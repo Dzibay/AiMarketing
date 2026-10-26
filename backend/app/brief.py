@@ -254,7 +254,7 @@ def draft_brief(user_id: int, payload: dict, progress=None) -> dict:
 
     progress = progress or (lambda *_a: None)
     ws = _ws_out(require_workspace(user_id, int(payload.get("workspace_id") or 0)))
-    cfg = ai.load_config(user_id)
+    cfg = ai.load_config(user_id, "brief", ws["id"])
     progress(0, 2, "Читаю сайт")
     url, html = fetch_site(payload.get("site") or ws.get("site") or "")
     page = extract_page(html)

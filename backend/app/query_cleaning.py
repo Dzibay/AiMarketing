@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import re
 from collections import defaultdict
 from collections.abc import Callable
@@ -48,6 +49,9 @@ AI_BATCH = 40
 CLASSIFY_MAX = 500
 APPLY_MAX = 500
 EXAMPLES_EACH = 40
+# Ответ ИИ на один запрос — около 50 токенов (id, вердикт, причина до 80 символов, фраза, уровень);
+# после первых разметок оценка берёт фактическое среднее этой модели.
+OUT_TOKENS_PER_QUERY = 50
 SEARCH_TYPES = ("TEXT_CAMPAIGN", "UNIFIED_CAMPAIGN", "DYNAMIC_TEXT_CAMPAIGN")
 
 # --- Слова и основы -----------------------------------------------------------------------------
@@ -811,7 +815,7 @@ def _valid_negative(raw: str, query: str) -> str:
     return phrase if not phrase_problems([phrase]) else ""
 
 
-def ai_labels(cfg: dict, system: str, batch: list[dict]) -> list[dict]:
+def _batch_messages(system: str, batch: list[dict]) -> list[dict]:
     payload = [
         {
             "id": n + 1,
@@ -823,13 +827,20 @@ def ai_labels(cfg: dict, system: str, batch: list[dict]) -> list[dict]:
         }
         for n, r in enumerate(batch)
     ]
-    data = ai.complete_json(
-        cfg,
-        [
-            {"role": "system", "content": system},
-            {"role": "user", "content": "Запросы:\n" + json.dumps(payload, ensure_ascii=False)},
-        ],
-    )
+    return [
+        {"role": "system", "content": system},
+        {"role": "user", "content": "Запросы:\n" + json.dumps(payload, ensure_ascii=False)},
+    ]
+
+
+def _batch_tokens(system: str, batch: list[dict], chars_per_token: float, out_per_query: float) -> tuple[int, int]:
+    """Оценка токенов одной пачки: вход — по символам сообщения, выход — по числу запросов."""
+    chars = len(json.dumps(_batch_messages(system, batch), ensure_ascii=False))
+    return math.ceil(chars / chars_per_token), math.ceil(len(batch) * out_per_query)
+
+
+def ai_labels(cfg: dict, system: str, batch: list[dict]) -> list[dict]:
+    data = ai.complete_json({**cfg, "units": len(batch)}, _batch_messages(system, batch))
     out = []
     seen = set()
     for item in data.get("items") or []:
@@ -863,9 +874,8 @@ def ai_labels(cfg: dict, system: str, batch: list[dict]) -> list[dict]:
     return out
 
 
-def classify_queries(user_id: int, payload: dict, progress: Progress | None = None) -> dict:
-    """Разметка очереди: сначала правила (Директ, память, бриф), остальное — ИИ пачками."""
-    progress = progress or (lambda *_a: None)
+def _classify_plan(user_id: int, payload: dict) -> dict | None:
+    """Очередь разметки и подсказки правил — общее у разметки и её оценки. None — размечать нечего."""
     workspace_id = int(payload.get("workspace_id") or 0)
     ws = require_workspace(user_id, workspace_id)
     limit = max(1, min(int(payload.get("limit") or 200), CLASSIFY_MAX))
@@ -887,8 +897,7 @@ def classify_queries(user_id: int, payload: dict, progress: Progress | None = No
             [*params, workspace_id, limit],
         ).fetchall()
     if not rows:
-        return {"labeled": 0, "negative": 0, "target": 0, "rules": 0, "ai": None, "left": 0}
-    progress(0, len(rows), "Память решений и бриф")
+        return None
     campaign_ids = sorted({int(c) for r in rows for c in r["campaign_row_ids"]})
     group_ids = sorted({int(g) for r in rows for g in r["adgroup_row_ids"]})
     negatives = _negatives_index(user_id, campaign_ids, group_ids)
@@ -902,45 +911,84 @@ def classify_queries(user_id: int, payload: dict, progress: Progress | None = No
             labels.append({**hit, "query_norm": r["norm"], "query": r["query"]})
         else:
             rest.append(r)
+    return {"ws": ws, "workspace_id": workspace_id, "rows": rows, "labels": labels, "rest": rest, "campaign_ids": campaign_ids}
+
+
+def _classify_system(user_id: int, plan: dict) -> str:
+    text = examples_prompt(memory_examples(plan["workspace_id"]))
+    return _SYSTEM.format(
+        brief=brief_prompt(plan["ws"]),
+        keywords=_keywords_sample(_keyword_index(user_id, plan["campaign_ids"])),
+        examples="Прошлые решения маркетолога — следуй им:\n" + text + "\n\n" if text else "",
+    )
+
+
+def _usage_out(usage: dict) -> dict | None:
+    if not usage["calls"]:
+        return None
+    return {
+        "calls": usage["calls"],
+        "tokens_in": usage["tokens_in"],
+        "tokens_out": usage["tokens_out"],
+        "cost_rub": round(usage["cost_rub"], 4) if usage["priced"] else None,
+        "estimated": usage["estimated"],
+    }
+
+
+def classify_queries(user_id: int, payload: dict, progress: Progress | None = None) -> dict:
+    """Разметка очереди: сначала правила (Директ, память, бриф), остальное — ИИ пачками.
+
+    ИИ — быстрая модель из настроек. Перед каждой пачкой — проверка, что её оценка влезает
+    в остаток месячного лимита: что успели — сохранено, остальное ждёт следующего месяца или лимита.
+    """
+    progress = progress or (lambda *_a: None)
+    plan = _classify_plan(user_id, payload)
+    if plan is None:
+        return {"labeled": 0, "negative": 0, "target": 0, "rules": 0, "ai": None, "left": 0, "usage": None}
+    workspace_id, rows, labels, rest = plan["workspace_id"], plan["rows"], plan["labels"], plan["rest"]
+    progress(0, len(rows), "Память решений и бриф")
     rules_n = len(labels)
     suggest_labels(user_id, workspace_id, labels)
 
     ai_used: bool | None = None
     ai_error = None
+    usage = None
     if rest:
         try:
-            cfg = ai.load_config(user_id)
+            cfg = ai.load_config(user_id, "classify", workspace_id)
         except YandexError as exc:
             cfg = None
             ai_used = False
             ai_error = exc.message or exc.code
         if cfg is not None:
             ai_used = True
-            index = _keyword_index(user_id, campaign_ids)
-            system = _SYSTEM.format(
-                brief=brief_prompt(ws),
-                keywords=_keywords_sample(index),
-                examples=(
-                    "Прошлые решения маркетолога — следуй им:\n" + text + "\n\n"
-                    if (text := examples_prompt(memory_examples(workspace_id)))
-                    else ""
-                ),
-            )
+            system = _classify_system(user_id, plan)
+            ratio = ai.chars_per_token(cfg)
+            out_per = ai.out_tokens_per_unit(cfg, "classify", OUT_TOKENS_PER_QUERY)
             done = rules_n
-            for start in range(0, len(rest), AI_BATCH):
-                batch = rest[start : start + AI_BATCH]
-                progress(done, len(rows), f"ИИ размечает запросы: {done} из {len(rows)}")
-                try:
-                    got = ai_labels(cfg, system, batch)
-                except YandexError as exc:
-                    # Что успели — сохранено; ошибку показываем, если не вышло ничего.
-                    ai_error = exc.message or exc.code
-                    if not labels:
-                        raise
-                    break
-                suggest_labels(user_id, workspace_id, got)
-                labels += got
-                done += len(batch)
+            with ai.meter() as spent:
+                for start in range(0, len(rest), AI_BATCH):
+                    batch = rest[start : start + AI_BATCH]
+                    progress(done, len(rows), f"ИИ размечает запросы: {done} из {len(rows)}")
+                    try:
+                        left = ai.budget_left(cfg)
+                        need = ai.cost_rub(cfg, *_batch_tokens(system, batch, ratio, out_per))
+                        if left is not None and need is not None and need > left:
+                            raise YandexError(
+                                "ai-budget",
+                                f"Месячного лимита на ИИ не хватает на следующие запросы: осталось {ai.format_rub(max(left, 0))}",
+                            )
+                        got = ai_labels(cfg, system, batch)
+                    except YandexError as exc:
+                        # Что успели — сохранено; ошибку показываем, если не вышло ничего.
+                        ai_error = exc.message or exc.code
+                        if not labels:
+                            raise
+                        break
+                    suggest_labels(user_id, workspace_id, got)
+                    labels += got
+                    done += len(batch)
+            usage = _usage_out(spent)
     progress(len(rows), len(rows), "Готово")
     with pool.connection() as conn:
         left = conn.execute(
@@ -959,7 +1007,60 @@ def classify_queries(user_id: int, payload: dict, progress: Progress | None = No
         "ai": ai_used,
         "ai_error": ai_error,
         "left": int(left["n"]),
+        "usage": usage,
     }
+
+
+def estimate_classify(user_id: int, payload: dict) -> dict:
+    """Оценка до запуска: сколько закроют правила, сколько уйдёт в ИИ, токены, рубли и остаток лимита.
+
+    Токены входа — по символам тех же сообщений, что уйдут в модель, и фактическому числу символов
+    на токен у этой модели; выхода — по среднему на запрос в прошлых разметках.
+    """
+    out = {
+        "queries": 0, "rules": 0, "ai": 0, "batches": 0, "model": None, "tokens_in": 0, "tokens_out": 0,
+        "cost_rub": None, "priced": False, "calibrated": False, "limit_rub": None, "spent_rub": None,
+        "remaining_rub": None, "fits": None, "ai_error": None,
+    }
+    plan = _classify_plan(user_id, payload)
+    if plan is None:
+        return out
+    rest = plan["rest"]
+    out.update(queries=len(plan["rows"]), rules=len(plan["labels"]), ai=len(rest))
+    if not rest:
+        return out
+    try:
+        cfg = ai.load_config(user_id, "classify", plan["workspace_id"])
+    except YandexError as exc:
+        out["ai_error"] = exc.message or exc.code
+        return out
+    system = _classify_system(user_id, plan)
+    ratio = ai.chars_per_token(cfg)
+    out_per = ai.out_tokens_per_unit(cfg, "classify", OUT_TOKENS_PER_QUERY)
+    batches = [rest[i : i + AI_BATCH] for i in range(0, len(rest), AI_BATCH)]
+    tokens = [_batch_tokens(system, b, ratio, out_per) for b in batches]
+    cost = ai.cost_rub(cfg, sum(t[0] for t in tokens), sum(t[1] for t in tokens))
+    out.update(
+        batches=len(batches),
+        model=cfg["model_name"],
+        tokens_in=sum(t[0] for t in tokens),
+        tokens_out=sum(t[1] for t in tokens),
+        cost_rub=None if cost is None else round(cost, 4),
+        priced=cost is not None,
+        calibrated=ratio != ai.CHARS_PER_TOKEN or out_per != OUT_TOKENS_PER_QUERY,
+    )
+    left = ai.budget_left(cfg)
+    if left is not None and cost is not None:
+        out.update(limit_rub=cfg["limit_rub"], spent_rub=round(cfg["limit_rub"] - left, 2), remaining_rub=round(left, 2))
+        # Пачки идут по порядку и останавливаются на первой, что не влезает в остаток.
+        fits, acc = 0, 0.0
+        for b, t in zip(batches, tokens):
+            acc += ai.cost_rub(cfg, *t)
+            if acc > left:
+                break
+            fits += len(b)
+        out["fits"] = fits
+    return out
 
 
 # --- Применение решений -------------------------------------------------------------------------

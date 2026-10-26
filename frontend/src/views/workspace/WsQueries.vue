@@ -422,6 +422,68 @@
     </template>
   </Modal>
 
+  <Modal :open="estimate.open" title="Разметка с ИИ" @close="estimate.open = false">
+    <template v-if="estimate.est">
+      <ul class="apply-summary">
+        <li>
+          Запросов к разметке: <strong>{{ num(estimate.est.queries) }}</strong>
+          <span v-if="estimate.est.rules" class="cell-note">
+            {{ num(estimate.est.rules) }} закроют память решений, бриф и Директ — без ИИ
+          </span>
+        </li>
+        <li>
+          Уйдёт в ИИ: <strong>{{ num(estimate.est.ai) }}</strong>
+          <span class="cell-note">
+            {{ estimate.est.batches }} {{ plural(estimate.est.batches, 'вызов', 'вызова', 'вызовов') }} модели
+            {{ estimate.est.model }}
+          </span>
+        </li>
+        <li>
+          Токенов ≈ <strong>{{ num(estimate.est.tokens_in + estimate.est.tokens_out) }}</strong>
+          <span class="cell-note">вход ≈ {{ num(estimate.est.tokens_in) }}, выход ≈ {{ num(estimate.est.tokens_out) }}</span>
+        </li>
+        <li>
+          Стоимость ≈ <strong>{{ estimate.est.priced ? rubAi(estimate.est.cost_rub) : '—' }}</strong>
+          <span v-if="!estimate.est.priced" class="cell-note">
+            цены модели не заданы — <RouterLink to="/cabinet/settings#ai">укажите в настройках</RouterLink>, чтобы видеть рубли
+          </span>
+          <span v-else-if="estimate.est.remaining_rub !== null" class="cell-note">
+            в месячном лимите осталось {{ rubAi(estimate.est.remaining_rub) }} из {{ rubAi(estimate.est.limit_rub) }}
+          </span>
+        </li>
+      </ul>
+      <p v-if="estimateShort" class="notice notice--warn">
+        <template v-if="estimate.est.fits">
+          В остаток лимита влезет ≈ {{ num(estimate.est.fits) }} из {{ num(estimate.est.ai) }} — остальные подождут
+          следующего месяца или повышения лимита.
+        </template>
+        <template v-else>
+          Остатка лимита не хватит даже на один вызов — ИИ не запустится.
+          <template v-if="estimate.est.rules">Разметим только то, что закрывают правила.</template>
+        </template>
+      </p>
+      <p class="field-hint">
+        {{
+          estimate.est.calibrated
+            ? 'Оценка — по прошлым вызовам этой модели.'
+            : 'Оценка приблизительная: после первых разметок станет точнее.'
+        }}
+        Фактический расход — в настройках, «Расход ИИ».
+      </p>
+    </template>
+    <template #footer>
+      <button class="btn btn--ghost" type="button" @click="estimate.open = false">Отмена</button>
+      <button
+        class="btn btn--accent"
+        type="button"
+        :disabled="estimateShort && !estimate.est.fits && !estimate.est.rules"
+        @click="confirmClassify"
+      >
+        {{ estimateShort && !estimate.est.fits ? 'Разметить правилами' : 'Разметить' }}
+      </button>
+    </template>
+  </Modal>
+
   <UndoDialog :log-id="undoId" @close="undoId = null" @done="onUndone" />
 </template>
 
@@ -433,7 +495,7 @@ import UndoDialog from '../../components/UndoDialog.vue'
 import { errorText, jobProgressText, wsApi } from '../../api/web'
 import { askConfirm } from '../../composables/useConfirm'
 import { pushToast } from '../../composables/useToasts'
-import { formatDate, formatDateTime, num, plural, rubles } from '../../utils/format'
+import { formatDate, formatDateTime, num, plural, rubAi, rubles } from '../../utils/format'
 import { useWs } from './context'
 
 const TABS = [
@@ -472,6 +534,12 @@ const rowResults = reactive({})
 const result = ref(null)
 const undoId = ref(null)
 const applyModal = reactive({ open: false, items: [], skipped: 0, bid: '' })
+// Оценка перед массовой разметкой: объём, токены, ₽ и остаток месячного лимита.
+const estimate = reactive({ open: false, est: null, payload: null })
+const estimateShort = computed(() => {
+  const est = estimate.est
+  return !!est && est.fits !== null && est.fits < est.ai
+})
 const mem = reactive({ items: [], total: 0, loading: false, busy: false, error: '', search: '', verdict: '', selected: new Set() })
 
 const counts = computed(() => data.value?.counts || EMPTY_COUNTS)
@@ -749,22 +817,52 @@ async function classify() {
     ))
   )
     return
+  const payload = { limit: 300, relabel, campaign_row_id: filters.campaign ? Number(filters.campaign) : null }
+  busy.value = 'classify'
+  busyText.value = 'Считаем объём и стоимость…'
+  let est
+  try {
+    est = await wsApi.queriesClassifyEstimate(ws.value.id, payload)
+  } catch (err) {
+    pushToast(errorText(err), 'error')
+    busy.value = ''
+    busyText.value = ''
+    return
+  }
+  // Один вызов ИИ, который влезает в лимит, — без лишнего вопроса; массовая разметка — после оценки.
+  if (!est.ai || est.ai_error || (est.batches <= 1 && !(est.fits !== null && est.fits < est.ai))) {
+    return runClassify(payload)
+  }
+  busy.value = ''
+  busyText.value = ''
+  Object.assign(estimate, { open: true, est, payload })
+}
+
+function confirmClassify() {
+  estimate.open = false
+  return runClassify(estimate.payload)
+}
+
+function usageText(usage) {
+  const tokens = usage.tokens_in + usage.tokens_out
+  const cost = usage.cost_rub === null ? '' : `, ${usage.estimated ? '≈ ' : ''}${rubAi(usage.cost_rub)}`
+  return `ИИ: ${usage.calls} ${plural(usage.calls, 'вызов', 'вызова', 'вызовов')}, ${num(tokens)} ${plural(tokens, 'токен', 'токена', 'токенов')}${cost}`
+}
+
+async function runClassify(payload) {
   busy.value = 'classify'
   busyText.value = 'Размечаем запросы…'
   try {
-    const res = await wsApi.queriesClassify(
-      ws.value.id,
-      { limit: 300, relabel, campaign_row_id: filters.campaign ? Number(filters.campaign) : null },
-      (job) => {
-        busyText.value = `Разметка: ${jobProgressText(job)}`
-      },
-    )
+    const res = await wsApi.queriesClassify(ws.value.id, payload, (job) => {
+      busyText.value = `Разметка: ${jobProgressText(job)}`
+    })
     if (!res.labeled) {
       pushToast(res.ai_error ? `ИИ не разметил запросы: ${res.ai_error}` : 'Размечать нечего', res.ai_error ? 'error' : 'info')
     } else {
       const parts = [`Размечено ${res.labeled}: в минус ${res.negative}, целевых ${res.target}`]
       if (res.rules) parts.push(`по памяти, брифу и Директу — ${res.rules}`)
       if (res.left) parts.push(`ещё без разметки ${res.left}`)
+      if (res.usage) parts.push(usageText(res.usage))
       pushToast(parts.join('; '), 'ok')
       if (res.ai_error) pushToast(`ИИ разобрал не всё: ${res.ai_error}`, 'warn')
     }

@@ -202,7 +202,7 @@ def test_check_phrases(env):
 
 
 def _fake_ai(monkeypatch, seen):
-    monkeypatch.setattr(qc.ai, "load_config", lambda user_id: {"model": "fake"})
+    monkeypatch.setattr(qc.ai, "load_config", lambda user_id, *a, **kw: {"model": "fake"})
 
     def complete(cfg, messages):
         seen.append(messages)
@@ -230,7 +230,7 @@ def test_classify_rules_first_then_ai(env, monkeypatch):
     _fake_ai(monkeypatch, seen)
     progress: list = []
     res = qc.classify_queries(u, {"workspace_id": ws}, lambda *a: progress.append(a))
-    assert res == {"labeled": 5, "negative": 4, "target": 1, "rules": 3, "ai": True, "ai_error": None, "left": 0}
+    assert res == {"labeled": 5, "negative": 4, "target": 1, "rules": 3, "ai": True, "ai_error": None, "left": 0, "usage": None}
     labels = _labels(db, ws)
     assert labels["кухни икеа"]["source"] == "direct" and labels["кухни икеа"]["negative_phrase"] == "икеа"
     assert labels["кухни своими руками"]["source"] == "memory" and labels["кухни своими руками"]["level"] == "adgroup"
@@ -255,7 +255,7 @@ def test_classify_rules_first_then_ai(env, monkeypatch):
 def test_classify_without_ai_keeps_rule_labels(env, monkeypatch):
     u, ws, db = env["user"], env["ws"], env["db"]
 
-    def no_ai(user_id):
+    def no_ai(user_id, *a, **kw):
         raise YandexError("ai-not-configured", "Подключите ИИ в настройках")
 
     monkeypatch.setattr(qc.ai, "load_config", no_ai)
@@ -269,7 +269,7 @@ def test_classify_without_ai_keeps_rule_labels(env, monkeypatch):
 def test_classify_ai_error_with_nothing_labeled_raises(env, monkeypatch):
     with env["db"].connection() as c:
         c.execute("UPDATE direct_adgroups SET negative_keywords = '[]'")
-    monkeypatch.setattr(qc.ai, "load_config", lambda user_id: {"model": "fake"})
+    monkeypatch.setattr(qc.ai, "load_config", lambda user_id, *a, **kw: {"model": "fake"})
 
     def broken(cfg, messages):
         raise YandexError("ai", "Модель не ответила")

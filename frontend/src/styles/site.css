@@ -549,6 +549,41 @@ input {
   font-size: 1.25rem;
 }
 
+/* Полоса «потрачено из лимита». */
+.meter {
+  height: 8px;
+  background: var(--paper-2);
+  overflow: hidden;
+}
+
+.meter > span {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+}
+
+.meter.is-near > span {
+  background: var(--warn);
+}
+
+.meter.is-over > span {
+  background: var(--danger);
+}
+
+/* Таблицы расхода ИИ одна под другой — с одинаковыми колонками. */
+.usage-table {
+  table-layout: fixed;
+  min-width: 520px;
+}
+
+.usage-table th:first-child {
+  width: 36%;
+}
+
+.usage-table td:first-child {
+  overflow-wrap: anywhere;
+}
+
 .filters {
   display: flex;
   flex-wrap: wrap;

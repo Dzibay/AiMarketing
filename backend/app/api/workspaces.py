@@ -26,6 +26,7 @@ from app.query_cleaning import (
     CLASSIFY_MAX,
     apply_decisions,
     check_phrases,
+    estimate_classify,
     forget_decisions,
     list_decisions,
     needs_direct,
@@ -481,20 +482,35 @@ def ws_queries_sync(
     return _start_job("sync_workspace_queries", user_id, {"workspace_id": workspace_id, "days": days})
 
 
-@router.post("/{workspace_id}/queries/classify")
-def ws_queries_classify(
-    workspace_id: int, body: QueriesClassifyBody | None = None, user_id: int = Depends(require_web_user)
-) -> dict:
-    body = body or QueriesClassifyBody()
+def _classify_payload(user_id: int, workspace_id: int, body: QueriesClassifyBody) -> dict:
     _ws(user_id, workspace_id)
     if body.campaign_row_id:
         _ws_campaign(user_id, workspace_id, body.campaign_row_id)
-    payload = {
+    return {
         "workspace_id": workspace_id,
         "limit": max(1, min(int(body.limit), CLASSIFY_MAX)),
         "relabel": bool(body.relabel),
         "campaign_row_id": body.campaign_row_id,
     }
+
+
+@router.post("/{workspace_id}/queries/classify/estimate")
+def ws_queries_classify_estimate(
+    workspace_id: int, body: QueriesClassifyBody | None = None, user_id: int = Depends(require_web_user)
+) -> dict:
+    """Без вызова ИИ: сколько запросов закроют правила, сколько уйдёт в модель и во что обойдётся."""
+    payload = _classify_payload(user_id, workspace_id, body or QueriesClassifyBody())
+    try:
+        return estimate_classify(user_id, payload)
+    except YandexError as exc:
+        raise _http(exc) from exc
+
+
+@router.post("/{workspace_id}/queries/classify")
+def ws_queries_classify(
+    workspace_id: int, body: QueriesClassifyBody | None = None, user_id: int = Depends(require_web_user)
+) -> dict:
+    payload = _classify_payload(user_id, workspace_id, body or QueriesClassifyBody())
     job = submit("classify_queries", user_id, payload, priority=PRIORITY_USER, max_attempts=2)
     return {"job": public_job(job)}
 

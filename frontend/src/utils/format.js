@@ -16,6 +16,14 @@ export function rubles(value, digits = 0) {
   return `${Number(value).toLocaleString('ru-RU', { minimumFractionDigits: digits, maximumFractionDigits: digits })} ₽`
 }
 
+/** Расход на ИИ: вызов стоит копейки, поэтому дробную часть не теряем. */
+export function rubAi(value) {
+  if (value === null || value === undefined || value === '') return '—'
+  const v = Number(value)
+  if (v > 0 && v < 0.01) return '< 0,01 ₽'
+  return `${v.toLocaleString('ru-RU', { minimumFractionDigits: v < 1000 ? 2 : 0, maximumFractionDigits: 2 })} ₽`
+}
+
 export function num(value, digits = 0) {
   if (value === null || value === undefined || value === '') return '—'
   return Number(value).toLocaleString('ru-RU', { maximumFractionDigits: digits })

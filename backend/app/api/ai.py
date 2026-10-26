@@ -19,6 +19,16 @@ class AiSettingsBody(BaseModel):
     # None — оставить сохранённый ключ, "" — удалить.
     api_key: str | None = None
     temperature: float | None = None
+    # Не переданы — остаются как были; null — очистить. Цены — ₽ за 1 млн токенов.
+    model_fast: str = ""
+    price_in: float | None = None
+    price_out: float | None = None
+    fast_price_in: float | None = None
+    fast_price_out: float | None = None
+    monthly_limit_rub: float | None = None
+
+
+_KEEP_IF_UNSET = ("model_fast", "price_in", "price_out", "fast_price_in", "fast_price_out", "monthly_limit_rub")
 
 
 class ChatBody(BaseModel):
@@ -52,12 +62,21 @@ def ai_settings_get(user_id: int = Depends(require_web_user)) -> dict:
 
 @router.put("/ai/settings")
 def ai_settings_put(body: AiSettingsBody, user_id: int = Depends(require_web_user)) -> dict:
-    return _call(ai.save_settings, user_id, **body.model_dump())
+    data = body.model_dump()
+    for name in _KEEP_IF_UNSET:
+        if name not in body.model_fields_set:
+            data.pop(name)
+    return _call(ai.save_settings, user_id, **data)
 
 
 @router.post("/ai/settings/test")
 def ai_settings_test(user_id: int = Depends(require_web_user)) -> dict:
     return _call(ai.check_connection, user_id)
+
+
+@router.get("/ai/usage")
+def ai_usage(month: str = "", user_id: int = Depends(require_web_user)) -> dict:
+    return _call(ai.usage_summary, user_id, month or None)
 
 
 @router.get("/workspaces/{workspace_id}/chats")

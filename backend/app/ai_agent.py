@@ -1278,7 +1278,8 @@ def post_message(user_id: int, chat_id: int, text: str) -> dict:
         raise YandexError("empty", "Пустое сообщение")
     if len(text) > 8000:
         raise YandexError("too-long", "Сообщение длиннее 8000 символов")
-    ai.load_config(user_id)
+    # Сразу понятная ошибка, а не чат в статусе «ошибка»: ИИ не подключён или лимит месяца исчерпан.
+    ai.check_budget(ai.load_config(user_id, "chat"))
     with pool.connection() as conn:
         chat = _require_chat(conn, user_id, chat_id, lock=True)
         if _chat_out(chat)["status"] == "running":
@@ -1516,7 +1517,7 @@ def run_chat(user_id: int, chat_id: int, progress=None) -> dict:
             progress(n, MAX_STEPS, text)
 
     try:
-        cfg = ai.load_config(user_id)
+        cfg = ai.load_config(user_id, "chat", chat["workspace_id"])
         ctx = Context(user_id, chat["workspace_id"])
     except YandexError as exc:
         _set_status(chat_id, "error", exc.message or exc.code)

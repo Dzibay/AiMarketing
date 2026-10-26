@@ -59,10 +59,48 @@
             />
           </div>
           <div class="field">
+            <label>Быстрая модель</label>
+            <input v-model.trim="aiForm.model_fast" type="text" placeholder="как основная" autocomplete="off" />
+            <small class="field-hint">Дешевле и быстрее — для массовой работы. Пусто — всё делает основная.</small>
+          </div>
+          <div class="field">
             <label>Температура: {{ Number(aiForm.temperature).toFixed(1) }}</label>
             <input v-model.number="aiForm.temperature" type="range" min="0" max="1" step="0.1" />
             <small class="field-hint">Ниже — точнее и стабильнее, выше — разнообразнее тексты.</small>
           </div>
+          <p v-if="taskModels" class="field-hint">{{ taskModels }}</p>
+
+          <h3>Цены и месячный лимит</h3>
+          <div class="field">
+            <label>Основная: вход, ₽ за 1 млн токенов</label>
+            <input v-model="aiForm.price_in" type="number" min="0" step="any" inputmode="decimal" placeholder="не задано" />
+          </div>
+          <div class="field">
+            <label>Основная: выход, ₽ за 1 млн токенов</label>
+            <input v-model="aiForm.price_out" type="number" min="0" step="any" inputmode="decimal" placeholder="не задано" />
+          </div>
+          <template v-if="aiForm.model_fast">
+            <div class="field">
+              <label>Быстрая: вход, ₽ за 1 млн токенов</label>
+              <input v-model="aiForm.fast_price_in" type="number" min="0" step="any" inputmode="decimal" placeholder="как у основной" />
+            </div>
+            <div class="field">
+              <label>Быстрая: выход, ₽ за 1 млн токенов</label>
+              <input v-model="aiForm.fast_price_out" type="number" min="0" step="any" inputmode="decimal" placeholder="как у основной" />
+            </div>
+          </template>
+          <div class="field">
+            <label>Месячный лимит, ₽</label>
+            <input v-model="aiForm.monthly_limit_rub" type="number" min="0" step="any" inputmode="decimal" placeholder="без лимита" />
+            <small class="field-hint">
+              Когда расход за календарный месяц дойдёт до лимита, чат, разметка и бриф остановятся до 1-го числа.
+              Проверка подключения не ограничивается.
+            </small>
+          </div>
+          <p class="field-hint">
+            Цены — из тарифа провайдера, в рублях (долларовые пересчитайте по курсу). Без цен расход считается только в
+            токенах, а лимит не работает.
+          </p>
           <div class="form-actions">
             <button class="btn btn--accent" type="submit" :disabled="aiBusy">Сохранить</button>
             <button class="btn btn--ghost" type="button" :disabled="aiBusy || !ai.configured" @click="testAi">
@@ -77,6 +115,95 @@
           <template v-if="aiTest.ok">Работает · {{ aiTest.model }} ответил: «{{ aiTest.reply }}»</template>
           <template v-else>{{ aiTest.error }}</template>
         </p>
+        <p v-if="aiTest?.fast" class="sync-status" :class="aiTest.fast.error ? 'is-error' : 'is-ok'">
+          <template v-if="aiTest.fast.error">Быстрая модель {{ aiTest.fast.model }}: {{ aiTest.fast.error }}</template>
+          <template v-else>Быстрая · {{ aiTest.fast.model }} ответил: «{{ aiTest.fast.reply }}»</template>
+        </p>
+      </section>
+
+      <section v-if="usage && (ai.configured || usage.months.length > 1 || usage.total.calls)" class="panel" id="ai-usage">
+        <div class="panel__head">
+          <h2>Расход ИИ</h2>
+          <select
+            v-if="usage.months.length > 1"
+            :value="usage.month"
+            :disabled="usageBusy"
+            aria-label="Месяц"
+            @change="loadUsage($event.target.value)"
+          >
+            <option v-for="m in usage.months" :key="m" :value="m">{{ monthLabel(m) }}</option>
+          </select>
+        </div>
+        <template v-if="usage.current && usage.limit_rub">
+          <div class="meter" :class="limitTone" role="progressbar" :aria-valuenow="limitPct" aria-valuemin="0" aria-valuemax="100">
+            <span :style="{ width: `${limitPct}%` }"></span>
+          </div>
+          <p class="sync-status" :class="usage.remaining_rub <= 0 ? 'is-error' : ''">
+            Потрачено {{ rubAi(usage.spent_rub) }} из {{ rubAi(usage.limit_rub) }} ·
+            <template v-if="usage.remaining_rub > 0">осталось {{ rubAi(usage.remaining_rub) }}</template>
+            <template v-else>лимит исчерпан — ИИ остановлен до 1-го числа</template>
+          </p>
+        </template>
+        <p v-if="!usage.total.calls" class="empty">
+          {{ usage.current ? 'В этом месяце ИИ ещё не вызывался.' : 'В этом месяце вызовов ИИ не было.' }}
+        </p>
+        <template v-else>
+          <div class="stats-grid">
+            <div class="stat-card">
+              <small>Вызовов</small>
+              <strong>{{ num(usage.total.calls) }}</strong>
+            </div>
+            <div class="stat-card">
+              <small>Токенов: вход</small>
+              <strong>{{ num(usage.total.tokens_in) }}</strong>
+            </div>
+            <div class="stat-card">
+              <small>Токенов: выход</small>
+              <strong>{{ num(usage.total.tokens_out) }}</strong>
+            </div>
+            <div class="stat-card">
+              <small>Потрачено</small>
+              <strong>{{ usage.total.cost_rub === null ? '—' : rubAi(usage.total.cost_rub) }}</strong>
+            </div>
+          </div>
+          <p v-if="usage.total.unpriced" class="hint">
+            <template v-if="usage.total.unpriced === usage.total.calls">Цены моделей не заданы — расход виден только в токенах.</template>
+            <template v-else>
+              {{ usage.total.unpriced }} {{ plural(usage.total.unpriced, 'вызов', 'вызова', 'вызовов') }} без цены — в рублях не
+              учтены.
+            </template>
+            Цены задаются выше, в настройках ассистента.
+          </p>
+          <p v-if="usage.total.estimated" class="hint">
+            {{ usage.total.estimated }} {{ plural(usage.total.estimated, 'вызов', 'вызова', 'вызовов') }} — провайдер не
+            сообщил число токенов, посчитано по длине текста.
+          </p>
+          <template v-for="group in usageGroups" :key="group.key">
+            <h3 class="subhead">{{ group.title }}</h3>
+            <div class="table-scroll">
+              <table class="table usage-table">
+                <thead>
+                  <tr>
+                    <th>{{ group.column }}</th>
+                    <th class="num">Вызовов</th>
+                    <th class="num">Вход</th>
+                    <th class="num">Выход</th>
+                    <th class="num">₽</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="row in group.rows" :key="row.key">
+                    <td>{{ row.name }}</td>
+                    <td class="num">{{ num(row.calls) }}</td>
+                    <td class="num">{{ num(row.tokens_in) }}</td>
+                    <td class="num">{{ num(row.tokens_out) }}</td>
+                    <td class="num">{{ rubAi(row.cost_rub) }}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </template>
+        </template>
       </section>
 
       <section class="panel">
@@ -167,16 +294,28 @@ import AppShell from '../components/AppShell.vue'
 import { aiApi, errorText, webApi } from '../api/web'
 import { pushToast } from '../composables/useToasts'
 import { useHead } from '../utils/useHead'
-import { formatDate } from '../utils/format'
+import { formatDate, num, plural, rubAi } from '../utils/format'
 
 useHead('Настройки — AiMarketing', true)
 
 const loading = ref(true)
 const user = ref(null)
 const ai = ref({ providers: [], default_base_url: '', configured: false, has_key: false, key_hint: '' })
-const aiForm = reactive({ provider: 'openai', model: '', base_url: '', folder_id: '', api_key: '', temperature: 0.3 })
+const PRICE_FIELDS = ['price_in', 'price_out', 'fast_price_in', 'fast_price_out', 'monthly_limit_rub']
+const aiForm = reactive({
+  provider: 'openai',
+  model: '',
+  model_fast: '',
+  base_url: '',
+  folder_id: '',
+  api_key: '',
+  temperature: 0.3,
+  ...Object.fromEntries(PRICE_FIELDS.map((f) => [f, ''])),
+})
 const aiBusy = ref(false)
 const aiTest = ref(null)
+const usage = ref(null)
+const usageBusy = ref(false)
 const telegram = ref({ configured: false, linked: false })
 const tgLink = ref('')
 const tgCode = ref('')
@@ -191,14 +330,69 @@ const defaultModel = computed(
   () => ai.value.providers.find((p) => p.id === aiForm.provider)?.default_model || '',
 )
 
+/** «ИИ-чат — основная; Разметка запросов, Черновик брифа — быстрая». */
+const taskModels = computed(() => {
+  const tasks = ai.value.tasks || []
+  const by = (tier) => tasks.filter((t) => t.tier === tier).map((t) => t.label).join(', ')
+  const parts = [[by('smart'), 'основная'], [by('fast'), aiForm.model_fast ? 'быстрая' : 'тоже основная, пока быстрая не задана']]
+  return parts.filter(([labels]) => labels).map(([labels, model]) => `${labels} — ${model}`).join('; ')
+})
+
+const limitPct = computed(() => {
+  const u = usage.value
+  if (!u?.limit_rub) return 0
+  return Math.min(100, Math.round((u.spent_rub / u.limit_rub) * 100))
+})
+const limitTone = computed(() => (limitPct.value >= 100 ? 'is-over' : limitPct.value >= 80 ? 'is-near' : ''))
+
+const usageGroups = computed(() => {
+  const u = usage.value
+  if (!u) return []
+  const groups = [
+    { key: 'task', title: 'По задачам', column: 'Задача', rows: u.by_task.map((r) => ({ ...r, key: r.task, name: r.label })) },
+    {
+      key: 'ws',
+      title: 'По пространствам',
+      column: 'Пространство',
+      rows: u.by_workspace.map((r) => ({ ...r, key: r.workspace_id ?? 'none', name: r.name })),
+    },
+    { key: 'model', title: 'По моделям', column: 'Модель', rows: u.by_model.map((r) => ({ ...r, key: r.model, name: r.model })) },
+  ]
+  return groups.filter((g) => g.rows.length)
+})
+
+function monthLabel(key) {
+  const [y, m] = key.split('-').map(Number)
+  const text = new Date(y, m - 1, 1).toLocaleDateString('ru-RU', { month: 'long', year: 'numeric' }).replace(/\s*г\.$/, '')
+  return text.charAt(0).toUpperCase() + text.slice(1)
+}
+
+/** Пустое поле — null (не задано), иначе число. */
+function money(value) {
+  return value === '' || value === null || value === undefined ? null : Number(value)
+}
+
+async function loadUsage(month = '') {
+  usageBusy.value = true
+  try {
+    usage.value = await aiApi.usage(month)
+  } catch (err) {
+    pushToast(errorText(err), 'error')
+  } finally {
+    usageBusy.value = false
+  }
+}
+
 function fillAiForm(data) {
   ai.value = data
   aiForm.provider = data.provider || 'openai'
   aiForm.model = data.model || ''
+  aiForm.model_fast = data.model_fast || ''
   aiForm.base_url = data.base_url || ''
   aiForm.folder_id = data.folder_id || ''
   aiForm.temperature = data.temperature ?? 0.3
   aiForm.api_key = ''
+  for (const f of PRICE_FIELDS) aiForm[f] = data[f] ?? ''
 }
 
 async function saveAi() {
@@ -212,8 +406,12 @@ async function saveAi() {
       folder_id: aiForm.provider === 'yandexgpt' ? aiForm.folder_id : '',
       temperature: aiForm.temperature,
       api_key: aiForm.api_key ? aiForm.api_key : null,
+      model_fast: aiForm.model_fast,
+      ...Object.fromEntries(PRICE_FIELDS.map((f) => [f, money(aiForm[f])])),
     }
     fillAiForm(await aiApi.saveSettings(payload))
+    // Лимит и цены меняют «осталось» в сводке.
+    loadUsage(usage.value?.current ? '' : usage.value?.month || '')
     pushToast(ai.value.configured ? 'Настройки ИИ сохранены' : 'Сохранено — осталось указать ключ')
     if (ai.value.configured && payload.api_key) await testAi()
   } catch (err) {
@@ -250,7 +448,13 @@ async function testAi() {
   aiBusy.value = true
   try {
     const res = await aiApi.test()
-    aiTest.value = { ok: true, model: res.model, reply: String(res.reply || '').slice(0, 120) }
+    aiTest.value = {
+      ok: true,
+      model: res.model,
+      reply: String(res.reply || '').slice(0, 120),
+      fast: res.fast ? { ...res.fast, reply: String(res.fast.reply || '').slice(0, 120) } : null,
+    }
+    if (usage.value?.current) loadUsage()
   } catch (err) {
     aiTest.value = { ok: false, error: errorText(err) }
   } finally {
@@ -363,7 +567,7 @@ async function changePassword() {
 
 onMounted(async () => {
   try {
-    const [me, aiSettings] = await Promise.all([webApi.me(), aiApi.settings(), loadTelegram()])
+    const [me, aiSettings] = await Promise.all([webApi.me(), aiApi.settings(), loadTelegram(), loadUsage()])
     user.value = me.user
     fillAiForm(aiSettings)
   } catch (err) {

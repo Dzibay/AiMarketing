@@ -117,6 +117,8 @@ export const wsApi = {
   queries: (id, params = {}) => request(`${WS(id)}/queries${query(params)}`),
   queriesSync: (id, days, onProgress) => runJob(`${WS(id)}/queries/sync`, { days }, onProgress),
   queriesClassify: (id, payload = {}, onProgress) => runJob(`${WS(id)}/queries/classify`, payload, onProgress),
+  /** Без вызова ИИ: сколько закроют правила, сколько уйдёт в модель, токены, ₽ и остаток лимита. */
+  queriesClassifyEstimate: (id, payload = {}) => post(`${WS(id)}/queries/classify/estimate`, payload),
   /** Только «целевые» без новых ключей сохраняются сразу, остальное — задачей (вызовы Директа). */
   queriesApply: async (id, payload, onProgress) => {
     const res = await post(`${WS(id)}/queries/apply`, payload)
@@ -139,6 +141,8 @@ export const aiApi = {
   settings: () => request('/api/web/ai/settings'),
   saveSettings: (payload) => put('/api/web/ai/settings', payload),
   test: () => post('/api/web/ai/settings/test'),
+  /** Расход за месяц (ГГГГ-ММ, по умолчанию текущий): итог, лимит, по задачам, пространствам и моделям. */
+  usage: (month = '') => request(`/api/web/ai/usage${query({ month })}`),
   chats: (workspaceId) => request(`${WS(workspaceId)}/chats`),
   createChat: (workspaceId, title = '') => post(`${WS(workspaceId)}/chats`, { title }),
   chat: (id) => request(`/api/web/ai/chats/${id}`),
