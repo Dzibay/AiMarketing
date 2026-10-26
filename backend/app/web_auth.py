@@ -8,6 +8,7 @@ from fastapi import Header, HTTPException
 
 from app.auth import _secret as _admin_secret
 from app.config import settings
+from app.users import get_user
 
 
 def _secret() -> bytes:
@@ -45,4 +46,9 @@ def require_web_user(authorization: str = Header(default="")) -> int:
     user_id = verify_session(token) if scheme.lower() == "bearer" else None
     if user_id is None:
         raise HTTPException(status_code=401, detail="unauthorized")
+    user = get_user(user_id)
+    if user is None:
+        raise HTTPException(status_code=401, detail="unauthorized")
+    if user.get("blocked_at"):
+        raise HTTPException(status_code=403, detail="blocked")
     return user_id

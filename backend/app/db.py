@@ -12,37 +12,43 @@ log = logging.getLogger("app.db")
 pool = ConnectionPool(
     settings.dsn,
     min_size=1,
-    max_size=10,
+    max_size=20,
     open=False,
     kwargs={"row_factory": dict_row},
 )
 
-_INIT_SQL_CANDIDATES = (
-    Path(__file__).resolve().parent.parent / "database" / "init.sql",
-    Path(__file__).resolve().parents[2] / "database" / "init.sql",
-)
+# backend/alembic.ini локально и /app/alembic.ini в Docker.
+ALEMBIC_INI = Path(__file__).resolve().parent.parent / "alembic.ini"
+
+
+def run_migrations(revision: str = "head") -> None:
+    """alembic upgrade head; параллельные запуски сериализует advisory lock в env.py."""
+    # Без этого на каждом старте в лог сыпется «setup plugin …» (пишется уже при импорте alembic).
+    logging.getLogger("alembic.runtime.plugins").setLevel(logging.WARNING)
+    from alembic import command
+    from alembic.config import Config
+
+    if not ALEMBIC_INI.is_file():
+        raise RuntimeError(f"{ALEMBIC_INI} не найден")
+    cfg = Config(str(ALEMBIC_INI))
+    cfg.attributes["configure_logging"] = False
+    command.upgrade(cfg, revision)
 
 
 def ensure_schema(retries: int = 10, delay: float = 2.0) -> None:
-    """Открывает пул и накатывает идемпотентную схему, дожидаясь готовности БД."""
-    sql = None
-    for candidate in _INIT_SQL_CANDIDATES:
-        if candidate.exists():
-            sql = candidate.read_text(encoding="utf-8")
-            break
-    if sql is None:
-        raise RuntimeError("database/init.sql не найден")
-
+    """Открывает пул, дожидается готовности БД и накатывает миграции."""
     last_error: Exception | None = None
     for attempt in range(1, retries + 1):
         try:
             pool.open()
             with pool.connection() as conn:
-                conn.execute(sql)
-            log.info("Схема БД готова")
-            return
+                conn.execute("SELECT 1")
+            break
         except Exception as exc:  # noqa: BLE001 — ждём поднятия postgres
             last_error = exc
             log.warning("БД недоступна (попытка %d/%d): %s", attempt, retries, exc)
             time.sleep(delay)
-    raise RuntimeError(f"Не удалось подключиться к БД: {last_error}")
+    else:
+        raise RuntimeError(f"Не удалось подключиться к БД: {last_error}")
+    run_migrations()
+    log.info("Схема БД готова")

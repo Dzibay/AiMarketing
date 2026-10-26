@@ -20,7 +20,6 @@ services:
       POSTGRES_DB: ${DB_NAME:-aimarketing}
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./database/init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
       interval: 5s
@@ -36,8 +35,10 @@ services:
     env_file: .env
     environment:
       DB_HOST: postgres
+      RUN_EMBEDDED_WORKERS: "false"
     ports:
-      - "8000:8000"
+      # 8001 на хосте: часто 8000 уже занят другим локальным API
+      - "8001:8000"
     depends_on:
       postgres:
         condition: service_healthy
@@ -47,6 +48,23 @@ services:
       timeout: 5s
       start_period: 25s
       retries: 3
+    networks: [internal]
+
+  worker:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DB_HOST: postgres
+      RUN_EMBEDDED_WORKERS: "true"
+    command: ["python", "-m", "app.worker_main"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      disable: true
     networks: [internal]
 
   nginx:
