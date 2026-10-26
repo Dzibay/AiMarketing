@@ -1,0 +1,94 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: aim_test
+          POSTGRES_PASSWORD: aim_test
+          POSTGRES_DB: aim_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U aim_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+      - name: Install
+        run: pip install -r requirements.txt
+      - name: Pytest
+        run: pytest -q
+        env:
+          # Юнит-тесты не ходят в БД/Яндекс; env нужен для импорта Settings.
+          DB_PASSWORD: ci
+          # Интеграционные тесты (test_db_*.py) — в одноразовую БД сервиса postgres.
+          TEST_DB_HOST: 127.0.0.1
+          TEST_DB_PORT: "5432"
+          TEST_DB_NAME: aim_test
+          TEST_DB_USER: aim_test
+          TEST_DB_PASSWORD: aim_test
+          PUBLIC_BASE_URL: http://127.0.0.1:8000
+          WEB_SESSION_SECRET: ci-session-secret-at-least-16
+          TOKEN_ENCRYPT_SECRET: ci-token-encrypt-secret-32chars!!
+          ADMIN_PASSWORD: ci-admin
+          ADMIN_TOKEN_SECRET: ci-admin-token-secret
+
+  smoke:
+    runs-on: ubuntu-latest
+    needs: pytest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Create .env for compose
+        run: |
+          cat > .env <<'EOF'
+          DB_USER=aimarketing
+          DB_PASSWORD=ci_password_strong
+          DB_NAME=aimarketing
+          PUBLIC_BASE_URL=http://127.0.0.1:8001
+          WEB_SESSION_SECRET=ci-session-secret-at-least-16chars
+          TOKEN_ENCRYPT_SECRET=ci-token-encrypt-secret-32charsxx
+          ADMIN_PASSWORD=ci-admin
+          ADMIN_TOKEN_SECRET=ci-admin-token-secret-xx
+          EOF
+          # убрать отступы YAML из значений
+          sed -i 's/^[[:space:]]*//' .env
+      - name: Build and start
+        run: docker compose up -d --build postgres backend worker
+      - name: Wait for backend
+        run: |
+          for i in $(seq 1 40); do
+            if curl -fsS http://127.0.0.1:8001/api/health; then
+              exit 0
+            fi
+            sleep 3
+          done
+          docker compose logs backend
+          exit 1
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Smoke
+        run: python backend/smoke_test.py
+        env:
+          SMOKE_BASE: http://127.0.0.1:8001
+      - name: Teardown
+        if: always()
+        run: docker compose down -v

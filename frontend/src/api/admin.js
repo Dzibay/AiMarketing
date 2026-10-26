@@ -24,4 +24,7 @@ export const adminApi = {
   login: (password) => request('/api/admin/login', { method: 'POST', body: JSON.stringify({ password }) }),
   me: () => request('/api/admin/me'),
   users: () => request('/api/admin/users'),
+  blockUser: (id, reason = '') =>
+    request(`/api/admin/users/${id}/block`, { method: 'POST', body: JSON.stringify({ reason }) }),
+  unblockUser: (id) => request(`/api/admin/users/${id}/unblock`, { method: 'POST' }),
 }

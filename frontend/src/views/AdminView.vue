@@ -34,6 +34,8 @@
                   <th>Почта</th>
                   <th>Имя</th>
                   <th>Яндекс</th>
+                  <th>Статус</th>
+                  <th></th>
                 </tr>
               </thead>
               <tbody>
@@ -42,6 +44,30 @@
                   <td>{{ user.email || '—' }}</td>
                   <td>{{ user.name || '—' }}</td>
                   <td>{{ user.has_yandex ? 'да' : 'нет' }}</td>
+                  <td>
+                    <span v-if="user.blocked">блок{{ user.blocked_reason ? `: ${user.blocked_reason}` : '' }}</span>
+                    <span v-else>активен</span>
+                  </td>
+                  <td>
+                    <button
+                      v-if="!user.blocked"
+                      class="btn btn--ghost"
+                      type="button"
+                      :disabled="busyId === user.id"
+                      @click="blockUser(user)"
+                    >
+                      Блок
+                    </button>
+                    <button
+                      v-else
+                      class="btn btn--ghost"
+                      type="button"
+                      :disabled="busyId === user.id"
+                      @click="unblockUser(user)"
+                    >
+                      Разблок
+                    </button>
+                  </td>
                 </tr>
               </tbody>
             </table>
@@ -66,6 +92,7 @@ const { isLoggedIn } = useAdminSession()
 const password = ref('')
 const error = ref('')
 const busy = ref(false)
+const busyId = ref(null)
 const summary = ref(null)
 const users = ref([])
 
@@ -99,6 +126,31 @@ function logout() {
   clearAdminSession()
   summary.value = null
   users.value = []
+}
+
+async function blockUser(user) {
+  const reason = window.prompt('Причина блокировки (необязательно):', '') ?? ''
+  busyId.value = user.id
+  try {
+    const updated = await adminApi.blockUser(user.id, reason)
+    users.value = users.value.map((u) => (u.id === user.id ? updated : u))
+  } catch {
+    error.value = 'Не удалось заблокировать.'
+  } finally {
+    busyId.value = null
+  }
+}
+
+async function unblockUser(user) {
+  busyId.value = user.id
+  try {
+    const updated = await adminApi.unblockUser(user.id)
+    users.value = users.value.map((u) => (u.id === user.id ? updated : u))
+  } catch {
+    error.value = 'Не удалось разблокировать.'
+  } finally {
+    busyId.value = null
+  }
 }
 
 onMounted(load)

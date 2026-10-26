@@ -9,6 +9,7 @@ from app.api.web import router as web_router
 from app.config import settings
 from app.db import ensure_schema, pool
 from app.settings_store import bootstrap_settings
+from app.workers import start_workers, stop_workers
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("app.main")
@@ -26,7 +27,14 @@ async def lifespan(_app: FastAPI):
         log.warning("PUBLIC_BASE_URL не задан — callback OAuth и ссылки юрстраниц могут быть пустыми")
     ensure_schema()
     bootstrap_settings()
+    if settings.run_embedded_workers:
+        start_workers()
+        log.info("Embedded workers enabled (RUN_EMBEDDED_WORKERS)")
+    else:
+        log.info("Embedded workers disabled — используйте сервис worker")
     yield
+    if settings.run_embedded_workers:
+        stop_workers()
     pool.close()
 
 

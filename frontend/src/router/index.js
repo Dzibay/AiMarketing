@@ -4,7 +4,14 @@ import LegalView from '../views/LegalView.vue'
 import AdminView from '../views/AdminView.vue'
 import LoginView from '../views/LoginView.vue'
 import RegisterView from '../views/RegisterView.vue'
+import ForgotPasswordView from '../views/ForgotPasswordView.vue'
+import ResetPasswordView from '../views/ResetPasswordView.vue'
 import CabinetView from '../views/CabinetView.vue'
+import CampaignsView from '../views/CampaignsView.vue'
+import CampaignDetailView from '../views/CampaignDetailView.vue'
+import AnalyticsView from '../views/AnalyticsView.vue'
+import RulesView from '../views/RulesView.vue'
+import ClientsView from '../views/ClientsView.vue'
 import OAuthDoneView from '../views/OAuthDoneView.vue'
 
 const DOCS_PAGES = new Set(['privacy', 'consent', 'offer', 'cookies'])
@@ -15,7 +22,18 @@ const router = createRouter({
     { path: '/', name: 'home', component: HomeView },
     { path: '/login', name: 'login', component: LoginView },
     { path: '/register', name: 'register', component: RegisterView },
+    { path: '/forgot-password', name: 'forgot-password', component: ForgotPasswordView },
+    { path: '/reset-password', name: 'reset-password', component: ResetPasswordView },
     { path: '/cabinet', name: 'cabinet', component: CabinetView },
+    { path: '/cabinet/clients', name: 'clients', component: ClientsView },
+    { path: '/cabinet/campaigns', name: 'campaigns', component: CampaignsView },
+    {
+      path: '/cabinet/campaigns/:id',
+      name: 'campaign-detail',
+      component: CampaignDetailView,
+    },
+    { path: '/cabinet/analytics', name: 'analytics', component: AnalyticsView },
+    { path: '/cabinet/rules', name: 'rules', component: RulesView },
     { path: '/oauth/done', name: 'oauth-done', component: OAuthDoneView },
     { path: '/privacy', name: 'privacy', component: LegalView, props: { page: 'privacy' } },
     { path: '/consent', name: 'consent', component: LegalView, props: { page: 'consent' } },

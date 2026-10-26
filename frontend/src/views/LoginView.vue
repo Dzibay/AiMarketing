@@ -21,7 +21,8 @@
           </form>
 
           <p class="muted-link">
-            Нет аккаунта?
+            <RouterLink to="/forgot-password">Забыли пароль?</RouterLink>
+            · Нет аккаунта?
             <RouterLink to="/register">Регистрация</RouterLink>
           </p>
         </div>
