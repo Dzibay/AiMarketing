@@ -1175,6 +1175,84 @@ input {
   overflow-y: auto;
 }
 
+.neg-list-row {
+  cursor: pointer;
+}
+
+.neg-list-row:hover {
+  border-color: var(--line);
+}
+
+.neg-phrases {
+  flex: 1 1 100%;
+}
+
+.neg-phrases textarea {
+  width: 100%;
+  resize: vertical;
+  font: inherit;
+}
+
+.neg-groups {
+  display: grid;
+  gap: 0.85rem;
+  max-height: 32rem;
+  overflow-y: auto;
+  margin-bottom: 0.85rem;
+  padding-right: 0.25rem;
+}
+
+.neg-group {
+  display: grid;
+  gap: 0.1rem;
+}
+
+.neg-group__head {
+  padding: 0.45rem 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.neg-group__head small {
+  color: var(--muted);
+}
+
+.neg-target {
+  flex-wrap: wrap;
+  padding: 0.35rem 0 0.35rem 1.6rem;
+}
+
+.neg-target > span:first-of-type {
+  flex: 1;
+  min-width: 12rem;
+}
+
+.neg-target.is-off,
+.neg-preview tr.is-off {
+  opacity: 0.55;
+}
+
+.neg-actions {
+  margin: 0;
+}
+
+.neg-preview td {
+  vertical-align: top;
+}
+
+.neg-preview .num {
+  text-align: right;
+  white-space: nowrap;
+}
+
+.neg-unchanged {
+  margin-top: 0.75rem;
+}
+
+.neg-errors {
+  margin: 0.5rem 0 0;
+  padding-left: 1.2rem;
+}
+
 @media (max-width: 640px) {
   .hero {
     padding-top: 2.75rem;

@@ -18,6 +18,7 @@ from app.entity_stats import sync_campaign_entity_stats
 from app.jobs import PRIORITY_BACKGROUND, complete, enqueue, fail, heartbeat, set_progress
 from app.keywords import sync_campaign_keywords
 from app.metrika_sync import sync_counter_goals
+from app.negative_lists import apply_negative_list
 from app.rules import run_enabled_rules_for_user
 from app.search_queries import sync_campaign_search_queries
 from app.stats import sync_direct_stats_for_user, sync_stats_for_user, sync_stats_range
@@ -106,6 +107,13 @@ def _send_digest(user_id: int, payload: dict, progress: Progress) -> dict:
     return send_digest(user_id, _day(payload, "day") or today_msk())
 
 
+def _apply_negative_list(user_id: int, payload: dict, progress: Progress) -> dict:
+    ids = payload.get("campaign_row_ids")
+    if not isinstance(ids, list):
+        raise YandexError("payload", "В задаче нет campaign_row_ids")
+    return apply_negative_list(user_id, _int(payload, "list_id"), ids, progress)
+
+
 def _run_rules(user_id: int, payload: dict, progress: Progress) -> dict:
     return {"rules_run": run_enabled_rules_for_user(user_id)}
 
@@ -120,6 +128,7 @@ HANDLERS: dict[str, Handler] = {
     "stats_range": _stats_range,
     "stats_today": _stats_today,
     "send_digest": _send_digest,
+    "apply_negative_list": _apply_negative_list,
     "run_rules": _run_rules,
 }
 

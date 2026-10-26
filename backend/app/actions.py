@@ -189,6 +189,7 @@ def update_campaign(
     negative_keywords: list[str] | str | None = None,
 ) -> dict:
     from app.adgroups import _parse_phrases
+    from app.negative_lists import CAMPAIGN_CHARS_LIMIT, negatives_length
 
     rows = get_campaign_rows(user_id, [campaign_row_id])
     if not rows:
@@ -211,9 +212,10 @@ def update_campaign(
         patch["DailyBudget"] = {"Amount": micros, "Mode": "STANDARD"}
     if negative_keywords is not None:
         negatives = _parse_phrases(negative_keywords)
-        if len(negatives) > 300:
-            raise YandexError("limit")
-        patch["NegativeKeywords"] = {"Items": negatives}
+        if negatives_length(negatives) > CAMPAIGN_CHARS_LIMIT:
+            raise YandexError("negatives-limit")
+        # Пустой список Директ принимает только как null.
+        patch["NegativeKeywords"] = {"Items": negatives} if negatives else None
     if len(patch) == 1:
         raise YandexError("empty")
 

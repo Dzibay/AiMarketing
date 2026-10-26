@@ -11,6 +11,7 @@ import CampaignsView from '../views/CampaignsView.vue'
 import CampaignDetailView from '../views/CampaignDetailView.vue'
 import AnalyticsView from '../views/AnalyticsView.vue'
 import RulesView from '../views/RulesView.vue'
+import NegativeListsView from '../views/NegativeListsView.vue'
 import ClientsView from '../views/ClientsView.vue'
 import OverviewView from '../views/OverviewView.vue'
 import OAuthDoneView from '../views/OAuthDoneView.vue'
@@ -36,6 +37,7 @@ const router = createRouter({
     },
     { path: '/cabinet/analytics', name: 'analytics', component: AnalyticsView },
     { path: '/cabinet/rules', name: 'rules', component: RulesView },
+    { path: '/cabinet/negative-lists', name: 'negative-lists', component: NegativeListsView },
     { path: '/oauth/done', name: 'oauth-done', component: OAuthDoneView },
     { path: '/privacy', name: 'privacy', component: LegalView, props: { page: 'privacy' } },
     { path: '/consent', name: 'consent', component: LegalView, props: { page: 'consent' } },

@@ -218,6 +218,21 @@ export const webApi = {
   updateDigest: (payload) => request('/api/web/digest', { method: 'PUT', body: JSON.stringify(payload) }),
   digestPreview: () => request('/api/web/digest/preview'),
   digestSend: () => request('/api/web/digest/send', { method: 'POST' }),
+  negativeLists: () => request('/api/web/negative-lists'),
+  negativeList: (id) => request(`/api/web/negative-lists/${id}`),
+  createNegativeList: (payload) =>
+    request('/api/web/negative-lists', { method: 'POST', body: JSON.stringify(payload) }),
+  updateNegativeList: (id, payload) =>
+    request(`/api/web/negative-lists/${id}`, { method: 'PATCH', body: JSON.stringify(payload) }),
+  deleteNegativeList: (id) => request(`/api/web/negative-lists/${id}`, { method: 'DELETE' }),
+  negativeTargets: () => request('/api/web/negative-lists/targets'),
+  negativePreview: (id, campaignRowIds) =>
+    request(`/api/web/negative-lists/${id}/preview`, {
+      method: 'POST',
+      body: JSON.stringify({ campaign_row_ids: campaignRowIds }),
+    }),
+  negativeApply: (id, campaignRowIds, onProgress) =>
+    runJob(`/api/web/negative-lists/${id}/apply`, { campaign_row_ids: campaignRowIds }, onProgress),
 }
 
 export const ERRORS = {
@@ -256,6 +271,12 @@ export const ERRORS = {
   stale: 'Задача прервалась — воркер перестал отвечать.',
   'job-timeout': 'Задача выполняется слишком долго. Проверьте результат позже.',
   'digest-hour': 'Час отправки — от 0 до 23.',
+  phrase: 'Проверьте минус-фразы: до 7 слов, слово до 35 символов.',
+  'negatives-limit': 'Минус-фраз больше 20 000 символов — это лимит Директа на кампанию.',
+  'in-use': 'Список применён к кампаниям. Сначала снимите его со всех кампаний.',
+  busy: 'Идёт другое применение списка — задача повторится автоматически.',
+  archived: 'Кампания в архиве.',
+  unsupported: 'Медийные кампании не поддерживают минус-фразы.',
 }
 
 export const JOB_LABELS = {
@@ -269,6 +290,7 @@ export const JOB_LABELS = {
   run_rules: 'Прогон правил',
   stats_today: 'Расход за сегодня и балансы',
   send_digest: 'Утренний дайджест',
+  apply_negative_list: 'Применение списка минус-фраз',
 }
 
 export function jobProgressText(job) {

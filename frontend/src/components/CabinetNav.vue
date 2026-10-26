@@ -8,6 +8,9 @@
     <RouterLink to="/cabinet/campaigns" :class="{ active: isActive('/cabinet/campaigns') }">Кампании</RouterLink>
     <RouterLink to="/cabinet/analytics" :class="{ active: isActive('/cabinet/analytics') }">Аналитика</RouterLink>
     <RouterLink to="/cabinet/rules" :class="{ active: isActive('/cabinet/rules') }">Правила</RouterLink>
+    <RouterLink to="/cabinet/negative-lists" :class="{ active: isActive('/cabinet/negative-lists') }">
+      Минус-фразы
+    </RouterLink>
   </nav>
 </template>
 
