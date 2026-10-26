@@ -18,7 +18,7 @@ import { computed, onMounted, ref } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
 import SiteHeader from '../components/SiteHeader.vue'
 import { ERRORS, webApi } from '../api/web'
-import { setSession } from '../composables/useSession'
+import { setSession, takeOAuthReturn } from '../composables/useSession'
 import { useHead } from '../utils/useHead'
 
 useHead('Подключение Яндекса — AiMarketing', true)
@@ -55,7 +55,7 @@ onMounted(async () => {
   if (legacyToken) {
     setSession(legacyToken)
     pending.value = false
-    router.replace('/cabinet')
+    router.replace(takeOAuthReturn())
     return
   }
 
@@ -70,7 +70,7 @@ onMounted(async () => {
     const data = await webApi.oauthExchange(code)
     setSession(data.token)
     pending.value = false
-    router.replace('/cabinet')
+    router.replace(takeOAuthReturn())
   } catch (err) {
     failed.value = true
     pending.value = false

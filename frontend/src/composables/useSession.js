@@ -25,3 +25,26 @@ export function useSession() {
     clearSession,
   }
 }
+
+const OAUTH_RETURN_KEY = 'aimarketing-oauth-return'
+
+/** Запоминает, куда вернуть пользователя после подключения Яндекса (только внутренние пути). */
+export function setOAuthReturn(path) {
+  try {
+    if (path && path.startsWith('/') && !path.startsWith('//')) sessionStorage.setItem(OAUTH_RETURN_KEY, path)
+    else sessionStorage.removeItem(OAUTH_RETURN_KEY)
+  } catch {
+    // Без sessionStorage вернёмся в обзор.
+  }
+}
+
+export function takeOAuthReturn(fallback = '/cabinet') {
+  try {
+    const path = sessionStorage.getItem(OAUTH_RETURN_KEY)
+    sessionStorage.removeItem(OAUTH_RETURN_KEY)
+    if (path && path.startsWith('/') && !path.startsWith('//')) return path
+  } catch {
+    // ignore
+  }
+  return fallback
+}

@@ -11,6 +11,7 @@ from decimal import Decimal
 
 import httpx
 
+from app import direct_api
 from app.adgroups import _campaign_row
 from app.db import pool
 from app.stats import _rub_to_kopecks
@@ -18,7 +19,6 @@ from app.sync_runs import finish_run, start_run
 from app.yandex import YandexError, get_connection_access_token
 
 log = logging.getLogger("app.entity_stats")
-REPORTS_URL = "https://api.direct.yandex.com/json/v5/reports"
 
 
 def _fetch_report(
@@ -74,7 +74,7 @@ def _fetch_report(
     for _attempt in range(10):
         try:
             with httpx.Client(timeout=120.0) as client:
-                response = client.post(REPORTS_URL, headers=headers, json=body)
+                response = client.post(direct_api.v5_url(access_token, "reports"), headers=headers, json=body)
         except httpx.HTTPError as exc:
             log.warning("entity_stats %s: %s", report_type, exc)
             raise YandexError("direct") from exc

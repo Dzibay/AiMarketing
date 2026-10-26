@@ -11,6 +11,7 @@ from decimal import Decimal
 
 import httpx
 
+from app import direct_api
 from app.adgroups import _campaign_row, _parse_phrases, update_adgroup
 from app.db import pool
 from app.keywords import create_keywords
@@ -19,7 +20,6 @@ from app.sync_runs import finish_run, start_run
 from app.yandex import YandexError, get_connection_access_token
 
 log = logging.getLogger("app.search_queries")
-REPORTS_URL = "https://api.direct.yandex.com/json/v5/reports"
 
 
 def fetch_search_query_report(
@@ -77,7 +77,7 @@ def fetch_search_query_report(
     for _attempt in range(10):
         try:
             with httpx.Client(timeout=120.0) as client:
-                response = client.post(REPORTS_URL, headers=headers, json=body)
+                response = client.post(direct_api.v5_url(access_token, "reports"), headers=headers, json=body)
         except httpx.HTTPError as exc:
             log.warning("search_queries report: %s", exc)
             raise YandexError("direct") from exc

@@ -50,7 +50,6 @@ from app.search_queries import (
 from app.db import pool
 from app.job_handlers import submit
 from app.jobs import PRIORITY_USER, get_job, list_jobs, public_job
-from app.links import create_link, delete_link, list_links
 from app.metrika_sync import list_goals
 from app.oauth_codes import consume_oauth_code, issue_oauth_code
 from app.rules import (
@@ -63,7 +62,6 @@ from app.rules import (
 )
 from app.password_reset import request_password_reset, reset_password
 from app.settings_store import consent_url, cookies_url, offer_url, privacy_url, public_base_url
-from app.stats import analytics_summary
 from app.sync_runs import list_sync_runs
 from app.telegram_notify import (
     create_link_code,
@@ -81,7 +79,9 @@ from app.users import (
     register_user,
 )
 from app.web_auth import make_session, require_web_user, verify_session
+from app.workspaces import ensure_workspaces, list_workspaces
 from app.yandex import (
+    OAUTH_MODES,
     YandexError,
     complete_oauth,
     delete_connection,
@@ -89,6 +89,7 @@ from app.yandex import (
     list_direct,
     list_metrika,
     set_direct_enabled,
+    set_connection_roles,
     set_metrika_enabled,
     start_oauth,
     yandex_configured,
@@ -235,6 +236,7 @@ class RuleBody(BaseModel):
     action: str = "pause"
     dry_run: bool = True
     scope_account_id: int | None = None
+    scope_workspace_id: int | None = None
     cooldown_hours: int = 24
     goal_row_id: int | None = None
     action_budget_rub: float | None = None
@@ -254,13 +256,14 @@ class RulePatchBody(BaseModel):
     action_budget_rub: float | None = None
     action_bid_rub: float | None = None
     scope_account_id: int | None = None
+    scope_workspace_id: int | None = None
     target: str | None = None
     rule_type: str | None = None
 
 
-class LinkBody(BaseModel):
-    account_id: int
-    counter_row_id: int
+class ConnectionRolesBody(BaseModel):
+    use_metrika: bool | None = None
+    use_direct: bool | None = None
 
 
 class OAuthExchangeBody(BaseModel):
@@ -407,18 +410,23 @@ def web_me(user_id: int = Depends(require_web_user)) -> dict:
         "connections": list_connections(user_id),
         "metrika": list_metrika(user_id),
         "direct": list_direct(user_id),
-        "links": list_links(user_id),
+        "workspaces": list_workspaces(user_id),
     }
 
 
 @router.get("/yandex/start")
 def web_yandex_start(
     purpose: str = "login",
+    mode: str = "",
     authorization: str = Header(default=""),
 ) -> dict:
+    """mode: "" — Метрика и Директ, "metrika" / "direct" — одна роль, "sandbox" — песочница Директа."""
     purpose = (purpose or "login").strip().lower()
     if purpose not in ("login", "connect"):
         raise HTTPException(status_code=400, detail="purpose")
+    mode = (mode or "").strip().lower()
+    if mode not in OAUTH_MODES or (mode and purpose != "connect"):
+        raise HTTPException(status_code=400, detail="mode")
     user_id: int | None = None
     if purpose == "connect":
         scheme, _, token = authorization.partition(" ")
@@ -426,7 +434,7 @@ def web_yandex_start(
         if user_id is None:
             raise HTTPException(status_code=401, detail="unauthorized")
     try:
-        url = start_oauth(purpose=purpose, user_id=user_id)
+        url = start_oauth(purpose=purpose, user_id=user_id, mode=mode)
     except YandexError as exc:
         raise _http(exc) from exc
     return {"url": url}
@@ -464,7 +472,24 @@ def web_sync_connection(
     user_id: int = Depends(require_web_user),
 ) -> dict:
     _require_owned("yandex_connections", connection_id, user_id)
-    return _start_job("sync_connection", user_id, {"connection_id": connection_id})
+    # deep: ещё кампании всех кабинетов и цели счётчиков — чтобы всё подтянулось сразу.
+    return _start_job("sync_connection", user_id, {"connection_id": connection_id, "deep": True})
+
+
+@router.patch("/connections/{connection_id}")
+def web_patch_connection(
+    connection_id: int,
+    body: ConnectionRolesBody,
+    user_id: int = Depends(require_web_user),
+) -> dict:
+    try:
+        out = set_connection_roles(
+            user_id, connection_id, use_metrika=body.use_metrika, use_direct=body.use_direct
+        )
+    except YandexError as exc:
+        raise _http(exc) from exc
+    ensure_workspaces(user_id)
+    return out
 
 
 @router.delete("/connections/{connection_id}")
@@ -486,9 +511,13 @@ def web_patch_metrika(
     user_id: int = Depends(require_web_user),
 ) -> dict:
     try:
-        return set_metrika_enabled(user_id, item_id, body.enabled)
+        out = set_metrika_enabled(user_id, item_id, body.enabled)
     except YandexError as exc:
         raise _http(exc) from exc
+    # Включённый счётчик сразу получает своё пространство.
+    if body.enabled:
+        ensure_workspaces(user_id)
+    return out
 
 
 @router.patch("/direct/{item_id}")
@@ -891,33 +920,13 @@ def web_search_query_bulk(
 
 
 @router.get("/actions")
-def web_action_logs(user_id: int = Depends(require_web_user)) -> dict:
-    return {"items": list_action_logs(user_id)}
-
-
-@router.get("/analytics")
-def web_analytics(
-    date_from: str = "",
-    date_to: str = "",
-    account_id: int | None = None,
-    goal_row_id: int | None = None,
+def web_action_logs(
+    source: str = "",
+    before_id: int | None = None,
+    limit: int = 50,
     user_id: int = Depends(require_web_user),
 ) -> dict:
-    today = date.today()
-    try:
-        d_from = date.fromisoformat(date_from) if date_from else today - timedelta(days=7)
-        d_to = date.fromisoformat(date_to) if date_to else today - timedelta(days=1)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail="date") from exc
-    if d_from > d_to:
-        raise HTTPException(status_code=400, detail="date")
-    return analytics_summary(
-        user_id,
-        date_from=d_from,
-        date_to=d_to,
-        account_id=account_id,
-        goal_row_id=goal_row_id,
-    )
+    return {"items": list_action_logs(user_id, limit=limit, source=source or None, before_id=before_id)}
 
 
 @router.post("/analytics/sync")
@@ -974,8 +983,8 @@ def web_get_job(job_id: int, user_id: int = Depends(require_web_user)) -> dict:
 
 
 @router.get("/rules")
-def web_list_rules(user_id: int = Depends(require_web_user)) -> dict:
-    return {"items": list_rules(user_id)}
+def web_list_rules(workspace_id: int | None = None, user_id: int = Depends(require_web_user)) -> dict:
+    return {"items": list_rules(user_id, workspace_id=workspace_id)}
 
 
 @router.get("/rules/runs")
@@ -1041,6 +1050,7 @@ def web_create_rule(body: RuleBody, user_id: int = Depends(require_web_user)) ->
             action=body.action,
             dry_run=body.dry_run,
             scope_account_id=body.scope_account_id,
+            scope_workspace_id=body.scope_workspace_id,
             cooldown_hours=body.cooldown_hours,
             goal_row_id=body.goal_row_id,
             action_budget_rub=body.action_budget_rub,
@@ -1097,24 +1107,3 @@ def web_sync_goals(counter_row_id: int, user_id: int = Depends(require_web_user)
     _require_owned("metrika_counters", counter_row_id, user_id)
     return _start_job("sync_goals", user_id, {"counter_row_id": counter_row_id})
 
-
-@router.get("/links")
-def web_list_links(user_id: int = Depends(require_web_user)) -> dict:
-    return {"items": list_links(user_id)}
-
-
-@router.post("/links")
-def web_create_link(body: LinkBody, user_id: int = Depends(require_web_user)) -> dict:
-    try:
-        return create_link(user_id, account_id=body.account_id, counter_row_id=body.counter_row_id)
-    except YandexError as exc:
-        raise _http(exc) from exc
-
-
-@router.delete("/links/{link_id}")
-def web_delete_link(link_id: int, user_id: int = Depends(require_web_user)) -> dict:
-    try:
-        delete_link(user_id, link_id)
-    except YandexError as exc:
-        raise _http(exc) from exc
-    return {"ok": True}

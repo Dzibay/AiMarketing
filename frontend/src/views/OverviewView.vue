@@ -1,309 +1,380 @@
 <template>
-  <div class="site">
-    <SiteHeader solid />
-    <main class="cabinet">
-      <div class="wrap">
-        <div class="cabinet__head">
-          <div>
-            <h1>Сводка</h1>
-            <p>Все клиенты на одном экране: расход, KPI, бюджет, баланс — и что требует внимания.</p>
+  <AppShell>
+    <div class="cabinet__head">
+      <div>
+        <h1>Обзор</h1>
+        <p>Все сайты и клиенты на одном экране: расход, KPI, бюджет, баланс и что требует внимания.</p>
+      </div>
+      <div class="row-actions">
+        <button class="btn btn--accent" type="button" :disabled="refreshing || loading" @click="refresh">
+          {{ refreshing ? 'Обновляем…' : 'Обновить расход за сегодня' }}
+        </button>
+      </div>
+    </div>
+
+    <div v-if="loading" class="panel"><p class="empty">Собираем обзор…</p></div>
+
+    <template v-else>
+      <section v-if="checklist.some((s) => !s.done)" class="panel">
+        <h2>Старт</h2>
+        <p class="hint">Несколько шагов — и кабинет начнёт экономить время.</p>
+        <ul class="checklist">
+          <li v-for="step in checklist" :key="step.id" :class="{ done: step.done }">
+            <span class="checklist__mark">{{ step.done ? '✓' : '○' }}</span>
+            <div>
+              <strong>{{ step.title }}</strong>
+              <small>{{ step.hint }}</small>
+            </div>
+            <RouterLink v-if="!step.done && step.to" class="btn btn--ghost" :to="step.to">Открыть</RouterLink>
+          </li>
+        </ul>
+      </section>
+
+      <template v-if="rows.length">
+        <p class="sync-status overview-updated">
+          <template v-if="refreshing">{{ refreshText }}</template>
+          <template v-else-if="data.today_updated_at">
+            Расход за сегодня — на {{ formatDateTime(data.today_updated_at) }}, Директ отдаёт его с задержкой.
+          </template>
+          <template v-else>Расход за сегодня ещё не загружался — нажмите «Обновить».</template>
+        </p>
+
+        <div class="stats-grid">
+          <div class="stat-card">
+            <small>Сегодня</small>
+            <strong>{{ rub(totals.spend_today) }}</strong>
           </div>
-          <div class="row-actions">
-            <button class="btn btn--accent" type="button" :disabled="refreshing || loading" @click="refresh">
-              {{ refreshing ? 'Обновляем…' : 'Обновить расход за сегодня' }}
-            </button>
+          <div class="stat-card">
+            <small>Вчера</small>
+            <strong>{{ rub(totals.spend_yesterday) }}</strong>
+          </div>
+          <div class="stat-card">
+            <small>Конверсии вчера</small>
+            <strong>{{ num(totals.conversions_yesterday || 0) }}</strong>
+          </div>
+          <div class="stat-card">
+            <small>7 дней</small>
+            <strong>{{ rub(totals.spend_7d) }}</strong>
+          </div>
+          <div class="stat-card">
+            <small>CPA 7 дней</small>
+            <strong>{{ totals.conversions_7d ? rub(totals.spend_7d / totals.conversions_7d) : '—' }}</strong>
+          </div>
+          <div class="stat-card">
+            <small>Горит</small>
+            <strong :class="fireCount ? 'tone-bad' : 'tone-ok'">{{ fireCount }}</strong>
           </div>
         </div>
-        <CabinetNav />
 
-        <div v-if="loading" class="panel"><p class="empty">Собираем сводку…</p></div>
-
-        <section v-else-if="!hasAccounts" class="panel">
-          <h2>Пока нечего сводить</h2>
-          <p class="hint">
-            Подключите Яндекс и включите кабинеты Директа на главной, затем привяжите их к клиентам.
-          </p>
-          <RouterLink class="btn btn--accent" to="/cabinet">К подключениям</RouterLink>
-        </section>
-
-        <template v-else>
-          <p class="sync-status overview-updated">
-            <template v-if="refreshing">{{ refreshText }}</template>
-            <template v-else-if="data.today_updated_at">
-              Расход за сегодня — на {{ formatTime(data.today_updated_at) }}, Директ отдаёт его с задержкой.
-            </template>
-            <template v-else>Расход за сегодня ещё не загружался — нажмите «Обновить».</template>
-          </p>
-
-          <div class="stats-grid">
-            <div class="stat-card">
-              <small>Сегодня</small>
-              <strong>{{ rub(totals.spend_today) }}</strong>
-            </div>
-            <div class="stat-card">
-              <small>Вчера</small>
-              <strong>{{ rub(totals.spend_yesterday) }}</strong>
-            </div>
-            <div class="stat-card">
-              <small>Конверсии вчера</small>
-              <strong>{{ totals.conversions_yesterday || 0 }}</strong>
-            </div>
-            <div class="stat-card">
-              <small>7 дней</small>
-              <strong>{{ rub(totals.spend_7d) }}</strong>
-            </div>
-            <div class="stat-card">
-              <small>CPA 7 дней</small>
-              <strong>{{ totals.conversions_7d ? rub(totals.spend_7d / totals.conversions_7d) : '—' }}</strong>
-            </div>
-            <div class="stat-card">
-              <small>Горит</small>
-              <strong :class="fireCount ? 'tone-bad' : 'tone-ok'">{{ fireCount }}</strong>
-            </div>
-          </div>
-
-          <section ref="problemsPanel" class="panel overview-problems">
-            <div class="panel__head">
-              <h2>Где горит</h2>
-            </div>
-            <p class="hint">
-              Токены и синки, баланс и бюджет, KPI, модерация, остановленные кампании и резкие изменения
-              вчерашнего дня против двух недель до него.
-            </p>
-            <div class="filters">
-              <div class="field">
-                <label>Важность</label>
-                <select v-model="severityFilter">
-                  <option value="all">Все</option>
-                  <option value="fire">Критично и внимание</option>
-                  <option value="critical">Только критично</option>
-                </select>
-              </div>
-              <div class="field">
-                <label>Клиент</label>
-                <select v-model="clientFilter">
-                  <option value="">Все клиенты</option>
-                  <option v-for="c in data.clients" :key="clientKey(c.id)" :value="clientKey(c.id)">
-                    {{ c.name }}
-                  </option>
-                </select>
-              </div>
-            </div>
-            <p v-if="!filteredProblems.length" class="empty">
-              {{ data.problems.length ? 'По выбранным фильтрам ничего.' : 'Ничего не горит.' }}
-            </p>
-            <div v-else class="list">
-              <div
-                v-for="(p, i) in visibleProblems"
-                :key="`${p.kind}-${p.client_id}-${p.account_id}-${p.campaign_row_id}-${i}`"
-                class="list-row problem"
-                :class="`is-${p.severity}`"
-              >
-                <div>
-                  <span class="chip" :class="`chip--${p.severity}`">{{ SEVERITY_LABELS[p.severity] }}</span>
-                  <strong>{{ p.title }}</strong>
-                  <small>{{ problemWhere(p) }}<template v-if="p.detail"> · {{ ERRORS[p.detail] || p.detail }}</template></small>
-                </div>
-                <RouterLink
-                  v-if="p.campaign_row_id"
-                  class="btn btn--ghost"
-                  :to="`/cabinet/campaigns/${p.campaign_row_id}`"
-                >
-                  К кампании
-                </RouterLink>
-                <RouterLink v-else-if="CONNECTION_KINDS.has(p.kind)" class="btn btn--ghost" to="/cabinet">
-                  К подключениям
-                </RouterLink>
-                <RouterLink v-else-if="CLIENT_KINDS.has(p.kind)" class="btn btn--ghost" to="/cabinet/clients">
-                  К клиенту
-                </RouterLink>
-              </div>
-            </div>
-            <div v-if="filteredProblems.length > visibleProblems.length" class="pager">
-              <span class="sync-status">Показано {{ visibleProblems.length }} из {{ filteredProblems.length }}</span>
-              <button class="btn btn--ghost" type="button" @click="showAllProblems = true">Показать все</button>
-            </div>
-          </section>
-
-          <section class="panel">
-            <div class="panel__head">
-              <h2>Клиенты</h2>
-            </div>
-            <p class="hint">
-              KPI — за 7 дней против цели клиента, темп — прогноз расхода месяца против бюджета, баланс —
-              общий счёт Директа и на сколько дней его хватит при расходе последней недели.
-            </p>
-            <div class="filters">
-              <div class="field">
-                <label>Поиск</label>
-                <input v-model="search" type="search" placeholder="Название клиента" />
-              </div>
+        <section class="panel">
+          <div class="panel__head">
+            <h2>Пространства</h2>
+            <div class="filters filters--inline">
+              <input v-model="search" type="search" placeholder="Сайт или клиент" />
               <label class="check-row">
-                <input v-model="view.onlyProblems" type="checkbox" />
+                <input v-model="onlyProblems" type="checkbox" />
                 Только с проблемами
               </label>
             </div>
-            <p v-if="!sortedClients.length" class="empty">Нет клиентов под фильтр.</p>
-            <div v-else class="table-scroll">
-              <table class="table overview-table">
-                <thead>
-                  <tr>
-                    <th v-for="col in COLUMNS" :key="col.key" :class="{ num: col.num }">
-                      <button class="th-sort" type="button" @click="sortBy(col.key)">
-                        {{ col.label }}<span v-if="view.sort === col.key">{{ view.dir === 'asc' ? ' ↑' : ' ↓' }}</span>
-                      </button>
-                    </th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr v-for="c in sortedClients" :key="clientKey(c.id)" :class="c.severity && `is-${c.severity}`">
-                    <td>
-                      <strong>{{ c.name }}</strong>
-                      <small class="cell-note">
-                        {{ c.accounts ? `кабинетов: ${c.accounts}` : 'нет кабинетов' }}
-                        <template v-if="c.accounts && !c.stats_synced_at"> · статистика не загружена</template>
-                      </small>
-                    </td>
-                    <td class="num">{{ rub(c.spend_today) }}</td>
-                    <td class="num">
-                      {{ rub(c.spend_yesterday) }}
-                      <small class="cell-note">{{ c.conversions_yesterday }} конв.</small>
-                    </td>
-                    <td class="num">
-                      {{ rub(c.spend_7d) }}
-                      <small class="cell-note">{{ c.conversions_7d }} конв. · {{ c.clicks_7d }} кл.</small>
-                    </td>
-                    <td class="num">
-                      <template v-if="c.kpi.type">
-                        <span :class="KPI_TONES[c.kpi.status]">{{ kpiValue(c.kpi) }}</span>
-                        <small class="cell-note">{{ kpiTarget(c.kpi) }}</small>
+          </div>
+          <p class="hint">
+            KPI — за 7 дней против цели, темп — прогноз расхода месяца против бюджета, баланс — на сколько дней
+            хватит при расходе последней недели. Клик по строке открывает пространство.
+          </p>
+          <p v-if="!visibleFolders.length" class="empty">Нет пространств под фильтр.</p>
+          <div v-else class="table-scroll">
+            <table class="table overview-table">
+              <thead>
+                <tr>
+                  <th>Сайт</th>
+                  <th class="num">Сегодня</th>
+                  <th class="num">Вчера</th>
+                  <th class="num">7 дней</th>
+                  <th class="num">KPI 7 дн.</th>
+                  <th class="num">Темп бюджета</th>
+                  <th class="num">Баланс</th>
+                  <th class="num">Проблемы</th>
+                </tr>
+              </thead>
+              <tbody v-for="folder in visibleFolders" :key="folder.key">
+                <tr class="folder-row">
+                  <td>
+                    <strong>{{ folder.name }}</strong>
+                    <small class="cell-note">{{ folder.rows.length }} {{ plural(folder.rows.length, 'сайт', 'сайта', 'сайтов') }}</small>
+                  </td>
+                  <td class="num">{{ rub(folder.spend_today) }}</td>
+                  <td class="num">{{ rub(folder.spend_yesterday) }}</td>
+                  <td class="num">{{ rub(folder.spend_7d) }}</td>
+                  <td class="num"></td>
+                  <td class="num">
+                    <template v-if="folder.budget">
+                      <span :class="BUDGET_TONES[folder.budget.status]">
+                        {{ folder.budget.pace_pct != null ? `${folder.budget.pace_pct}%` : '—' }}
+                      </span>
+                      <small class="cell-note">общий бюджет {{ rub(folder.budget.budget_kopecks) }}</small>
+                    </template>
+                  </td>
+                  <td class="num"></td>
+                  <td class="num"></td>
+                </tr>
+                <tr
+                  v-for="w in folder.rows"
+                  :key="w.id ?? 'none'"
+                  class="ws-row"
+                  :class="[w.severity && `is-${w.severity}`, { 'is-link': w.id }]"
+                  @click="w.id && openWs(w.id)"
+                >
+                  <td>
+                    <RouterLink v-if="w.id" :to="`/w/${w.id}/summary`" @click.stop>
+                      <strong>{{ w.name }}</strong>
+                    </RouterLink>
+                    <strong v-else>{{ w.name }}</strong>
+                    <small class="cell-note">
+                      <template v-if="w.id">
+                        № {{ w.counter_id }} · {{ w.campaigns }} {{ plural(w.campaigns, 'кампания', 'кампании', 'кампаний') }}
+                        <template v-if="!w.counter_ok"> · <span class="tone-warn">счётчик недоступен</span></template>
+                        <template v-if="w.accounts && !w.stats_synced_at"> · статистика не загружена</template>
                       </template>
-                      <template v-else>
-                        {{ c.cpa_7d != null ? rub(c.cpa_7d) : '—' }}
-                        <small class="cell-note">{{ c.cpa_7d != null ? 'CPA, цель не задана' : 'KPI не задан' }}</small>
-                      </template>
-                    </td>
-                    <td class="num">
-                      <template v-if="c.budget">
-                        <span :class="BUDGET_TONES[c.budget.status]">
-                          {{ c.budget.pace_pct != null ? `${c.budget.pace_pct}%` : '—' }}
-                        </span>
-                        <small class="cell-note">
-                          {{ rub(c.budget.spent_kopecks) }} из {{ rub(c.budget.budget_kopecks) }}
-                        </small>
-                      </template>
-                      <template v-else>—</template>
-                    </td>
-                    <td class="num">
-                      {{ c.balance_kopecks != null ? rub(c.balance_kopecks) : '—' }}
-                      <small v-if="c.days_on_balance != null" class="cell-note" :class="balanceTone(c.days_on_balance)">
-                        ≈ {{ c.days_on_balance }} дн.
-                      </small>
-                    </td>
-                    <td class="num">
-                      <button
-                        v-if="c.severity"
-                        class="th-sort problem-counts"
-                        type="button"
-                        title="Показать проблемы клиента"
-                        @click="focusClient(c.id)"
-                      >
-                        <span v-if="c.problems.critical" class="tone-bad">🔴 {{ c.problems.critical }}</span>
-                        <span v-if="c.problems.warning" class="tone-warn">🟠 {{ c.problems.warning }}</span>
-                        <span v-if="c.problems.info" class="cell-note">ⓘ {{ c.problems.info }}</span>
-                      </button>
-                      <span v-else class="tone-ok">✓</span>
-                    </td>
-                  </tr>
-                </tbody>
-              </table>
+                      <template v-else>Кампании, которые не входят ни в одно пространство</template>
+                    </small>
+                  </td>
+                  <td class="num">{{ rub(w.spend_today) }}</td>
+                  <td class="num">
+                    {{ rub(w.spend_yesterday) }}
+                    <small class="cell-note">{{ num(w.conversions_yesterday) }} конв.</small>
+                  </td>
+                  <td class="num">
+                    {{ rub(w.spend_7d) }}
+                    <small class="cell-note">{{ num(w.conversions_7d) }} конв. · {{ num(w.clicks_7d) }} кл.</small>
+                  </td>
+                  <td class="num">
+                    <template v-if="w.kpi?.type">
+                      <span :class="KPI_TONES[w.kpi.status]">{{ kpiValue(w.kpi) }}</span>
+                      <small class="cell-note">{{ kpiTarget(w.kpi) }}</small>
+                    </template>
+                    <template v-else>
+                      {{ w.cpa_7d != null ? rub(w.cpa_7d) : '—' }}
+                      <small class="cell-note">{{ w.cpa_7d != null ? 'CPA, KPI не задан' : 'KPI не задан' }}</small>
+                    </template>
+                  </td>
+                  <td class="num">
+                    <template v-if="w.budget">
+                      <span :class="BUDGET_TONES[w.budget.status]">
+                        {{ w.budget.pace_pct != null ? `${w.budget.pace_pct}%` : '—' }}
+                      </span>
+                      <small class="cell-note">{{ rub(w.budget.spent_kopecks) }} из {{ rub(w.budget.budget_kopecks) }}</small>
+                    </template>
+                    <template v-else>—</template>
+                  </td>
+                  <td class="num">
+                    {{ w.balance_kopecks != null ? rub(w.balance_kopecks) : '—' }}
+                    <small v-if="w.days_on_balance != null" class="cell-note" :class="balanceTone(w.days_on_balance)">
+                      ≈ {{ w.days_on_balance }} дн.
+                    </small>
+                  </td>
+                  <td class="num">
+                    <button
+                      v-if="w.severity"
+                      class="th-sort problem-counts"
+                      type="button"
+                      title="Показать проблемы"
+                      @click.stop="focusWorkspace(w.id)"
+                    >
+                      <span v-if="w.problems.critical" class="tone-bad">● {{ w.problems.critical }}</span>
+                      <span v-if="w.problems.warning" class="tone-warn">● {{ w.problems.warning }}</span>
+                      <span v-if="w.problems.info" class="cell-note">ⓘ {{ w.problems.info }}</span>
+                    </button>
+                    <span v-else class="tone-ok">✓</span>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <section ref="problemsPanel" class="panel overview-problems">
+          <div class="panel__head">
+            <h2>Где горит</h2>
+            <div class="filters filters--inline">
+              <select v-model="severityFilter">
+                <option value="all">Все</option>
+                <option value="fire">Критично и внимание</option>
+                <option value="critical">Только критично</option>
+              </select>
+              <select v-model="wsFilter">
+                <option value="">Все пространства</option>
+                <option v-for="w in rows" :key="w.id ?? 'none'" :value="wsKey(w.id)">{{ w.name }}</option>
+              </select>
             </div>
-          </section>
-        </template>
-      </div>
-    </main>
-    <SiteFooter />
-  </div>
+          </div>
+          <p class="hint">
+            Токены и синки, баланс и бюджет, KPI, модерация, остановленные кампании и резкие изменения вчерашнего дня.
+          </p>
+          <p v-if="!filteredProblems.length" class="empty">
+            {{ data.problems.length ? 'По выбранным фильтрам ничего.' : 'Ничего не горит.' }}
+          </p>
+          <div v-else class="list">
+            <div
+              v-for="(p, i) in visibleProblems"
+              :key="`${p.kind}-${p.workspace_id}-${p.account_id}-${p.campaign_row_id}-${i}`"
+              class="list-row problem"
+              :class="`is-${p.severity}`"
+            >
+              <div>
+                <span class="chip" :class="`chip--${p.severity}`">{{ SEVERITY_LABELS[p.severity] }}</span>
+                <strong>{{ p.title }}</strong>
+                <small>
+                  {{ [p.workspace_name, p.object_name].filter(Boolean).join(' · ') }}
+                  <template v-if="p.detail"> · {{ errorDetail(p.detail) }}</template>
+                </small>
+              </div>
+              <RouterLink v-if="problemLink(p)" class="btn btn--ghost" :to="problemLink(p).to">
+                {{ problemLink(p).label }}
+              </RouterLink>
+            </div>
+          </div>
+          <div v-if="filteredProblems.length > visibleProblems.length" class="pager">
+            <span class="sync-status">Показано {{ visibleProblems.length }} из {{ filteredProblems.length }}</span>
+            <button class="btn btn--ghost" type="button" @click="showAllProblems = true">Показать все</button>
+          </div>
+        </section>
+      </template>
+    </template>
+  </AppShell>
 </template>
 
 <script setup>
-import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { RouterLink, useRouter } from 'vue-router'
-import CabinetNav from '../components/CabinetNav.vue'
-import SiteFooter from '../components/SiteFooter.vue'
-import SiteHeader from '../components/SiteHeader.vue'
-import { ERRORS, errorText, jobProgressText, webApi } from '../api/web'
-import { getSession } from '../composables/useSession'
+import AppShell from '../components/AppShell.vue'
+import { aiApi, errorDetail, errorText, jobProgressText, webApi } from '../api/web'
 import { pushToast } from '../composables/useToasts'
+import { useWorkspaces } from '../composables/useWorkspaces'
 import { useHead } from '../utils/useHead'
+import {
+  balanceTone,
+  BUDGET_TONES,
+  formatDateTime,
+  KPI_TONES,
+  kpiTarget,
+  kpiValue,
+  problemLink,
+  num,
+  plural,
+  rub,
+  SEVERITY_LABELS,
+} from '../utils/format'
 
-useHead('Сводка — AiMarketing', true)
+useHead('Обзор — AiMarketing', true)
 
-const VIEW_KEY = 'aim.overview.view'
 const PROBLEMS_LIMIT = 30
-const SEVERITY_LABELS = { critical: 'Критично', warning: 'Внимание', info: 'К сведению' }
 const SEVERITY_RANK = { critical: 0, warning: 1, info: 2, '': 3 }
-const KPI_TONES = { ok: 'tone-ok', warn: 'tone-warn', bad: 'tone-bad', none: '' }
-const BUDGET_TONES = { ok: 'tone-ok', under: 'tone-warn', over: 'tone-bad', exhausted: 'tone-bad' }
-const CONNECTION_KINDS = new Set(['token', 'connection_sync', 'account_sync', 'stats_error', 'stats_stale'])
-const CLIENT_KINDS = new Set(['budget', 'kpi'])
-const COLUMNS = [
-  { key: 'name', label: 'Клиент' },
-  { key: 'spend_today', label: 'Сегодня', num: true },
-  { key: 'spend_yesterday', label: 'Вчера', num: true },
-  { key: 'spend_7d', label: '7 дней', num: true },
-  { key: 'kpi', label: 'KPI 7 дн.', num: true },
-  { key: 'budget', label: 'Темп бюджета', num: true },
-  { key: 'balance', label: 'Баланс', num: true },
-  { key: 'problems', label: 'Проблемы', num: true },
-]
-// Чем «хуже» клиент, тем больше значение — сортировка по убыванию поднимает проблемных наверх.
-const SORT_VALUES = {
-  name: (c) => c.name.toLowerCase(),
-  spend_today: (c) => c.spend_today,
-  spend_yesterday: (c) => c.spend_yesterday,
-  spend_7d: (c) => c.spend_7d,
-  kpi: (c) => c.kpi.ratio ?? -1,
-  budget: (c) => c.budget?.pace_pct ?? -1,
-  balance: (c) => (c.days_on_balance == null ? -Infinity : -c.days_on_balance),
-  problems: (c) => -SEVERITY_RANK[c.severity] * 1000 + c.problems.critical * 100 + c.problems.warning * 10 + c.problems.info,
-}
 
 const router = useRouter()
+const { workspaces, loadWorkspaces } = useWorkspaces()
 const loading = ref(true)
 const refreshing = ref(false)
 const refreshText = ref('')
-const data = ref({ clients: [], problems: [], totals: {} })
+const data = ref({ workspaces: [], folders: [], problems: [], totals: {} })
+const aiConfigured = ref(true)
 const search = ref('')
+const onlyProblems = ref(false)
 const severityFilter = ref('all')
-const clientFilter = ref('')
+const wsFilter = ref('')
 const showAllProblems = ref(false)
 const problemsPanel = ref(null)
-const view = reactive(loadView())
 
-function loadView() {
-  const fallback = { sort: 'problems', dir: 'desc', onlyProblems: false }
-  try {
-    return { ...fallback, ...JSON.parse(localStorage.getItem(VIEW_KEY) || '{}') }
-  } catch {
-    return fallback
-  }
-}
-
-watch(view, () => localStorage.setItem(VIEW_KEY, JSON.stringify(view)))
-watch([severityFilter, clientFilter], () => {
+watch([severityFilter, wsFilter], () => {
   showAllProblems.value = false
 })
 
+const rows = computed(() => data.value.workspaces || [])
 const totals = computed(() => data.value.totals || {})
-const hasAccounts = computed(() => data.value.clients.some((c) => c.accounts))
 const fireCount = computed(() => data.value.problems.filter((p) => p.severity !== 'info').length)
+
+const checklist = computed(() => {
+  const list = workspaces.value
+  return [
+    {
+      id: 'yandex',
+      title: 'Подключить Метрику и Директ',
+      hint: 'Каждый счётчик Метрики станет рабочим пространством',
+      done: list.length > 0,
+      to: '/cabinet/accounts',
+    },
+    {
+      id: 'campaigns',
+      title: 'Добавить кампании в пространства',
+      hint: 'Пространство → Настройки → кабинеты и кампании',
+      done: list.some((w) => w.campaigns_count > 0),
+      to: list[0] ? `/w/${list[0].id}/settings` : '/cabinet/accounts',
+    },
+    {
+      id: 'stats',
+      title: 'Загрузить статистику',
+      hint: 'Пространство → Аналитика → «Загрузить 30 дней»',
+      done: rows.value.some((r) => r.stats_synced_at),
+      to: list[0] ? `/w/${list[0].id}/analytics` : '',
+    },
+    {
+      id: 'ai',
+      title: 'Подключить ИИ-ассистента',
+      hint: 'Свой ключ OpenAI-совместимого API или YandexGPT',
+      done: aiConfigured.value,
+      to: '/cabinet/settings',
+    },
+  ]
+})
+
+function wsKey(id) {
+  return id == null ? 'none' : String(id)
+}
+
+function matches(w) {
+  const q = search.value.trim().toLowerCase()
+  if (onlyProblems.value && !w.severity) return false
+  if (!q) return true
+  return [w.name, w.site, w.client_name, String(w.counter_id || '')].some((v) =>
+    String(v || '').toLowerCase().includes(q),
+  )
+}
+
+function bySeverity(a, b) {
+  const s = SEVERITY_RANK[a.severity] - SEVERITY_RANK[b.severity]
+  if (s) return s
+  if (a.id == null) return 1
+  if (b.id == null) return -1
+  return a.name.localeCompare(b.name, 'ru')
+}
+
+const visibleFolders = computed(() => {
+  const byId = new Map(rows.value.map((r) => [r.id, r]))
+  const folders = (data.value.folders || []).map((f) => ({
+    ...f,
+    key: `f${f.id ?? 'none'}`,
+    rows: f.workspace_ids.map((id) => byId.get(id)).filter(Boolean).filter(matches).sort(bySeverity),
+  }))
+  const unassigned = byId.get(null)
+  if (unassigned && matches(unassigned) && (unassigned.spend_7d || unassigned.accounts)) {
+    folders.push({
+      key: 'none',
+      id: null,
+      name: 'Вне пространств',
+      rows: [unassigned],
+      spend_today: unassigned.spend_today,
+      spend_yesterday: unassigned.spend_yesterday,
+      spend_7d: unassigned.spend_7d,
+      budget: null,
+    })
+  }
+  return folders.filter((f) => f.rows.length)
+})
 
 const filteredProblems = computed(() =>
   data.value.problems.filter((p) => {
     if (severityFilter.value === 'fire' && p.severity === 'info') return false
     if (severityFilter.value === 'critical' && p.severity !== 'critical') return false
-    if (clientFilter.value && !p.client_ids.some((id) => clientKey(id) === clientFilter.value)) return false
+    if (wsFilter.value && !p.workspace_ids.some((id) => wsKey(id) === wsFilter.value)) return false
     return true
   }),
 )
@@ -311,79 +382,26 @@ const visibleProblems = computed(() =>
   showAllProblems.value ? filteredProblems.value : filteredProblems.value.slice(0, PROBLEMS_LIMIT),
 )
 
-const sortedClients = computed(() => {
-  const needle = search.value.trim().toLowerCase()
-  const rows = data.value.clients.filter(
-    (c) => (!needle || c.name.toLowerCase().includes(needle)) && (!view.onlyProblems || c.severity),
-  )
-  const value = SORT_VALUES[view.sort] || SORT_VALUES.problems
-  const sign = view.dir === 'asc' ? 1 : -1
-  return rows.sort((a, b) => {
-    const va = value(a)
-    const vb = value(b)
-    if (va < vb) return -sign
-    if (va > vb) return sign
-    return a.name.localeCompare(b.name, 'ru')
-  })
-})
 
-function clientKey(id) {
-  return id == null ? 'none' : String(id)
+function openWs(id) {
+  router.push(`/w/${id}/summary`)
 }
 
-function sortBy(key) {
-  if (view.sort === key) {
-    view.dir = view.dir === 'asc' ? 'desc' : 'asc'
-  } else {
-    view.sort = key
-    view.dir = key === 'name' ? 'asc' : 'desc'
-  }
-}
-
-function focusClient(id) {
-  clientFilter.value = clientKey(id)
+function focusWorkspace(id) {
+  wsFilter.value = wsKey(id)
   severityFilter.value = 'all'
   problemsPanel.value?.scrollIntoView({ behavior: 'smooth', block: 'start' })
 }
 
-function rub(kopecks) {
-  if (kopecks == null) return '—'
-  return `${Math.round(Number(kopecks) / 100).toLocaleString('ru-RU')} ₽`
-}
-
-function kpiValue(kpi) {
-  if (kpi.value == null) return '—'
-  return kpi.type === 'cpa' ? rub(kpi.value) : `${kpi.value}%`
-}
-
-function kpiTarget(kpi) {
-  const name = kpi.type === 'cpa' ? 'CPA' : 'ДРР'
-  if (kpi.target == null) return `${name}, цель не задана`
-  return kpi.type === 'cpa' ? `${name}, цель ${rub(kpi.target * 100)}` : `${name}, цель ${kpi.target}%`
-}
-
-function balanceTone(days) {
-  if (days < 2) return 'tone-bad'
-  if (days < 5) return 'tone-warn'
-  return ''
-}
-
-function problemWhere(p) {
-  return [p.client_name, p.object_name].filter(Boolean).join(' · ')
-}
-
-function formatTime(iso) {
-  return new Date(iso).toLocaleString('ru-RU', {
-    day: 'numeric',
-    month: 'short',
-    hour: '2-digit',
-    minute: '2-digit',
-  })
-}
-
 async function load() {
   try {
-    data.value = await webApi.overview()
+    const [overview, ai] = await Promise.all([
+      webApi.overview(),
+      aiApi.settings().catch(() => ({ configured: true })),
+      loadWorkspaces(true),
+    ])
+    data.value = overview
+    aiConfigured.value = Boolean(ai.configured)
   } catch (err) {
     pushToast(errorText(err), 'error')
   } finally {
@@ -408,11 +426,5 @@ async function refresh() {
   }
 }
 
-onMounted(() => {
-  if (!getSession()) {
-    router.replace('/login')
-    return
-  }
-  load()
-})
+onMounted(load)
 </script>

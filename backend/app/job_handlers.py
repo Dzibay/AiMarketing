@@ -8,9 +8,11 @@ import threading
 from collections.abc import Callable
 from datetime import date
 
+from app.actions import acting_as, duplicate_campaign
 from app.adgroups import sync_campaign_adgroups
 from app.ads import sync_campaign_ads
 from app.clock import today_msk
+from app.db import pool
 from app.digest import send_digest
 from app.direct_balance import sync_balances_for_user
 from app.direct_sync import sync_account_campaigns
@@ -50,7 +52,45 @@ def _day(payload: dict, key: str) -> date | None:
 
 
 def _sync_connection(user_id: int, payload: dict, progress: Progress) -> dict:
-    return sync_connection(user_id, _int(payload, "connection_id"))
+    """Аккаунты и счётчики подключения; deep — ещё кампании всех кабинетов и цели счётчиков."""
+    connection_id = _int(payload, "connection_id")
+    progress(0, 1, "Аккаунты и счётчики")
+    result = sync_connection(user_id, connection_id)
+    if not payload.get("deep"):
+        return result
+    with pool.connection() as conn:
+        accounts = conn.execute(
+            """
+            SELECT id, client_login FROM direct_accounts
+            WHERE connection_id = %s AND user_id = %s AND enabled
+            ORDER BY id
+            """,
+            (connection_id, user_id),
+        ).fetchall()
+        counters = conn.execute(
+            """
+            SELECT id, name FROM metrika_counters
+            WHERE connection_id = %s AND user_id = %s AND enabled
+            ORDER BY id
+            """,
+            (connection_id, user_id),
+        ).fetchall()
+    total = 1 + len(accounts) + len(counters)
+    campaigns = 0
+    errors: list[str] = []
+    for n, account in enumerate(accounts, start=1):
+        progress(n, total, f"Кампании {account['client_login']}")
+        try:
+            campaigns += int(sync_account_campaigns(user_id, int(account["id"])).get("campaigns") or 0)
+        except YandexError as exc:
+            errors.append(f"{account['client_login']}: {exc.message or exc.code}")
+    for n, counter in enumerate(counters, start=1 + len(accounts)):
+        progress(n, total, f"Цели {counter['name'] or counter['id']}")
+        try:
+            sync_counter_goals(user_id, int(counter["id"]))
+        except YandexError as exc:
+            errors.append(f"{counter['name'] or counter['id']}: {exc.message or exc.code}")
+    return {**result, "campaigns": campaigns, "deep_errors": errors[:20]}
 
 
 def _sync_account_campaigns(user_id: int, payload: dict, progress: Progress) -> dict:
@@ -118,6 +158,26 @@ def _run_rules(user_id: int, payload: dict, progress: Progress) -> dict:
     return {"rules_run": run_enabled_rules_for_user(user_id)}
 
 
+def _duplicate_campaign(user_id: int, payload: dict, progress: Progress) -> dict:
+    target = payload.get("target_account_id")
+    workspace_id = payload.get("workspace_id")
+    with acting_as(str(payload.get("source") or "user")):
+        return duplicate_campaign(
+            user_id,
+            _int(payload, "campaign_row_id"),
+            target_account_id=int(target) if target else None,
+            name=payload.get("name") or None,
+            workspace_id=int(workspace_id) if workspace_id else None,
+            progress=progress,
+        )
+
+
+def _ai_chat(user_id: int, payload: dict, progress: Progress) -> dict:
+    from app.ai_agent import run_chat
+
+    return run_chat(user_id, _int(payload, "chat_id"), progress)
+
+
 HANDLERS: dict[str, Handler] = {
     "sync_connection": _sync_connection,
     "sync_account_campaigns": _sync_account_campaigns,
@@ -130,6 +190,8 @@ HANDLERS: dict[str, Handler] = {
     "send_digest": _send_digest,
     "apply_negative_list": _apply_negative_list,
     "run_rules": _run_rules,
+    "duplicate_campaign": _duplicate_campaign,
+    "ai_chat": _ai_chat,
 }
 
 
@@ -143,6 +205,7 @@ def submit(
     payload: dict | None = None,
     *,
     priority: int = PRIORITY_BACKGROUND,
+    max_attempts: int = 3,
 ) -> dict:
     """Ставит задачу известного вида; одинаковая активная задача не дублируется."""
     if kind not in HANDLERS:
@@ -154,6 +217,7 @@ def submit(
         user_id=user_id,
         priority=priority,
         dedupe_key=dedupe_key(kind, user_id, payload),
+        max_attempts=max_attempts,
     )
 
 

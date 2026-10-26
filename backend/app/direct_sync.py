@@ -6,8 +6,9 @@ import json
 import logging
 from decimal import Decimal, InvalidOperation
 
-import httpx
+from psycopg.types.json import Jsonb
 
+from app import direct_api
 from app.adgroups import _parse_phrases
 from app.db import pool
 from app.sync_runs import finish_run, start_run
@@ -15,7 +16,8 @@ from app.yandex import YandexError, get_connection_access_token
 
 log = logging.getLogger("app.direct_sync")
 
-CAMPAIGNS_URL = "https://api.direct.yandex.com/json/v5/campaigns"
+# Блоки типов кампаний, где Директ хранит счётчики Метрики и стратегию.
+_TYPE_BLOCKS = ("TextCampaign", "DynamicTextCampaign", "SmartCampaign", "UnifiedCampaign", "CpmBannerCampaign")
 
 
 def _account(user_id: int, account_id: int) -> dict:
@@ -60,52 +62,51 @@ def _money_to_kopecks(raw) -> int | None:
         return None
 
 
+def _campaigns_get(access_token: str, client_login: str, unified: bool) -> dict:
+    params = {
+        "SelectionCriteria": {},
+        "FieldNames": ["Id", "Name", "Type", "State", "Status", "DailyBudget", "NegativeKeywords", "StartDate"],
+        "TextCampaignFieldNames": ["BiddingStrategy", "CounterIds"],
+        "DynamicTextCampaignFieldNames": ["BiddingStrategy", "CounterIds"],
+        "SmartCampaignFieldNames": ["BiddingStrategy", "CounterId"],
+    }
+    if unified:
+        params["UnifiedCampaignFieldNames"] = ["BiddingStrategy", "CounterIds"]
+    return direct_api.call(access_token, client_login, "campaigns", "get", params)
+
+
+def _counter_ids(item: dict) -> list[int]:
+    out: list[int] = []
+    for key in _TYPE_BLOCKS:
+        block = item.get(key) or {}
+        raw = block.get("CounterIds")
+        values = raw.get("Items") if isinstance(raw, dict) else raw
+        if block.get("CounterId"):
+            values = [block["CounterId"], *(values or [])]
+        for value in values or []:
+            try:
+                counter_id = int(value)
+            except (TypeError, ValueError):
+                continue
+            if counter_id not in out:
+                out.append(counter_id)
+    return out
+
+
 def fetch_campaigns(access_token: str, client_login: str) -> list[dict]:
-    headers = {
-        "Authorization": f"Bearer {access_token}",
-        "Accept-Language": "ru",
-        "Content-Type": "application/json; charset=utf-8",
-        "Client-Login": client_login,
-    }
-    body = {
-        "method": "get",
-        "params": {
-            "SelectionCriteria": {},
-            "FieldNames": [
-                "Id",
-                "Name",
-                "Type",
-                "State",
-                "Status",
-                "DailyBudget",
-                "NegativeKeywords",
-            ],
-            "TextCampaignFieldNames": ["BiddingStrategy"],
-            "DynamicTextCampaignFieldNames": ["BiddingStrategy"],
-            "SmartCampaignFieldNames": ["BiddingStrategy"],
-        },
-    }
     try:
-        with httpx.Client(timeout=60.0) as client:
-            response = client.post(CAMPAIGNS_URL, headers=headers, json=body)
-    except httpx.HTTPError as exc:
-        log.warning("campaigns.get: %s", exc)
-        raise YandexError("direct") from exc
-    if response.status_code >= 400:
-        log.warning("campaigns.get HTTP %s %s", response.status_code, response.text[:400])
-        raise YandexError("direct")
-    payload = response.json()
-    if payload.get("error"):
-        log.info("campaigns.get error: %s", payload.get("error"))
-        raise YandexError("direct-denied")
-    items = (payload.get("result") or {}).get("Campaigns") or []
-    result = []
+        result = _campaigns_get(access_token, client_login, unified=True)
+    except YandexError:
+        # Старые аккаунты API могут не знать про ЕПК — повторяем без неё.
+        result = _campaigns_get(access_token, client_login, unified=False)
+    items = result.get("Campaigns") or []
+    out = []
     for item in items:
         cid = item.get("Id")
         if cid is None:
             continue
         strategy = ""
-        for key in ("TextCampaign", "DynamicTextCampaign", "SmartCampaign", "CpmBannerCampaign"):
+        for key in _TYPE_BLOCKS:
             block = item.get(key) or {}
             bidding = block.get("BiddingStrategy") or {}
             strategy = str(
@@ -119,7 +120,7 @@ def fetch_campaigns(access_token: str, client_login: str) -> list[dict]:
         daily = (item.get("DailyBudget") or {}).get("Amount")
         neg_raw = item.get("NegativeKeywords") or {}
         negatives = _parse_phrases(neg_raw.get("Items") if isinstance(neg_raw, dict) else [])
-        result.append(
+        out.append(
             {
                 "campaign_id": int(cid),
                 "name": str(item.get("Name") or ""),
@@ -129,23 +130,39 @@ def fetch_campaigns(access_token: str, client_login: str) -> list[dict]:
                 "strategy": strategy,
                 "daily_budget_kopecks": _money_to_kopecks(daily),
                 "negative_keywords": negatives,
+                "counter_ids": _counter_ids(item),
+                "start_date": item.get("StartDate") or None,
             }
         )
-    return result
+    return out
 
 
-def upsert_campaigns(user_id: int, account_id: int, campaigns: list[dict]) -> int:
+def upsert_campaigns(user_id: int, account_id: int, campaigns: list[dict], *, prune: bool = False) -> dict:
+    """
+    Записывает кампании кабинета. Возвращает {"count", "fresh", "removed"}: fresh — id строк,
+    чьи счётчики узнали впервые (новые кампании и первый синк после обновления), —
+    их раскладываем по пространствам. prune — удалить кампании, которых в Директе больше нет.
+    """
     count = 0
+    fresh: list[int] = []
+    removed = 0
     with pool.connection() as conn:
+        unknown = {
+            int(r["campaign_id"])
+            for r in conn.execute(
+                "SELECT campaign_id FROM direct_campaigns WHERE account_id = %s AND counter_ids IS NULL",
+                (account_id,),
+            )
+        }
         for item in campaigns:
-            conn.execute(
+            row = conn.execute(
                 """
                 INSERT INTO direct_campaigns (
                     user_id, account_id, campaign_id, name, campaign_type,
                     state, status, strategy, daily_budget_kopecks,
-                    negative_keywords, synced_at
+                    negative_keywords, counter_ids, start_date, synced_at
                 )
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
                 ON CONFLICT (account_id, campaign_id) DO UPDATE SET
                     name = EXCLUDED.name,
                     campaign_type = EXCLUDED.campaign_type,
@@ -154,7 +171,10 @@ def upsert_campaigns(user_id: int, account_id: int, campaigns: list[dict]) -> in
                     strategy = EXCLUDED.strategy,
                     daily_budget_kopecks = EXCLUDED.daily_budget_kopecks,
                     negative_keywords = EXCLUDED.negative_keywords,
+                    counter_ids = EXCLUDED.counter_ids,
+                    start_date = EXCLUDED.start_date,
                     synced_at = NOW()
+                RETURNING id, (xmax = 0) AS inserted
                 """,
                 (
                     user_id,
@@ -167,13 +187,25 @@ def upsert_campaigns(user_id: int, account_id: int, campaigns: list[dict]) -> in
                     item.get("strategy") or "",
                     item.get("daily_budget_kopecks"),
                     json.dumps(item.get("negative_keywords") or [], ensure_ascii=False),
+                    Jsonb(list(item.get("counter_ids") or [])),
+                    item.get("start_date"),
                 ),
-            )
+            ).fetchone()
             count += 1
-    return count
+            if row["inserted"] or int(item["campaign_id"]) in unknown:
+                fresh.append(int(row["id"]))
+        if prune:
+            seen = [int(item["campaign_id"]) for item in campaigns]
+            removed = conn.execute(
+                "DELETE FROM direct_campaigns WHERE account_id = %s AND NOT (campaign_id = ANY(%s))",
+                (account_id, seen),
+            ).rowcount
+    return {"count": count, "fresh": fresh, "removed": removed}
 
 
 def sync_account_campaigns(user_id: int, account_id: int) -> dict:
+    from app.workspaces import auto_attach_campaigns
+
     account = _account(user_id, account_id)
     if not account.get("enabled"):
         raise YandexError("disabled")
@@ -181,10 +213,12 @@ def sync_account_campaigns(user_id: int, account_id: int) -> dict:
     try:
         token = get_connection_access_token(account["connection_id"], user_id)
         campaigns = fetch_campaigns(token, account["client_login"])
-        n = upsert_campaigns(user_id, account_id, campaigns)
+        saved = upsert_campaigns(user_id, account_id, campaigns, prune=True)
+        attached = auto_attach_campaigns(user_id, saved["fresh"])
         _set_account_sync(account_id, "ok")
-        finish_run(run_id, status="ok", meta={"campaigns": n})
-        return {"campaigns": n, "status": "ok"}
+        meta = {"campaigns": saved["count"], "removed": saved["removed"], "attached": attached}
+        finish_run(run_id, status="ok", meta=meta)
+        return {**meta, "status": "ok"}
     except YandexError as exc:
         _set_account_sync(account_id, "error", exc.code)
         finish_run(run_id, status="error", error=exc.code)
@@ -337,15 +371,19 @@ def insert_campaign_local(
     status: str = "",
     strategy: str = "",
     daily_budget_kopecks: int | None = None,
+    negative_keywords: list[str] | None = None,
+    counter_ids: list[int] | None = None,
+    start_date: str | None = None,
 ) -> dict:
     with pool.connection() as conn:
         row = conn.execute(
             """
             INSERT INTO direct_campaigns (
                 user_id, account_id, campaign_id, name, campaign_type,
-                state, status, strategy, daily_budget_kopecks, synced_at
+                state, status, strategy, daily_budget_kopecks,
+                negative_keywords, counter_ids, start_date, synced_at
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
             ON CONFLICT (account_id, campaign_id) DO UPDATE SET
                 name = EXCLUDED.name,
                 campaign_type = EXCLUDED.campaign_type,
@@ -353,6 +391,9 @@ def insert_campaign_local(
                 status = EXCLUDED.status,
                 strategy = EXCLUDED.strategy,
                 daily_budget_kopecks = EXCLUDED.daily_budget_kopecks,
+                negative_keywords = EXCLUDED.negative_keywords,
+                counter_ids = EXCLUDED.counter_ids,
+                start_date = EXCLUDED.start_date,
                 synced_at = NOW()
             RETURNING id, account_id, campaign_id, name, campaign_type, state, status,
                       strategy, daily_budget_kopecks
@@ -367,6 +408,9 @@ def insert_campaign_local(
                 status,
                 strategy,
                 daily_budget_kopecks,
+                json.dumps(negative_keywords or [], ensure_ascii=False),
+                Jsonb(list(counter_ids or [])),
+                start_date,
             ),
         ).fetchone()
     return {

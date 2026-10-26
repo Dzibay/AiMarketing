@@ -4,7 +4,7 @@
       v-for="toast in toasts"
       :key="toast.id"
       class="toast"
-      :class="{ 'is-error': toast.tone === 'error' }"
+      :class="toast.tone ? `is-${toast.tone}` : ''"
     >
       {{ toast.message }}
     </div>

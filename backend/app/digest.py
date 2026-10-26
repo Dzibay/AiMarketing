@@ -1,4 +1,4 @@
-"""Утренний дайджест в Telegram: вчерашний расход по клиентам и «где горит»."""
+"""Утренний дайджест в Telegram: вчерашний расход по сайтам и «где горит»."""
 
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ from app.yandex import YandexError
 log = logging.getLogger("app.digest")
 
 MAX_PROBLEMS = 10
-MAX_CLIENTS = 15
+MAX_WORKSPACES = 15
 # Если воркер лежал, дайджест догоняет ещё два часа, а не приходит вечером.
 SEND_WINDOW_HOURS = 3
 _ICONS = {"critical": "🔴", "warning": "🟠"}
@@ -38,20 +38,20 @@ def format_digest(overview: dict, base_url: str = "") -> str:
     if fires:
         lines.append(f"Где горит ({len(fires)}):")
         for p in fires[:MAX_PROBLEMS]:
-            where = " · ".join(x for x in (p["client_name"], p["object_name"]) if x)
+            where = " · ".join(x for x in (p["workspace_name"], p["object_name"]) if x)
             lines.append(f"{_ICONS[p['severity']]} {where + ': ' if where else ''}{p['title']}")
         if len(fires) > MAX_PROBLEMS:
             lines.append(f"…и ещё {len(fires) - MAX_PROBLEMS} — в сводке")
     else:
         lines.append("✅ Ничего не горит")
 
-    clients = sorted(
-        (c for c in overview["clients"] if c["accounts"]),
+    rows = sorted(
+        (c for c in overview["workspaces"] if c["campaigns"] or c["spend_7d"]),
         key=lambda c: (-c["spend_yesterday"], c["name"].lower()),
     )
-    if clients:
-        lines += ["", "Клиенты за вчера:"]
-        for c in clients[:MAX_CLIENTS]:
+    if rows:
+        lines += ["", "Сайты за вчера:"]
+        for c in rows[:MAX_WORKSPACES]:
             parts = [rub(c["spend_yesterday"])]
             if c["conversions_yesterday"]:
                 parts.append(f"{c['conversions_yesterday']} конв.")
@@ -64,9 +64,10 @@ def format_digest(overview: dict, base_url: str = "") -> str:
                 parts.append(f"темп бюджета {budget['pace_pct']}%")
             if c["days_on_balance"] is not None and c["days_on_balance"] < 14:
                 parts.append(f"баланс на {c['days_on_balance']:g} дн.")
-            lines.append(f"• {c['name']} — " + " · ".join(parts))
-        if len(clients) > MAX_CLIENTS:
-            lines.append(f"…и ещё {len(clients) - MAX_CLIENTS} клиентов")
+            name = f"{c['client_name']} · {c['name']}" if c.get("client_name") else c["name"]
+            lines.append(f"• {name} — " + " · ".join(parts))
+        if len(rows) > MAX_WORKSPACES:
+            lines.append(f"…и ещё {len(rows) - MAX_WORKSPACES} сайтов")
 
     if base_url:
         lines += ["", f"{base_url}/cabinet/overview"]

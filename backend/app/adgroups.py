@@ -5,14 +5,12 @@ from __future__ import annotations
 import json
 import logging
 
-import httpx
-
+from app import direct_api
 from app.db import pool
 from app.sync_runs import finish_run, start_run
-from app.yandex import YandexError, direct_api_error, get_connection_access_token
+from app.yandex import YandexError, get_connection_access_token
 
 log = logging.getLogger("app.adgroups")
-ADGROUPS_URL = "https://api.direct.yandex.com/json/v5/adgroups"
 
 
 def _campaign_row(user_id: int, campaign_row_id: int) -> dict:
@@ -35,27 +33,7 @@ def _campaign_row(user_id: int, campaign_row_id: int) -> dict:
 
 
 def _call(access_token: str, client_login: str, method: str, params: dict) -> dict:
-    headers = {
-        "Authorization": f"Bearer {access_token}",
-        "Accept-Language": "ru",
-        "Content-Type": "application/json; charset=utf-8",
-        "Client-Login": client_login,
-    }
-    try:
-        with httpx.Client(timeout=60.0) as client:
-            response = client.post(
-                ADGROUPS_URL,
-                headers=headers,
-                json={"method": method, "params": params},
-            )
-    except httpx.HTTPError as exc:
-        raise YandexError("direct") from exc
-    payload = response.json() if response.content else {}
-    if response.status_code >= 400 or payload.get("error"):
-        err = payload.get("error") or {}
-        log.warning("adgroups.%s %s %s", method, response.status_code, err or payload)
-        raise direct_api_error(payload, response.status_code)
-    return payload.get("result") or {}
+    return direct_api.call(access_token, client_login, "adgroups", method, params)
 
 
 def _negatives_from_api(item: dict) -> list[str]:

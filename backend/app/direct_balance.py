@@ -7,13 +7,13 @@ from collections import defaultdict
 
 import httpx
 
+from app import direct_api
 from app.db import pool
 from app.stats import _rub_to_kopecks
 from app.yandex import YandexError, get_connection_access_token
 
 log = logging.getLogger("app.direct_balance")
 
-LIVE4_URL = "https://api.direct.yandex.ru/live/v4/json/"
 LOGINS_PER_REQUEST = 50
 
 # Коды ошибок Live 4: 53 — токен не принят, 54 — нет прав на логин.
@@ -30,7 +30,7 @@ def fetch_balances(access_token: str, logins: list[str]) -> dict[str, dict]:
     }
     try:
         with httpx.Client(timeout=30.0) as client:
-            response = client.post(LIVE4_URL, json=body)
+            response = client.post(direct_api.live4_url(access_token), json=body)
     except httpx.HTTPError as exc:
         log.warning("balance: %s", exc)
         raise YandexError("direct") from exc

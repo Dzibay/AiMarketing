@@ -9,6 +9,7 @@ from urllib.parse import urlencode
 
 import httpx
 
+from app import direct_api
 from app.config import settings
 from app.db import pool
 from app.settings_store import public_base_url
@@ -21,8 +22,9 @@ YANDEX_AUTHORIZE = "https://oauth.yandex.ru/authorize"
 YANDEX_TOKEN = "https://oauth.yandex.ru/token"
 YANDEX_INFO = "https://login.yandex.ru/info"
 METRIKA_COUNTERS = "https://api-metrika.yandex.net/management/v1/counters"
-DIRECT_API = "https://api.direct.yandex.com/json/v5/clients"
-DIRECT_AGENCY = "https://api.direct.yandex.com/json/v5/agencyclients"
+
+# Режим входа «подключить»: что берём из этого логина.
+OAUTH_MODES = ("", "metrika", "direct", "sandbox")
 
 
 class YandexError(Exception):
@@ -68,9 +70,11 @@ def _purge_expired_states() -> None:
         conn.execute("DELETE FROM oauth_states WHERE expires_at < NOW()")
 
 
-def create_oauth_state(*, purpose: str, user_id: int | None = None) -> str:
+def create_oauth_state(*, purpose: str, user_id: int | None = None, mode: str = "") -> str:
     if purpose not in ("login", "connect"):
         raise YandexError("purpose")
+    if mode not in OAUTH_MODES:
+        raise YandexError("mode")
     if purpose == "connect" and user_id is None:
         raise YandexError("unauthorized")
     _purge_expired_states()
@@ -78,10 +82,10 @@ def create_oauth_state(*, purpose: str, user_id: int | None = None) -> str:
     with pool.connection() as conn:
         conn.execute(
             """
-            INSERT INTO oauth_states (state, user_id, purpose, expires_at)
-            VALUES (%s, %s, %s, %s)
+            INSERT INTO oauth_states (state, user_id, purpose, mode, expires_at)
+            VALUES (%s, %s, %s, %s, %s)
             """,
-            (state, user_id, purpose, datetime.now(timezone.utc) + timedelta(minutes=15)),
+            (state, user_id, purpose, mode, datetime.now(timezone.utc) + timedelta(minutes=15)),
         )
     return state
 
@@ -94,7 +98,7 @@ def consume_oauth_state(state: str) -> dict:
             """
             DELETE FROM oauth_states
             WHERE state = %s AND expires_at >= NOW()
-            RETURNING state, user_id, purpose
+            RETURNING state, user_id, purpose, mode
             """,
             (state,),
         ).fetchone()
@@ -117,8 +121,8 @@ def build_authorize_url(state: str) -> str:
     return f"{YANDEX_AUTHORIZE}?{urlencode(params)}"
 
 
-def start_oauth(*, purpose: str, user_id: int | None = None) -> str:
-    state = create_oauth_state(purpose=purpose, user_id=user_id)
+def start_oauth(*, purpose: str, user_id: int | None = None, mode: str = "") -> str:
+    state = create_oauth_state(purpose=purpose, user_id=user_id, mode=mode)
     return build_authorize_url(state)
 
 
@@ -205,8 +209,15 @@ def _expires_at(token_payload: dict) -> datetime | None:
         return None
 
 
-def save_connection(*, user_id: int, profile: dict, token_payload: dict) -> dict:
+def save_connection(*, user_id: int, profile: dict, token_payload: dict, mode: str = "") -> dict:
+    """
+    Новое подключение получает роль режима входа (без режима — Метрику и Директ).
+    Повторный вход того же логина добавляет роль режима и не снимает уже включённые.
+    """
     access = token_payload.get("access_token") or ""
+    sandbox = mode == "sandbox"
+    new_metrika = mode in ("", "metrika")
+    new_direct = mode in ("", "direct", "sandbox")
     refresh = token_payload.get("refresh_token") or ""
     scopes = token_payload.get("scope") or settings.yandex_oauth_scopes
     with pool.connection() as conn:
@@ -214,10 +225,13 @@ def save_connection(*, user_id: int, profile: dict, token_payload: dict) -> dict
             """
             INSERT INTO yandex_connections (
                 user_id, yandex_uid, yandex_login, display_name,
-                access_token_enc, refresh_token_enc, expires_at, scopes, updated_at
+                access_token_enc, refresh_token_enc, expires_at, scopes,
+                use_metrika, use_direct, sandbox, updated_at
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, NOW())
-            ON CONFLICT (user_id, yandex_uid) DO UPDATE SET
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
+            ON CONFLICT (user_id, yandex_uid, sandbox) DO UPDATE SET
+                use_metrika = yandex_connections.use_metrika OR %s,
+                use_direct = yandex_connections.use_direct OR %s,
                 yandex_login = EXCLUDED.yandex_login,
                 display_name = EXCLUDED.display_name,
                 access_token_enc = EXCLUDED.access_token_enc,
@@ -230,7 +244,7 @@ def save_connection(*, user_id: int, profile: dict, token_payload: dict) -> dict
                 updated_at = NOW()
             RETURNING id, user_id, yandex_uid, yandex_login, display_name, scopes,
                       expires_at, last_sync_at, last_sync_status, last_sync_error,
-                      created_at, updated_at
+                      use_metrika, use_direct, sandbox, created_at, updated_at
             """,
             (
                 user_id,
@@ -241,6 +255,11 @@ def save_connection(*, user_id: int, profile: dict, token_payload: dict) -> dict
                 encrypt_token(refresh) if refresh else "",
                 _expires_at(token_payload),
                 scopes,
+                new_metrika and not sandbox,
+                new_direct,
+                sandbox,
+                mode == "metrika",
+                mode in ("direct", "sandbox"),
             ),
         ).fetchone()
     return row
@@ -283,13 +302,16 @@ def _update_connection_tokens(connection_id: int, token_payload: dict) -> None:
             )
 
 
-def get_connection_access_token(connection_id: int, user_id: int | None = None) -> str:
-    """Возвращает валидный access token; при необходимости обновляет через refresh."""
+def get_connection_access_token(connection_id: int, user_id: int | None = None) -> direct_api.AccessToken:
+    """Возвращает валидный access token; при необходимости обновляет через refresh.
+
+    Токен подключения-песочницы помечен — запросы Директа с ним уходят в песочницу.
+    """
     with pool.connection() as conn:
         if user_id is None:
             row = conn.execute(
                 """
-                SELECT id, access_token_enc, refresh_token_enc, expires_at
+                SELECT id, access_token_enc, refresh_token_enc, expires_at, sandbox
                 FROM yandex_connections WHERE id = %s
                 """,
                 (connection_id,),
@@ -297,7 +319,7 @@ def get_connection_access_token(connection_id: int, user_id: int | None = None) 
         else:
             row = conn.execute(
                 """
-                SELECT id, access_token_enc, refresh_token_enc, expires_at
+                SELECT id, access_token_enc, refresh_token_enc, expires_at, sandbox
                 FROM yandex_connections WHERE id = %s AND user_id = %s
                 """,
                 (connection_id, user_id),
@@ -312,19 +334,20 @@ def get_connection_access_token(connection_id: int, user_id: int | None = None) 
             expires = expires.replace(tzinfo=timezone.utc)
         need_refresh = expires <= datetime.now(timezone.utc) + timedelta(minutes=5)
 
+    sandbox = bool(row.get("sandbox"))
     if not need_refresh:
-        return decrypt_token(row["access_token_enc"])
+        return direct_api.AccessToken(decrypt_token(row["access_token_enc"]), sandbox)
 
     refresh_plain = decrypt_token(row["refresh_token_enc"]) if row.get("refresh_token_enc") else ""
     if not refresh_plain:
         # Токен без срока / без refresh — пробуем старый
         if expires is None:
-            return decrypt_token(row["access_token_enc"])
+            return direct_api.AccessToken(decrypt_token(row["access_token_enc"]), sandbox)
         raise YandexError("token-expired")
 
     payload = refresh_access_token(refresh_plain)
     _update_connection_tokens(connection_id, payload)
-    return payload["access_token"]
+    return direct_api.AccessToken(payload["access_token"], sandbox)
 
 
 def set_connection_sync_status(
@@ -351,11 +374,17 @@ def list_connections(user_id: int) -> list[dict]:
     with pool.connection() as conn:
         rows = conn.execute(
             """
-            SELECT id, yandex_uid, yandex_login, display_name, scopes, expires_at,
-                   last_sync_at, last_sync_status, last_sync_error, created_at, updated_at
-            FROM yandex_connections
-            WHERE user_id = %s
-            ORDER BY created_at ASC
+            SELECT c.id, c.yandex_uid, c.yandex_login, c.display_name, c.scopes, c.expires_at,
+                   c.last_sync_at, c.last_sync_status, c.last_sync_error, c.created_at, c.updated_at,
+                   c.use_metrika, c.use_direct, c.sandbox,
+                   (SELECT COUNT(*) FROM metrika_counters m WHERE m.connection_id = c.id) AS counters,
+                   (SELECT COUNT(*) FROM direct_accounts d WHERE d.connection_id = c.id) AS accounts,
+                   (SELECT COUNT(*) FROM direct_campaigns dc
+                      JOIN direct_accounts d ON d.id = dc.account_id
+                     WHERE d.connection_id = c.id) AS campaigns
+            FROM yandex_connections c
+            WHERE c.user_id = %s
+            ORDER BY c.sandbox, c.created_at ASC
             """,
             (user_id,),
         ).fetchall()
@@ -366,6 +395,12 @@ def list_connections(user_id: int) -> list[dict]:
             "yandex_login": row["yandex_login"],
             "display_name": row["display_name"],
             "scopes": row["scopes"],
+            "use_metrika": row["use_metrika"],
+            "use_direct": row["use_direct"],
+            "sandbox": row["sandbox"],
+            "counters": int(row["counters"] or 0),
+            "accounts": int(row["accounts"] or 0),
+            "campaigns": int(row["campaigns"] or 0),
             "expires_at": row["expires_at"].isoformat() if row.get("expires_at") else None,
             "last_sync_at": row["last_sync_at"].isoformat() if row.get("last_sync_at") else None,
             "last_sync_status": row.get("last_sync_status") or "",
@@ -375,6 +410,39 @@ def list_connections(user_id: int) -> list[dict]:
         }
         for row in rows
     ]
+
+
+def set_connection_roles(
+    user_id: int, connection_id: int, *, use_metrika: bool | None = None, use_direct: bool | None = None
+) -> dict:
+    """
+    Роль выключается обратимо: счётчики/кабинеты логина отключаются (enabled = FALSE),
+    данные и привязки к пространствам остаются; включение роли возвращает их.
+    """
+    with pool.connection() as conn:
+        row = conn.execute(
+            "SELECT id, use_metrika, use_direct, sandbox FROM yandex_connections WHERE id = %s AND user_id = %s",
+            (connection_id, user_id),
+        ).fetchone()
+        if row is None:
+            raise YandexError("not-found")
+        metrika = row["use_metrika"] if use_metrika is None else bool(use_metrika)
+        direct = row["use_direct"] if use_direct is None else bool(use_direct)
+        if row["sandbox"]:
+            metrika = False
+            if not direct:
+                raise YandexError("roles", "Песочница — только Директ")
+        if not metrika and not direct:
+            raise YandexError("roles", "Оставьте Метрику или Директ — или удалите подключение")
+        conn.execute(
+            "UPDATE yandex_connections SET use_metrika = %s, use_direct = %s, updated_at = NOW() WHERE id = %s",
+            (metrika, direct, connection_id),
+        )
+        if metrika != row["use_metrika"]:
+            conn.execute("UPDATE metrika_counters SET enabled = %s WHERE connection_id = %s", (metrika, connection_id))
+        if direct != row["use_direct"]:
+            conn.execute("UPDATE direct_accounts SET enabled = %s WHERE connection_id = %s", (direct, connection_id))
+    return {"id": connection_id, "use_metrika": metrika, "use_direct": direct, "sandbox": row["sandbox"]}
 
 
 def delete_connection(user_id: int, connection_id: int) -> None:
@@ -423,11 +491,7 @@ def fetch_metrika_counters(access_token: str) -> list[dict]:
 
 def fetch_direct_clients(access_token: str) -> tuple[list[dict], str]:
     """Возвращает (клиенты, код_ошибки_или_пусто)."""
-    headers = {
-        "Authorization": f"Bearer {access_token}",
-        "Accept-Language": "ru",
-        "Content-Type": "application/json; charset=utf-8",
-    }
+    headers = direct_api.headers(access_token)
     body = {
         "method": "get",
         "params": {
@@ -437,7 +501,7 @@ def fetch_direct_clients(access_token: str) -> tuple[list[dict], str]:
     }
     clients: list[dict] = []
     last_error = ""
-    for url in (DIRECT_API, DIRECT_AGENCY):
+    for url in (direct_api.v5_url(access_token, "clients"), direct_api.v5_url(access_token, "agencyclients")):
         try:
             with httpx.Client(timeout=30.0) as client:
                 response = client.post(url, headers=headers, json=body)
@@ -547,8 +611,8 @@ def upsert_direct(user_id: int, connection_id: int, accounts: list[dict]) -> tup
 
 
 def sync_connection(user_id: int, connection_id: int) -> dict:
-    from app.clients import assign_new_items
     from app.sync_runs import finish_run, start_run
+    from app.workspaces import ensure_workspaces
 
     run_id = start_run(user_id=user_id, kind="connection", target_id=connection_id)
     try:
@@ -562,20 +626,28 @@ def sync_connection(user_id: int, connection_id: int) -> dict:
     direct_error = ""
     counters: list[dict] = []
     accounts: list[dict] = []
+    with pool.connection() as conn:
+        conn_row = conn.execute(
+            """
+            SELECT yandex_login, display_name, use_metrika, use_direct, sandbox
+            FROM yandex_connections WHERE id = %s AND user_id = %s
+            """,
+            (connection_id, user_id),
+        ).fetchone()
+    if conn_row is None:
+        finish_run(run_id, status="error", error="not-found")
+        raise YandexError("not-found")
 
-    try:
-        counters = fetch_metrika_counters(token)
-    except YandexError as exc:
-        metrika_error = exc.code
+    if conn_row["use_metrika"] and not conn_row["sandbox"]:
+        try:
+            counters = fetch_metrika_counters(token)
+        except YandexError as exc:
+            metrika_error = exc.code
 
-    accounts, direct_error = fetch_direct_clients(token)
-    if not accounts:
-        with pool.connection() as conn:
-            conn_row = conn.execute(
-                "SELECT yandex_login, display_name FROM yandex_connections WHERE id = %s AND user_id = %s",
-                (connection_id, user_id),
-            ).fetchone()
-        if conn_row and conn_row.get("yandex_login") and not direct_error:
+    if conn_row["use_direct"]:
+        accounts, direct_error = fetch_direct_clients(token)
+    if conn_row["use_direct"] and not accounts:
+        if conn_row.get("yandex_login") and not direct_error:
             accounts = [
                 {
                     "client_login": conn_row["yandex_login"],
@@ -587,12 +659,7 @@ def sync_connection(user_id: int, connection_id: int) -> dict:
 
     metrika_n, new_counter_ids = upsert_metrika(user_id, connection_id, counters)
     direct_n, new_account_ids = upsert_direct(user_id, connection_id, accounts)
-    assign_new_items(
-        user_id,
-        connection_id,
-        new_account_ids=new_account_ids,
-        new_counter_ids=new_counter_ids,
-    )
+    ensure_workspaces(user_id)
 
     status = "ok"
     error_parts = []
@@ -610,6 +677,8 @@ def sync_connection(user_id: int, connection_id: int) -> dict:
         "error": ";".join(error_parts),
         "metrika_error": metrika_error,
         "direct_error": direct_error,
+        "new_counters": len(new_counter_ids),
+        "new_accounts": len(new_account_ids),
     }
     finish_run(run_id, status=status, error=";".join(error_parts), meta=result)
     return result
@@ -660,6 +729,8 @@ def _direct_out(row: dict) -> dict:
         "last_sync_status": row.get("last_sync_status") or "",
         "last_sync_error": row.get("last_sync_error") or "",
         "synced_at": _iso(row.get("synced_at")),
+        "campaigns": int(row.get("campaigns") or 0),
+        "workspaces": int(row.get("workspaces") or 0),
     }
 
 
@@ -682,7 +753,9 @@ def list_direct(user_id: int) -> list[dict]:
         rows = conn.execute(
             """
             SELECT id, connection_id, client_row_id, client_login, client_id, name, currency,
-                   enabled, last_sync_at, last_sync_status, last_sync_error, synced_at
+                   enabled, last_sync_at, last_sync_status, last_sync_error, synced_at,
+                   (SELECT COUNT(*) FROM direct_campaigns c WHERE c.account_id = direct_accounts.id) AS campaigns,
+                   (SELECT COUNT(*) FROM workspace_accounts wa WHERE wa.account_id = direct_accounts.id) AS workspaces
             FROM direct_accounts
             WHERE user_id = %s
             ORDER BY name ASC, client_login ASC
@@ -740,15 +813,18 @@ def complete_oauth(*, code: str, state: str) -> tuple[dict, dict]:
     except UsersError as exc:
         raise YandexError(exc.code) from exc
 
-    connection = save_connection(user_id=user["id"], profile=profile, token_payload=token_payload)
+    connection = save_connection(
+        user_id=user["id"], profile=profile, token_payload=token_payload, mode=oauth_state.get("mode") or ""
+    )
     # Синк — задачей в очереди, чтобы редирект после согласия не ждал API Яндекса.
     from app.job_handlers import submit
     from app.jobs import PRIORITY_USER
 
+    # deep — сразу подтянуть кампании кабинетов и цели счётчиков.
     job = submit(
         "sync_connection",
         user["id"],
-        {"connection_id": connection["id"]},
+        {"connection_id": connection["id"], "deep": True},
         priority=PRIORITY_USER,
     )
     return user, job

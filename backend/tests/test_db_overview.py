@@ -5,13 +5,13 @@ from datetime import date, timedelta
 from fastapi.testclient import TestClient
 
 from app import digest, direct_balance, stats
-from app.clients import assign_direct_account, create_client, update_client
+from app.clients import create_client, update_client
 from app.clock import now_msk
 from app.main import app
 from app.overview import build_overview
 from app.web_auth import make_session
 from app.yandex import YandexError
-from tests.dbutil import make_account, make_connection, make_user
+from tests.dbutil import make_account, make_campaign, make_connection, make_counter, make_user, make_workspace
 
 TODAY = date(2026, 10, 26)
 YESTERDAY = TODAY - timedelta(days=1)
@@ -31,17 +31,6 @@ def _stat(pool, user, account, campaign, day, cost_rub, conv=0, revenue_rub=0):
     )
 
 
-def _campaign(pool, user, account, campaign_id, name, state="ON", status="ACCEPTED") -> int:
-    with pool.connection() as conn:
-        return conn.execute(
-            """
-            INSERT INTO direct_campaigns (user_id, account_id, campaign_id, name, state, status)
-            VALUES (%s, %s, %s, %s, %s, %s) RETURNING id
-            """,
-            (user, account, campaign_id, name, state, status),
-        ).fetchone()["id"]
-
-
 def _sql(pool, query, params=()):
     with pool.connection() as conn:
         conn.execute(query, params)
@@ -50,16 +39,13 @@ def _sql(pool, query, params=()):
 def _seed(db):
     user = make_user(db)
     connection = make_connection(db, user, "agency")
-    romashka = create_client(user, name="Ромашка", kpi_type="cpa", kpi_target=900, monthly_budget_rub=100000)
-    vector = create_client(user, name="Вектор", kpi_type="drr", kpi_target=20)
+    romashka = create_client(user, name="ООО Ромашка")
+    vector = create_client(user, name="ООО Вектор")
     archived = create_client(user, name="Архив")
     acc_r = make_account(db, user, connection, name="Ромашка Директ", login="romashka")
     acc_v = make_account(db, user, connection, name="Вектор Директ", login="vector")
     acc_free = make_account(db, user, connection, name="Ничей", login="free")
     acc_old = make_account(db, user, connection, name="Старый", login="old")
-    assign_direct_account(user, acc_r, romashka["id"])
-    assign_direct_account(user, acc_v, vector["id"])
-    assign_direct_account(user, acc_old, archived["id"])
     update_client(user, archived["id"], archived=True)
 
     # Ромашка: 14 дней по 4000 ₽ / 4 конв., вчера 12 000 ₽ / 4 конв. — скачок расхода и CPA.
@@ -68,15 +54,42 @@ def _seed(db):
     _stat(db, user, acc_r, 11, YESTERDAY, 12000, 4)
     _stat(db, user, acc_r, 11, TODAY, 1000)
     _stat(db, user, acc_r, 12, TODAY - timedelta(days=6), 500)  # кампания 12 тратила и встала
-    _campaign(db, user, acc_r, 11, "Поиск")
-    _campaign(db, user, acc_r, 12, "РСЯ", state="OFF")
+    r_search = make_campaign(db, user, acc_r, 11, "Поиск")
+    r_network = make_campaign(db, user, acc_r, 12, "РСЯ", state="OFF")
+    ws_r = make_workspace(
+        db,
+        user,
+        101,
+        "Ромашка",
+        counter_row_id=make_counter(db, user, connection, 101),
+        client_id=romashka["id"],
+        accounts=[acc_r],
+        campaigns=[r_search, r_network],
+        kpi_type="cpa",
+        kpi_target=900,
+        monthly_budget_rub=100000,
+    )
     _sql(db, "UPDATE direct_accounts SET balance_kopecks = 600000, balance_currency = 'RUB' WHERE id = %s", (acc_r,))
 
     # Вектор: ДРР 10% при цели 20%, кампания отклонена модерацией.
     for i in range(0, 7):
         _stat(db, user, acc_v, 21, YESTERDAY - timedelta(days=i), 1000, 1, 10000)
-    _campaign(db, user, acc_v, 21, "Товары", status="REJECTED")
-
+    v_goods = make_campaign(db, user, acc_v, 21, "Товары", status="REJECTED")
+    ws_v = make_workspace(
+        db,
+        user,
+        102,
+        "Вектор",
+        counter_row_id=make_counter(db, user, connection, 102),
+        client_id=vector["id"],
+        accounts=[acc_v],
+        campaigns=[v_goods],
+        kpi_type="drr",
+        kpi_target=20,
+    )
+    # Пространство архивного клиента скрыто вместе с кабинетом.
+    old_campaign = make_campaign(db, user, acc_old, 31, "Старая")
+    make_workspace(db, user, 103, "Архивный сайт", client_id=archived["id"], accounts=[acc_old], campaigns=[old_campaign])
     _stat(db, user, acc_old, 31, YESTERDAY, 99999)
     _sql(
         db,
@@ -87,25 +100,27 @@ def _seed(db):
         "user": user,
         "romashka": romashka["id"],
         "vector": vector["id"],
+        "ws_r": ws_r,
+        "ws_v": ws_v,
         "acc_r": acc_r,
         "acc_v": acc_v,
         "acc_free": acc_free,
     }
 
 
-def _problems(overview, client_name=None):
+def _problems(overview, workspace_name=None):
     return [
         (p["severity"], p["kind"])
         for p in overview["problems"]
-        if client_name is None or p["client_name"] == client_name
+        if workspace_name is None or p["workspace_name"] == workspace_name
     ]
 
 
 def test_overview_rows(db):
     s = _seed(db)
     overview = build_overview(s["user"], TODAY)
-    rows = {r["name"]: r for r in overview["clients"]}
-    assert set(rows) == {"Ромашка", "Вектор", "Без клиента"}  # архивный клиент скрыт
+    rows = {r["name"]: r for r in overview["workspaces"]}
+    assert set(rows) == {"Ромашка", "Вектор", "Без пространства"}  # пространство архивного клиента скрыто
 
     r = rows["Ромашка"]
     assert (r["spend_today"], r["spend_yesterday"]) == (100_000, 1_200_000)
@@ -124,9 +139,32 @@ def test_overview_rows(db):
     assert (v["revenue_7d"], v["drr_7d"], v["kpi"]["status"]) == (7_000_000, 10.0, "ok")
     assert v["balance_kopecks"] is None and v["days_on_balance"] is None
 
-    assert rows["Без клиента"]["accounts"] == 1
+    assert rows["Без пространства"]["accounts"] == 1
+    assert rows["Ромашка"]["client_name"] == "ООО Ромашка" and rows["Ромашка"]["campaigns"] == 2
     assert overview["totals"]["spend_yesterday"] == 1_200_000 + 100_000
     assert overview["today_updated_at"] is not None
+
+    folders = {f["name"]: f for f in overview["folders"]}
+    assert set(folders) == {"ООО Ромашка", "ООО Вектор"}
+    assert folders["ООО Ромашка"]["workspace_ids"] == [s["ws_r"]]
+    assert folders["ООО Ромашка"]["spend_yesterday"] == 1_200_000
+
+
+def test_client_shared_budget_and_unassigned_spend(db):
+    s = _seed(db)
+    update_client(s["user"], s["romashka"], monthly_budget_rub=50000)
+    second = make_workspace(db, s["user"], 104, "Ромашка Блог", client_id=s["romashka"])
+    make_campaign(db, s["user"], s["acc_r"], 13, "Без сайта")
+    _stat(db, s["user"], s["acc_r"], 13, YESTERDAY, 300)
+    overview = build_overview(s["user"], TODAY)
+    folder = next(f for f in overview["folders"] if f["id"] == s["romashka"])
+    assert sorted(folder["workspace_ids"]) == sorted([s["ws_r"], second])
+    assert folder["budget"]["status"] == "exhausted"  # больше 50 000 ₽ за месяц
+    shared = [p for p in overview["problems"] if p["kind"] == "budget" and p["client_id"] == s["romashka"]]
+    assert any("Общий бюджет клиента" in p["title"] for p in shared)
+    rows = {r["id"]: r for r in overview["workspaces"]}
+    # Кампания кабинета вне пространств — в строке «Без пространства».
+    assert rows[None]["spend_yesterday"] == 30_000
 
 
 def test_where_it_burns(db):
@@ -146,10 +184,10 @@ def test_where_it_burns(db):
 
     token = [p for p in overview["problems"] if p["kind"] == "token"]
     assert len(token) == 1 and token[0]["severity"] == "critical"
-    assert token[0]["client_name"] == "Ромашка, Вектор, Без клиента"
-    rows = {r["name"]: r for r in overview["clients"]}
-    # Проблема логина засчитана каждому клиенту на нём.
-    assert rows["Без клиента"]["problems"] == {"critical": 1, "warning": 0, "info": 0}
+    assert token[0]["workspace_name"] == "Вектор, Ромашка, Без пространства"
+    rows = {r["name"]: r for r in overview["workspaces"]}
+    # Проблема логина засчитана каждому пространству на нём.
+    assert rows["Без пространства"]["problems"] == {"critical": 1, "warning": 0, "info": 0}
     assert rows["Вектор"]["problems"]["critical"] == 2
 
     stopped = next(p for p in overview["problems"] if p["kind"] == "stopped")
@@ -160,8 +198,8 @@ def test_overview_is_private(db):
     s = _seed(db)
     stranger = make_user(db, "b@example.com")
     overview = build_overview(stranger, TODAY)
-    assert overview["clients"] == [] and overview["problems"] == []
-    assert build_overview(s["user"], TODAY)["clients"]
+    assert overview["workspaces"] == [] and overview["problems"] == []
+    assert build_overview(s["user"], TODAY)["workspaces"]
 
 
 def test_stats_sync_saves_revenue_and_account_status(db, monkeypatch):
@@ -269,7 +307,7 @@ def test_api(db, monkeypatch):
 
     assert client.get("/api/web/overview").status_code == 401
     overview = client.get("/api/web/overview", headers=auth).json()
-    assert {r["name"] for r in overview["clients"]} >= {"Ромашка", "Вектор"}
+    assert {r["name"] for r in overview["workspaces"]} >= {"Ромашка", "Вектор"}
 
     job = client.post("/api/web/overview/refresh", headers=auth).json()["job"]
     assert job["kind"] == "stats_today"

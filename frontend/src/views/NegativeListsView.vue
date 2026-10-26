@@ -1,8 +1,5 @@
 <template>
-  <div class="site">
-    <SiteHeader solid />
-    <main class="cabinet">
-      <div class="wrap">
+  <AppShell>
         <div class="cabinet__head">
           <div>
             <h1>Минус-фразы</h1>
@@ -12,7 +9,6 @@
             </p>
           </div>
         </div>
-        <CabinetNav />
 
         <div v-if="loading" class="panel"><p class="empty">Загружаем списки…</p></div>
 
@@ -264,20 +260,14 @@
             </ul>
           </section>
         </template>
-      </div>
-    </main>
-    <SiteFooter />
-  </div>
+  </AppShell>
 </template>
 
 <script setup>
+import { askConfirm } from '../composables/useConfirm'
 import { computed, onMounted, reactive, ref, watch } from 'vue'
-import { useRouter } from 'vue-router'
-import CabinetNav from '../components/CabinetNav.vue'
-import SiteFooter from '../components/SiteFooter.vue'
-import SiteHeader from '../components/SiteHeader.vue'
+import AppShell from '../components/AppShell.vue'
 import { ERRORS, errorText, jobProgressText, webApi } from '../api/web'
-import { getSession } from '../composables/useSession'
 import { pushToast } from '../composables/useToasts'
 import { useHead } from '../utils/useHead'
 
@@ -295,7 +285,6 @@ const SAMPLE_SIZE = 4
 const NOT_COUNTED = /[\s\-!+"[\]]/g
 const MINUS_SPLIT = /\s+-(?=\S)/
 
-const router = useRouter()
 const loading = ref(true)
 const busy = ref(false)
 const lists = ref([])
@@ -540,7 +529,7 @@ async function save() {
 }
 
 async function remove() {
-  if (!window.confirm(`Удалить список «${detail.value.name}»? В Директе ничего не изменится.`)) return
+  if (!await askConfirm(`Удалить список «${detail.value.name}»? В Директе ничего не изменится.`)) return
   busy.value = true
   try {
     await webApi.deleteNegativeList(selectedId.value)
@@ -574,7 +563,7 @@ async function apply() {
     ? `Записать в Директ: ${t.changed} ${plural(t.changed, 'кампания', 'кампании', 'кампаний')}, ` +
       `+${t.add} / −${t.remove} фраз?`
     : 'В Директе ничего не изменится — только обновим привязки списка. Продолжить?'
-  if (!window.confirm(question)) return
+  if (!await askConfirm(question)) return
   applying.value = true
   applyText.value = 'Ставим задачу…'
   try {
@@ -595,10 +584,6 @@ async function apply() {
 }
 
 onMounted(async () => {
-  if (!getSession()) {
-    router.replace('/login')
-    return
-  }
   try {
     await Promise.all([loadLists(), loadTargets()])
     if (lists.value.length) await selectList(lists.value[0].id)

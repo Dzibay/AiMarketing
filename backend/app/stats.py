@@ -13,6 +13,7 @@ from decimal import Decimal
 
 import httpx
 
+from app import direct_api
 from app.clock import yesterday_msk
 from app.db import pool
 from app.metrika_sync import sync_metrika_stats_for_user
@@ -20,8 +21,6 @@ from app.sync_runs import finish_run, start_run
 from app.yandex import YandexError, get_connection_access_token
 
 log = logging.getLogger("app.stats")
-
-REPORTS_URL = "https://api.direct.yandex.com/json/v5/reports"
 
 
 def _rub_to_kopecks(raw) -> int:
@@ -122,7 +121,7 @@ def fetch_direct_campaign_report(access_token: str, client_login: str, day: date
     for _attempt in range(8):
         try:
             with httpx.Client(timeout=90.0) as client:
-                response = client.post(REPORTS_URL, headers=headers, json=body)
+                response = client.post(direct_api.v5_url(access_token, "reports"), headers=headers, json=body)
         except httpx.HTTPError as exc:
             log.warning("reports: %s", exc)
             raise YandexError("direct") from exc
@@ -282,341 +281,14 @@ def sync_stats_range(
         raise
 
 
-def analytics_summary(
-    user_id: int,
-    *,
-    date_from: date,
-    date_to: date,
-    account_id: int | None = None,
-    goal_row_id: int | None = None,
-) -> dict:
-    yandex_goal_id: int | None = None
-    goal_name = ""
-    if goal_row_id:
-        with pool.connection() as conn:
-            g = conn.execute(
-                "SELECT goal_id, name FROM metrika_goals WHERE id = %s AND user_id = %s",
-                (goal_row_id, user_id),
-            ).fetchone()
-        if g:
-            yandex_goal_id = int(g["goal_id"])
-            goal_name = g.get("name") or ""
-
-    with pool.connection() as conn:
-        links_count = conn.execute(
-            "SELECT COUNT(*) AS n FROM account_counter_links WHERE user_id = %s",
-            (user_id,),
-        ).fetchone()
-        linked_n = int(links_count["n"] or 0)
-
-        if account_id is not None:
-            totals = conn.execute(
-                """
-                SELECT
-                    COALESCE(SUM(CASE WHEN s.source = 'direct' THEN s.cost_kopecks ELSE 0 END), 0) AS cost_kopecks,
-                    COALESCE(SUM(CASE WHEN s.source = 'direct' THEN s.clicks ELSE 0 END), 0) AS clicks,
-                    COALESCE(SUM(CASE WHEN s.source = 'direct' THEN s.impressions ELSE 0 END), 0) AS impressions,
-                    COALESCE(SUM(CASE WHEN s.source = 'direct' THEN s.conversions ELSE 0 END), 0) AS conversions,
-                    COALESCE(SUM(CASE WHEN s.source = 'metrika' THEN s.visits ELSE 0 END), 0) AS visits,
-                    COALESCE(SUM(CASE WHEN s.source = 'metrika' THEN s.goal_reaches ELSE 0 END), 0) AS goal_reaches
-                FROM stats_daily s
-                WHERE s.user_id = %s AND s.day >= %s AND s.day <= %s
-                  AND (
-                    (s.source = 'direct' AND s.account_id = %s)
-                    OR (
-                      s.source = 'metrika'
-                      AND s.counter_row_id IN (
-                        SELECT counter_row_id FROM account_counter_links
-                        WHERE user_id = %s AND account_id = %s
-                      )
-                    )
-                  )
-                """,
-                (user_id, date_from, date_to, account_id, user_id, account_id),
-            ).fetchone()
-        else:
-            totals = conn.execute(
-                """
-                SELECT
-                    COALESCE(SUM(CASE WHEN source = 'direct' THEN cost_kopecks ELSE 0 END), 0) AS cost_kopecks,
-                    COALESCE(SUM(CASE WHEN source = 'direct' THEN clicks ELSE 0 END), 0) AS clicks,
-                    COALESCE(SUM(CASE WHEN source = 'direct' THEN impressions ELSE 0 END), 0) AS impressions,
-                    COALESCE(SUM(CASE WHEN source = 'direct' THEN conversions ELSE 0 END), 0) AS conversions,
-                    COALESCE(SUM(CASE WHEN source = 'metrika' THEN visits ELSE 0 END), 0) AS visits,
-                    COALESCE(SUM(CASE WHEN source = 'metrika' THEN goal_reaches ELSE 0 END), 0) AS goal_reaches
-                FROM stats_daily
-                WHERE user_id = %s AND day >= %s AND day <= %s
-                """,
-                (user_id, date_from, date_to),
-            ).fetchone()
-
-        selected_goal_reaches = 0
-        if yandex_goal_id is not None:
-            if account_id is not None:
-                sg = conn.execute(
-                    """
-                    SELECT COALESCE(SUM(s.goal_reaches), 0) AS goal_reaches
-                    FROM stats_daily s
-                    JOIN account_counter_links l
-                      ON l.counter_row_id = s.counter_row_id AND l.user_id = s.user_id
-                    WHERE s.user_id = %s AND s.source = 'metrika_goal'
-                      AND s.goal_id = %s AND s.campaign_id IS NULL
-                      AND s.day >= %s AND s.day <= %s
-                      AND l.account_id = %s
-                    """,
-                    (user_id, yandex_goal_id, date_from, date_to, account_id),
-                ).fetchone()
-            else:
-                sg = conn.execute(
-                    """
-                    SELECT COALESCE(SUM(goal_reaches), 0) AS goal_reaches
-                    FROM stats_daily
-                    WHERE user_id = %s AND source = 'metrika_goal'
-                      AND goal_id = %s AND campaign_id IS NULL
-                      AND day >= %s AND day <= %s
-                    """,
-                    (user_id, yandex_goal_id, date_from, date_to),
-                ).fetchone()
-            selected_goal_reaches = int((sg or {}).get("goal_reaches") or 0)
-
-        by_account = conn.execute(
-            """
-            WITH direct_agg AS (
-                SELECT account_id,
-                       COALESCE(SUM(cost_kopecks), 0) AS cost_kopecks,
-                       COALESCE(SUM(clicks), 0) AS clicks,
-                       COALESCE(SUM(conversions), 0) AS conversions
-                FROM stats_daily
-                WHERE user_id = %s AND source = 'direct'
-                  AND day >= %s AND day <= %s
-                GROUP BY account_id
-            ),
-            metrika_agg AS (
-                SELECT l.account_id,
-                       COALESCE(SUM(m.visits), 0) AS visits,
-                       COALESCE(SUM(m.goal_reaches), 0) AS goal_reaches
-                FROM account_counter_links l
-                JOIN stats_daily m
-                  ON m.counter_row_id = l.counter_row_id
-                 AND m.source = 'metrika'
-                 AND m.user_id = %s
-                 AND m.day >= %s AND m.day <= %s
-                WHERE l.user_id = %s
-                GROUP BY l.account_id
-            ),
-            link_counts AS (
-                SELECT account_id, COUNT(*) AS links
-                FROM account_counter_links
-                WHERE user_id = %s
-                GROUP BY account_id
-            )
-            SELECT a.id, a.name, a.client_login,
-                   COALESCE(d.cost_kopecks, 0) AS cost_kopecks,
-                   COALESCE(d.clicks, 0) AS clicks,
-                   COALESCE(d.conversions, 0) AS conversions,
-                   COALESCE(m.visits, 0) AS visits,
-                   COALESCE(m.goal_reaches, 0) AS goal_reaches,
-                   COALESCE(lc.links, 0) AS links
-            FROM direct_accounts a
-            LEFT JOIN direct_agg d ON d.account_id = a.id
-            LEFT JOIN metrika_agg m ON m.account_id = a.id
-            LEFT JOIN link_counts lc ON lc.account_id = a.id
-            WHERE a.user_id = %s AND a.enabled = TRUE
-              AND (%s::bigint IS NULL OR a.id = %s)
-            ORDER BY cost_kopecks DESC
-            """,
-            (
-                user_id,
-                date_from,
-                date_to,
-                user_id,
-                date_from,
-                date_to,
-                user_id,
-                user_id,
-                user_id,
-                account_id,
-                account_id,
-            ),
-        ).fetchall()
-
-        by_campaign = conn.execute(
-            """
-            SELECT s.campaign_id, c.name, s.account_id, a.client_login,
-                   COALESCE(SUM(s.cost_kopecks), 0) AS cost_kopecks,
-                   COALESCE(SUM(s.clicks), 0) AS clicks,
-                   COALESCE(SUM(s.conversions), 0) AS conversions
-            FROM stats_daily s
-            LEFT JOIN direct_campaigns c
-              ON c.account_id = s.account_id AND c.campaign_id = s.campaign_id
-            LEFT JOIN direct_accounts a ON a.id = s.account_id
-            WHERE s.user_id = %s AND s.source = 'direct'
-              AND s.day >= %s AND s.day <= %s
-              AND (%s::bigint IS NULL OR s.account_id = %s)
-            GROUP BY s.campaign_id, c.name, s.account_id, a.client_login
-            ORDER BY cost_kopecks DESC
-            LIMIT 100
-            """,
-            (user_id, date_from, date_to, account_id, account_id),
-        ).fetchall()
-
-        if account_id is not None:
-            by_day_rows = conn.execute(
-                """
-                SELECT d.day::date AS day,
-                       COALESCE(SUM(CASE WHEN s.source = 'direct' THEN s.cost_kopecks ELSE 0 END), 0) AS cost_kopecks,
-                       COALESCE(SUM(CASE WHEN s.source = 'direct' THEN s.clicks ELSE 0 END), 0) AS clicks,
-                       COALESCE(SUM(CASE WHEN s.source = 'direct' THEN s.conversions ELSE 0 END), 0) AS conversions,
-                       COALESCE(SUM(CASE WHEN s.source = 'metrika' THEN s.visits ELSE 0 END), 0) AS visits,
-                       COALESCE(SUM(CASE WHEN s.source = 'metrika' THEN s.goal_reaches ELSE 0 END), 0) AS goal_reaches
-                FROM generate_series(%s::date, %s::date, '1 day'::interval) AS d(day)
-                LEFT JOIN stats_daily s
-                  ON s.user_id = %s AND s.day = d.day
-                 AND (
-                   (s.source = 'direct' AND s.account_id = %s)
-                   OR (
-                     s.source = 'metrika'
-                     AND s.counter_row_id IN (
-                       SELECT counter_row_id FROM account_counter_links
-                       WHERE user_id = %s AND account_id = %s
-                     )
-                   )
-                 )
-                GROUP BY d.day
-                ORDER BY d.day ASC
-                """,
-                (date_from, date_to, user_id, account_id, user_id, account_id),
-            ).fetchall()
-        else:
-            by_day_rows = conn.execute(
-                """
-                SELECT d.day::date AS day,
-                       COALESCE(SUM(CASE WHEN s.source = 'direct' THEN s.cost_kopecks ELSE 0 END), 0) AS cost_kopecks,
-                       COALESCE(SUM(CASE WHEN s.source = 'direct' THEN s.clicks ELSE 0 END), 0) AS clicks,
-                       COALESCE(SUM(CASE WHEN s.source = 'direct' THEN s.conversions ELSE 0 END), 0) AS conversions,
-                       COALESCE(SUM(CASE WHEN s.source = 'metrika' THEN s.visits ELSE 0 END), 0) AS visits,
-                       COALESCE(SUM(CASE WHEN s.source = 'metrika' THEN s.goal_reaches ELSE 0 END), 0) AS goal_reaches
-                FROM generate_series(%s::date, %s::date, '1 day'::interval) AS d(day)
-                LEFT JOIN stats_daily s
-                  ON s.user_id = %s AND s.day = d.day
-                 AND s.source IN ('direct', 'metrika')
-                GROUP BY d.day
-                ORDER BY d.day ASC
-                """,
-                (date_from, date_to, user_id),
-            ).fetchall()
-
-        if yandex_goal_id is not None:
-            if account_id is not None:
-                goal_days = conn.execute(
-                    """
-                    SELECT s.day, COALESCE(SUM(s.goal_reaches), 0) AS goal_reaches
-                    FROM stats_daily s
-                    JOIN account_counter_links l
-                      ON l.counter_row_id = s.counter_row_id AND l.user_id = s.user_id
-                    WHERE s.user_id = %s AND s.source = 'metrika_goal'
-                      AND s.goal_id = %s AND s.campaign_id IS NULL
-                      AND s.day >= %s AND s.day <= %s
-                      AND l.account_id = %s
-                    GROUP BY s.day
-                    """,
-                    (user_id, yandex_goal_id, date_from, date_to, account_id),
-                ).fetchall()
-            else:
-                goal_days = conn.execute(
-                    """
-                    SELECT day, COALESCE(SUM(goal_reaches), 0) AS goal_reaches
-                    FROM stats_daily
-                    WHERE user_id = %s AND source = 'metrika_goal'
-                      AND goal_id = %s AND campaign_id IS NULL
-                      AND day >= %s AND day <= %s
-                    GROUP BY day
-                    """,
-                    (user_id, yandex_goal_id, date_from, date_to),
-                ).fetchall()
-            goal_map = {r["day"]: int(r["goal_reaches"] or 0) for r in goal_days}
-        else:
-            goal_map = {}
-
-    by_day = []
-    for r in by_day_rows:
-        day = r["day"]
-        day_goals = goal_map.get(day, int(r["goal_reaches"] or 0)) if yandex_goal_id is not None else int(r["goal_reaches"] or 0)
-        by_day.append(
-            {
-                "day": day.isoformat() if hasattr(day, "isoformat") else str(day),
-                "cost_kopecks": int(r["cost_kopecks"] or 0),
-                "clicks": int(r["clicks"] or 0),
-                "conversions": int(r["conversions"] or 0),
-                "visits": int(r["visits"] or 0),
-                "goal_reaches": day_goals,
-            }
-        )
-
-    cost = int(totals["cost_kopecks"] or 0)
-    conv = int(totals["conversions"] or 0)
-    goals_any = int(totals["goal_reaches"] or 0)
-    goals = selected_goal_reaches if yandex_goal_id is not None else goals_any
-    tops = _structure_tops(user_id, account_id=account_id)
-    return {
-        "date_from": date_from.isoformat(),
-        "date_to": date_to.isoformat(),
-        "links_count": linked_n,
-        "goal_row_id": goal_row_id,
-        "goal_name": goal_name,
-        "totals": {
-            "cost_kopecks": cost,
-            "clicks": int(totals["clicks"] or 0),
-            "impressions": int(totals["impressions"] or 0),
-            "conversions": conv,
-            "visits": int(totals["visits"] or 0),
-            "goal_reaches": goals,
-            "goal_reaches_any": goals_any,
-            "cpa_kopecks": int(cost / conv) if conv else None,
-            "cpa_goal_kopecks": int(cost / goals) if goals else None,
-        },
-        "by_account": [
-            {
-                "id": r["id"],
-                "name": r["name"],
-                "client_login": r["client_login"],
-                "cost_kopecks": int(r["cost_kopecks"]),
-                "clicks": int(r["clicks"]),
-                "conversions": int(r["conversions"]),
-                "visits": int(r["visits"]),
-                "goal_reaches": int(r["goal_reaches"]),
-                "links": int(r["links"]),
-            }
-            for r in by_account
-        ],
-        "by_campaign": [
-            {
-                "campaign_id": r["campaign_id"],
-                "name": r["name"] or str(r["campaign_id"]),
-                "account_id": r["account_id"],
-                "client_login": r["client_login"],
-                "cost_kopecks": int(r["cost_kopecks"]),
-                "clicks": int(r["clicks"]),
-                "conversions": int(r["conversions"]),
-            }
-            for r in by_campaign
-            if r["campaign_id"]
-        ],
-        "by_day": by_day,
-        "top_keywords": tops["keywords"],
-        "top_adgroups": tops["adgroups"],
-        "top_queries": tops["queries"],
-        "tops_note": tops["note"],
-    }
-
-
-def _structure_tops(user_id: int, *, account_id: int | None = None, limit: int = 15) -> dict:
-    """Топы по period_* / search_queries (после синка статистики на кампании)."""
+def structure_tops(user_id: int, *, campaign_row_ids: list[int] | None = None, limit: int = 15) -> dict:
+    """Топы ключей, групп и запросов по period_* / search_queries (после синка статистики на кампании)."""
     limit = max(1, min(limit, 50))
-    acc_clause_k = "AND k.account_id = %s" if account_id is not None else ""
-    acc_clause_g = "AND g.account_id = %s" if account_id is not None else ""
-    acc_clause_q = "AND q.account_id = %s" if account_id is not None else ""
-    params_acc = [account_id] if account_id is not None else []
+    scoped = campaign_row_ids is not None
+    acc_clause_k = "AND g.campaign_row_id = ANY(%s)" if scoped else ""
+    acc_clause_g = "AND g.campaign_row_id = ANY(%s)" if scoped else ""
+    acc_clause_q = "AND q.campaign_row_id = ANY(%s)" if scoped else ""
+    params_acc = [list(campaign_row_ids)] if scoped else []
     with pool.connection() as conn:
         kw_rows = conn.execute(
             f"""

@@ -78,3 +78,16 @@ def test_format_rule_alert():
     assert "CPA" in text
     assert "Camp A" in text
     assert "pause" in text
+
+
+def test_rule_reason_rubles():
+    from app.rules import _rub
+
+    def plain(kopecks):
+        # разделители — неразрывные пробелы, чтобы сумма не переносилась
+        return _rub(kopecks).replace("\u00a0", " ")
+
+    assert plain(Decimal("323964")) == "3 240 ₽"
+    assert plain(Decimal(2000) * 100) == "2 000 ₽"
+    assert plain(3622) == "36,22 ₽"
+    assert plain(2500) == "25 ₽"

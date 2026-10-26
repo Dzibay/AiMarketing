@@ -245,16 +245,21 @@ def fetch_metrika_goal_total(access_token: str, counter_id: int, goal_id: int, d
 
 
 def _goals_to_sync(user_id: int, counter_row_id: int) -> list[dict]:
-    """Цели из правил пользователя + до 20 целей счётчика."""
+    """Основная цель пространства, цели из правил пользователя + до 20 целей счётчика."""
     with pool.connection() as conn:
         from_rules = conn.execute(
             """
-            SELECT DISTINCT g.id, g.goal_id, g.counter_row_id
+            SELECT g.id, g.goal_id, g.counter_row_id
+            FROM metrika_goals g
+            JOIN workspaces w ON w.counter_row_id = g.counter_row_id AND w.goal_id = g.goal_id
+            WHERE w.user_id = %s AND g.counter_row_id = %s
+            UNION
+            SELECT g.id, g.goal_id, g.counter_row_id
             FROM automation_rules r
             JOIN metrika_goals g ON g.id = r.goal_row_id
             WHERE r.user_id = %s AND g.counter_row_id = %s AND r.goal_row_id IS NOT NULL
             """,
-            (user_id, counter_row_id),
+            (user_id, counter_row_id, user_id, counter_row_id),
         ).fetchall()
         all_goals = conn.execute(
             """
@@ -278,11 +283,15 @@ def _goals_to_sync(user_id: int, counter_row_id: int) -> list[dict]:
 def sync_metrika_stats_for_user(user_id: int, day: date | None = None) -> dict:
     day = day or (date.today() - timedelta(days=1))
     with pool.connection() as conn:
+        # Один номер счётчика может быть виден из нескольких подключений — читаем его один раз,
+        # через строку, к которой привязано пространство.
         counters = conn.execute(
             """
-            SELECT id, connection_id, counter_id
-            FROM metrika_counters
-            WHERE user_id = %s AND enabled = TRUE
+            SELECT DISTINCT ON (m.counter_id) m.id, m.connection_id, m.counter_id
+            FROM metrika_counters m
+            LEFT JOIN workspaces w ON w.counter_row_id = m.id
+            WHERE m.user_id = %s AND m.enabled = TRUE
+            ORDER BY m.counter_id, (w.id IS NULL), m.id
             """,
             (user_id,),
         ).fetchall()

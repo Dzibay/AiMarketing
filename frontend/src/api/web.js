@@ -61,13 +61,88 @@ async function runJob(path, body, onProgress) {
   return waitJob(job, onProgress)
 }
 
+/** ?a=1&b=2 из объекта; пустые значения пропускаются. */
+function query(params = {}) {
+  const q = new URLSearchParams()
+  for (const [key, value] of Object.entries(params)) {
+    if (value === undefined || value === null || value === '' || value === false) continue
+    q.set(key, value === true ? 'true' : String(value))
+  }
+  const qs = q.toString()
+  return qs ? `?${qs}` : ''
+}
+
+const post = (path, body) =>
+  request(path, { method: 'POST', ...(body === undefined ? {} : { body: JSON.stringify(body) }) })
+const patch = (path, body) => request(path, { method: 'PATCH', body: JSON.stringify(body) })
+const put = (path, body) => request(path, { method: 'PUT', body: JSON.stringify(body) })
+const del = (path) => request(path, { method: 'DELETE' })
+
+const WS = (id) => `/api/web/workspaces/${id}`
+
+/** Рабочие пространства: пространство = счётчик Метрики + кампании из любых кабинетов Директа. */
+export const wsApi = {
+  list: (archived = false) => request(`/api/web/workspaces${query({ archived })}`),
+  refresh: () => post('/api/web/workspaces/refresh'),
+  get: (id) => request(WS(id)),
+  update: (id, payload) => patch(WS(id), payload),
+  summary: (id) => request(`${WS(id)}/summary`),
+  analytics: (id, params = {}) => request(`${WS(id)}/analytics${query(params)}`),
+  syncStats: (id, days, onProgress) => runJob(`${WS(id)}/analytics/sync`, { days }, onProgress),
+  accounts: (id) => request(`${WS(id)}/accounts`),
+  accountCandidates: (id) => request(`${WS(id)}/accounts/candidates`),
+  addAccount: (id, accountId, campaigns = 'matching') =>
+    post(`${WS(id)}/accounts`, { account_id: accountId, campaigns }),
+  removeAccount: (id, accountId) => del(`${WS(id)}/accounts/${accountId}`),
+  campaignCandidates: (id) => request(`${WS(id)}/campaigns/candidates`),
+  setCampaigns: (id, add = [], remove = []) => post(`${WS(id)}/campaigns/set`, { add, remove }),
+  syncCampaigns: async (id, onProgress) => {
+    const { jobs } = await post(`${WS(id)}/campaigns/sync`)
+    const results = []
+    for (const job of jobs || []) results.push(await waitJob(job, onProgress))
+    return results
+  },
+  campaigns: (id, params = {}) => request(`${WS(id)}/campaigns${query(params)}`),
+  campaignOptions: (id) => request(`${WS(id)}/campaign-options`),
+  createCampaign: (id, accountId, spec) => post(`${WS(id)}/campaigns`, { account_id: accountId, spec }),
+  bulk: (id, payload) => post(`${WS(id)}/campaigns/actions`, payload),
+  campaign: (id, cid) => request(`${WS(id)}/campaigns/${cid}`),
+  campaignSettings: (id, cid) => request(`${WS(id)}/campaigns/${cid}/settings`),
+  updateCampaignSettings: (id, cid, changes) => patch(`${WS(id)}/campaigns/${cid}/settings`, { changes }),
+  duplicate: (id, cid, payload, onProgress) => runJob(`${WS(id)}/campaigns/${cid}/duplicate`, payload, onProgress),
+  moderate: (id, cid) => post(`${WS(id)}/campaigns/${cid}/moderate`),
+  actions: (id, params = {}) => request(`${WS(id)}/actions${query(params)}`),
+  rules: (id) => request(`${WS(id)}/rules`),
+}
+
+/** ИИ-ассистент: свой ключ пользователя (BYOK), чаты пространства, согласование действий. */
+export const aiApi = {
+  settings: () => request('/api/web/ai/settings'),
+  saveSettings: (payload) => put('/api/web/ai/settings', payload),
+  test: () => post('/api/web/ai/settings/test'),
+  chats: (workspaceId) => request(`${WS(workspaceId)}/chats`),
+  createChat: (workspaceId, title = '') => post(`${WS(workspaceId)}/chats`, { title }),
+  chat: (id) => request(`/api/web/ai/chats/${id}`),
+  renameChat: (id, title) => patch(`/api/web/ai/chats/${id}`, { title }),
+  deleteChat: (id) => del(`/api/web/ai/chats/${id}`),
+  send: (id, text) => post(`/api/web/ai/chats/${id}/messages`, { text }),
+  decide: (actionId, approve, remember = false) =>
+    post(`/api/web/ai/actions/${actionId}/decide`, { approve, remember }),
+  decideAll: (chatId, approve) => post(`/api/web/ai/chats/${chatId}/decide-all`, { approve }),
+}
+
 export const webApi = {
   config: () => request('/api/web/config'),
   register: (payload) => request('/api/web/register', { method: 'POST', body: JSON.stringify(payload) }),
   login: (payload) => request('/api/web/login', { method: 'POST', body: JSON.stringify(payload) }),
   me: () => request('/api/web/me'),
-  yandexStart: (purpose = 'login') => request(`/api/web/yandex/start?purpose=${encodeURIComponent(purpose)}`),
+  yandexStart: (purpose = 'login', mode = '') =>
+    request(
+      `/api/web/yandex/start?purpose=${encodeURIComponent(purpose)}${mode ? `&mode=${encodeURIComponent(mode)}` : ''}`,
+    ),
   syncConnection: (id, onProgress) => runJob(`/api/web/connections/${id}/sync`, undefined, onProgress),
+  patchConnection: (id, payload) =>
+    request(`/api/web/connections/${id}`, { method: 'PATCH', body: JSON.stringify(payload) }),
   deleteConnection: (id) => request(`/api/web/connections/${id}`, { method: 'DELETE' }),
   patchMetrika: (id, enabled) =>
     request(`/api/web/metrika/${id}`, { method: 'PATCH', body: JSON.stringify({ enabled }) }),
@@ -170,16 +245,7 @@ export const webApi = {
       method: 'POST',
       body: JSON.stringify(payload),
     }),
-  actionLogs: () => request('/api/web/actions'),
-  analytics: (params = {}) => {
-    const q = new URLSearchParams()
-    if (params.date_from) q.set('date_from', params.date_from)
-    if (params.date_to) q.set('date_to', params.date_to)
-    if (params.account_id) q.set('account_id', params.account_id)
-    if (params.goal_row_id) q.set('goal_row_id', params.goal_row_id)
-    const qs = q.toString()
-    return request(`/api/web/analytics${qs ? `?${qs}` : ''}`)
-  },
+  actionLogs: (params = {}) => request(`/api/web/actions${query(params)}`),
   analyticsSync: (opts = {}, onProgress) => {
     const payload = typeof opts === 'string' ? { day: opts } : opts || {}
     return runJob('/api/web/analytics/sync', payload, onProgress)
@@ -209,9 +275,6 @@ export const webApi = {
     request(`/api/web/metrika/goals${counterRowId ? `?counter_row_id=${counterRowId}` : ''}`),
   syncGoals: (counterRowId, onProgress) =>
     runJob(`/api/web/metrika/${counterRowId}/goals/sync`, undefined, onProgress),
-  links: () => request('/api/web/links'),
-  createLink: (payload) => request('/api/web/links', { method: 'POST', body: JSON.stringify(payload) }),
-  deleteLink: (id) => request(`/api/web/links/${id}`, { method: 'DELETE' }),
   overview: () => request('/api/web/overview'),
   overviewRefresh: (onProgress) => runJob('/api/web/overview/refresh', undefined, onProgress),
   digestSettings: () => request('/api/web/digest'),
@@ -277,6 +340,19 @@ export const ERRORS = {
   busy: 'Идёт другое применение списка — задача повторится автоматически.',
   archived: 'Кампания в архиве.',
   unsupported: 'Медийные кампании не поддерживают минус-фразы.',
+  mode: 'Некорректный режим подключения Яндекса.',
+  scope: 'Это действие не входит в рабочее пространство.',
+  decided: 'Решение по действию уже принято.',
+  'ai-not-configured': 'Подключите ИИ: Настройки → ИИ-ассистент.',
+  'ai-url': 'Адрес API ИИ должен быть публичным https-адресом.',
+  'ai-provider': 'Неизвестный провайдер ИИ.',
+  'ai-folder': 'Для YandexGPT укажите каталог Yandex Cloud.',
+  'ai-auth': 'Провайдер ИИ отклонил ключ.',
+  'ai-limit': 'Превышен лимит запросов к ИИ.',
+  'ai-timeout': 'ИИ не ответил вовремя.',
+  'ai-network': 'Не удалось связаться с ИИ.',
+  'ai-error': 'Ошибка ИИ.',
+  'ai-busy': 'ИИ ещё отвечает на прошлое сообщение.',
 }
 
 export const JOB_LABELS = {
@@ -291,6 +367,8 @@ export const JOB_LABELS = {
   stats_today: 'Расход за сегодня и балансы',
   send_digest: 'Утренний дайджест',
   apply_negative_list: 'Применение списка минус-фраз',
+  ai_chat: 'Ответ ИИ-ассистента',
+  duplicate_campaign: 'Копирование кампании',
 }
 
 export function jobProgressText(job) {
@@ -307,6 +385,23 @@ export function errorText(err) {
     return ERRORS[err.code] || 'Что-то пошло не так. Попробуйте позже.'
   }
   return 'Что-то пошло не так. Попробуйте позже.'
+}
+
+const ERROR_SOURCES = { metrika: 'Метрика', direct: 'Директ' }
+
+/** Код ошибки из БД или составная строка синка «metrika:код;direct:код» → текст для человека. */
+export function errorDetail(text) {
+  if (!text) return ''
+  if (ERRORS[text]) return ERRORS[text]
+  return String(text)
+    .split(';')
+    .map((part) => {
+      const piece = part.trim()
+      const m = /^(metrika|direct):(.+)$/.exec(piece)
+      if (!m) return ERRORS[piece] || piece
+      return `${ERROR_SOURCES[m[1]]}: ${(ERRORS[m[2]] || m[2]).replace(/\.$/, '')}`
+    })
+    .join('; ')
 }
 
 export function formatMoneyKopecks(kopecks) {

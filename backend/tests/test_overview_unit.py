@@ -103,11 +103,13 @@ def test_cpa_spike_and_spend_without_conversions():
     assert _kinds(found) == {"no_conversions"}
 
 
-def _client(name, spend, **extra):
+def _site(name, spend, **extra):
     row = {
         "id": 1,
         "name": name,
-        "accounts": 1,
+        "client_name": "",
+        "campaigns": 1,
+        "spend_7d": spend,
         "spend_yesterday": spend,
         "conversions_yesterday": 0,
         "kpi": {"type": "", "value": None, "status": "none"},
@@ -123,13 +125,13 @@ def test_format_digest():
         "yesterday": "2026-10-25",
         "totals": {"spend_yesterday": 300_000, "conversions_yesterday": 6},
         "problems": [
-            {"severity": "critical", "client_name": "Ромашка", "object_name": "", "title": "Деньги закончились"},
-            {"severity": "warning", "client_name": "Вектор", "object_name": "Поиск", "title": "Расход упал"},
-            {"severity": "info", "client_name": "Вектор", "object_name": "", "title": "Недорасход"},
+            {"severity": "critical", "workspace_name": "Ромашка", "object_name": "", "title": "Деньги закончились"},
+            {"severity": "warning", "workspace_name": "Вектор", "object_name": "Поиск", "title": "Расход упал"},
+            {"severity": "info", "workspace_name": "Вектор", "object_name": "", "title": "Недорасход"},
         ],
-        "clients": [
-            _client("Вектор", 100_000),
-            _client(
+        "workspaces": [
+            _site("Вектор", 100_000, client_name="ООО Вектор"),
+            _site(
                 "Ромашка",
                 200_000,
                 conversions_yesterday=6,
@@ -137,7 +139,7 @@ def test_format_digest():
                 budget={"pace_pct": 104},
                 days_on_balance=1.5,
             ),
-            _client("Пустой", 0, accounts=0),
+            _site("Пустой", 0, campaigns=0),
         ],
     }
     text = format_digest(overview, "https://aim.example")
@@ -147,10 +149,10 @@ def test_format_digest():
     assert "🔴 Ромашка: Деньги закончились" in text
     assert "🟠 Вектор · Поиск: Расход упал" in text
     assert "Недорасход" not in text  # info в дайджест не идёт
-    assert text.index("• Ромашка") < text.index("• Вектор")  # по расходу
+    assert text.index("• Ромашка") < text.index("• ООО Вектор · Вектор")  # по расходу, с папкой
     assert "темп бюджета 104%" in text and "баланс на 1.5 дн." in text and "✓" in text
     assert "Пустой" not in text
     assert text.endswith("https://aim.example/cabinet/overview")
 
-    calm = format_digest({**overview, "problems": [], "clients": []})
+    calm = format_digest({**overview, "problems": [], "workspaces": []})
     assert "Ничего не горит" in calm

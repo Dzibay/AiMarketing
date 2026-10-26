@@ -33,6 +33,8 @@ def test_fresh_db_migrates_to_head(db_pool):
         }
     assert _version(db_pool) == _head()
     assert {"users", "clients", "jobs", "job_schedules", "direct_accounts", "metrika_counters"} <= tables
+    assert {"workspaces", "workspace_accounts", "workspace_campaigns", "ai_settings", "ai_chats"} <= tables
+    assert "account_counter_links" not in tables
     run_migrations()  # повторный запуск — no-op
     assert _version(db_pool) == _head()
 
@@ -70,3 +72,18 @@ def test_pre_alembic_db_is_adopted_and_backfilled(db_pool):
     # Неоднозначные случаи оставляем пользователю.
     assert client_of(db_pool, "metrika_counters", unlinked) is None
     assert client_of(db_pool, "metrika_counters", shared) is None
+
+    # Связи кабинет ↔ счётчик стали рабочими пространствами: по пространству на счётчик.
+    with db_pool.connection() as conn:
+        spaces = {
+            r["counter_id"]: r
+            for r in conn.execute("SELECT id, counter_id, client_row_id, name FROM workspaces WHERE user_id = %s", (user,))
+        }
+        members = {
+            (r["workspace_id"], r["account_id"])
+            for r in conn.execute("SELECT workspace_id, account_id FROM workspace_accounts")
+        }
+    assert set(spaces) == {1, 2, 3, 4}
+    assert spaces[2]["name"] == "solo.ru"
+    assert spaces[1]["client_row_id"] == client_of(db_pool, "direct_accounts", alpha)
+    assert members == {(spaces[1]["id"], alpha), (spaces[4]["id"], alpha), (spaces[4]["id"], beta)}

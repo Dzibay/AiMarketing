@@ -13,7 +13,8 @@ _CLIENT_COLUMNS = """
     c.id, c.name, c.site, c.notes, c.kpi_type, c.kpi_target, c.monthly_budget_kopecks,
     c.archived_at, c.created_at, c.updated_at,
     (SELECT COUNT(*) FROM direct_accounts d WHERE d.client_row_id = c.id) AS direct_count,
-    (SELECT COUNT(*) FROM metrika_counters m WHERE m.client_row_id = c.id) AS metrika_count
+    (SELECT COUNT(*) FROM metrika_counters m WHERE m.client_row_id = c.id) AS metrika_count,
+    (SELECT COUNT(*) FROM workspaces w WHERE w.client_row_id = c.id AND w.archived_at IS NULL) AS workspace_count
 """
 
 
@@ -38,6 +39,7 @@ def _client_out(row: dict) -> dict:
         "updated_at": _iso(row.get("updated_at")),
         "direct_count": int(row.get("direct_count") or 0),
         "metrika_count": int(row.get("metrika_count") or 0),
+        "workspace_count": int(row.get("workspace_count") or 0),
     }
 
 

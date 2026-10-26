@@ -4,10 +4,12 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from app.api.admin import admin_public, router as admin_router
+from app.api.ai import router as ai_router
 from app.api.negative_lists import router as negative_lists_router
 from app.api.overview import router as overview_router
 from app.api.site import router as site_router
 from app.api.web import router as web_router
+from app.api.workspaces import router as workspaces_router
 from app.config import settings
 from app.db import ensure_schema, pool
 from app.settings_store import bootstrap_settings
@@ -52,5 +54,7 @@ app.include_router(site_router, prefix="/api")
 app.include_router(web_router, prefix="/api")
 app.include_router(overview_router, prefix="/api")
 app.include_router(negative_lists_router, prefix="/api")
+app.include_router(workspaces_router, prefix="/api")
+app.include_router(ai_router, prefix="/api")
 app.include_router(admin_public, prefix="/api/admin")
 app.include_router(admin_router, prefix="/api/admin")

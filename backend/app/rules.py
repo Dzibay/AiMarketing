@@ -7,12 +7,22 @@ import logging
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 
-from app.actions import bulk_campaign_action
+from app.actions import acting_as, bulk_campaign_action
 from app.db import pool
 from app.keywords import bulk_keyword_action
 from app.search_queries import bulk_search_query_action
 from app.telegram_notify import format_rule_alert, notify_user
 from app.yandex import YandexError
+
+
+def _rub(kopecks) -> str:
+    """Копейки → «3 240 ₽» (до копеек только если они есть и сумма меньше 100 ₽)."""
+    value = float(kopecks) / 100
+    text = f"{value:,.2f}" if value < 100 and round(value, 2) != round(value) else f"{value:,.0f}"
+    return text.replace(",", "\u00a0").replace(".", ",") + "\u00a0₽"
+
+
+_CONV_NOTE = {"цель": "по цели", "цель~": "по цели, оценка", "конв.": "по конверсиям Директа"}
 
 log = logging.getLogger("app.rules")
 
@@ -45,6 +55,7 @@ def create_rule(
     action: str = "pause",
     dry_run: bool = True,
     scope_account_id: int | None = None,
+    scope_workspace_id: int | None = None,
     cooldown_hours: int = 24,
     goal_row_id: int | None = None,
     action_budget_rub: float | None = None,
@@ -66,15 +77,16 @@ def create_rule(
         raise YandexError("action")
     budget = _validate_budget(action, action_budget_rub)
     bid = _validate_bid(action, action_bid_rub)
+    scope_workspace_id = _validate_workspace(user_id, scope_workspace_id)
     with pool.connection() as conn:
         row = conn.execute(
             """
             INSERT INTO automation_rules (
                 user_id, name, enabled, dry_run, scope_account_id,
                 rule_type, threshold_value, lookback_days, action, cooldown_hours,
-                goal_row_id, action_budget_rub, target, action_bid_rub
+                goal_row_id, action_budget_rub, target, action_bid_rub, scope_workspace_id
             )
-            VALUES (%s, %s, TRUE, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            VALUES (%s, %s, TRUE, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             RETURNING *
             """,
             (
@@ -91,22 +103,40 @@ def create_rule(
                 budget,
                 target_n,
                 bid,
+                scope_workspace_id,
             ),
         ).fetchone()
     return _public_rule(row)
 
 
-def list_rules(user_id: int) -> list[dict]:
+def _validate_workspace(user_id: int, workspace_id: int | None) -> int | None:
+    if not workspace_id:
+        return None
+    with pool.connection() as conn:
+        row = conn.execute(
+            "SELECT id FROM workspaces WHERE id = %s AND user_id = %s",
+            (workspace_id, user_id),
+        ).fetchone()
+    if row is None:
+        raise YandexError("not-found")
+    return int(row["id"])
+
+
+def list_rules(user_id: int, *, workspace_id: int | None = None) -> list[dict]:
     with pool.connection() as conn:
         rows = conn.execute(
             """
-            SELECT r.*, g.name AS goal_name, g.goal_id AS yandex_goal_id
+            SELECT r.*, g.name AS goal_name, g.goal_id AS yandex_goal_id, w.name AS workspace_name,
+                   COALESCE(NULLIF(a.name, ''), a.client_login) AS account_name
             FROM automation_rules r
             LEFT JOIN metrika_goals g ON g.id = r.goal_row_id
+            LEFT JOIN workspaces w ON w.id = r.scope_workspace_id
+            LEFT JOIN direct_accounts a ON a.id = r.scope_account_id
             WHERE r.user_id = %s
+              AND (%s::bigint IS NULL OR r.scope_workspace_id = %s)
             ORDER BY r.id DESC
             """,
-            (user_id,),
+            (user_id, workspace_id, workspace_id),
         ).fetchall()
     return [_public_rule(r) for r in rows]
 
@@ -124,6 +154,7 @@ def update_rule(user_id: int, rule_id: int, **fields) -> dict:
         "action_budget_rub",
         "action_bid_rub",
         "scope_account_id",
+        "scope_workspace_id",
         "target",
         "rule_type",
     }
@@ -146,6 +177,8 @@ def update_rule(user_id: int, rule_id: int, **fields) -> dict:
     if "target" in updates and updates["target"] is not None:
         if updates["target"] not in RULE_TARGETS:
             raise YandexError("rule-type")
+    if "scope_workspace_id" in updates:
+        updates["scope_workspace_id"] = _validate_workspace(user_id, updates["scope_workspace_id"])
     target_n = updates.get("target") or current.get("target") or "campaign"
     rule_type_n = updates.get("rule_type") or current.get("rule_type")
     action_n = updates.get("action") or current.get("action") or "pause"
@@ -284,6 +317,9 @@ def _public_rule(row: dict) -> dict:
         "dry_run": row["dry_run"],
         "target": row.get("target") or "campaign",
         "scope_account_id": row["scope_account_id"],
+        "scope_workspace_id": row.get("scope_workspace_id"),
+        "workspace_name": row.get("workspace_name") or "",
+        "account_name": row.get("account_name") or "",
         "rule_type": row["rule_type"],
         "threshold_value": float(row["threshold_value"] or 0),
         "lookback_days": row["lookback_days"],
@@ -323,6 +359,7 @@ def _matching_campaigns(user_id: int, rule: dict) -> list[dict]:
     date_to = date.today() - timedelta(days=1)
     threshold = Decimal(str(rule["threshold_value"]))
     account_id = rule.get("scope_account_id")
+    workspace_id = rule.get("scope_workspace_id")
     goal = _goal_meta(user_id, rule.get("goal_row_id"))
     yandex_goal_id = int(goal["goal_id"]) if goal else None
 
@@ -342,6 +379,8 @@ def _matching_campaigns(user_id: int, rule: dict) -> list[dict]:
              AND s.day >= %s AND s.day <= %s
             WHERE c.user_id = %s
               AND (%s::bigint IS NULL OR c.account_id = %s)
+              AND (%s::bigint IS NULL OR c.id IN (
+                    SELECT campaign_row_id FROM workspace_campaigns WHERE workspace_id = %s))
               AND (
                 (%s = 'resume' AND c.state = 'SUSPENDED')
                 OR (%s <> 'resume' AND c.state = 'ON')
@@ -354,6 +393,8 @@ def _matching_campaigns(user_id: int, rule: dict) -> list[dict]:
                 user_id,
                 account_id,
                 account_id,
+                workspace_id,
+                workspace_id,
                 rule["action"],
                 rule["action"],
             ),
@@ -362,17 +403,19 @@ def _matching_campaigns(user_id: int, rule: dict) -> list[dict]:
         goal_by_campaign: dict[tuple[int, int], int] = {}
         goal_by_account: dict[int, int] = {}
         if yandex_goal_id is not None:
+            # Достижения цели по кампании — из счётчика пространства, где лежит кампания.
             g_rows = conn.execute(
                 """
-                SELECT s.campaign_id, s.goal_reaches, l.account_id
+                SELECT c.campaign_id, s.goal_reaches, c.account_id
                 FROM stats_daily s
-                JOIN account_counter_links l
-                  ON l.counter_row_id = s.counter_row_id AND l.user_id = s.user_id
+                JOIN workspaces w ON w.counter_row_id = s.counter_row_id AND w.user_id = s.user_id
+                JOIN workspace_campaigns wc ON wc.workspace_id = w.id
+                JOIN direct_campaigns c ON c.id = wc.campaign_row_id AND c.campaign_id = s.campaign_id
                 WHERE s.user_id = %s AND s.source = 'metrika_goal'
                   AND s.goal_id = %s
                   AND s.day >= %s AND s.day <= %s
                   AND s.campaign_id IS NOT NULL
-                  AND (%s::bigint IS NULL OR l.account_id = %s)
+                  AND (%s::bigint IS NULL OR c.account_id = %s)
                 """,
                 (user_id, yandex_goal_id, date_from, date_to, account_id, account_id),
             ).fetchall()
@@ -382,16 +425,16 @@ def _matching_campaigns(user_id: int, rule: dict) -> list[dict]:
 
             a_rows = conn.execute(
                 """
-                SELECT l.account_id, COALESCE(SUM(s.goal_reaches), 0) AS goal_reaches
+                SELECT wa.account_id, COALESCE(SUM(s.goal_reaches), 0) AS goal_reaches
                 FROM stats_daily s
-                JOIN account_counter_links l
-                  ON l.counter_row_id = s.counter_row_id AND l.user_id = s.user_id
+                JOIN workspaces w ON w.counter_row_id = s.counter_row_id AND w.user_id = s.user_id
+                JOIN workspace_accounts wa ON wa.workspace_id = w.id
                 WHERE s.user_id = %s AND s.source = 'metrika_goal'
                   AND s.goal_id = %s
                   AND s.day >= %s AND s.day <= %s
                   AND s.campaign_id IS NULL
-                  AND (%s::bigint IS NULL OR l.account_id = %s)
-                GROUP BY l.account_id
+                  AND (%s::bigint IS NULL OR wa.account_id = %s)
+                GROUP BY wa.account_id
                 """,
                 (user_id, yandex_goal_id, date_from, date_to, account_id, account_id),
             ).fetchall()
@@ -432,11 +475,11 @@ def _matching_campaigns(user_id: int, rule: dict) -> list[dict]:
         if rule_type == "cpa_above":
             if cpa is not None and cpa >= threshold * 100:
                 hit = True
-                reason = f"CPA {float(cpa/100):.2f} >= {float(threshold)} ({conv_label})"
+                reason = f"CPA {_rub(cpa)} — порог {_rub(threshold * 100)} ({_CONV_NOTE[conv_label]})"
         elif rule_type == "spend_no_conv":
             if conv == 0 and cost >= threshold * 100:
                 hit = True
-                reason = f"расход {float(cost/100):.2f} без {conv_label}"
+                reason = f"расход {_rub(cost)} без конверсий ({_CONV_NOTE[conv_label]})"
         elif rule_type == "daily_budget_pct":
             with pool.connection() as conn:
                 camp = conn.execute(
@@ -463,7 +506,7 @@ def _matching_campaigns(user_id: int, rule: dict) -> list[dict]:
                 cpc = cost / clicks
                 if cpc >= threshold * 100:
                     hit = True
-                    reason = f"CPC {float(cpc/100):.2f} >= {float(threshold)}"
+                    reason = f"CPC {_rub(cpc)} — порог {_rub(threshold * 100)}"
         if hit:
             matched.append(
                 {
@@ -484,6 +527,7 @@ def _matching_keywords(user_id: int, rule: dict) -> list[dict]:
     """Совпадения по period_* статистики ключей (после синка на странице кампании)."""
     threshold = Decimal(str(rule["threshold_value"]))
     account_id = rule.get("scope_account_id")
+    workspace_id = rule.get("scope_workspace_id")
     action = rule.get("action") or "pause"
     with pool.connection() as conn:
         rows = conn.execute(
@@ -499,6 +543,8 @@ def _matching_keywords(user_id: int, rule: dict) -> list[dict]:
             JOIN direct_campaigns c ON c.id = g.campaign_row_id
             WHERE k.user_id = %s
               AND (%s::bigint IS NULL OR k.account_id = %s)
+              AND (%s::bigint IS NULL OR g.campaign_row_id IN (
+                    SELECT campaign_row_id FROM workspace_campaigns WHERE workspace_id = %s))
               AND (
                 (%s = 'resume' AND k.state = 'SUSPENDED')
                 OR (%s <> 'resume' AND (k.state = 'ON' OR k.state = '' OR k.state IS NULL))
@@ -508,7 +554,7 @@ def _matching_keywords(user_id: int, rule: dict) -> list[dict]:
             ORDER BY k.period_cost_kopecks DESC NULLS LAST
             LIMIT 500
             """,
-            (user_id, account_id, account_id, action, action),
+            (user_id, account_id, account_id, workspace_id, workspace_id, action, action),
         ).fetchall()
 
     matched = []
@@ -524,17 +570,17 @@ def _matching_keywords(user_id: int, rule: dict) -> list[dict]:
                 cpa = cost / conv
                 if cpa >= threshold * 100:
                     hit = True
-                    reason = f"CPA {float(cpa/100):.2f} >= {float(threshold)}"
+                    reason = f"CPA {_rub(cpa)} — порог {_rub(threshold * 100)}"
         elif rule_type == "spend_no_conv":
             if conv == 0 and cost >= threshold * 100:
                 hit = True
-                reason = f"расход {float(cost/100):.2f} без конв."
+                reason = f"расход {_rub(cost)} без конверсий"
         elif rule_type == "cpc_above":
             if clicks > 0:
                 cpc = cost / clicks
                 if cpc >= threshold * 100:
                     hit = True
-                    reason = f"CPC {float(cpc/100):.2f} >= {float(threshold)}"
+                    reason = f"CPC {_rub(cpc)} — порог {_rub(threshold * 100)}"
         if hit:
             matched.append(
                 {
@@ -557,6 +603,7 @@ def _matching_queries(user_id: int, rule: dict) -> list[dict]:
     """Совпадения по синхронизированным поисковым запросам."""
     threshold = Decimal(str(rule["threshold_value"]))
     account_id = rule.get("scope_account_id")
+    workspace_id = rule.get("scope_workspace_id")
     with pool.connection() as conn:
         rows = conn.execute(
             """
@@ -568,11 +615,13 @@ def _matching_queries(user_id: int, rule: dict) -> list[dict]:
             JOIN direct_campaigns c ON c.id = q.campaign_row_id
             WHERE q.user_id = %s
               AND (%s::bigint IS NULL OR q.account_id = %s)
+              AND (%s::bigint IS NULL OR q.campaign_row_id IN (
+                    SELECT campaign_row_id FROM workspace_campaigns WHERE workspace_id = %s))
               AND COALESCE(q.clicks, 0) + COALESCE(q.cost_kopecks, 0) > 0
             ORDER BY q.cost_kopecks DESC NULLS LAST
             LIMIT 500
             """,
-            (user_id, account_id, account_id),
+            (user_id, account_id, account_id, workspace_id, workspace_id),
         ).fetchall()
 
     matched = []
@@ -586,19 +635,19 @@ def _matching_queries(user_id: int, rule: dict) -> list[dict]:
         if rule_type == "spend_no_conv":
             if conv == 0 and cost >= threshold * 100:
                 hit = True
-                reason = f"расход {float(cost/100):.2f} без конв."
+                reason = f"расход {_rub(cost)} без конверсий"
         elif rule_type == "cpc_above":
             if clicks > 0:
                 cpc = cost / clicks
                 if cpc >= threshold * 100:
                     hit = True
-                    reason = f"CPC {float(cpc/100):.2f} >= {float(threshold)}"
+                    reason = f"CPC {_rub(cpc)} — порог {_rub(threshold * 100)}"
         elif rule_type == "cpa_above":
             if conv > 0:
                 cpa = cost / conv
                 if cpa >= threshold * 100:
                     hit = True
-                    reason = f"CPA {float(cpa/100):.2f} >= {float(threshold)}"
+                    reason = f"CPA {_rub(cpa)} — порог {_rub(threshold * 100)}"
         if hit:
             matched.append(
                 {
@@ -618,6 +667,12 @@ def _matching_queries(user_id: int, rule: dict) -> list[dict]:
 
 
 def run_rule(user_id: int, rule_id: int, *, force_dry_run: bool | None = None) -> dict:
+    # Действия правила попадают в журнал с источником «правило».
+    with acting_as("rule"):
+        return _run_rule(user_id, rule_id, force_dry_run=force_dry_run)
+
+
+def _run_rule(user_id: int, rule_id: int, *, force_dry_run: bool | None = None) -> dict:
     with pool.connection() as conn:
         rule = conn.execute(
             "SELECT * FROM automation_rules WHERE id = %s AND user_id = %s",

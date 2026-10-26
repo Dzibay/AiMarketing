@@ -1,4 +1,4 @@
-"""Сводка по клиентам: расход, KPI против цели, темп месячного бюджета, баланс и список «где горит».
+"""Сводка по сайтам (рабочим пространствам) и папкам-клиентам: расход, KPI, темп бюджета, баланс, «где горит».
 
 Всё считается из уже загруженных данных (stats_daily, direct_campaigns, балансы кабинетов) —
 сводка открывается мгновенно и не ходит в API. Свежесть данных — задачи stats_today / stats_day.
@@ -198,20 +198,26 @@ def campaign_anomalies(
 
 # --- Сборка сводки ---------------------------------------------------------------------------
 
+NO_WORKSPACE = "Без пространства"
+NO_CLIENT = "Без клиента"
+
 
 def _problem(severity: str, kind: str, title: str, detail: str = "", **where) -> dict:
+    workspace_ids = where.get("workspace_ids") or [where.get("workspace_id")]
     return {
         "severity": severity,
         "kind": kind,
         "title": title,
         "detail": detail,
+        "workspace_id": where.get("workspace_id"),
+        "workspace_name": where.get("workspace_name", ""),
         "client_id": where.get("client_id"),
         "client_name": where.get("client_name", ""),
         "account_id": where.get("account_id"),
         "campaign_row_id": where.get("campaign_row_id"),
         "object_name": where.get("object_name", ""),
-        # Клиенты, которых задевает проблема подключения, — для счётчиков в строках сводки.
-        "client_ids": where.get("client_ids") or [where.get("client_id")],
+        # Пространства, которые задевает проблема кабинета или логина, — для счётчиков в строках.
+        "workspace_ids": workspace_ids,
     }
 
 
@@ -225,15 +231,35 @@ def _load(user_id: int, date_from: date, date_to: date) -> dict:
     with pool.connection() as conn:
         clients = conn.execute(
             """
-            SELECT id, name, kpi_type, kpi_target, monthly_budget_kopecks
-            FROM clients WHERE user_id = %s AND archived_at IS NULL
+            SELECT id, name, notes, kpi_type, kpi_target, monthly_budget_kopecks, archived_at
+            FROM clients WHERE user_id = %s
             ORDER BY lower(name), id
             """,
             (user_id,),
         ).fetchall()
+        workspaces = conn.execute(
+            """
+            SELECT w.id, w.name, w.site, w.client_row_id, w.kpi_type, w.kpi_target,
+                   w.monthly_budget_kopecks, w.counter_id, w.counter_row_id,
+                   m.enabled AS counter_enabled, m.connection_id AS counter_connection_id
+            FROM workspaces w
+            LEFT JOIN metrika_counters m ON m.id = w.counter_row_id
+            WHERE w.user_id = %s AND w.archived_at IS NULL
+            ORDER BY lower(w.name), w.id
+            """,
+            (user_id,),
+        ).fetchall()
+        ws_accounts = conn.execute(
+            "SELECT workspace_id, account_id FROM workspace_accounts WHERE user_id = %s",
+            (user_id,),
+        ).fetchall()
+        ws_campaigns = conn.execute(
+            "SELECT workspace_id, campaign_row_id FROM workspace_campaigns WHERE user_id = %s",
+            (user_id,),
+        ).fetchall()
         accounts = conn.execute(
             """
-            SELECT id, connection_id, client_row_id,
+            SELECT id, connection_id,
                    COALESCE(NULLIF(name, ''), client_login) AS name,
                    last_sync_status, last_sync_error,
                    balance_kopecks, balance_currency, balance_synced_at, balance_error,
@@ -263,7 +289,7 @@ def _load(user_id: int, date_from: date, date_to: date) -> dict:
                        AND ad.state <> 'ARCHIVED'
                    ) AS rejected_ads
             FROM direct_campaigns c
-            WHERE c.user_id = %s AND c.state NOT IN ('ARCHIVED', 'ENDED')
+            WHERE c.user_id = %s
             ORDER BY c.id
             """,
             (user_id,),
@@ -279,6 +305,9 @@ def _load(user_id: int, date_from: date, date_to: date) -> dict:
         ).fetchall()
     return {
         "clients": clients,
+        "workspaces": workspaces,
+        "ws_accounts": ws_accounts,
+        "ws_campaigns": ws_campaigns,
         "accounts": accounts,
         "stats": stats,
         "campaigns": campaigns,
@@ -286,8 +315,81 @@ def _load(user_id: int, date_from: date, date_to: date) -> dict:
     }
 
 
+def _new_sums() -> dict[str, int]:
+    return defaultdict(int)
+
+
+def _add_day(s: dict[str, int], r: dict, *, today: date, yesterday: date, week_from: date, month_start: date) -> None:
+    day, cost = r["day"], r["cost_kopecks"]
+    if day == today:
+        s["today"] += cost
+    if day == yesterday:
+        s["yesterday"] += cost
+        s["conversions_yesterday"] += r["conversions"]
+    if week_from <= day <= yesterday:
+        s["cost_7d"] += cost
+        s["clicks_7d"] += r["clicks"]
+        s["conversions_7d"] += r["conversions"]
+        s["revenue_7d"] += r["revenue_kopecks"]
+    if day >= month_start:
+        s["mtd"] += cost
+        if day < today:
+            s["mtd_before_today"] += cost
+
+
+def _spend_fields(s: dict[str, int]) -> dict:
+    return {
+        "spend_today": s["today"],
+        "spend_yesterday": s["yesterday"],
+        "conversions_yesterday": s["conversions_yesterday"],
+        "spend_7d": s["cost_7d"],
+        "clicks_7d": s["clicks_7d"],
+        "conversions_7d": s["conversions_7d"],
+        "revenue_7d": s["revenue_7d"],
+        "spend_mtd": s["mtd"],
+        "cpa_7d": round(s["cost_7d"] / s["conversions_7d"]) if s["conversions_7d"] else None,
+        "drr_7d": round(s["cost_7d"] / s["revenue_7d"] * 100, 1) if s["revenue_7d"] else None,
+    }
+
+
+def _budget_problems(budget: dict | None, where: dict, *, label: str = "") -> list[dict]:
+    if not budget:
+        return []
+    prefix = f"{label}: " if label else ""
+    plan = f"бюджет {rub(budget['budget_kopecks'])}, потрачено {rub(budget['spent_kopecks'])}"
+    if budget["status"] == "exhausted":
+        return [_problem("warning", "budget", f"{prefix}месячный бюджет исчерпан".capitalize(), plan, **where)]
+    if budget["status"] == "over":
+        return [
+            _problem(
+                "warning",
+                "budget",
+                f"{prefix}перерасход: прогноз {budget['pace_pct']}% бюджета".capitalize(),
+                f"{plan}; чтобы уложиться — до {rub(budget['daily_allowed_kopecks'])} в день",
+                **where,
+            )
+        ]
+    if budget["status"] == "under":
+        return [
+            _problem(
+                "info",
+                "budget",
+                f"{prefix}недорасход: прогноз {budget['pace_pct']}% бюджета".capitalize(),
+                f"{plan}; можно тратить до {rub(budget['daily_allowed_kopecks'])} в день",
+                **where,
+            )
+        ]
+    return []
+
+
 def build_overview(user_id: int, today: date | None = None, now: datetime | None = None) -> dict:
-    """Строки по клиентам + отсортированный список проблем. today — московская дата."""
+    """
+    Строки по рабочим пространствам (сайтам), папки-клиенты с общим бюджетом и список «где горит».
+
+    Расход кампании идёт в пространство, где она лежит; кампании вне пространств — в строку
+    «Без пространства». Пространства архивных клиентов и их кабинеты в сводку не попадают.
+    today — московская дата.
+    """
     today = today or today_msk()
     now = now or datetime.now(timezone.utc)
     yesterday = today - timedelta(days=1)
@@ -295,45 +397,90 @@ def build_overview(user_id: int, today: date | None = None, now: datetime | None
     month_start = today.replace(day=1)
     history_from = min(month_start, yesterday - timedelta(days=ANOMALY_BASE_DAYS))
     data = _load(user_id, history_from, today)
+    period = {"today": today, "yesterday": yesterday, "week_from": week_from, "month_start": month_start}
 
     clients_by_id = {c["id"]: c for c in data["clients"]}
-    # Кабинеты архивных клиентов в сводку не попадают; без клиента — отдельной строкой.
-    accounts = [a for a in data["accounts"] if a["client_row_id"] is None or a["client_row_id"] in clients_by_id]
-    owner = {a["id"]: a["client_row_id"] for a in accounts}
+    archived_clients = {c["id"] for c in data["clients"] if c["archived_at"] is not None}
+    workspaces = [w for w in data["workspaces"] if w["client_row_id"] not in archived_clients]
+    hidden_ws = {w["id"] for w in data["workspaces"]} - {w["id"] for w in workspaces}
+    ws_by_id = {w["id"]: w for w in workspaces}
+
+    account_ws: dict[int, list[int]] = defaultdict(list)
+    account_hidden_ws: set[int] = set()
+    for link in data["ws_accounts"]:
+        if link["workspace_id"] in ws_by_id:
+            account_ws[link["account_id"]].append(link["workspace_id"])
+        elif link["workspace_id"] in hidden_ws:
+            account_hidden_ws.add(link["account_id"])
+    campaign_ws = {link["campaign_row_id"]: link["workspace_id"] for link in data["ws_campaigns"]}
+
+    accounts = [
+        a for a in data["accounts"] if a["id"] in account_ws or a["id"] not in account_hidden_ws
+    ]  # кабинет только архивных клиентов — скрыт
     accounts_by_id = {a["id"]: a for a in accounts}
 
-    def client_name(client_id: int | None) -> str:
-        return clients_by_id[client_id]["name"] if client_id is not None else "Без клиента"
+    campaign_row = {(c["account_id"], c["campaign_id"]): c for c in data["campaigns"]}
 
-    sums: dict[int | None, dict[str, int]] = defaultdict(lambda: defaultdict(int))
+    def ws_of_campaign(account_id: int, campaign_id: int | None) -> tuple[bool, int | None]:
+        """(видно ли, пространство). Кампания скрытого пространства не видна."""
+        row = campaign_row.get((account_id, campaign_id)) if campaign_id else None
+        ws_id = campaign_ws.get(row["id"]) if row else None
+        if ws_id in hidden_ws:
+            return False, None
+        return True, ws_id
+
+    def ws_name(ws_id: int | None) -> str:
+        return ws_by_id[ws_id]["name"] if ws_id in ws_by_id else NO_WORKSPACE
+
+    def ws_client(ws_id: int | None) -> int | None:
+        return ws_by_id[ws_id]["client_row_id"] if ws_id in ws_by_id else None
+
+    def client_name(client_id: int | None) -> str:
+        return clients_by_id[client_id]["name"] if client_id in clients_by_id else ""
+
+    def where_ws(ws_id: int | None, **extra) -> dict:
+        cid = ws_client(ws_id)
+        return {
+            "workspace_id": ws_id,
+            "workspace_name": ws_name(ws_id),
+            "client_id": cid,
+            "client_name": client_name(cid),
+            **extra,
+        }
+
+    def where_many(ws_ids: list[int | None], **extra) -> dict:
+        ws_ids = sorted(set(ws_ids), key=lambda w: (w is None, ws_name(w).lower(), w or 0))
+        names = [ws_name(w) for w in ws_ids]
+        label = ", ".join(names[:3]) + (f" и ещё {len(names) - 3}" if len(names) > 3 else "")
+        if len(ws_ids) == 1:
+            return where_ws(ws_ids[0], **extra)
+        return {"workspace_ids": ws_ids, "workspace_name": label, "client_name": "", **extra}
+
+    ws_sums: dict[int | None, dict[str, int]] = defaultdict(_new_sums)
+    account_cost_7d: dict[int, int] = defaultdict(int)
     campaign_history: dict[tuple[int, int], dict[date, tuple[int, int]]] = defaultdict(dict)
     loaded_days: dict[int, set[date]] = defaultdict(set)
     campaign_week_cost: dict[tuple[int, int], int] = defaultdict(int)
+    has_unassigned_spend = False
     today_updated: datetime | None = None
     for r in data["stats"]:
         account_id = r["account_id"]
-        if account_id not in owner:
+        if account_id not in accounts_by_id:
             continue
-        s = sums[owner[account_id]]
+        visible, ws_id = ws_of_campaign(account_id, r["campaign_id"])
+        if not visible:
+            continue
         day, cost = r["day"], r["cost_kopecks"]
         loaded_days[account_id].add(day)
+        _add_day(ws_sums[ws_id], r, **period)
+        if ws_id is None and cost:
+            has_unassigned_spend = True
+        if week_from <= day <= yesterday:
+            account_cost_7d[account_id] += cost
         if day == today:
-            s["today"] += cost
             updated = _aware(r["updated_at"])
             if updated and (today_updated is None or updated > today_updated):
                 today_updated = updated
-        if day == yesterday:
-            s["yesterday"] += cost
-            s["conversions_yesterday"] += r["conversions"]
-        if week_from <= day <= yesterday:
-            s["cost_7d"] += cost
-            s["clicks_7d"] += r["clicks"]
-            s["conversions_7d"] += r["conversions"]
-            s["revenue_7d"] += r["revenue_kopecks"]
-        if day >= month_start:
-            s["mtd"] += cost
-            if day < today:
-                s["mtd_before_today"] += cost
         if r["campaign_id"] and day <= yesterday:
             key = (account_id, r["campaign_id"])
             prev_cost, prev_conv = campaign_history[key].get(day, (0, 0))
@@ -341,87 +488,73 @@ def build_overview(user_id: int, today: date | None = None, now: datetime | None
             if day >= week_from:
                 campaign_week_cost[key] += cost
 
+    ws_campaign_count: dict[int, int] = defaultdict(int)
+    for c in data["campaigns"]:
+        ws_id = campaign_ws.get(c["id"])
+        if ws_id in ws_by_id and c["state"] not in ("ARCHIVED",):
+            ws_campaign_count[ws_id] += 1
+
+    unlinked_accounts = [a for a in accounts if a["id"] not in account_ws]
+    row_ids: list[int | None] = [w["id"] for w in workspaces]
+    if unlinked_accounts or has_unassigned_spend:
+        row_ids.append(None)
+
     problems: list[dict] = []
     rows: dict[int | None, dict] = {}
-    client_ids: list[int | None] = list(clients_by_id)
-    if any(a["client_row_id"] is None for a in accounts):
-        client_ids.append(None)
-
-    for client_id in client_ids:
-        client = clients_by_id.get(client_id) or {}
-        own_accounts = [a for a in accounts if a["client_row_id"] == client_id]
-        s = sums[client_id]
-        kpi_type = client.get("kpi_type") or ""
-        target = float(client["kpi_target"]) if client.get("kpi_target") is not None else None
+    for ws_id in row_ids:
+        ws = ws_by_id.get(ws_id) or {}
+        client = clients_by_id.get(ws.get("client_row_id")) or {}
+        s = ws_sums[ws_id]
+        # KPI пространства; не задан — берём KPI папки-клиента.
+        kpi_type = ws.get("kpi_type") or client.get("kpi_type") or ""
+        raw_target = ws.get("kpi_target") if ws.get("kpi_type") else client.get("kpi_target")
+        target = float(raw_target) if raw_target is not None else None
         kpi = kpi_state(kpi_type, target, s["cost_7d"], s["conversions_7d"], s["revenue_7d"])
-        budget = budget_pace(client.get("monthly_budget_kopecks"), s["mtd"], s["mtd_before_today"], today)
+        budget = budget_pace(ws.get("monthly_budget_kopecks"), s["mtd"], s["mtd_before_today"], today)
+        own_accounts = (
+            [accounts_by_id[a] for a, ws_ids in account_ws.items() if ws_id in ws_ids and a in accounts_by_id]
+            if ws_id is not None
+            else unlinked_accounts
+        )
         balances = [a["balance_kopecks"] for a in own_accounts if a["balance_kopecks"] is not None]
         balance = sum(balances) if balances else None
         currencies = {a["balance_currency"] for a in own_accounts if a["balance_kopecks"] is not None}
-        balance_days = days_on_balance(balance, s["cost_7d"])
+        # Баланс кабинета общий для всех его кампаний — дни считаем по расходу всего кабинета.
+        balance_days = days_on_balance(balance, sum(account_cost_7d[a["id"]] for a in own_accounts))
         synced = [_aware(a["stats_synced_at"]) for a in own_accounts]
-        rows[client_id] = {
-            "id": client_id,
-            "name": client_name(client_id),
+        rows[ws_id] = {
+            "id": ws_id,
+            "name": ws_name(ws_id),
+            "site": ws.get("site") or "",
+            "client_id": ws.get("client_row_id"),
+            "client_name": client_name(ws.get("client_row_id")),
+            "counter_id": ws.get("counter_id"),
+            "counter_ok": bool(ws.get("counter_row_id")) and bool(ws.get("counter_enabled")) if ws_id else True,
             "accounts": len(own_accounts),
-            "spend_today": s["today"],
-            "spend_yesterday": s["yesterday"],
-            "conversions_yesterday": s["conversions_yesterday"],
-            "spend_7d": s["cost_7d"],
-            "clicks_7d": s["clicks_7d"],
-            "conversions_7d": s["conversions_7d"],
-            "revenue_7d": s["revenue_7d"],
-            "cpa_7d": round(s["cost_7d"] / s["conversions_7d"]) if s["conversions_7d"] else None,
-            "drr_7d": round(s["cost_7d"] / s["revenue_7d"] * 100, 1) if s["revenue_7d"] else None,
+            "campaigns": ws_campaign_count.get(ws_id, 0) if ws_id is not None else 0,
+            **_spend_fields(s),
             "kpi": kpi,
             "budget": budget,
             "balance_kopecks": balance,
             "balance_currency": currencies.pop() if len(currencies) == 1 else "",
             "days_on_balance": balance_days,
-            # Самый старый синк статистики среди кабинетов клиента: устарел один — устарела сводка.
+            # Самый старый синк статистики среди кабинетов: устарел один — устарела строка.
             "stats_synced_at": None if not synced or None in synced else min(synced).isoformat(),
         }
-        where = {"client_id": client_id, "client_name": client_name(client_id)}
+        where = where_ws(ws_id)
 
-        if balance is not None and s["cost_7d"] > 0:
-            if balance <= 0:
-                problems.append(_problem("critical", "balance", "Деньги на счёте закончились", rub(balance), **where))
-            elif balance_days is not None and balance_days < BALANCE_WARNING_DAYS:
-                severity = "critical" if balance_days < BALANCE_CRITICAL_DAYS else "warning"
-                problems.append(
-                    _problem(
-                        severity,
-                        "balance",
-                        f"Баланса хватит на {balance_days:g} дн.",
-                        f"{rub(balance)} при расходе ≈{rub(s['cost_7d'] / 7)} в день",
-                        **where,
-                    )
+        if ws_id is not None and not rows[ws_id]["counter_ok"] and (own_accounts or rows[ws_id]["campaigns"]):
+            problems.append(
+                _problem(
+                    "warning",
+                    "counter",
+                    "Счётчик Метрики недоступен",
+                    f"Счётчик {ws.get('counter_id')} не виден ни одному подключению — визиты и цели не обновляются",
+                    **where,
                 )
+            )
 
-        if budget:
-            plan = f"бюджет {rub(budget['budget_kopecks'])}, потрачено {rub(budget['spent_kopecks'])}"
-            if budget["status"] == "exhausted":
-                problems.append(_problem("warning", "budget", "Месячный бюджет исчерпан", plan, **where))
-            elif budget["status"] == "over":
-                problems.append(
-                    _problem(
-                        "warning",
-                        "budget",
-                        f"Перерасход: прогноз {budget['pace_pct']}% бюджета",
-                        f"{plan}; чтобы уложиться — до {rub(budget['daily_allowed_kopecks'])} в день",
-                        **where,
-                    )
-                )
-            elif budget["status"] == "under":
-                problems.append(
-                    _problem(
-                        "info",
-                        "budget",
-                        f"Недорасход: прогноз {budget['pace_pct']}% бюджета",
-                        f"{plan}; можно тратить до {rub(budget['daily_allowed_kopecks'])} в день",
-                        **where,
-                    )
-                )
+        problems.extend(_budget_problems(budget, where))
 
         if kpi["status"] in ("warn", "bad"):
             over = f"+{round((kpi['ratio'] - 1) * 100)}%"
@@ -446,13 +579,62 @@ def build_overview(user_id: int, today: date | None = None, now: datetime | None
                 )
             )
 
+    # Папки-клиенты: общий месячный бюджет на все сайты клиента.
+    folders: dict[int | None, dict] = {}
+    for ws_id, row in rows.items():
+        if ws_id is None:
+            continue
+        folder = folders.get(row["client_id"])
+        if folder is None:
+            client = clients_by_id.get(row["client_id"]) or {}
+            folder = folders[row["client_id"]] = {
+                "id": row["client_id"],
+                "name": client.get("name") or NO_CLIENT,
+                "notes": client.get("notes") or "",
+                "workspace_ids": [],
+                "_sums": _new_sums(),
+                "_budget": client.get("monthly_budget_kopecks"),
+            }
+        folder["workspace_ids"].append(ws_id)
+        for key, value in ws_sums[ws_id].items():
+            folder["_sums"][key] += value
+    for folder in folders.values():
+        s = folder.pop("_sums")
+        budget = budget_pace(folder.pop("_budget"), s["mtd"], s["mtd_before_today"], today)
+        folder.update(_spend_fields(s))
+        folder["budget"] = budget
+        if folder["id"] is not None and len(folder["workspace_ids"]) > 1:
+            problems.extend(
+                _budget_problems(
+                    budget,
+                    {**where_many(folder["workspace_ids"]), "client_id": folder["id"], "client_name": folder["name"]},
+                    label="Общий бюджет клиента",
+                )
+            )
+        elif folder["id"] is not None and budget:
+            # Один сайт у клиента — общий бюджет и есть бюджет сайта.
+            problems.extend(_budget_problems(budget, where_ws(folder["workspace_ids"][0]), label="Бюджет клиента"))
+
     for a in accounts:
-        where = {
-            "client_id": owner[a["id"]],
-            "client_name": client_name(owner[a["id"]]),
-            "account_id": a["id"],
-            "object_name": a["name"],
-        }
+        ws_ids: list[int | None] = list(account_ws.get(a["id"]) or [None])
+        where = where_many(ws_ids, account_id=a["id"], object_name=a["name"])
+        balance = a["balance_kopecks"]
+        cost_7d = account_cost_7d[a["id"]]
+        if balance is not None and cost_7d > 0:
+            balance_days = days_on_balance(balance, cost_7d)
+            if balance <= 0:
+                problems.append(_problem("critical", "balance", "Деньги на счёте закончились", rub(balance), **where))
+            elif balance_days is not None and balance_days < BALANCE_WARNING_DAYS:
+                severity = "critical" if balance_days < BALANCE_CRITICAL_DAYS else "warning"
+                problems.append(
+                    _problem(
+                        severity,
+                        "balance",
+                        f"Баланса хватит на {balance_days:g} дн.",
+                        f"{rub(balance)} при расходе ≈{rub(cost_7d / 7)} в день",
+                        **where,
+                    )
+                )
         if a["stats_error"]:
             severity = "critical" if a["stats_error"] in _TOKEN_ERRORS else "warning"
             problems.append(
@@ -472,28 +654,18 @@ def build_overview(user_id: int, today: date | None = None, now: datetime | None
                 )
         if a["last_sync_status"] == "error":
             problems.append(
-                _problem(
-                    "warning",
-                    "account_sync",
-                    "Не обновляются кампании кабинета",
-                    a["last_sync_error"],
-                    **where,
-                )
+                _problem("warning", "account_sync", "Не обновляются кампании кабинета", a["last_sync_error"], **where)
             )
 
     for c in data["connections"]:
-        affected = sorted(
-            {owner[a["id"]] for a in accounts if a["connection_id"] == c["id"]},
-            key=lambda cid: (cid is None, cid or 0),
-        )
+        affected: set[int | None] = set()
+        for a in accounts:
+            if a["connection_id"] == c["id"]:
+                affected.update(account_ws.get(a["id"]) or [None])
+        affected.update(w["id"] for w in workspaces if w["counter_connection_id"] == c["id"])
         if not affected:
             continue
-        where = {
-            "client_ids": affected,
-            "client_name": ", ".join(client_name(cid) for cid in affected[:3])
-            + (f" и ещё {len(affected) - 3}" if len(affected) > 3 else ""),
-            "object_name": f"Яндекс-логин {c['yandex_login']}",
-        }
+        where = where_many(list(affected), object_name=f"Яндекс-логин {c['yandex_login']}")
         expires = _aware(c["expires_at"])
         error = c["last_sync_error"] or ""
         if any(code in error for code in _TOKEN_ERRORS) or (
@@ -517,16 +689,18 @@ def build_overview(user_id: int, today: date | None = None, now: datetime | None
 
     for c in data["campaigns"]:
         account_id = c["account_id"]
-        if account_id not in owner:
+        if account_id not in accounts_by_id or c["state"] in ("ARCHIVED", "ENDED"):
+            continue
+        visible, ws_id = ws_of_campaign(account_id, c["campaign_id"])
+        if not visible:
             continue
         key = (account_id, c["campaign_id"])
-        where = {
-            "client_id": owner[account_id],
-            "client_name": client_name(owner[account_id]),
-            "account_id": account_id,
-            "campaign_row_id": c["id"],
-            "object_name": c["name"] or str(c["campaign_id"]),
-        }
+        where = where_ws(
+            ws_id,
+            account_id=account_id,
+            campaign_row_id=c["id"],
+            object_name=c["name"] or str(c["campaign_id"]),
+        )
         if c["status"] == "REJECTED":
             problems.append(_problem("critical", "moderation", "Кампания отклонена модерацией", **where))
         elif c["status"] == "MODERATION":
@@ -546,10 +720,10 @@ def build_overview(user_id: int, today: date | None = None, now: datetime | None
                 _problem("warning", "ads_rejected", f"Отклонено объявлений: {c['rejected_ads']}", **where)
             )
         if c["state"] == "ON" and key in campaign_history:
-            client = clients_by_id.get(owner[account_id]) or {}
+            row = rows.get(ws_id) or {}
             cpa_target = (
-                float(client["kpi_target"]) * 100
-                if client.get("kpi_type") == "cpa" and client.get("kpi_target")
+                row["kpi"]["target"] * 100
+                if row and row["kpi"]["type"] == "cpa" and row["kpi"]["target"]
                 else None
             )
             for anomaly in campaign_anomalies(
@@ -558,18 +732,22 @@ def build_overview(user_id: int, today: date | None = None, now: datetime | None
                 day_loaded=yesterday in loaded_days[account_id],
                 cpa_target_kopecks=cpa_target,
             ):
-                problems.append(
-                    _problem("warning", anomaly["kind"], anomaly["title"], anomaly["detail"], **where)
-                )
+                problems.append(_problem("warning", anomaly["kind"], anomaly["title"], anomaly["detail"], **where))
 
-    problems.sort(key=lambda p: (SEVERITY_ORDER[p["severity"]], p["client_name"].lower(), p["object_name"].lower()))
-    for row in rows.values():
+    problems.sort(
+        key=lambda p: (SEVERITY_ORDER[p["severity"]], p["workspace_name"].lower(), p["object_name"].lower())
+    )
+    for row in [*rows.values(), *folders.values()]:
         row["problems"] = {"critical": 0, "warning": 0, "info": 0}
     for p in problems:
-        for client_id in p["client_ids"]:
-            if client_id in rows:
-                rows[client_id]["problems"][p["severity"]] += 1
-    for row in rows.values():
+        for ws_id in p["workspace_ids"]:
+            if ws_id in rows:
+                rows[ws_id]["problems"][p["severity"]] += 1
+    for folder in folders.values():
+        for ws_id in folder["workspace_ids"]:
+            for sev, n in rows[ws_id]["problems"].items():
+                folder["problems"][sev] += n
+    for row in [*rows.values(), *folders.values()]:
         counts = row["problems"]
         row["severity"] = next((sev for sev in ("critical", "warning", "info") if counts[sev]), "")
 
@@ -577,11 +755,13 @@ def build_overview(user_id: int, today: date | None = None, now: datetime | None
     for row in rows.values():
         for key in ("spend_today", "spend_yesterday", "conversions_yesterday", "spend_7d", "conversions_7d"):
             totals[key] += row[key]
+    ordered_folders = sorted(folders.values(), key=lambda f: (f["id"] is None, f["name"].lower()))
     return {
         "today": today.isoformat(),
         "yesterday": yesterday.isoformat(),
         "today_updated_at": today_updated.isoformat() if today_updated else None,
-        "clients": list(rows.values()),
+        "workspaces": list(rows.values()),
+        "folders": ordered_folders,
         "totals": dict(totals),
         "problems": problems,
     }
