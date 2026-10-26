@@ -10,6 +10,7 @@
   --accent-soft: rgba(0, 122, 126, 0.12);
   --danger: #b42318;
   --ok: #007a7e;
+  --warn: #a15c00;
   --shadow: 0 16px 40px rgba(5, 28, 44, 0.1);
   --radius: 2px;
   --font: 'Space Grotesk Variable', 'Space Grotesk', system-ui, sans-serif;
@@ -1059,6 +1060,119 @@ input {
   align-items: center;
   justify-content: space-between;
   margin-top: 1rem;
+}
+
+.chip--critical {
+  background: rgba(180, 35, 24, 0.12);
+  color: var(--danger);
+}
+
+.chip--warning {
+  background: rgba(161, 92, 0, 0.13);
+  color: var(--warn);
+}
+
+.chip--info {
+  background: rgba(5, 28, 44, 0.07);
+  color: var(--muted);
+}
+
+.tone-ok {
+  color: var(--ok);
+}
+
+.tone-warn {
+  color: var(--warn);
+}
+
+.tone-bad {
+  color: var(--danger);
+  font-weight: 600;
+}
+
+.overview-problems {
+  scroll-margin-top: 6rem;
+}
+
+.overview-updated {
+  margin: -0.75rem 0 1rem;
+}
+
+.problem > div {
+  flex: 1;
+  min-width: 0;
+}
+
+.problem .chip {
+  margin-bottom: 0.3rem;
+}
+
+.problem.is-critical {
+  border-left: 3px solid var(--danger);
+}
+
+.problem.is-warning {
+  border-left: 3px solid var(--warn);
+}
+
+.table-scroll {
+  overflow-x: auto;
+}
+
+.overview-table td {
+  vertical-align: top;
+}
+
+.overview-table .num {
+  text-align: right;
+  white-space: nowrap;
+}
+
+.overview-table tr.is-critical td:first-child {
+  box-shadow: inset 3px 0 var(--danger);
+}
+
+.overview-table tr.is-warning td:first-child {
+  box-shadow: inset 3px 0 var(--warn);
+}
+
+.overview-table td:first-child {
+  padding-left: 0.7rem;
+}
+
+.cell-note {
+  display: block;
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.th-sort {
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  cursor: pointer;
+}
+
+.problem-counts {
+  display: inline-flex;
+  gap: 0.45rem;
+  text-transform: none;
+}
+
+.digest-preview {
+  margin: 0.75rem 0 0;
+  padding: 0.85rem 0.95rem;
+  background: rgba(5, 28, 44, 0.03);
+  border: 1px solid var(--line);
+  font-family: inherit;
+  font-size: 0.85rem;
+  white-space: pre-wrap;
+  max-height: 24rem;
+  overflow-y: auto;
 }
 
 @media (max-width: 640px) {

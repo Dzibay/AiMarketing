@@ -10,6 +10,9 @@ from datetime import date
 
 from app.adgroups import sync_campaign_adgroups
 from app.ads import sync_campaign_ads
+from app.clock import today_msk
+from app.digest import send_digest
+from app.direct_balance import sync_balances_for_user
 from app.direct_sync import sync_account_campaigns
 from app.entity_stats import sync_campaign_entity_stats
 from app.jobs import PRIORITY_BACKGROUND, complete, enqueue, fail, heartbeat, set_progress
@@ -17,7 +20,7 @@ from app.keywords import sync_campaign_keywords
 from app.metrika_sync import sync_counter_goals
 from app.rules import run_enabled_rules_for_user
 from app.search_queries import sync_campaign_search_queries
-from app.stats import sync_stats_for_user, sync_stats_range
+from app.stats import sync_direct_stats_for_user, sync_stats_for_user, sync_stats_range
 from app.yandex import YandexError, sync_connection
 
 log = logging.getLogger("app.job_handlers")
@@ -90,6 +93,19 @@ def _stats_range(user_id: int, payload: dict, progress: Progress) -> dict:
     return sync_stats_range(user_id, date_from=date_from, date_to=date_to, on_progress=progress)
 
 
+def _stats_today(user_id: int, payload: dict, progress: Progress) -> dict:
+    """Расход за сегодня (данные Директа неокончательные) и балансы — для сводки."""
+    progress(0, 2, "Расход за сегодня")
+    direct = sync_direct_stats_for_user(user_id, today_msk())
+    progress(1, 2, "Балансы")
+    balances = sync_balances_for_user(user_id)
+    return {"direct": direct, "balances": balances}
+
+
+def _send_digest(user_id: int, payload: dict, progress: Progress) -> dict:
+    return send_digest(user_id, _day(payload, "day") or today_msk())
+
+
 def _run_rules(user_id: int, payload: dict, progress: Progress) -> dict:
     return {"rules_run": run_enabled_rules_for_user(user_id)}
 
@@ -102,6 +118,8 @@ HANDLERS: dict[str, Handler] = {
     "sync_goals": _sync_goals,
     "stats_day": _stats_day,
     "stats_range": _stats_range,
+    "stats_today": _stats_today,
+    "send_digest": _send_digest,
     "run_rules": _run_rules,
 }
 

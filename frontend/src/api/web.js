@@ -212,6 +212,12 @@ export const webApi = {
   links: () => request('/api/web/links'),
   createLink: (payload) => request('/api/web/links', { method: 'POST', body: JSON.stringify(payload) }),
   deleteLink: (id) => request(`/api/web/links/${id}`, { method: 'DELETE' }),
+  overview: () => request('/api/web/overview'),
+  overviewRefresh: (onProgress) => runJob('/api/web/overview/refresh', undefined, onProgress),
+  digestSettings: () => request('/api/web/digest'),
+  updateDigest: (payload) => request('/api/web/digest', { method: 'PUT', body: JSON.stringify(payload) }),
+  digestPreview: () => request('/api/web/digest/preview'),
+  digestSend: () => request('/api/web/digest/send', { method: 'POST' }),
 }
 
 export const ERRORS = {
@@ -249,6 +255,7 @@ export const ERRORS = {
   internal: 'Внутренняя ошибка задачи. Попробуйте позже.',
   stale: 'Задача прервалась — воркер перестал отвечать.',
   'job-timeout': 'Задача выполняется слишком долго. Проверьте результат позже.',
+  'digest-hour': 'Час отправки — от 0 до 23.',
 }
 
 export const JOB_LABELS = {
@@ -260,6 +267,8 @@ export const JOB_LABELS = {
   stats_day: 'Статистика за день',
   stats_range: 'Загрузка статистики',
   run_rules: 'Прогон правил',
+  stats_today: 'Расход за сегодня и балансы',
+  send_digest: 'Утренний дайджест',
 }
 
 export function jobProgressText(job) {

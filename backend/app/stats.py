@@ -6,12 +6,14 @@ import csv
 import io
 import logging
 import time
+import uuid
 from collections.abc import Callable
 from datetime import date, timedelta
 from decimal import Decimal
 
 import httpx
 
+from app.clock import yesterday_msk
 from app.db import pool
 from app.metrika_sync import sync_metrika_stats_for_user
 from app.sync_runs import finish_run, start_run
@@ -29,6 +31,14 @@ def _rub_to_kopecks(raw) -> int:
         return 0
 
 
+def _count(raw) -> int:
+    """Целое из ячейки отчёта; «--» (нет данных по целям) и мусор — 0."""
+    try:
+        return int(Decimal(str(raw or 0)))
+    except Exception:
+        return 0
+
+
 def upsert_direct_stat(
     *,
     user_id: int,
@@ -39,6 +49,7 @@ def upsert_direct_stat(
     clicks: int,
     cost_kopecks: int,
     conversions: int,
+    revenue_kopecks: int = 0,
 ) -> None:
     with pool.connection() as conn:
         conn.execute(
@@ -54,9 +65,9 @@ def upsert_direct_stat(
             """
             INSERT INTO stats_daily (
                 user_id, day, source, account_id, campaign_id,
-                impressions, clicks, cost_kopecks, conversions, updated_at
+                impressions, clicks, cost_kopecks, conversions, revenue_kopecks, updated_at
             )
-            VALUES (%s, %s, 'direct', %s, %s, %s, %s, %s, %s, NOW())
+            VALUES (%s, %s, 'direct', %s, %s, %s, %s, %s, %s, %s, NOW())
             """,
             (
                 user_id,
@@ -67,6 +78,7 @@ def upsert_direct_stat(
                 clicks,
                 cost_kopecks,
                 conversions,
+                revenue_kopecks,
             ),
         )
 
@@ -95,8 +107,11 @@ def fetch_direct_campaign_report(access_token: str, client_login: str, day: date
                 "Clicks",
                 "Cost",
                 "Conversions",
+                "Revenue",
             ],
-            "ReportName": f"aimarketing_{client_login}_{day.isoformat()}",
+            # Отчёт с тем же именем и параметрами API отдаёт из кэша: за сегодня и после
+            # дозачёта конверсий за прошлые дни нужен свежий, поэтому имя уникально.
+            "ReportName": f"aimarketing_{client_login}_{day.isoformat()}_{uuid.uuid4().hex[:12]}"[:255],
             "ReportType": "CAMPAIGN_PERFORMANCE_REPORT",
             "DateRangeType": "CUSTOM_DATE",
             "Format": "TSV",
@@ -136,17 +151,31 @@ def fetch_direct_campaign_report(access_token: str, client_login: str, day: date
         rows.append(
             {
                 "campaign_id": cid,
-                "impressions": int(Decimal(str(item.get("Impressions") or 0))),
-                "clicks": int(Decimal(str(item.get("Clicks") or 0))),
+                "impressions": _count(item.get("Impressions")),
+                "clicks": _count(item.get("Clicks")),
                 "cost_kopecks": _rub_to_kopecks(item.get("Cost")),
-                "conversions": int(Decimal(str(item.get("Conversions") or 0))),
+                "conversions": _count(item.get("Conversions")),
+                "revenue_kopecks": _rub_to_kopecks(item.get("Revenue")),
             }
         )
     return rows
 
 
+def _set_account_stats_status(account_id: int, error: str) -> None:
+    with pool.connection() as conn:
+        conn.execute(
+            """
+            UPDATE direct_accounts
+            SET stats_error = %s,
+                stats_synced_at = CASE WHEN %s = '' THEN NOW() ELSE stats_synced_at END
+            WHERE id = %s
+            """,
+            (error, error, account_id),
+        )
+
+
 def sync_direct_stats_for_user(user_id: int, day: date | None = None) -> dict:
-    day = day or (date.today() - timedelta(days=1))
+    day = day or yesterday_msk()
     with pool.connection() as conn:
         accounts = conn.execute(
             """
@@ -172,16 +201,19 @@ def sync_direct_stats_for_user(user_id: int, day: date | None = None) -> dict:
                     clicks=row["clicks"],
                     cost_kopecks=row["cost_kopecks"],
                     conversions=row["conversions"],
+                    revenue_kopecks=row["revenue_kopecks"],
                 )
+            _set_account_stats_status(account["id"], "")
             synced += 1
-        except Exception:
+        except Exception as exc:
             log.exception("direct stats account %s", account["id"])
+            _set_account_stats_status(account["id"], getattr(exc, "code", "") or "internal")
             errors += 1
     return {"day": day.isoformat(), "synced": synced, "errors": errors}
 
 
 def sync_stats_for_user(user_id: int, day: date | None = None) -> dict:
-    day = day or (date.today() - timedelta(days=1))
+    day = day or yesterday_msk()
     run_id = start_run(user_id=user_id, kind="stats_daily", target_id=None)
     try:
         direct = sync_direct_stats_for_user(user_id, day)

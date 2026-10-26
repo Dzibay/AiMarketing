@@ -7,9 +7,10 @@ import os
 import socket
 import threading
 from collections.abc import Callable
-from datetime import date, timedelta
 
+from app.clock import yesterday_msk
 from app.config import settings
+from app.digest import users_due_for_digest
 from app.job_handlers import run_job, submit
 from app.jobs import claim, claim_schedule, purge_finished, requeue_stale
 from app.rules import list_users_with_rules
@@ -38,9 +39,19 @@ def _enqueue_campaigns() -> None:
 
 
 def _enqueue_stats() -> None:
-    day = (date.today() - timedelta(days=1)).isoformat()
+    day = yesterday_msk().isoformat()
     for user_id in list_user_ids_with_accounts():
         submit("stats_day", user_id, {"day": day})
+
+
+def _enqueue_today() -> None:
+    for user_id in list_user_ids_with_accounts():
+        submit("stats_today", user_id)
+
+
+def _enqueue_digests() -> None:
+    for user_id, day in users_due_for_digest():
+        submit("send_digest", user_id, {"day": day.isoformat()})
 
 
 def _enqueue_rules() -> None:
@@ -60,6 +71,9 @@ SCHEDULES: dict[str, tuple[int, Callable[[], None]]] = {
     "connections": (3600, _enqueue_connections),
     "campaigns": (7200, _enqueue_campaigns),
     "stats": (21600, _enqueue_stats),
+    "today": (3600, _enqueue_today),
+    # Часто, но дёшево: один запрос; дайджест уходит в течение 10 минут после часа пользователя.
+    "digest": (600, _enqueue_digests),
     "rules": (3600, _enqueue_rules),
     "purge_jobs": (86400, _purge_jobs),
 }

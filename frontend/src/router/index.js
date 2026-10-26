@@ -12,6 +12,7 @@ import CampaignDetailView from '../views/CampaignDetailView.vue'
 import AnalyticsView from '../views/AnalyticsView.vue'
 import RulesView from '../views/RulesView.vue'
 import ClientsView from '../views/ClientsView.vue'
+import OverviewView from '../views/OverviewView.vue'
 import OAuthDoneView from '../views/OAuthDoneView.vue'
 
 const DOCS_PAGES = new Set(['privacy', 'consent', 'offer', 'cookies'])
@@ -25,6 +26,7 @@ const router = createRouter({
     { path: '/forgot-password', name: 'forgot-password', component: ForgotPasswordView },
     { path: '/reset-password', name: 'reset-password', component: ResetPasswordView },
     { path: '/cabinet', name: 'cabinet', component: CabinetView },
+    { path: '/cabinet/overview', name: 'overview', component: OverviewView },
     { path: '/cabinet/clients', name: 'clients', component: ClientsView },
     { path: '/cabinet/campaigns', name: 'campaigns', component: CampaignsView },
     {

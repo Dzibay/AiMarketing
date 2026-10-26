@@ -58,7 +58,8 @@
           <section class="panel">
             <h2>Telegram</h2>
             <p class="hint">
-              Алерты при срабатывании правил (вне dry-run или для действия «уведомить»).
+              Утренний дайджест по клиентам и алерты при срабатывании правил (вне dry-run или для
+              действия «уведомить»).
             </p>
             <template v-if="!telegram.configured">
               <p class="empty">Бот не настроен на сервере (TELEGRAM_BOT_TOKEN).</p>
@@ -73,6 +74,46 @@
                   Отвязать
                 </button>
               </div>
+              <template v-if="digest">
+                <h3 class="subhead">Утренний дайджест</h3>
+                <p class="hint">
+                  Вчерашний расход по клиентам, KPI, темп бюджета, баланс и «где горит». Перед отправкой
+                  статистика за вчера и балансы обновляются.
+                </p>
+                <div class="filters">
+                  <label class="check-row">
+                    <input
+                      type="checkbox"
+                      :checked="digest.enabled"
+                      :disabled="digestBusy"
+                      @change="saveDigest({ enabled: $event.target.checked })"
+                    />
+                    Присылать каждое утро
+                  </label>
+                  <div class="field">
+                    <label>Время, МСК</label>
+                    <select
+                      :value="digest.hour"
+                      :disabled="digestBusy || !digest.enabled"
+                      @change="saveDigest({ hour: Number($event.target.value) })"
+                    >
+                      <option v-for="h in 24" :key="h" :value="h - 1">{{ String(h - 1).padStart(2, '0') }}:00</option>
+                    </select>
+                  </div>
+                </div>
+                <p v-if="digest.last_sent_on" class="sync-status">
+                  Последний утренний — {{ new Date(digest.last_sent_on).toLocaleDateString('ru-RU') }}
+                </p>
+                <div class="row-actions">
+                  <button class="btn btn--ghost" type="button" :disabled="digestBusy" @click="previewDigest">
+                    Показать
+                  </button>
+                  <button class="btn btn--ghost" type="button" :disabled="digestBusy" @click="sendDigest">
+                    Отправить сейчас
+                  </button>
+                </div>
+                <pre v-if="digestText" class="digest-preview">{{ digestText }}</pre>
+              </template>
             </template>
             <template v-else>
               <p class="hint">Нажмите «Получить ссылку» и откройте бота → Start.</p>
@@ -335,6 +376,9 @@ const telegram = ref({ configured: false, linked: false })
 const tgLink = ref('')
 const tgCode = ref('')
 const tgBusy = ref(false)
+const digest = ref(null)
+const digestBusy = ref(false)
+const digestText = ref('')
 const linkAccountId = ref(0)
 const linkCounterId = ref(0)
 const pwd = reactive({ current: '', next: '' })
@@ -421,18 +465,20 @@ async function load(quiet = false) {
   }
   if (!quiet) loading.value = true
   try {
-    const [profile, runs, tg, rules, analytics, actions] = await Promise.all([
+    const [profile, runs, tg, rules, analytics, actions, digestSettings] = await Promise.all([
       webApi.me(),
       webApi.syncRuns(),
       webApi.telegramStatus(),
       webApi.rules().catch(() => ({ items: [] })),
       webApi.analytics({}).catch(() => null),
       webApi.actionLogs().catch(() => ({ items: [] })),
+      webApi.digestSettings().catch(() => null),
     ])
     me.value = profile
     syncRuns.value = runs.items || []
     actionLogs.value = (actions.items || []).slice(0, 8)
     telegram.value = tg
+    digest.value = digestSettings
     rulesCount.value = (rules.items || []).length
     const t = analytics?.totals
     hasStats.value = Boolean(
@@ -516,6 +562,40 @@ async function testTelegram() {
     pushToast(errorText(err), 'error')
   } finally {
     tgBusy.value = false
+  }
+}
+
+async function saveDigest(patch) {
+  digestBusy.value = true
+  try {
+    digest.value = await webApi.updateDigest(patch)
+  } catch (err) {
+    pushToast(errorText(err), 'error')
+  } finally {
+    digestBusy.value = false
+  }
+}
+
+async function previewDigest() {
+  digestBusy.value = true
+  try {
+    digestText.value = (await webApi.digestPreview()).text
+  } catch (err) {
+    pushToast(errorText(err), 'error')
+  } finally {
+    digestBusy.value = false
+  }
+}
+
+async function sendDigest() {
+  digestBusy.value = true
+  try {
+    await webApi.digestSend()
+    pushToast('Дайджест отправлен в Telegram')
+  } catch (err) {
+    pushToast(errorText(err), 'error')
+  } finally {
+    digestBusy.value = false
   }
 }
 
