@@ -14,9 +14,12 @@ from datetime import datetime, timedelta, timezone
 from psycopg.types.json import Jsonb
 
 from app import ai
-from app.actions import BULK_ACTIONS, acting_as, campaign_options, list_action_logs
+from app.actions import BULK_ACTIONS, campaign_options
+from app.brief import brief_filled, normalize_brief
 from app.clock import today_msk
 from app.db import pool
+from app.journal import acting_as, list_action_logs
+from app.query_cleaning import examples_prompt, memory_examples
 from app.workspaces import (
     AI_CATEGORIES,
     get_workspace,
@@ -541,17 +544,22 @@ def _p_add_negatives(ctx: Context, args: dict) -> Plan:
 
 
 def _x_add_negatives(ctx: Context, args: dict) -> dict:
-    from app.actions import get_campaign_settings, update_campaign_settings
+    """Добавляет только новые фразы; откат из журнала уберёт ровно их."""
+    from app.negatives import add_negatives_logged
 
     cid = _int(args, "campaign_row_id")
-    ctx.campaign(cid)
-    current = get_campaign_settings(ctx.user_id, cid).get("negative_keywords") or []
-    seen = {p.lower() for p in current}
-    added = [p for p in _phrases(args) if p.lower() not in seen]
+    row = ctx.campaign(cid)
+    phrases = _phrases(args)
+    result = add_negatives_logged(
+        ctx.user_id,
+        campaigns={cid: {"add": phrases}},
+        title=f"Минус-фразы кампании «{row['name']}»",
+        payload={"phrases": phrases[:50]},
+    )
+    added = (result["campaigns"].get(cid) or {}).get("added") or []
     if not added:
-        return {"added": [], "total": len(current), "note": "все фразы уже есть"}
-    update_campaign_settings(ctx.user_id, cid, {"negative_keywords": [*current, *added]})
-    return {"added": added, "total": len(current) + len(added)}
+        return {"added": [], "note": "все фразы уже есть"}
+    return {"added": added, "skipped": [s["reason"] for s in result["skipped"]][:10]}
 
 
 def _p_create_campaign(ctx: Context, args: dict) -> Plan:
@@ -1060,6 +1068,20 @@ def _system_prompt(ctx: Context) -> str:
         "- Если действие отклонено, не повторяй его без новой просьбы. Если ошибка — объясни её пользователю.",
         "- Работай только с кампаниями и кабинетами этого пространства.",
     ]
+    brief = normalize_brief(ws.get("brief"))
+    if brief_filled(brief):
+        lines += ["", "Бриф клиента:"]
+        if brief["product"]:
+            lines.append(f"- Что продаём: {brief['product']}")
+        if brief["geo"]:
+            lines.append(f"- География: {brief['geo']}")
+        if brief["not_ours"]:
+            lines.append("- Точно не наше: " + ", ".join(brief["not_ours"]))
+        if brief["notes"]:
+            lines.append(f"- Заметки: {brief['notes']}")
+    examples = examples_prompt(memory_examples(ctx.ws_id, 10))
+    if examples:
+        lines += ["", "Решения маркетолога по поисковым запросам (учитывай их в предложениях минус-фраз):", examples]
     if (ws.get("ai_notes") or "").strip():
         lines += ["", "Заметки маркетолога о проекте:", ws["ai_notes"].strip()]
     return "\n".join(lines)

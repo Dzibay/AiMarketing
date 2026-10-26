@@ -13,6 +13,7 @@ from decimal import Decimal, InvalidOperation
 
 from psycopg.types.json import Jsonb
 
+from app.brief import normalize_brief
 from app.db import pool
 from app.yandex import YandexError
 
@@ -182,7 +183,7 @@ def auto_attach_campaigns(user_id: int, campaign_row_ids: list[int]) -> int:
 
 _WS_COLUMNS = """
     w.id, w.user_id, w.client_row_id, w.counter_id, w.counter_row_id, w.name, w.site,
-    w.kpi_type, w.kpi_target, w.monthly_budget_kopecks, w.goal_id, w.ai_notes, w.ai_access,
+    w.kpi_type, w.kpi_target, w.monthly_budget_kopecks, w.goal_id, w.ai_notes, w.ai_access, w.brief,
     w.archived_at, w.created_at, w.updated_at,
     cl.name AS client_name, cl.kpi_type AS client_kpi_type, cl.kpi_target AS client_kpi_target,
     m.name AS counter_name, m.site AS counter_site, m.enabled AS counter_enabled,
@@ -221,6 +222,7 @@ def _ws_out(row: dict) -> dict:
         "goal_id": row["goal_id"],
         "goal_name": row.get("goal_name") or "",
         "ai_notes": row["ai_notes"],
+        "brief": normalize_brief(row.get("brief")),
         "ai_access": normalize_ai_access(row.get("ai_access")),
         "archived": row.get("archived_at") is not None,
         "campaigns_count": int(row.get("campaigns_count") or 0),
@@ -375,6 +377,9 @@ def update_workspace(user_id: int, workspace_id: int, **fields) -> dict:
     if "ai_notes" in fields:
         sets.append("ai_notes = %s")
         params.append((fields["ai_notes"] or "").strip()[:8000])
+    if "brief" in fields and fields["brief"] is not None:
+        sets.append("brief = %s")
+        params.append(Jsonb(normalize_brief(fields["brief"])))
     if "ai_access" in fields and fields["ai_access"] is not None:
         current = normalize_ai_access(ws.get("ai_access"))
         patch = dict(fields["ai_access"])

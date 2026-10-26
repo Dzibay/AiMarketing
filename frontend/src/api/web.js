@@ -113,6 +113,25 @@ export const wsApi = {
   moderate: (id, cid) => post(`${WS(id)}/campaigns/${cid}/moderate`),
   actions: (id, params = {}) => request(`${WS(id)}/actions${query(params)}`),
   rules: (id) => request(`${WS(id)}/rules`),
+  // Чистка поисковых запросов: очередь, разметка ИИ, решения и память.
+  queries: (id, params = {}) => request(`${WS(id)}/queries${query(params)}`),
+  queriesSync: (id, days, onProgress) => runJob(`${WS(id)}/queries/sync`, { days }, onProgress),
+  queriesClassify: (id, payload = {}, onProgress) => runJob(`${WS(id)}/queries/classify`, payload, onProgress),
+  /** Только «целевые» без новых ключей сохраняются сразу, остальное — задачей (вызовы Директа). */
+  queriesApply: async (id, payload, onProgress) => {
+    const res = await post(`${WS(id)}/queries/apply`, payload)
+    return res.job ? waitJob(res.job, onProgress) : res.result
+  },
+  queriesCheck: (id, items) => post(`${WS(id)}/queries/check`, { items }),
+  queriesMemory: (id, params = {}) => request(`${WS(id)}/queries/memory${query(params)}`),
+  queriesForget: (id, queryNorms) => post(`${WS(id)}/queries/forget`, { query_norms: queryNorms }),
+  briefDraft: (id, site, onProgress) => runJob(`${WS(id)}/brief/draft`, { site }, onProgress),
+}
+
+/** Откат действия из журнала: предпросмотр шагов и запуск задачей. */
+export const undoApi = {
+  preview: (logId) => request(`/api/web/actions/${logId}/undo`),
+  run: (logId, onProgress) => runJob(`/api/web/actions/${logId}/undo`, undefined, onProgress),
 }
 
 /** ИИ-ассистент: свой ключ пользователя (BYOK), чаты пространства, согласование действий. */
@@ -353,6 +372,9 @@ export const ERRORS = {
   'ai-network': 'Не удалось связаться с ИИ.',
   'ai-error': 'Ошибка ИИ.',
   'ai-busy': 'ИИ ещё отвечает на прошлое сообщение.',
+  'ai-json': 'ИИ ответил не по формату. Попробуйте ещё раз.',
+  site: 'Не удалось прочитать сайт.',
+  undo: 'Это действие нельзя откатить.',
 }
 
 export const JOB_LABELS = {
@@ -369,6 +391,11 @@ export const JOB_LABELS = {
   apply_negative_list: 'Применение списка минус-фраз',
   ai_chat: 'Ответ ИИ-ассистента',
   duplicate_campaign: 'Копирование кампании',
+  sync_workspace_queries: 'Синк поисковых запросов пространства',
+  classify_queries: 'Разметка запросов ИИ',
+  apply_query_decisions: 'Применение решений по запросам',
+  brief_draft: 'Черновик брифа по сайту',
+  undo_action: 'Откат действия',
 }
 
 export function jobProgressText(job) {

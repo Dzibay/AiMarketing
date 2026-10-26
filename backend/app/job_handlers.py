@@ -8,19 +8,22 @@ import threading
 from collections.abc import Callable
 from datetime import date
 
-from app.actions import acting_as, duplicate_campaign
+from app.actions import duplicate_campaign
 from app.adgroups import sync_campaign_adgroups
 from app.ads import sync_campaign_ads
+from app.brief import draft_brief
 from app.clock import today_msk
 from app.db import pool
 from app.digest import send_digest
 from app.direct_balance import sync_balances_for_user
 from app.direct_sync import sync_account_campaigns
 from app.entity_stats import sync_campaign_entity_stats
+from app.journal import acting_as
 from app.jobs import PRIORITY_BACKGROUND, complete, enqueue, fail, heartbeat, set_progress
 from app.keywords import sync_campaign_keywords
 from app.metrika_sync import sync_counter_goals
 from app.negative_lists import apply_negative_list
+from app.query_cleaning import apply_decisions, classify_queries, sync_workspace_queries
 from app.rules import run_enabled_rules_for_user
 from app.search_queries import sync_campaign_search_queries
 from app.stats import sync_direct_stats_for_user, sync_stats_for_user, sync_stats_range
@@ -178,6 +181,40 @@ def _ai_chat(user_id: int, payload: dict, progress: Progress) -> dict:
     return run_chat(user_id, _int(payload, "chat_id"), progress)
 
 
+def _sync_workspace_queries(user_id: int, payload: dict, progress: Progress) -> dict:
+    return sync_workspace_queries(user_id, {**payload, "workspace_id": _int(payload, "workspace_id")}, progress)
+
+
+def _classify_queries(user_id: int, payload: dict, progress: Progress) -> dict:
+    return classify_queries(user_id, {**payload, "workspace_id": _int(payload, "workspace_id")}, progress)
+
+
+def _apply_query_decisions(user_id: int, payload: dict, progress: Progress) -> dict:
+    items = payload.get("items")
+    if not isinstance(items, list):
+        raise YandexError("payload", "В задаче нет items")
+    bid = payload.get("bid_rub")
+    with acting_as(str(payload.get("source") or "user")):
+        return apply_decisions(
+            user_id,
+            _int(payload, "workspace_id"),
+            items,
+            force=bool(payload.get("force")),
+            bid_rub=float(bid) if bid not in (None, "") else None,
+            progress=progress,
+        )
+
+
+def _brief_draft(user_id: int, payload: dict, progress: Progress) -> dict:
+    return draft_brief(user_id, {**payload, "workspace_id": _int(payload, "workspace_id")}, progress)
+
+
+def _undo_action(user_id: int, payload: dict, progress: Progress) -> dict:
+    from app.undo import run_undo
+
+    return run_undo(user_id, _int(payload, "log_id"), progress)
+
+
 HANDLERS: dict[str, Handler] = {
     "sync_connection": _sync_connection,
     "sync_account_campaigns": _sync_account_campaigns,
@@ -192,6 +229,11 @@ HANDLERS: dict[str, Handler] = {
     "run_rules": _run_rules,
     "duplicate_campaign": _duplicate_campaign,
     "ai_chat": _ai_chat,
+    "sync_workspace_queries": _sync_workspace_queries,
+    "classify_queries": _classify_queries,
+    "apply_query_decisions": _apply_query_decisions,
+    "brief_draft": _brief_draft,
+    "undo_action": _undo_action,
 }
 
 

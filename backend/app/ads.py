@@ -7,6 +7,7 @@ import logging
 from app import direct_api
 from app.adgroups import _adgroup_row
 from app.db import pool
+from app.journal import campaigns_of, log_action
 from app.sync_runs import finish_run, start_run
 from app.yandex import YandexError, get_connection_access_token
 
@@ -213,6 +214,20 @@ def create_text_ad(
                 href_n,
             ),
         ).fetchone()
+    log_action(
+        user_id,
+        "ads",
+        {"adgroup_row_id": adgroup_row_id, "campaign_row_id": group["campaign_row_id"], "title": title_n, "href": href_n},
+        {"ad_id": ad_id},
+        "ok",
+        title=f"Объявление в группу «{group['name']}»: «{title_n}»",
+        undo={
+            "label": "Удалить объявление",
+            "danger": True,
+            "steps": [{"op": "ads_action", "args": {"ad_row_ids": [row["id"]], "action": "delete"}}],
+        },
+        targets=[f"ad:{row['id']}", f"adgroup:{adgroup_row_id}"],
+    )
     return _public(row)
 
 
@@ -270,6 +285,21 @@ def update_text_ad(
             """,
             params,
         ).fetchone()
+    columns = {"Title": "title", "Title2": "title2", "Text": "text", "Href": "href"}
+    back = {col: row.get(col) or "" for key, col in columns.items() if key in text_ad and text_ad[key] != (row.get(col) or "")}
+    log_action(
+        user_id,
+        "ads",
+        {"ad_row_ids": [ad_row_id], "campaign_row_ids": campaigns_of(user_id, "ad", [ad_row_id]), "changes": text_ad},
+        {"ad_id": row["ad_id"]},
+        "ok",
+        title=f"Правка объявления «{row.get('title') or row['ad_id']}»",
+        undo={
+            "label": "Вернуть прежний текст",
+            "steps": [{"op": "ad_update", "args": {"ad_row_id": ad_row_id, **back}}] if back else [],
+        },
+        targets=[f"ad:{ad_row_id}"],
+    )
     return _public(updated)
 
 
@@ -279,43 +309,81 @@ def bulk_ad_action(user_id: int, *, ad_row_ids: list[int], action: str) -> dict:
     if not ad_row_ids:
         raise YandexError("empty")
     rows = [_ad_row(user_id, rid) for rid in ad_row_ids]
+    campaign_ids = campaigns_of(user_id, "ad", [r["id"] for r in rows])
     by_login: dict[str, list[dict]] = {}
     for r in rows:
         by_login.setdefault(r["client_login"], []).append(r)
     applied = 0
+    done: list[dict] = []  # строки до изменения — для отката
+    failure: YandexError | None = None
     for client_login, group in by_login.items():
-        token = get_connection_access_token(group[0]["connection_id"], user_id)
-        ids = [int(r["ad_id"]) for r in group]
-        method = action
-        _call(token, client_login, method, {"SelectionCriteria": {"Ids": ids}})
-        with pool.connection() as conn:
-            if action == "delete":
-                conn.execute(
-                    "DELETE FROM direct_ads WHERE user_id = %s AND id = ANY(%s)",
-                    (user_id, [r["id"] for r in group]),
-                )
-            elif action == "suspend":
-                conn.execute(
-                    "UPDATE direct_ads SET state = 'SUSPENDED', synced_at = NOW() WHERE id = ANY(%s)",
-                    ([r["id"] for r in group],),
-                )
-            elif action == "resume":
-                conn.execute(
-                    "UPDATE direct_ads SET state = 'ON', synced_at = NOW() WHERE id = ANY(%s)",
-                    ([r["id"] for r in group],),
-                )
-            elif action == "archive":
-                conn.execute(
-                    "UPDATE direct_ads SET state = 'ARCHIVED', synced_at = NOW() WHERE id = ANY(%s)",
-                    ([r["id"] for r in group],),
-                )
-            elif action == "unarchive":
-                conn.execute(
-                    "UPDATE direct_ads SET state = 'OFF', synced_at = NOW() WHERE id = ANY(%s)",
-                    ([r["id"] for r in group],),
-                )
+        try:
+            _apply_group(user_id, client_login, group, action)
+        except YandexError as exc:
+            failure = failure or exc
+            continue
+        done.extend(group)
         applied += len(group)
-    return {"applied": applied, "status": "ok"}
+    status = "ok" if failure is None else ("partial" if done else "error")
+    names = ", ".join(f"«{r.get('title') or r['ad_id']}»" for r in rows[:3]) + (
+        f" и ещё {len(rows) - 3}" if len(rows) > 3 else ""
+    )
+    log_action(
+        user_id,
+        "ads",
+        {"ad_row_ids": [r["id"] for r in rows], "campaign_row_ids": campaign_ids, "action": action},
+        {"applied": applied, "error": failure.code if failure else None},
+        status,
+        title=f"{_BULK_TITLES[action]}: {names}",
+        undo=_bulk_undo(action, done),
+        targets=[f"ad:{r['id']}" for r in rows],
+    )
+    if failure is not None and not done:
+        raise failure
+    return {"applied": applied, "status": status}
+
+
+_STATES = {"suspend": "SUSPENDED", "resume": "ON", "archive": "ARCHIVED", "unarchive": "OFF"}
+_BULK_TITLES = {
+    "suspend": "Остановка объявлений",
+    "resume": "Запуск объявлений",
+    "archive": "Архивация объявлений",
+    "unarchive": "Возврат объявлений из архива",
+    "delete": "Удаление объявлений",
+}
+
+
+def _apply_group(user_id: int, client_login: str, group: list[dict], action: str) -> None:
+    token = get_connection_access_token(group[0]["connection_id"], user_id)
+    _call(token, client_login, action, {"SelectionCriteria": {"Ids": [int(r["ad_id"]) for r in group]}})
+    ids = [r["id"] for r in group]
+    with pool.connection() as conn:
+        if action == "delete":
+            conn.execute("DELETE FROM direct_ads WHERE user_id = %s AND id = ANY(%s)", (user_id, ids))
+        else:
+            conn.execute(
+                "UPDATE direct_ads SET state = %s, synced_at = NOW() WHERE id = ANY(%s)",
+                (_STATES[action], ids),
+            )
+
+
+def _bulk_undo(action: str, done: list[dict]) -> dict | None:
+    """Обратное действие только для объявлений, что реально изменились."""
+
+    def step(ids: list[int], what: str) -> list[dict]:
+        return [{"op": "ads_action", "args": {"ad_row_ids": ids, "action": what}}] if ids else []
+
+    every = [r["id"] for r in done]
+    was_on = [r["id"] for r in done if r.get("state") == "ON"]
+    if action == "suspend":
+        return {"label": "Запустить снова", "steps": step(was_on, "resume")}
+    if action == "resume":
+        return {"label": "Остановить снова", "steps": step([r["id"] for r in done if r.get("state") == "SUSPENDED"], "suspend")}
+    if action == "archive":
+        return {"label": "Вернуть из архива", "steps": step(every, "unarchive") + step(was_on, "resume")}
+    if action == "unarchive":
+        return {"label": "Вернуть в архив", "steps": step(every, "archive")}
+    return None  # удаление не откатывается
 
 
 def _ad_row(user_id: int, ad_row_id: int) -> dict:

@@ -230,6 +230,37 @@ def complete(cfg: dict, messages: list[dict], tools: list[dict] | None = None) -
     return {"content": message.get("content") or "", "tool_calls": calls}
 
 
+def parse_json_reply(text: str):
+    """JSON из ответа модели: без обёртки ```json и пояснений вокруг. None — не разобрать."""
+    text = (text or "").strip()
+    if text.startswith("```"):
+        text = text.split("\n", 1)[1] if "\n" in text else ""
+        text = text.rsplit("```", 1)[0]
+    start, end = text.find("{"), text.rfind("}")
+    if start < 0 or end <= start:
+        return None
+    try:
+        return json.loads(text[start : end + 1])
+    except ValueError:
+        return None
+
+
+def complete_json(cfg: dict, messages: list[dict], *, retries: int = 1) -> dict:
+    """Ответ строго объектом JSON; на неразборчивый ответ один раз просим исправиться."""
+    history = list(messages)
+    for attempt in range(retries + 1):
+        reply = complete(cfg, history)
+        data = parse_json_reply(reply["content"])
+        if isinstance(data, dict):
+            return data
+        if attempt < retries:
+            history += [
+                {"role": "assistant", "content": reply["content"][:4000]},
+                {"role": "user", "content": "Ответ не разобрался. Верни только JSON-объект по заданной схеме, без текста вокруг."},
+            ]
+    raise YandexError("ai-json", "ИИ вернул ответ не в том формате — попробуйте ещё раз или смените модель")
+
+
 def check_connection(user_id: int) -> dict:
     cfg = load_config(user_id)
     reply = complete(cfg, [{"role": "user", "content": "Ответь одним словом: готов"}])

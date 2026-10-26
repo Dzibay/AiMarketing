@@ -6,15 +6,26 @@ import csv
 import io
 import logging
 import time
+from collections import defaultdict
 from datetime import date, timedelta
 from decimal import Decimal
 
 import httpx
 
 from app import direct_api
-from app.adgroups import _campaign_row, _parse_phrases, update_adgroup
+from app.adgroups import _campaign_row
 from app.db import pool
-from app.keywords import create_keywords
+from app.negative_lists import phrase_key
+from app.query_cleaning import (
+    NORM_SQL,
+    add_target_keywords,
+    apply_negative_entries,
+    clean_negative,
+    keyword_text,
+    log_query_action,
+    remember_decisions,
+    snapshot_labels,
+)
 from app.stats import _rub_to_kopecks
 from app.sync_runs import finish_run, start_run
 from app.yandex import YandexError, get_connection_access_token
@@ -302,23 +313,171 @@ def list_search_queries(
     }
 
 
-def _query_row(user_id: int, query_row_id: int) -> dict:
+def _query_rows(user_id: int, query_row_ids: list[int]) -> list[dict]:
+    ids = list(dict.fromkeys(int(i) for i in query_row_ids))
     with pool.connection() as conn:
-        row = conn.execute(
-            """
-            SELECT q.*, c.campaign_id, a.connection_id, a.client_login, a.enabled
+        rows = conn.execute(
+            f"""
+            SELECT q.*, {NORM_SQL} AS query_norm, c.campaign_id, a.connection_id, a.client_login, a.enabled,
+                   wc.workspace_id
             FROM direct_search_queries q
             JOIN direct_campaigns c ON c.id = q.campaign_row_id
             JOIN direct_accounts a ON a.id = q.account_id
-            WHERE q.id = %s AND q.user_id = %s
+            LEFT JOIN workspace_campaigns wc ON wc.campaign_row_id = q.campaign_row_id AND wc.user_id = q.user_id
+            WHERE q.id = ANY(%s) AND q.user_id = %s
             """,
-            (query_row_id, user_id),
-        ).fetchone()
-    if row is None:
-        raise YandexError("not-found")
-    if not row.get("enabled"):
-        raise YandexError("disabled")
-    return row
+            (ids, user_id),
+        ).fetchall()
+    by_id = {int(r["id"]): r for r in rows}
+    out = []
+    for query_row_id in ids:
+        row = by_id.get(query_row_id)
+        if row is None:
+            raise YandexError("not-found")
+        if not row.get("enabled"):
+            raise YandexError("disabled")
+        out.append(row)
+    return out
+
+
+def _query_row(user_id: int, query_row_id: int) -> dict:
+    return _query_rows(user_id, [query_row_id])[0]
+
+
+def _remember(user_id: int, rows: list[dict], decisions: dict[int, dict]) -> dict[int, list[dict]]:
+    """Решения по запросам — в память пространства кампании. → прежние метки по пространствам, для отката."""
+    by_ws: dict[int, dict[str, dict]] = defaultdict(dict)
+    for row in rows:
+        decision = decisions.get(int(row["id"]))
+        if decision and row.get("workspace_id"):
+            norm = row["query_norm"]
+            by_ws[int(row["workspace_id"])][norm] = {"query_norm": norm, "query": row["query"], **decision}
+    previous: dict[int, list[dict]] = {}
+    for ws_id, items in by_ws.items():
+        previous[ws_id] = snapshot_labels(ws_id, list(items))
+        remember_decisions(user_id, ws_id, list(items.values()))
+    return previous
+
+
+def _log(user_id: int, rows: list[dict], *, title: str, action: str, summary: dict, status: str, **kwargs) -> int | None:
+    ws_ids = {int(r["workspace_id"]) for r in rows if r.get("workspace_id")}
+    return log_query_action(
+        user_id,
+        next(iter(ws_ids)) if len(ws_ids) == 1 else None,
+        title=title,
+        payload={"query_row_ids": [int(r["id"]) for r in rows][:50], "action": action},
+        summary=summary,
+        status=status,
+        campaign_row_ids=sorted({int(r["campaign_row_id"]) for r in rows}),
+        **kwargs,
+    )
+
+
+def _status(applied: int, errors: int) -> str:
+    return "error" if errors and not applied else ("partial" if errors else "ok")
+
+
+def _keywords_from_rows(user_id: int, rows: list[dict], adgroup_row_id: int | None, bid_rub) -> tuple[dict, dict]:
+    by_group: dict[int, list[tuple[str, str]]] = defaultdict(list)
+    outcomes: dict[str, tuple[str, str]] = {}
+    for row in rows:
+        group_id = adgroup_row_id or row.get("adgroup_row_id")
+        phrase = keyword_text(row.get("query") or "")
+        key = str(row["id"])
+        if not group_id or not phrase:
+            outcomes[key] = ("skipped", "Нет группы или фразы")
+        elif any(phrase_key(p) == phrase_key(phrase) for _k, p in by_group[int(group_id)]):
+            outcomes[key] = ("skipped", "Такая фраза уже в списке")
+        else:
+            by_group[int(group_id)].append((key, phrase))
+    created_ids: list[int] = []
+    if by_group:
+        created_ids, made = add_target_keywords(user_id, by_group, bid_rub)
+        outcomes.update(made)
+    applied = sum(1 for s, _m in outcomes.values() if s == "ok")
+    errors = sum(1 for s, _m in outcomes.values() if s == "error")
+    summary = {
+        "status": _status(applied, errors),
+        "action": "add_keyword",
+        "applied": applied,
+        "skipped": sum(1 for s, _m in outcomes.values() if s == "skipped"),
+        "errors": errors,
+        "log_id": None,
+    }
+    done = {int(k): {"verdict": "target", "negative_phrase": "", "level": "adgroup", "applied": True}
+            for k, (s, _m) in outcomes.items() if s == "ok"}
+    if done or errors:
+        previous = _remember(user_id, rows, done)
+        summary["log_id"] = _log(
+            user_id,
+            rows,
+            title=f"Запросы в ключевые фразы: +{len(created_ids)}",
+            action="add_keyword",
+            summary={k: summary[k] for k in ("applied", "skipped", "errors")},
+            status=summary["status"],
+            negatives={"campaigns": {}, "adgroups": {}, "skipped": [], "errors": []},
+            created_keyword_ids=created_ids,
+            previous_labels=previous,
+        )
+    return summary, outcomes
+
+
+def _negatives_from_rows(user_id: int, rows: list[dict], level: str) -> tuple[dict, dict]:
+    """Запросы в минус-фразы — общий путь с экраном чистки: журнал с откатом и память пространства."""
+    entries = []
+    outcomes: dict[str, dict] = {}
+    for row in rows:
+        phrase = clean_negative(row.get("query") or "")
+        key = str(row["id"])
+        if not phrase:
+            outcomes[key] = {"status": "skipped", "message": "Пустой запрос"}
+        elif level == "adgroup" and not row.get("adgroup_row_id"):
+            outcomes[key] = {"status": "skipped", "message": "Запрос без группы"}
+        else:
+            entries.append(
+                {
+                    "key": key,
+                    "phrase": phrase,
+                    "level": level,
+                    "campaign_row_ids": [int(row["campaign_row_id"])],
+                    "adgroup_row_ids": [int(row["adgroup_row_id"])] if row.get("adgroup_row_id") else [],
+                }
+            )
+    result = {"campaigns": {}, "adgroups": {}, "skipped": [], "errors": []}
+    if entries:
+        result, made = apply_negative_entries(user_id, entries, force=True)
+        outcomes.update(made)
+    applied = sum(1 for o in outcomes.values() if o["status"] in ("ok", "partial"))
+    errors = sum(1 for o in outcomes.values() if o["status"] == "error")
+    action = f"negative_{level}"
+    summary = {
+        "status": _status(applied, errors),
+        "action": action,
+        "applied": applied,
+        "skipped": sum(1 for o in outcomes.values() if o["status"] == "skipped"),
+        "errors": errors,
+        "log_id": None,
+    }
+    done = {
+        int(k): {"verdict": "negative", "negative_phrase": o["phrase"], "level": o["level"], "applied": True}
+        for k, o in outcomes.items()
+        if o["status"] in ("ok", "partial")
+    }
+    if done or errors:
+        previous = _remember(user_id, rows, done)
+        where = "группы" if level == "adgroup" else "кампании"
+        summary["log_id"] = _log(
+            user_id,
+            rows,
+            title=f"Запросы в минус-фразы {where}: {applied}",
+            action=action,
+            summary={k: summary[k] for k in ("applied", "skipped", "errors")},
+            status=summary["status"],
+            negatives=result,
+            created_keyword_ids=[],
+            previous_labels=previous,
+        )
+    return summary, outcomes
 
 
 def add_query_as_keyword(
@@ -329,19 +488,13 @@ def add_query_as_keyword(
     bid_rub: float | None = None,
 ) -> dict:
     row = _query_row(user_id, query_row_id)
-    group_id = adgroup_row_id or row.get("adgroup_row_id")
-    if not group_id:
+    if not (adgroup_row_id or row.get("adgroup_row_id")) or not keyword_text(row.get("query") or ""):
         raise YandexError("empty")
-    phrase = (row.get("query") or "").strip()
-    if not phrase:
-        raise YandexError("empty")
-    result = create_keywords(
-        user_id,
-        adgroup_row_id=int(group_id),
-        phrases=[phrase],
-        bid_rub=bid_rub,
-    )
-    return {"status": "ok", "query_id": query_row_id, "keywords": result}
+    summary, outcomes = _keywords_from_rows(user_id, [row], adgroup_row_id, bid_rub)
+    status, message = outcomes.get(str(row["id"]), ("error", ""))
+    if status == "error":
+        raise YandexError("direct", message or None)
+    return {"status": "ok", "query_id": query_row_id, "created": summary["applied"], "log_id": summary["log_id"]}
 
 
 def add_query_as_negative(
@@ -353,46 +506,13 @@ def add_query_as_negative(
     if scope not in ("adgroup", "campaign"):
         raise YandexError("action")
     row = _query_row(user_id, query_row_id)
-    phrase = (row.get("query") or "").strip()
-    if not phrase:
-        raise YandexError("empty")
-    # минус без плюс-модификаторов
-    neg = phrase.lstrip("+").strip()
-    if not neg:
-        raise YandexError("empty")
-    if scope == "adgroup":
-        if not row.get("adgroup_row_id"):
-            raise YandexError("empty")
-        with pool.connection() as conn:
-            group = conn.execute(
-                "SELECT negative_keywords FROM direct_adgroups WHERE id = %s AND user_id = %s",
-                (row["adgroup_row_id"], user_id),
-            ).fetchone()
-        current = _parse_phrases((group or {}).get("negative_keywords") or "[]")
-        if neg not in current:
-            current.append(neg)
-        updated = update_adgroup(
-            user_id,
-            int(row["adgroup_row_id"]),
-            negative_keywords=current,
-        )
-        return {"status": "ok", "scope": "adgroup", "adgroup": updated, "phrase": neg}
-
-    from app.actions import update_campaign
-    from app.direct_sync import get_campaign
-
-    camp = get_campaign(user_id, int(row["campaign_row_id"]))
-    if camp is None:
-        raise YandexError("not-found")
-    current = list(camp.get("negative_keywords") or [])
-    if neg not in current:
-        current.append(neg)
-    updated = update_campaign(
-        user_id,
-        int(row["campaign_row_id"]),
-        negative_keywords=current,
-    )
-    return {"status": "ok", "scope": "campaign", "campaign": updated, "phrase": neg}
+    summary, outcomes = _negatives_from_rows(user_id, [row], scope)
+    outcome = outcomes.get(str(row["id"])) or {"status": "error", "message": ""}
+    if outcome["status"] == "skipped":
+        raise YandexError("empty", outcome.get("message") or None)
+    if outcome["status"] == "error":
+        raise YandexError("direct", outcome.get("message") or None)
+    return {"status": "ok", "scope": outcome["level"], "phrase": outcome["phrase"], "log_id": summary["log_id"]}
 
 
 def bulk_search_query_action(
@@ -403,132 +523,19 @@ def bulk_search_query_action(
     adgroup_row_id: int | None = None,
     bid_rub: float | None = None,
 ) -> dict:
-    """action: add_keyword | negative_adgroup | negative_campaign"""
+    """action: add_keyword | negative_adgroup | negative_campaign. → {status, action, applied, skipped, errors, log_id}"""
     if action not in ("add_keyword", "negative_adgroup", "negative_campaign"):
         raise YandexError("action")
     if not query_ids:
         raise YandexError("empty")
     if len(query_ids) > 100:
         raise YandexError("limit")
-
-    rows = [_query_row(user_id, qid) for qid in query_ids]
-    applied = 0
-    skipped = 0
-    errors = 0
-
+    rows = _query_rows(user_id, query_ids)
     if action == "add_keyword":
-        by_group: dict[int, list[str]] = {}
-        for row in rows:
-            group_id = adgroup_row_id or row.get("adgroup_row_id")
-            phrase = (row.get("query") or "").strip()
-            if not group_id or not phrase:
-                skipped += 1
-                continue
-            by_group.setdefault(int(group_id), [])
-            if phrase not in by_group[int(group_id)]:
-                by_group[int(group_id)].append(phrase)
-        for group_id, phrases in by_group.items():
-            # create_keywords лимит 100
-            for i in range(0, len(phrases), 100):
-                chunk = phrases[i : i + 100]
-                try:
-                    result = create_keywords(
-                        user_id,
-                        adgroup_row_id=group_id,
-                        phrases=chunk,
-                        bid_rub=bid_rub,
-                    )
-                    applied += int(result.get("created") or 0)
-                    errors += int(result.get("errors") or 0)
-                except YandexError:
-                    errors += len(chunk)
-                    log.exception("bulk add keyword group %s", group_id)
-        return {
-            "status": "ok",
-            "action": action,
-            "applied": applied,
-            "skipped": skipped,
-            "errors": errors,
-        }
-
-    # negatives: batch by adgroup or one campaign update
-    phrases_by_group: dict[int, list[str]] = {}
-    campaign_phrases: list[str] = []
-    campaign_row_id = None
-    for row in rows:
-        phrase = (row.get("query") or "").strip().lstrip("+").strip()
-        if not phrase:
-            skipped += 1
-            continue
-        if action == "negative_adgroup":
-            gid = row.get("adgroup_row_id")
-            if not gid:
-                skipped += 1
-                continue
-            phrases_by_group.setdefault(int(gid), [])
-            if phrase not in phrases_by_group[int(gid)]:
-                phrases_by_group[int(gid)].append(phrase)
-        else:
-            campaign_row_id = int(row["campaign_row_id"])
-            if phrase not in campaign_phrases:
-                campaign_phrases.append(phrase)
-
-    if action == "negative_adgroup":
-        for gid, phrases in phrases_by_group.items():
-            with pool.connection() as conn:
-                group = conn.execute(
-                    "SELECT negative_keywords FROM direct_adgroups WHERE id = %s AND user_id = %s",
-                    (gid, user_id),
-                ).fetchone()
-            current = _parse_phrases((group or {}).get("negative_keywords") or "[]")
-            added = 0
-            for phrase in phrases:
-                if phrase not in current:
-                    current.append(phrase)
-                    added += 1
-            if added:
-                try:
-                    update_adgroup(user_id, gid, negative_keywords=current)
-                    applied += added
-                except YandexError:
-                    errors += added
-                    log.exception("bulk negative adgroup %s", gid)
-            else:
-                skipped += len(phrases)
-        return {
-            "status": "ok",
-            "action": action,
-            "applied": applied,
-            "skipped": skipped,
-            "errors": errors,
-        }
-
-    from app.actions import update_campaign
-    from app.direct_sync import get_campaign
-
-    if not campaign_row_id or not campaign_phrases:
-        raise YandexError("empty")
-    camp = get_campaign(user_id, campaign_row_id)
-    if camp is None:
-        raise YandexError("not-found")
-    current = list(camp.get("negative_keywords") or [])
-    added = 0
-    for phrase in campaign_phrases:
-        if phrase not in current:
-            current.append(phrase)
-            added += 1
-    if added:
-        update_campaign(user_id, campaign_row_id, negative_keywords=current)
-        applied = added
+        summary, _outcomes = _keywords_from_rows(user_id, rows, adgroup_row_id, bid_rub)
     else:
-        skipped += len(campaign_phrases)
-    return {
-        "status": "ok",
-        "action": action,
-        "applied": applied,
-        "skipped": skipped,
-        "errors": errors,
-    }
+        summary, _outcomes = _negatives_from_rows(user_id, rows, action.removeprefix("negative_"))
+    return summary
 
 
 def _public(row: dict) -> dict:

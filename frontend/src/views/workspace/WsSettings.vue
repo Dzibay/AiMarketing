@@ -77,6 +77,8 @@
     </form>
   </section>
 
+  <BriefPanel />
+
   <section class="panel">
     <div class="panel__head">
       <div>
@@ -295,6 +297,7 @@ import { errorText, jobProgressText, webApi, wsApi } from '../../api/web'
 import { pushToast } from '../../composables/useToasts'
 import { loadWorkspaces, useWorkspaces } from '../../composables/useWorkspaces'
 import { CAMPAIGN_STATES, CAMPAIGN_TYPES, plural, rub } from '../../utils/format'
+import BriefPanel from './BriefPanel.vue'
 import { useWs } from './context'
 
 const COUNTER_TONES = { ok: 'tone-ok', unknown: 'tone-warn', sandbox: 'tone-warn' }

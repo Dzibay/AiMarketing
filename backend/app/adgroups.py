@@ -7,6 +7,7 @@ import logging
 
 from app import direct_api
 from app.db import pool
+from app.journal import log_action
 from app.sync_runs import finish_run, start_run
 from app.yandex import YandexError, get_connection_access_token
 
@@ -235,6 +236,20 @@ def create_adgroup(
                 json.dumps(regions),
             ),
         ).fetchone()
+    log_action(
+        user_id,
+        "adgroups",
+        {"campaign_row_id": campaign_row_id, "name": name_n, "region_ids": regions},
+        {"adgroup_id": adgroup_id},
+        "ok",
+        title=f"Группа «{name_n}» в «{camp['name']}»",
+        undo={
+            "label": "Удалить группу",
+            "danger": True,
+            "steps": [{"op": "adgroups_delete", "args": {"adgroup_row_ids": [row["id"]]}}],
+        },
+        targets=[f"adgroup:{row['id']}"],
+    )
     return _public(row)
 
 
@@ -282,6 +297,35 @@ def update_adgroup(
             """,
             params,
         ).fetchone()
+    steps: list[dict] = []
+    what = []
+    if name_n is not None:
+        what.append(f"название «{name_n}»")
+        if name_n != row["name"]:
+            steps.append({"op": "adgroup_update", "args": {"adgroup_row_id": adgroup_row_id, "name": row["name"]}})
+    if negatives is not None:
+        from app.negative_lists import phrase_key
+
+        before = _parse_phrases(row.get("negative_keywords") or "[]")
+        old_keys = {phrase_key(x) for x in before}
+        new_keys = {phrase_key(x) for x in negatives}
+        added = [x for x in negatives if phrase_key(x) not in old_keys]
+        removed = [x for x in before if phrase_key(x) not in new_keys]
+        what.append(f"минус-фразы +{len(added)} −{len(removed)}")
+        if added or removed:
+            steps.append(
+                {"op": "negatives", "args": {"adgroups": {str(adgroup_row_id): {"add": removed, "remove": added}}}}
+            )
+    log_action(
+        user_id,
+        "adgroups",
+        {"adgroup_row_id": adgroup_row_id, "campaign_row_id": row["campaign_row_id"], "name": name_n},
+        {"negative_count": len(negatives) if negatives is not None else None},
+        "ok",
+        title=f"Группа «{row['name']}»: {', '.join(what)}",
+        undo={"label": "Вернуть как было", "steps": steps},
+        targets=[f"adgroup:{adgroup_row_id}"],
+    )
     return _public(updated)
 
 
@@ -306,6 +350,16 @@ def delete_adgroups(user_id: int, adgroup_row_ids: list[int]) -> dict:
                 (user_id, [r["id"] for r in group]),
             )
         applied += len(group)
+    names = ", ".join(f"«{r['name']}»" for r in rows[:3]) + (f" и ещё {len(rows) - 3}" if len(rows) > 3 else "")
+    log_action(
+        user_id,
+        "adgroups",
+        {"adgroup_row_ids": [r["id"] for r in rows], "campaign_row_ids": sorted({r["campaign_row_id"] for r in rows})},
+        {"applied": applied},
+        "ok",
+        title=f"Удаление групп: {names}",
+        targets=[f"adgroup:{r['id']}" for r in rows],
+    )
     return {"applied": applied, "status": "ok"}
 
 

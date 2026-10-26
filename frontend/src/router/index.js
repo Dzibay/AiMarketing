@@ -56,6 +56,7 @@ const router = createRouter({
           name: 'ws-campaign',
           component: () => import('../views/workspace/WsCampaign.vue'),
         },
+        { path: 'queries', name: 'ws-queries', component: () => import('../views/workspace/WsQueries.vue') },
         { path: 'actions', name: 'ws-actions', component: () => import('../views/workspace/WsActions.vue') },
         { path: 'chat/:chatId(\\d+)?', name: 'ws-chat', component: () => import('../views/workspace/WsChat.vue') },
         {
@@ -85,10 +86,16 @@ const router = createRouter({
     if (savedPosition) return savedPosition
     // Переключение чатов внутри вкладки не прокручивает страницу наверх.
     if (to.name === 'ws-chat' && from.name === 'ws-chat' && to.params.wsId === from.params.wsId) return false
-    // Якорь на секцию (#ai): страница дорисовывается после загрузки данных — ждём немного.
+    // Якорь на секцию (#ai): страница дорисовывается после загрузки данных — ждём, пока секция появится.
     if (to.hash) {
       return new Promise((resolve) => {
-        setTimeout(() => resolve(document.querySelector(to.hash) ? { el: to.hash, top: 80 } : { top: 0 }), 400)
+        const started = Date.now()
+        const tick = () => {
+          if (document.querySelector(to.hash)) resolve({ el: to.hash, top: 80 })
+          else if (Date.now() - started > 3000) resolve({ top: 0 })
+          else setTimeout(tick, 150)
+        }
+        setTimeout(tick, 400)
       })
     }
     return { top: 0 }

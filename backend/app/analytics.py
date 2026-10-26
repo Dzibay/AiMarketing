@@ -9,7 +9,7 @@ from __future__ import annotations
 from collections import defaultdict
 from datetime import date, timedelta
 
-from app.actions import list_action_logs
+from app.journal import list_action_logs
 from app.clock import today_msk
 from app.db import pool
 from app.overview import SEVERITY_ORDER, build_overview, kpi_state

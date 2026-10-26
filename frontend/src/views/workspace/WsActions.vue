@@ -11,6 +11,10 @@
         <strong>Создать кампанию</strong>
         <small>Мастер: кабинет, стратегия, расписание, первая группа</small>
       </RouterLink>
+      <RouterLink class="quick-action" :to="`/w/${ws.id}/queries`">
+        <strong>Чистка поисковых запросов</strong>
+        <small>ИИ размечает запросы, вы подтверждаете минус-фразы пачкой</small>
+      </RouterLink>
       <RouterLink class="quick-action" :to="`/w/${ws.id}/campaigns`">
         <strong>Копировать, остановить, бюджеты</strong>
         <small>Массовые действия в списке кампаний</small>
@@ -32,7 +36,9 @@
     <div class="panel__head">
       <div>
         <h2>Журнал изменений</h2>
-        <p class="hint">Что меняли в Директе вы, ИИ и правила — с параметрами и результатом.</p>
+        <p class="hint">
+          Что меняли в Директе вы, ИИ и правила — с параметрами и результатом. Большинство действий можно откатить.
+        </p>
       </div>
       <div class="seg" role="group" aria-label="Источник">
         <button v-for="s in SOURCES" :key="s.id" type="button" :class="{ active: source === s.id }" @click="setSource(s.id)">
@@ -45,7 +51,7 @@
     <p v-else-if="loadError" class="empty">{{ loadError }}</p>
     <p v-else-if="!items.length" class="empty">Записей нет.</p>
     <div v-else class="list">
-      <details v-for="a in items" :key="a.id" class="log-row">
+      <details v-for="a in items" :key="a.id" class="log-row" :class="{ 'is-undone': a.undone_at }">
         <summary class="list-row">
           <div>
             <strong>{{ a.title || a.action }}</strong>
@@ -55,7 +61,20 @@
               <template v-if="summaryLine(a)"> · {{ summaryLine(a) }}</template>
             </small>
           </div>
-          <span :class="ACTION_STATUS_TONES[a.status]">{{ STATUS_LABELS[a.status] || a.status }}</span>
+          <div class="log-row__side">
+            <span v-if="a.undone_at" class="chip">откачено {{ formatDateTime(a.undone_at) }}</span>
+            <span v-else :class="ACTION_STATUS_TONES[a.status]">{{ STATUS_LABELS[a.status] || a.status }}</span>
+            <button
+              v-if="a.undo"
+              class="btn btn--ghost"
+              :class="{ 'btn--danger': a.undo.danger }"
+              type="button"
+              :title="a.undo.label"
+              @click.prevent.stop="undoId = a.id"
+            >
+              Откатить
+            </button>
+          </div>
         </summary>
         <div class="log-row__body">
           <div>
@@ -69,6 +88,7 @@
         </div>
       </details>
     </div>
+    <UndoDialog :log-id="undoId" @close="undoId = null" @done="fetchPage()" />
     <div v-if="hasMore" class="pager">
       <button class="btn btn--ghost" type="button" :disabled="loading" @click="loadMore">
         {{ loading ? 'Загружаем…' : 'Показать ещё' }}
@@ -81,6 +101,7 @@
 import { onMounted, ref } from 'vue'
 import { RouterLink } from 'vue-router'
 import RulesManager from '../../components/RulesManager.vue'
+import UndoDialog from '../../components/UndoDialog.vue'
 import { errorText, wsApi } from '../../api/web'
 import { ACTION_SOURCES, ACTION_STATUS_TONES, formatDateTime } from '../../utils/format'
 import { useWs } from './context'
@@ -100,6 +121,7 @@ const loading = ref(false)
 const loadError = ref('')
 const source = ref('')
 const hasMore = ref(false)
+const undoId = ref(null)
 
 function pretty(value) {
   if (value == null || (typeof value === 'object' && !Object.keys(value).length)) return '—'
@@ -109,8 +131,12 @@ function pretty(value) {
 function summaryLine(a) {
   const r = a.result || {}
   const parts = []
+  if (a.undo_of) parts.push(`откат записи № ${a.undo_of}`)
   if (r.applied != null) parts.push(`применено ${r.applied}`)
+  if (r.negative != null && r.target != null) parts.push(`минус ${r.negative}, целевых ${r.target}`)
+  else if (r.added != null && r.removed != null) parts.push(`+${r.added} / −${r.removed}`)
   if (Array.isArray(r.errors) && r.errors.length) parts.push(`ошибок ${r.errors.length}`)
+  else if (typeof r.errors === 'number' && r.errors) parts.push(`ошибок ${r.errors}`)
   if (r.error) parts.push(String(r.message || r.error))
   return parts.join(', ')
 }

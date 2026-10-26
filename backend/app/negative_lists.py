@@ -18,7 +18,8 @@ from collections.abc import Callable
 
 from psycopg.types.json import Jsonb
 
-from app.actions import _call_campaigns, _log_action
+from app.actions import _call_campaigns
+from app.journal import log_action as _log_action
 from app.adgroups import _parse_phrases
 from app.db import pool
 from app.worker_lock import try_worker_lock

@@ -7,8 +7,9 @@ import logging
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 
-from app.actions import acting_as, bulk_campaign_action
+from app.actions import bulk_campaign_action
 from app.db import pool
+from app.journal import acting_as
 from app.keywords import bulk_keyword_action
 from app.search_queries import bulk_search_query_action
 from app.telegram_notify import format_rule_alert, notify_user

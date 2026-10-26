@@ -8,7 +8,6 @@ from app.actions import (
     campaign_options,
     create_campaign,
     get_campaign_settings,
-    list_action_logs,
     moderate_campaign,
     update_campaign_settings,
 )
@@ -20,7 +19,18 @@ from app.db import pool
 from app.direct_sync import get_campaign
 from app.job_handlers import submit
 from app.jobs import PRIORITY_USER, public_job
+from app.journal import list_action_logs
 from app.keywords import list_keywords
+from app.query_cleaning import (
+    APPLY_MAX,
+    CLASSIFY_MAX,
+    apply_decisions,
+    check_phrases,
+    forget_decisions,
+    list_decisions,
+    needs_direct,
+    query_queue,
+)
 from app.rules import list_rules
 from app.web_auth import require_web_user
 from app.workspaces import (
@@ -55,6 +65,7 @@ class WorkspacePatchBody(BaseModel):
     goal_id: int | None = None
     ai_notes: str | None = None
     ai_access: dict | None = None
+    brief: dict | None = None
     archived: bool | None = None
 
 
@@ -398,3 +409,150 @@ def ws_actions(
 def ws_rules(workspace_id: int, user_id: int = Depends(require_web_user)) -> dict:
     _ws(user_id, workspace_id)
     return {"items": list_rules(user_id, workspace_id=workspace_id)}
+
+
+# --- Чистка поисковых запросов и бриф ---------------------------------------------------------
+
+
+class QueriesSyncBody(BaseModel):
+    days: int = 14
+
+
+class QueriesClassifyBody(BaseModel):
+    limit: int = 200
+    relabel: bool = False
+    campaign_row_id: int | None = None
+
+
+class QueriesApplyBody(BaseModel):
+    items: list[dict] = Field(default_factory=list)
+    force: bool = False
+    bid_rub: float | None = None
+
+
+class QueriesCheckBody(BaseModel):
+    items: list[dict] = Field(default_factory=list)
+
+
+class QueriesForgetBody(BaseModel):
+    query_norms: list[str] = Field(default_factory=list)
+
+
+class BriefDraftBody(BaseModel):
+    site: str = ""
+
+
+@router.get("/{workspace_id}/queries")
+def ws_queries(
+    workspace_id: int,
+    tab: str = "new",
+    search: str = "",
+    min_cost_rub: float | None = None,
+    no_conversions: bool = False,
+    campaign_row_id: int | None = None,
+    limit: int = 100,
+    offset: int = 0,
+    user_id: int = Depends(require_web_user),
+) -> dict:
+    if campaign_row_id:
+        _ws_campaign(user_id, workspace_id, campaign_row_id)
+    try:
+        return query_queue(
+            user_id,
+            workspace_id,
+            tab=tab,
+            search=search,
+            min_cost_rub=min_cost_rub,
+            no_conversions=no_conversions,
+            campaign_row_id=campaign_row_id,
+            limit=limit,
+            offset=offset,
+        )
+    except YandexError as exc:
+        raise _http(exc) from exc
+
+
+@router.post("/{workspace_id}/queries/sync")
+def ws_queries_sync(
+    workspace_id: int, body: QueriesSyncBody | None = None, user_id: int = Depends(require_web_user)
+) -> dict:
+    _ws(user_id, workspace_id)
+    days = max(1, min(int((body or QueriesSyncBody()).days), 90))
+    return _start_job("sync_workspace_queries", user_id, {"workspace_id": workspace_id, "days": days})
+
+
+@router.post("/{workspace_id}/queries/classify")
+def ws_queries_classify(
+    workspace_id: int, body: QueriesClassifyBody | None = None, user_id: int = Depends(require_web_user)
+) -> dict:
+    body = body or QueriesClassifyBody()
+    _ws(user_id, workspace_id)
+    if body.campaign_row_id:
+        _ws_campaign(user_id, workspace_id, body.campaign_row_id)
+    payload = {
+        "workspace_id": workspace_id,
+        "limit": max(1, min(int(body.limit), CLASSIFY_MAX)),
+        "relabel": bool(body.relabel),
+        "campaign_row_id": body.campaign_row_id,
+    }
+    job = submit("classify_queries", user_id, payload, priority=PRIORITY_USER, max_attempts=2)
+    return {"job": public_job(job)}
+
+
+@router.post("/{workspace_id}/queries/apply")
+def ws_queries_apply(workspace_id: int, body: QueriesApplyBody, user_id: int = Depends(require_web_user)) -> dict:
+    """Только «целевые» без новых ключей — сразу; с минус-фразами и ключами — задачей (это Директ)."""
+    _ws(user_id, workspace_id)
+    if len(body.items) > APPLY_MAX:
+        raise _http(YandexError("limit", f"Не больше {APPLY_MAX} запросов за раз"))
+    if not needs_direct(body.items):
+        try:
+            return {"result": apply_decisions(user_id, workspace_id, body.items)}
+        except YandexError as exc:
+            raise _http(exc) from exc
+    payload = {"workspace_id": workspace_id, "items": body.items, "force": body.force, "bid_rub": body.bid_rub}
+    # Без повторов: половина минус-фраз уже в Директе, повтор только запутает журнал.
+    job = submit("apply_query_decisions", user_id, payload, priority=PRIORITY_USER, max_attempts=1)
+    return {"job": public_job(job)}
+
+
+@router.post("/{workspace_id}/queries/check")
+def ws_queries_check(workspace_id: int, body: QueriesCheckBody, user_id: int = Depends(require_web_user)) -> dict:
+    try:
+        return {"items": check_phrases(user_id, workspace_id, body.items)}
+    except YandexError as exc:
+        raise _http(exc) from exc
+
+
+@router.get("/{workspace_id}/queries/memory")
+def ws_queries_memory(
+    workspace_id: int,
+    verdict: str = "",
+    search: str = "",
+    limit: int = 100,
+    offset: int = 0,
+    user_id: int = Depends(require_web_user),
+) -> dict:
+    try:
+        return list_decisions(user_id, workspace_id, verdict=verdict or None, search=search, limit=limit, offset=offset)
+    except YandexError as exc:
+        raise _http(exc) from exc
+
+
+@router.post("/{workspace_id}/queries/forget")
+def ws_queries_forget(workspace_id: int, body: QueriesForgetBody, user_id: int = Depends(require_web_user)) -> dict:
+    try:
+        return forget_decisions(user_id, workspace_id, body.query_norms)
+    except YandexError as exc:
+        raise _http(exc) from exc
+
+
+@router.post("/{workspace_id}/brief/draft")
+def ws_brief_draft(
+    workspace_id: int, body: BriefDraftBody | None = None, user_id: int = Depends(require_web_user)
+) -> dict:
+    """Черновик брифа по сайту — задачей: сайт и ИИ отвечают десятки секунд. Ничего не сохраняет."""
+    _ws(user_id, workspace_id)
+    site = (body or BriefDraftBody()).site.strip()[:500]
+    job = submit("brief_draft", user_id, {"workspace_id": workspace_id, "site": site}, priority=PRIORITY_USER, max_attempts=1)
+    return {"job": public_job(job)}

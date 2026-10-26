@@ -11,9 +11,9 @@ log = logging.getLogger("app.api.web")
 from app.actions import (
     bulk_campaign_action,
     create_text_campaign,
-    list_action_logs,
     update_campaign,
 )
+from app.journal import list_action_logs
 from app.clients import (
     assign_direct_account,
     assign_metrika_counter,
@@ -63,6 +63,7 @@ from app.rules import (
 from app.password_reset import request_password_reset, reset_password
 from app.settings_store import consent_url, cookies_url, offer_url, privacy_url, public_base_url
 from app.sync_runs import list_sync_runs
+from app.undo import undo_preview
 from app.telegram_notify import (
     create_link_code,
     get_telegram_status,
@@ -927,6 +928,27 @@ def web_action_logs(
     user_id: int = Depends(require_web_user),
 ) -> dict:
     return {"items": list_action_logs(user_id, limit=limit, source=source or None, before_id=before_id)}
+
+
+@router.get("/actions/{log_id}/undo")
+def web_action_undo_preview(log_id: int, user_id: int = Depends(require_web_user)) -> dict:
+    try:
+        return undo_preview(user_id, log_id)
+    except YandexError as exc:
+        raise _http(exc) from exc
+
+
+@router.post("/actions/{log_id}/undo")
+def web_action_undo(log_id: int, user_id: int = Depends(require_web_user)) -> dict:
+    """Откат задачей: шаги идут в Директ. Без повторов — откат не должен выполниться дважды."""
+    try:
+        preview = undo_preview(user_id, log_id)
+    except YandexError as exc:
+        raise _http(exc) from exc
+    if not preview["available"]:
+        raise _http(YandexError("undo", preview["reason"]))
+    job = submit("undo_action", user_id, {"log_id": log_id}, priority=PRIORITY_USER, max_attempts=1)
+    return {"job": public_job(job)}
 
 
 @router.post("/analytics/sync")

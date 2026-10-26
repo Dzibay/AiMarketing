@@ -93,6 +93,7 @@ const tabs = computed(() => [
     names: ['ws-campaigns', 'ws-campaign'],
     badge: ws.value?.campaigns_count || '',
   },
+  { name: 'queries', path: 'queries', label: 'Поисковые запросы', names: ['ws-queries'] },
   { name: 'actions', path: 'actions', label: 'Действия и правила', names: ['ws-actions'] },
   { name: 'chat', path: 'chat', label: 'ИИ-чат', names: ['ws-chat'] },
   { name: 'settings', path: 'settings', label: 'Настройки', names: ['ws-settings'] },

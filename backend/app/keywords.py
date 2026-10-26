@@ -7,6 +7,7 @@ import logging
 from app import direct_api
 from app.adgroups import _adgroup_row
 from app.db import pool
+from app.journal import campaigns_of, log_action
 from app.sync_runs import finish_run, start_run
 from app.yandex import YandexError, get_connection_access_token
 
@@ -23,7 +24,7 @@ def _rub_to_micros(rub: float | None) -> int | None:
     value = float(rub)
     if value <= 0:
         return None
-    return int(value * 1_000_000)
+    return int(round(value * 1_000_000))
 
 
 def fetch_keywords(access_token: str, client_login: str, adgroup_ids: list[int]) -> list[dict]:
@@ -226,6 +227,25 @@ def create_keywords(
             created.append(_public(row))
     if not created and errors:
         raise YandexError("direct", first_err or None)
+    log_action(
+        user_id,
+        "keywords",
+        {
+            "adgroup_row_id": adgroup_row_id,
+            "campaign_row_id": group["campaign_row_id"],
+            "phrases": cleaned[:50],
+            "bid_rub": bid_rub,
+        },
+        {"created": len(created), "errors": errors, "message": first_err},
+        "partial" if errors else "ok",
+        title=f"Фразы в группу «{group['name']}»: +{len(created)}",
+        undo={
+            "label": "Удалить добавленные фразы",
+            "danger": True,
+            "steps": [{"op": "keywords_action", "args": {"keyword_row_ids": [c["id"] for c in created], "action": "delete"}}],
+        },
+        targets=[f"keyword:{c['id']}" for c in created] + [f"adgroup:{adgroup_row_id}"],
+    )
     return {"items": created, "created": len(created), "errors": errors, "status": "ok"}
 
 
@@ -273,6 +293,29 @@ def update_keyword(
             """,
             params,
         ).fetchone()
+    back: dict = {}
+    what = []
+    if keyword_n is not None:
+        what.append(f"текст «{keyword_n}»")
+        if keyword_n != row["keyword"]:
+            back["keyword"] = row["keyword"]
+    if bid_micros is not None:
+        what.append(f"ставка {bid_micros / 1_000_000:g} ₽")
+        if row.get("bid_micros") is not None and int(row["bid_micros"]) != bid_micros:
+            back["bid_rub"] = int(row["bid_micros"]) / 1_000_000
+    log_action(
+        user_id,
+        "keywords",
+        {"keyword_row_ids": [keyword_row_id], "campaign_row_ids": campaigns_of(user_id, "keyword", [keyword_row_id])},
+        {"keyword": keyword_n, "bid_micros": bid_micros},
+        "ok",
+        title=f"Фраза «{row['keyword']}»: {', '.join(what)}",
+        undo={
+            "label": "Вернуть как было",
+            "steps": [{"op": "keyword_update", "args": {"keyword_row_id": keyword_row_id, **back}}] if back else [],
+        },
+        targets=[f"keyword:{keyword_row_id}"],
+    )
     return _public(updated)
 
 
@@ -295,47 +338,94 @@ def bulk_keyword_action(
         if bid_micros is None:
             raise YandexError("budget")
     rows = [_keyword_row(user_id, rid) for rid in keyword_row_ids]
+    campaign_ids = campaigns_of(user_id, "keyword", [r["id"] for r in rows])
     by_login: dict[str, list[dict]] = {}
     for r in rows:
         by_login.setdefault(r["client_login"], []).append(r)
     applied = 0
+    done: list[dict] = []  # строки до изменения — для отката
+    failure: YandexError | None = None
     for client_login, group in by_login.items():
-        token = get_connection_access_token(group[0]["connection_id"], user_id)
-        if action == "set_bid":
-            payload = [
-                {"Id": int(r["keyword_id"]), "Bid": bid_micros} for r in group
-            ]
-            _call(token, client_login, "update", {"Keywords": payload})
-            with pool.connection() as conn:
-                conn.execute(
-                    """
-                    UPDATE direct_keywords
-                    SET bid_micros = %s, synced_at = NOW()
-                    WHERE id = ANY(%s)
-                    """,
-                    (bid_micros, [r["id"] for r in group]),
-                )
-        else:
-            ids = [int(r["keyword_id"]) for r in group]
-            _call(token, client_login, action, {"SelectionCriteria": {"Ids": ids}})
-            with pool.connection() as conn:
-                if action == "delete":
-                    conn.execute(
-                        "DELETE FROM direct_keywords WHERE user_id = %s AND id = ANY(%s)",
-                        (user_id, [r["id"] for r in group]),
-                    )
-                elif action == "suspend":
-                    conn.execute(
-                        "UPDATE direct_keywords SET state = 'SUSPENDED', synced_at = NOW() WHERE id = ANY(%s)",
-                        ([r["id"] for r in group],),
-                    )
-                elif action == "resume":
-                    conn.execute(
-                        "UPDATE direct_keywords SET state = 'ON', synced_at = NOW() WHERE id = ANY(%s)",
-                        ([r["id"] for r in group],),
-                    )
+        try:
+            _apply_group(user_id, client_login, group, action, bid_micros)
+        except YandexError as exc:
+            failure = failure or exc
+            continue
+        done.extend(group)
         applied += len(group)
-    return {"applied": applied, "status": "ok"}
+    status = "ok" if failure is None else ("partial" if done else "error")
+    log_action(
+        user_id,
+        "keywords",
+        {"keyword_row_ids": [r["id"] for r in rows], "campaign_row_ids": campaign_ids, "action": action, "bid_rub": bid_rub},
+        {"applied": applied, "error": failure.code if failure else None},
+        status,
+        title=_bulk_title(action, rows, bid_micros),
+        undo=_bulk_undo(action, done, bid_micros),
+        targets=[f"keyword:{r['id']}" for r in rows],
+    )
+    if failure is not None and not done:
+        raise failure
+    return {"applied": applied, "status": status}
+
+
+def _apply_group(user_id: int, client_login: str, group: list[dict], action: str, bid_micros: int | None) -> None:
+    token = get_connection_access_token(group[0]["connection_id"], user_id)
+    ids = [r["id"] for r in group]
+    if action == "set_bid":
+        payload = [{"Id": int(r["keyword_id"]), "Bid": bid_micros} for r in group]
+        _call(token, client_login, "update", {"Keywords": payload})
+        with pool.connection() as conn:
+            conn.execute(
+                "UPDATE direct_keywords SET bid_micros = %s, synced_at = NOW() WHERE id = ANY(%s)",
+                (bid_micros, ids),
+            )
+        return
+    _call(token, client_login, action, {"SelectionCriteria": {"Ids": [int(r["keyword_id"]) for r in group]}})
+    with pool.connection() as conn:
+        if action == "delete":
+            conn.execute("DELETE FROM direct_keywords WHERE user_id = %s AND id = ANY(%s)", (user_id, ids))
+        else:
+            state = "SUSPENDED" if action == "suspend" else "ON"
+            conn.execute("UPDATE direct_keywords SET state = %s, synced_at = NOW() WHERE id = ANY(%s)", (state, ids))
+
+
+_BULK_TITLES = {"suspend": "Остановка фраз", "resume": "Запуск фраз", "delete": "Удаление фраз"}
+
+
+def _bulk_title(action: str, rows: list[dict], bid_micros: int | None) -> str:
+    names = ", ".join(f"«{r['keyword']}»" for r in rows[:3]) + (f" и ещё {len(rows) - 3}" if len(rows) > 3 else "")
+    if action == "set_bid":
+        return f"Ставка {(bid_micros or 0) / 1_000_000:g} ₽: {names}"
+    return f"{_BULK_TITLES[action]}: {names}"
+
+
+def _bulk_undo(action: str, done: list[dict], bid_micros: int | None) -> dict | None:
+    """Обратное действие только для фраз, что реально изменились."""
+
+    def ids(state: str) -> list[int]:
+        return [r["id"] for r in done if r.get("state") == state]
+
+    if action == "suspend":
+        steps = [{"op": "keywords_action", "args": {"keyword_row_ids": ids("ON"), "action": "resume"}}]
+        return {"label": "Запустить снова", "steps": steps if ids("ON") else []}
+    if action == "resume":
+        steps = [{"op": "keywords_action", "args": {"keyword_row_ids": ids("SUSPENDED"), "action": "suspend"}}]
+        return {"label": "Остановить снова", "steps": steps if ids("SUSPENDED") else []}
+    if action == "set_bid":
+        bids = {
+            str(r["id"]): int(r["bid_micros"])
+            for r in done
+            if r.get("bid_micros") is not None and int(r["bid_micros"]) != bid_micros
+        }
+        return {"label": "Вернуть прежние ставки", "steps": [{"op": "keyword_bids", "args": {"bids": bids}}] if bids else []}
+    items = [
+        {"adgroup_row_id": r["adgroup_row_id"], "keyword": r["keyword"], "bid_micros": r.get("bid_micros")}
+        for r in done
+        if r.get("keyword")
+    ]
+    # Удалённое Директ не восстанавливает: фразы добавятся заново, без статистики.
+    return {"label": "Добавить фразы заново", "steps": [{"op": "keywords_recreate", "args": {"items": items}}] if items else []}
 
 
 def _keyword_row(user_id: int, keyword_row_id: int) -> dict:

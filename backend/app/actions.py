@@ -2,11 +2,9 @@
 
 from __future__ import annotations
 
-import contextvars
 import json
 import logging
 from collections import defaultdict
-from contextlib import contextmanager
 from datetime import date
 
 from app import direct_api
@@ -18,6 +16,7 @@ from app.direct_sync import (
     remove_campaign_local,
     update_campaign_local_state,
 )
+from app.journal import ACTION_TITLES, _workspace_for, journal_quiet, log_action
 from app.yandex import YandexError, get_connection_access_token
 
 log = logging.getLogger("app.actions")
@@ -26,171 +25,6 @@ BULK_ACTIONS = {"pause", "resume", "set_budget", "archive", "unarchive", "delete
 BULK_LIMIT = 500
 UPDATE_BATCH = 10  # campaigns.update — не более 10 кампаний за вызов
 ADD_BATCH = 1000  # adgroups/keywords/ads.add — до 1000 объектов за вызов
-
-ACTION_TITLES = {
-    "pause": "Остановка кампаний",
-    "resume": "Запуск кампаний",
-    "set_budget": "Изменение дневного бюджета",
-    "archive": "Архивация кампаний",
-    "unarchive": "Возврат из архива",
-    "delete": "Удаление кампаний",
-    "create": "Создание кампании",
-    "update": "Изменение кампании",
-    "settings": "Изменение настроек кампании",
-    "duplicate": "Копия кампании",
-    "moderate": "Отправка на модерацию",
-    "negative_list_apply": "Применение списка минус-фраз",
-    "keywords": "Изменение ключевых фраз",
-    "ads": "Изменение объявлений",
-    "adgroups": "Изменение групп",
-}
-
-# --- Кто действует -----------------------------------------------------------------------------
-# Журнал показывает источник действия: пользователь, ИИ-агент или правило автоматизации.
-# Агент и правила оборачивают свои вызовы в acting_as(...), сами функции действий об этом не знают.
-
-_source: contextvars.ContextVar[str] = contextvars.ContextVar("action_source", default="user")
-
-
-@contextmanager
-def acting_as(source: str):
-    token = _source.set(source if source in ("user", "ai", "rule") else "user")
-    try:
-        yield
-    finally:
-        _source.reset(token)
-
-
-def current_source() -> str:
-    return _source.get()
-
-
-# --- Журнал ------------------------------------------------------------------------------------
-
-
-def _dump(value) -> str:
-    return json.dumps(value, ensure_ascii=False, default=str)[:4000]
-
-
-def _load(text: str | None):
-    if not text:
-        return None
-    try:
-        return json.loads(text)
-    except ValueError:
-        return text
-
-
-def _workspace_for(user_id: int, payload: dict) -> int | None:
-    """Пространство действия — если все затронутые кампании лежат в одном."""
-    ids: set[int] = set()
-    for key in ("campaign_row_ids", "campaign_ids"):
-        for value in payload.get(key) or []:
-            try:
-                ids.add(int(value))
-            except (TypeError, ValueError):
-                continue
-    if payload.get("campaign_row_id"):
-        ids.add(int(payload["campaign_row_id"]))
-    if not ids:
-        return None
-    with pool.connection() as conn:
-        rows = conn.execute(
-            """
-            SELECT DISTINCT workspace_id FROM workspace_campaigns
-            WHERE user_id = %s AND campaign_row_id = ANY(%s)
-            """,
-            (user_id, list(ids)),
-        ).fetchall()
-    return int(rows[0]["workspace_id"]) if len(rows) == 1 else None
-
-
-def log_action(
-    user_id: int,
-    action: str,
-    payload: dict,
-    result: dict,
-    status: str,
-    *,
-    workspace_id: int | None = None,
-    title: str | None = None,
-) -> int:
-    if workspace_id is None:
-        workspace_id = _workspace_for(user_id, payload or {})
-    with pool.connection() as conn:
-        row = conn.execute(
-            """
-            INSERT INTO action_logs (user_id, action, payload, result, status, workspace_id, source, title)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-            RETURNING id
-            """,
-            (
-                user_id,
-                action,
-                _dump(payload),
-                _dump(result),
-                status,
-                workspace_id,
-                _source.get(),
-                (title or ACTION_TITLES.get(action) or action)[:300],
-            ),
-        ).fetchone()
-    return int(row["id"])
-
-
-_log_action = log_action  # старое имя: им пользуются модули минус-фраз
-
-
-def list_action_logs(
-    user_id: int,
-    limit: int = 50,
-    *,
-    workspace_id: int | None = None,
-    source: str | None = None,
-    before_id: int | None = None,
-) -> list[dict]:
-    limit = max(1, min(int(limit), 200))
-    where = ["l.user_id = %s"]
-    params: list = [user_id]
-    if workspace_id is not None:
-        where.append("l.workspace_id = %s")
-        params.append(workspace_id)
-    if source in ("user", "ai", "rule"):
-        where.append("l.source = %s")
-        params.append(source)
-    if before_id:
-        where.append("l.id < %s")
-        params.append(before_id)
-    params.append(limit)
-    with pool.connection() as conn:
-        rows = conn.execute(
-            f"""
-            SELECT l.id, l.action, l.title, l.source, l.workspace_id, w.name AS workspace_name,
-                   l.payload, l.result, l.status, l.created_at
-            FROM action_logs l
-            LEFT JOIN workspaces w ON w.id = l.workspace_id
-            WHERE {' AND '.join(where)}
-            ORDER BY l.id DESC
-            LIMIT %s
-            """,
-            params,
-        ).fetchall()
-    return [
-        {
-            "id": r["id"],
-            "action": r["action"],
-            "title": r["title"] or ACTION_TITLES.get(r["action"]) or r["action"],
-            "source": r["source"],
-            "workspace_id": r["workspace_id"],
-            "workspace_name": r["workspace_name"],
-            "payload": _load(r["payload"]),
-            "result": _load(r["result"]),
-            "status": r["status"],
-            "created_at": r["created_at"].isoformat() if r.get("created_at") else None,
-        }
-        for r in rows
-    ]
-
 
 # --- Доступ к API ------------------------------------------------------------------------------
 
@@ -723,7 +557,9 @@ def create_campaign(user_id: int, *, account_id: int, spec: dict, workspace_id: 
     group_out = None
     if spec.get("group"):
         try:
-            group_out = _create_first_group(user_id, row["id"], spec["group"], manual=manual)
+            # Группа, фразы и объявление — часть создания кампании, отдельных записей в журнале не нужно.
+            with journal_quiet():
+                group_out = _create_first_group(user_id, row["id"], spec["group"], manual=manual)
             warnings.extend(group_out.pop("warnings", []))
         except YandexError as exc:
             warnings.append(f"Группа не создана: {exc.message or exc.code}")
@@ -737,8 +573,17 @@ def create_campaign(user_id: int, *, account_id: int, spec: dict, workspace_id: 
         "ok",
         workspace_id=int(ws["id"]) if ws else None,
         title=f"Создание кампании «{name}»",
+        undo=_delete_undo(row["id"], "Удалить созданную кампанию"),
     )
     return out
+
+
+def _delete_undo(campaign_row_id: int, label: str) -> dict:
+    return {
+        "label": label,
+        "danger": True,
+        "steps": [{"op": "campaigns_action", "args": {"campaign_ids": [campaign_row_id], "action": "delete"}}],
+    }
 
 
 def _create_first_group(user_id: int, campaign_row_id: int, group: dict, *, manual: bool) -> dict:
@@ -1003,6 +848,7 @@ def update_campaign_settings(user_id: int, campaign_row_id: int, changes: dict) 
         raise YandexError("empty", "Нет изменений")
 
     token = get_connection_access_token(row["connection_id"], user_id)
+    previous = _previous_settings(token, row, ctype, changes)
     result = _call_campaigns(token, row["client_login"], "update", {"Campaigns": [patch]})
     errors = direct_api.item_errors(result, "UpdateResults")
     if errors:
@@ -1017,8 +863,54 @@ def update_campaign_settings(user_id: int, campaign_row_id: int, changes: dict) 
         out,
         "ok",
         title=f"Настройки «{row['name']}»: {', '.join(changed)}",
+        undo={
+            "label": "Вернуть прежние настройки",
+            "steps": [{"op": "campaign_settings", "args": {"campaign_row_id": campaign_row_id, "changes": previous}}]
+            if previous
+            else [],
+        },
     )
     return out
+
+
+def _previous_settings(token, row: dict, ctype: str, changes: dict) -> dict:
+    """Прежние значения изменяемых полей — для отката. Пусто, если прочитать не удалось."""
+    try:
+        before = _settings_out(row, _fetch_campaign(token, row["client_login"], row["campaign_id"], ctype), ctype)
+    except Exception:
+        log.warning("settings snapshot failed for campaign %s", row["id"], exc_info=True)
+        return {}
+    previous: dict = {}
+    for key in changes:
+        if key == "start_date":
+            # Дату начала в прошлом Директ не примет — её не возвращаем.
+            if before.get("start_date") and before["start_date"] >= date.today().isoformat():
+                previous["start_date"] = before["start_date"]
+        elif key == "end_date":
+            previous["end_date"] = before.get("end_date") or ""
+        elif key == "daily_budget_rub":
+            previous["daily_budget_rub"] = before.get("daily_budget_rub") or 0
+        elif key == "strategy":
+            previous["strategy"] = before["strategy"]
+            if before.get("daily_budget_rub"):
+                previous["daily_budget_rub"] = before["daily_budget_rub"]
+        elif key == "schedule":
+            previous["schedule"] = before.get("schedule")
+            previous["consider_working_weekends"] = before.get("consider_working_weekends", True)
+        elif key == "settings":
+            wanted = changes.get("settings") or {}
+            old = {k: before["settings"][k] for k in wanted if k in before["settings"]}
+            if old:
+                previous["settings"] = old
+        elif key == "counter_ids":
+            if before.get("counter_ids"):
+                previous["counter_ids"] = before["counter_ids"]
+        elif key == "attribution_model":
+            if before.get("attribution_model"):
+                previous["attribution_model"] = before["attribution_model"]
+        elif key in ("name", "negative_keywords", "excluded_sites", "priority_goals", "tracking_params", "client_info"):
+            previous[key] = before.get(key)
+    return previous
 
 
 def _update_local(campaign_row_id: int, local: dict) -> None:
@@ -1069,6 +961,13 @@ def update_campaign(
         raise YandexError("empty")
 
     token = get_connection_access_token(row["connection_id"], user_id)
+    before_negatives = None
+    if negatives is not None:
+        from app.negative_lists import fetch_campaign_negatives
+
+        before_negatives = fetch_campaign_negatives(token, row["client_login"], [int(row["campaign_id"])]).get(
+            int(row["campaign_id"])
+        )
     result = _call_campaigns(token, row["client_login"], "update", {"Campaigns": [patch]})
     errors = direct_api.item_errors(result, "UpdateResults")
     if errors:
@@ -1081,6 +980,20 @@ def update_campaign(
         "negative_keywords": negatives,
         "status": "ok",
     }
+    steps: list[dict] = []
+    if name is not None and row["name"] != local["name"]:
+        steps.append({"op": "campaign_update", "args": {"campaign_row_id": campaign_row_id, "name": row["name"]}})
+    if daily_budget_rub is not None:
+        steps.append({"op": "campaign_budgets", "args": {"budgets": {str(campaign_row_id): row.get("daily_budget_kopecks")}}})
+    if before_negatives is not None:
+        from app.negative_lists import phrase_key
+
+        old_keys = {phrase_key(p) for p in before_negatives}
+        new_keys = {phrase_key(p) for p in negatives or []}
+        added = [p for p in negatives or [] if phrase_key(p) not in old_keys]
+        removed = [p for p in before_negatives if phrase_key(p) not in new_keys]
+        if added or removed:
+            steps.append({"op": "negatives", "args": {"campaigns": {str(campaign_row_id): {"add": removed, "remove": added}}}})
     log_action(
         user_id,
         "update",
@@ -1093,8 +1006,48 @@ def update_campaign(
         out,
         "ok",
         title=f"Изменение кампании «{row['name']}»",
+        undo={"label": "Вернуть как было", "steps": steps},
     )
     return out
+
+
+def set_campaign_budgets(user_id: int, budgets: dict) -> dict:
+    """Дневные бюджеты кампаний как есть: {row_id: копейки | None (снять)}. Для отката."""
+    wanted = {int(k): (int(v) if v else None) for k, v in budgets.items()}
+    rows = get_campaign_rows(user_id, list(wanted))
+    grouped: dict[tuple[int, str], list[dict]] = defaultdict(list)
+    for row in rows:
+        grouped[(row["connection_id"], row["client_login"])].append(row)
+    applied, errors, done = 0, [], set()
+    for (connection_id, client_login), group in grouped.items():
+        try:
+            token = get_connection_access_token(connection_id, user_id)
+            for chunk in direct_api.chunks(group, UPDATE_BATCH):
+                body = [
+                    {
+                        "Id": int(r["campaign_id"]),
+                        "DailyBudget": {"Amount": wanted[r["id"]] * 10_000, "Mode": "STANDARD"} if wanted[r["id"]] else None,
+                    }
+                    for r in chunk
+                ]
+                result = _call_campaigns(token, client_login, "update", {"Campaigns": body})
+                item_errs = dict(direct_api.item_errors(result, "UpdateResults"))
+                for index, r in enumerate(chunk):
+                    if index in item_errs:
+                        errors.append({"campaign_row_id": r["id"], "message": item_errs[index]})
+                        continue
+                    with pool.connection() as conn:
+                        conn.execute(
+                            "UPDATE direct_campaigns SET daily_budget_kopecks = %s, synced_at = NOW() WHERE id = %s",
+                            (wanted[r["id"]], r["id"]),
+                        )
+                    done.add(r["id"])
+                    applied += 1
+        except YandexError as exc:
+            errors.extend({"campaign_row_id": r["id"], "message": exc.message or exc.code} for r in group if r["id"] not in done)
+    missing = set(wanted) - {r["id"] for r in rows}
+    errors.extend({"campaign_row_id": i, "message": "кампания не найдена"} for i in missing)
+    return {"applied": applied, "errors": errors}
 
 
 # --- Массовые действия -------------------------------------------------------------------------
@@ -1153,6 +1106,7 @@ def bulk_campaign_action(
     applied = 0
     errors: list[dict] = []
     details: list[dict] = []
+    done: list[dict] = []  # строки до изменения — для отката
 
     def fail(row: dict, login: str, code: str, message: str = "") -> None:
         errors.append(
@@ -1182,6 +1136,7 @@ def bulk_campaign_action(
                             fail(r, client_login, "direct", item_errs[index])
                         else:
                             update_campaign_local_state(r["id"], daily_budget_kopecks=kopecks)
+                            done.append(r)
                             applied += 1
             else:
                 method, key, state = _SELECT_METHODS[action]
@@ -1197,6 +1152,7 @@ def bulk_campaign_action(
                             applied += 1
                         else:
                             update_campaign_local_state(r["id"], state=state)
+                            done.append(r)
                             applied += 1
         except YandexError as exc:
             for r in group:
@@ -1229,11 +1185,34 @@ def bulk_campaign_action(
         status,
         workspace_id=workspace_id,
         title=title,
+        undo=_bulk_undo(action, done),
     )
     if status == "error":
         first = errors[0] if errors else {"error": "direct", "message": ""}
         raise YandexError(first["error"], first.get("message") or None)
     return result
+
+
+def _bulk_undo(action: str, done: list[dict]) -> dict | None:
+    """Обратное массовое действие только для тех кампаний, что реально изменились."""
+
+    def step(ids: list[int], what: str) -> list[dict]:
+        return [{"op": "campaigns_action", "args": {"campaign_ids": ids, "action": what}}] if ids else []
+
+    every = [r["id"] for r in done]
+    was_on = [r["id"] for r in done if r.get("state") == "ON"]
+    if action == "set_budget":
+        budgets = {str(r["id"]): r.get("daily_budget_kopecks") for r in done}
+        return {"label": "Вернуть прежние бюджеты", "steps": [{"op": "campaign_budgets", "args": {"budgets": budgets}}]}
+    if action == "pause":
+        return {"label": "Запустить снова", "steps": step(was_on, "resume")}
+    if action == "resume":
+        return {"label": "Остановить снова", "steps": step([r["id"] for r in done if r.get("state") == "SUSPENDED"], "pause")}
+    if action == "archive":
+        return {"label": "Вернуть из архива", "steps": step(every, "unarchive") + step(was_on, "resume")}
+    if action == "unarchive":
+        return {"label": "Вернуть в архив", "steps": step(every, "archive")}
+    return None  # удаление не откатывается
 
 
 # --- Модерация ---------------------------------------------------------------------------------
@@ -1666,5 +1645,7 @@ def duplicate_campaign(
         out["status"],
         workspace_id=int(ws["id"]) if ws else None,
         title=f"Копия «{src['name']}» → «{new_name}» ({dst['client_login']})",
+        undo=_delete_undo(row["id"], "Удалить копию"),
+        targets=[f"campaign:{campaign_row_id}", f"campaign:{row['id']}"],
     )
     return out
