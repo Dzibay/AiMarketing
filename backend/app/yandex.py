@@ -26,6 +26,9 @@ METRIKA_COUNTERS = "https://api-metrika.yandex.net/management/v1/counters"
 # Режим входа «подключить»: что берём из этого логина.
 OAUTH_MODES = ("", "metrika", "direct", "sandbox")
 
+# Коды API Директа, которые повтор не исправит: заявка на доступ, права, логин без Директа.
+DIRECT_DENIED_CODES = frozenset({54, 58, 513, 3000, 3001})
+
 
 class YandexError(Exception):
     def __init__(self, code: str, message: str | None = None) -> None:
@@ -52,6 +55,33 @@ def direct_api_error(payload: dict | None, status_code: int) -> YandexError:
                 break
     code = "direct-denied" if status_code in (400, 403) else "direct"
     return YandexError(code, detail or None)
+
+
+def direct_sync_error(err: dict | None, status_code: int) -> str:
+    """Ошибка синка логина: код и через «|» ответ Директа как есть.
+
+    «direct-denied|Незавершенная регистрация (ошибка 58). Необходимо создать заявку…» —
+    по одному нашему коду не понять, что именно не так с доступом.
+    """
+    err = err or {}
+    try:
+        number = int(err.get("error_code"))
+    except (TypeError, ValueError):
+        number = None
+    title = str(err.get("error_string") or "").strip()
+    detail = str(err.get("error_detail") or "").strip()
+    if number is None:
+        text = title
+    else:
+        text = f"{title} (ошибка {number})" if title else f"Ошибка {number}"
+    if detail and detail != title:
+        text = f"{text}. {detail}" if text else detail
+    if not text and status_code >= 400:
+        text = f"HTTP {status_code}"
+    # «;» и «|» разделяют части строки статуса синка.
+    text = text.replace(";", ",").replace("|", "/")
+    code = "direct-denied" if number in DIRECT_DENIED_CODES else "direct"
+    return f"{code}|{text}" if text else code
 
 
 def yandex_configured() -> bool:
@@ -490,7 +520,7 @@ def fetch_metrika_counters(access_token: str) -> list[dict]:
 
 
 def fetch_direct_clients(access_token: str) -> tuple[list[dict], str]:
-    """Возвращает (клиенты, код_ошибки_или_пусто)."""
+    """Возвращает (клиенты, ошибка_или_пусто) — ошибка в формате ``direct_sync_error``."""
     headers = direct_api.headers(access_token)
     body = {
         "method": "get",
@@ -500,25 +530,24 @@ def fetch_direct_clients(access_token: str) -> tuple[list[dict], str]:
         },
     }
     clients: list[dict] = []
-    last_error = ""
+    # Показываем ошибку clients.get: agencyclients.get у обычного рекламодателя падает всегда.
+    first_error = ""
     for url in (direct_api.v5_url(access_token, "clients"), direct_api.v5_url(access_token, "agencyclients")):
         try:
             with httpx.Client(timeout=30.0) as client:
                 response = client.post(url, headers=headers, json=body)
         except httpx.HTTPError as exc:
             log.warning("Директ %s: %s", url, exc)
-            last_error = "direct"
+            first_error = first_error or "direct"
             continue
-        if response.status_code >= 400:
-            log.warning("Директ отказ %s: %s %s", url, response.status_code, response.text[:300])
-            last_error = "direct"
-            continue
-        payload = response.json()
-        if payload.get("error"):
-            err = payload.get("error") or {}
-            code = str(err.get("error_code") or err.get("error_string") or "direct")
-            log.info("Директ error %s: %s", url, err)
-            last_error = "direct-denied" if "58" in str(code) or "access" in str(err).lower() else "direct"
+        try:
+            payload = response.json() if response.content else {}
+        except ValueError:
+            payload = {}
+        err = payload.get("error") if isinstance(payload, dict) else None
+        if err or response.status_code >= 400:
+            log.warning("Директ отказ %s: %s %s", url, response.status_code, err or response.text[:300])
+            first_error = first_error or direct_sync_error(err, response.status_code)
             continue
         result = (payload.get("result") or {}).get("Clients") or (payload.get("result") or {}).get(
             "AgencyClients"
@@ -537,7 +566,7 @@ def fetch_direct_clients(access_token: str) -> tuple[list[dict], str]:
             )
         if clients:
             return clients, ""
-    return clients, last_error
+    return clients, first_error
 
 
 def upsert_metrika(user_id: int, connection_id: int, counters: list[dict]) -> tuple[int, list[int]]:

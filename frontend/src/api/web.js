@@ -420,7 +420,10 @@ export function errorText(err) {
 
 const ERROR_SOURCES = { metrika: 'Метрика', direct: 'Директ' }
 
-/** Код ошибки из БД или составная строка синка «metrika:код;direct:код» → текст для человека. */
+/**
+ * Код ошибки из БД или составная строка синка «metrika:код;direct:код|ответ Директа» → текст для человека.
+ * Есть ответ Директа — показываем его: в нём причина точнее нашего общего текста.
+ */
 export function errorDetail(text) {
   if (!text) return ''
   if (ERRORS[text]) return ERRORS[text]
@@ -428,9 +431,9 @@ export function errorDetail(text) {
     .split(';')
     .map((part) => {
       const piece = part.trim()
-      const m = /^(metrika|direct):(.+)$/.exec(piece)
+      const m = /^(metrika|direct):([^|]+)(?:\|(.+))?$/.exec(piece)
       if (!m) return ERRORS[piece] || piece
-      return `${ERROR_SOURCES[m[1]]}: ${(ERRORS[m[2]] || m[2]).replace(/\.$/, '')}`
+      return `${ERROR_SOURCES[m[1]]}: ${(m[3] || ERRORS[m[2]] || m[2]).replace(/\.$/, '')}`
     })
     .join('; ')
 }
