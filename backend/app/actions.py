@@ -1270,10 +1270,37 @@ _COPYABLE_OPTIONS = {
 _GROUP_TYPES = {"TEXT_AD_GROUP", "UNIFIED_AD_GROUP"}
 
 
+def _strategy_for_add(strategy: dict | None) -> dict:
+    """campaigns.get отдаёт поля, которые campaigns.add не принимает.
+
+    BudgetType в ответе get говорит, недельный бюджет или бюджет периода.
+    В add этого поля нет: тип задаётся тем, какое поле передано — WeeklySpendLimit
+    или CustomPeriodBudget, но не оба. ExplorationBudget с признаком «не свой»
+    add отклоняет: бюджет по умолчанию Директ проставит сам.
+    """
+    out = _clean(strategy or {})
+    for side in ("Search", "Network"):
+        part = out.get(side)
+        if not isinstance(part, dict):
+            continue
+        for block in part.values():
+            if not isinstance(block, dict):
+                continue
+            kind = block.pop("BudgetType", None)
+            if kind == "WEEKLY_BUDGET":
+                block.pop("CustomPeriodBudget", None)
+            elif kind == "CUSTOM_PERIOD_BUDGET":
+                block.pop("WeeklySpendLimit", None)
+            explore = block.get("ExplorationBudget")
+            if isinstance(explore, dict) and explore.get("IsMinimumExplorationBudgetCustom") != "YES":
+                block.pop("ExplorationBudget", None)
+    return _clean(out)
+
+
 def _copy_body(item: dict, ctype: str, *, name: str, counter_id: int | None) -> tuple[dict, bool]:
     block_name = _TYPE_BLOCK[ctype]
     src = item.get(block_name) or {}
-    strategy = _clean(src.get("BiddingStrategy") or {})
+    strategy = _strategy_for_add(src.get("BiddingStrategy"))
     flat = strategy_from_api(strategy)
     today = date.today()
     start = max(_date(item.get("StartDate"), "дата начала") or today, today)
