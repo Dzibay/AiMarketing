@@ -129,13 +129,31 @@
               </details>
             </div>
 
+            <template v-for="a in item.asks" :key="a.key">
+              <AiPlanCard
+                v-if="a.tool === 'propose_plan'"
+                :action="a"
+                :progress="planProgress(a)"
+                :disabled="deciding || status === 'running'"
+                @submit="respond(() => aiApi.plan(a.id, $event))"
+              />
+              <AiQuestionsCard
+                v-else
+                :action="a"
+                :disabled="deciding || status === 'running'"
+                @submit="respond(() => aiApi.answer(a.id, $event))"
+              />
+            </template>
+
             <div v-for="a in item.writes" :key="a.key" class="action-card" :class="`is-${a.status}`">
               <div class="action-card__head">
                 <strong>{{ a.label }}</strong>
                 <span class="chip" :class="STATUS_CHIPS[a.status]">{{ STATUS_LABELS[a.status] || a.status }}</span>
+                <span v-if="a.plan_step" class="chip">шаг {{ a.plan_step }} плана</span>
                 <span v-if="a.auto" class="chip">без согласования</span>
               </div>
               <p class="action-card__summary">{{ a.summary }}</p>
+              <AiChanges v-if="a.changes?.length" :changes="a.changes" />
               <p v-if="a.reason" class="hint">Зачем: {{ a.reason }}</p>
               <p v-if="a.categories?.length" class="action-card__cats">
                 <span v-for="c in a.categories" :key="c.id" class="chip">{{ c.label }}</span>
@@ -168,8 +186,8 @@
         <p v-if="status === 'error' && chat?.error" class="notice notice--warn">{{ chat.error }}</p>
       </div>
 
-      <div v-if="pendingActions.length > 1" class="chat__pending">
-        <span>Ждут решения: {{ pendingActions.length }}</span>
+      <div v-if="pendingWrites.length > 1" class="chat__pending">
+        <span>Ждут решения: {{ pendingWrites.length }}</span>
         <button class="btn btn--accent" type="button" :disabled="deciding" @click="decideAll(true)">Выполнить все</button>
         <button class="btn btn--ghost" type="button" :disabled="deciding" @click="decideAll(false)">Отклонить все</button>
       </div>
@@ -200,6 +218,9 @@ import { aiApi, errorText, wsApi } from '../../api/web'
 import { pushToast } from '../../composables/useToasts'
 import { formatDateTime } from '../../utils/format'
 import { renderMarkdown } from '../../utils/markdown'
+import AiChanges from './AiChanges.vue'
+import AiPlanCard from './AiPlanCard.vue'
+import AiQuestionsCard from './AiQuestionsCard.vue'
 import { useWs } from './context'
 
 const POLL_MS = 1500
@@ -217,6 +238,7 @@ const STATUS_LABELS = {
   error: 'ошибка',
 }
 const STATUS_CHIPS = { pending: 'chip--warning', done: 'chip--ok', error: 'chip--bad' }
+const STATUS_TONES = { pending: 'tone-warn', done: 'tone-ok', error: 'tone-bad' }
 
 const route = useRoute()
 const router = useRouter()
@@ -246,6 +268,10 @@ const status = computed(() => chat.value?.status || 'idle')
 const access = computed(() => ws.value.ai_access || { full_access: false, categories: {}, max_change_pct: 30 })
 const actions = computed(() => (chat.value ? data.value.actions : []))
 const pendingActions = computed(() => actions.value.filter((a) => a.status === 'pending'))
+// Вопросы и план закрываются ответом в своей карточке, а не кнопками «Выполнить / Отклонить все».
+const pendingWrites = computed(() => pendingActions.value.filter((a) => a.kind !== 'ask'))
+const pendingAsks = computed(() => pendingActions.value.filter((a) => a.kind === 'ask'))
+const plans = computed(() => actions.value.filter((a) => a.tool === 'propose_plan'))
 
 const accessText = computed(() => {
   const a = access.value
@@ -258,7 +284,12 @@ const accessText = computed(() => {
 const placeholder = computed(() => {
   if (!aiConfigured.value) return 'Сначала подключите ИИ в настройках аккаунта'
   if (status.value === 'running') return 'ИИ отвечает…'
-  if (pendingActions.value.length) return 'Новое сообщение отклонит действия, которые ждут решения'
+  if (pendingAsks.value.length) {
+    return pendingWrites.value.length
+      ? 'Ответьте в карточке или напишите своими словами; действия, которые ждут решения, будут отклонены'
+      : 'Ответьте в карточке или напишите своими словами'
+  }
+  if (pendingWrites.value.length) return 'Новое сообщение отклонит действия, которые ждут решения'
   return 'Задача для ИИ: проанализировать, найти проблемы, создать, поправить… (Enter — отправить, Shift+Enter — новая строка)'
 })
 const canSend = computed(
@@ -296,7 +327,7 @@ function toolError(content) {
   }
 }
 
-/** Ход за ходом: реплики пользователя, ответы ИИ с шагами чтения и карточками действий. */
+/** Ход за ходом: реплики пользователя, ответы ИИ с шагами чтения, вопросами, планом и карточками действий. */
 const items = computed(() => {
   if (!chat.value) return []
   const results = new Map()
@@ -307,13 +338,18 @@ const items = computed(() => {
     if (m.role === 'user') out.push({ key: `m${m.id}`, role: 'user', content: m.content })
     if (m.role !== 'assistant') continue
     const reads = []
+    const asks = []
     const writes = []
     for (const call of m.tool_calls || []) {
       const raw = results.get(call.id)
-      if (call.write) {
+      // Вопросы без карточки (на всё уже ответили или ошибка в аргументах) — обычный шаг с ответом.
+      if (call.kind === 'ask' && byCall.has(call.id)) {
+        const action = byCall.get(call.id)
+        asks.push({ ...action, key: `a${action.id}` })
+      } else if (call.write) {
         const action = byCall.get(call.id)
         if (action) {
-          const { reason: _reason, ...argsShown } = action.args || {}
+          const { reason: _reason, plan_step: _step, ...argsShown } = action.args || {}
           writes.push({ ...action, key: `a${action.id}`, argsShown })
         } else {
           // Подготовка не прошла (ошибка в аргументах) — ответ инструмента вместо карточки.
@@ -331,10 +367,28 @@ const items = computed(() => {
         reads.push({ id: call.id, label: call.label, args: call.args, result: parsed?.text ?? null, failed: parsed?.failed })
       }
     }
-    if (m.content || reads.length || writes.length) out.push({ key: `m${m.id}`, role: 'assistant', content: m.content, reads, writes })
+    if (m.content || reads.length || asks.length || writes.length) {
+      out.push({ key: `m${m.id}`, role: 'assistant', content: m.content, reads, asks, writes })
+    }
   }
   return out
 })
+
+/** Действия ИИ по шагам плана: с номером шага, после этого плана и до следующего. */
+function planProgress(plan) {
+  const next = plans.value.find((p) => p.id > plan.id)
+  const out = {}
+  for (const a of actions.value) {
+    if (a.kind !== 'write' || a.plan_step == null || a.id < plan.id || (next && a.id > next.id)) continue
+    ;(out[a.plan_step] ||= []).push({
+      id: a.id,
+      label: a.label,
+      status: STATUS_LABELS[a.status] || a.status,
+      tone: STATUS_TONES[a.status] || '',
+    })
+  }
+  return out
+}
 
 function hasArgs(args) {
   return args && typeof args === 'object' && Object.keys(args).length > 0
@@ -478,6 +532,21 @@ async function decide(action, approve) {
   try {
     await aiApi.decide(action.id, approve, rememberIt)
     if (rememberIt) reloadWs()
+    await loadChat(chatId.value)
+  } catch (err) {
+    pushToast(errorText(err), 'error')
+    loadChat(chatId.value, true)
+  } finally {
+    deciding.value = false
+  }
+}
+
+/** Ответ в карточке вопросов или плана; когда решать больше нечего, ИИ продолжает. */
+async function respond(request) {
+  deciding.value = true
+  try {
+    await request()
+    stickToBottom = true
     await loadChat(chatId.value)
   } catch (err) {
     pushToast(errorText(err), 'error')

@@ -135,8 +135,8 @@ def test_restart_reports_failed_pause(direct):
 
 def test_every_tool_has_schema_and_label():
     schemas = {tool["function"]["name"] for tool in ai_agent.TOOLS}
-    assert schemas == set(ai_agent.READ_TOOLS) | set(ai_agent.WRITE_TOOLS)
-    assert set(ai_agent.WRITE_TOOLS) <= set(ai_agent.TOOL_LABELS)
+    assert schemas == set(ai_agent.READ_TOOLS) | set(ai_agent.WRITE_TOOLS) | set(ai_agent.ASK_TOOLS)
+    assert set(ai_agent.WRITE_TOOLS) | set(ai_agent.ASK_TOOLS) <= set(ai_agent.TOOL_LABELS)
 
 
 @pytest.fixture

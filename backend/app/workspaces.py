@@ -439,15 +439,18 @@ def _edit_facts(user_id: int, workspace_id: int, edit) -> list[dict]:
     return facts
 
 
+def remember_ai_facts(user_id: int, workspace_id: int, items: list[dict]) -> list[dict]:
+    """Запомнить ответы маркетолога разом: [{key, question, answer}]; тот же key заменяет прежний ответ."""
+    at = datetime.now(timezone.utc).isoformat()
+    new = {f["key"]: {**f, "at": at} for f in normalize_ai_facts(items)}
+    if not new:
+        raise YandexError("args", "Нужны key и answer")
+    return _edit_facts(user_id, workspace_id, lambda facts: [*(f for f in facts if f["key"] not in new), *new.values()])
+
+
 def remember_ai_fact(user_id: int, workspace_id: int, *, key: str, question: str, answer: str) -> list[dict]:
     """Запомнить ответ маркетолога; тот же key заменяет прежний ответ."""
-    key = fact_key(key)
-    answer = (answer or "").strip()
-    if not key or not answer:
-        raise YandexError("args", "Нужны key и answer")
-    fact = normalize_ai_facts([{"key": key, "question": question, "answer": answer}])[0]
-    fact["at"] = datetime.now(timezone.utc).isoformat()
-    return _edit_facts(user_id, workspace_id, lambda facts: [*(f for f in facts if f["key"] != key), fact])
+    return remember_ai_facts(user_id, workspace_id, [{"key": key, "question": question, "answer": answer}])
 
 
 def forget_ai_fact(user_id: int, workspace_id: int, key: str) -> dict:

@@ -3462,6 +3462,197 @@ body.has-modal {
   color: var(--muted);
 }
 
+/* «Было → станет» в карточке действия ИИ */
+.ai-changes {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+}
+
+.ai-changes th,
+.ai-changes td {
+  padding: 0.35rem 0.5rem;
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+  vertical-align: top;
+  overflow-wrap: anywhere;
+}
+
+.ai-changes th {
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.ai-changes__before {
+  color: var(--muted);
+}
+
+.ai-changes__after {
+  font-weight: 600;
+}
+
+.ai-changes__after.is-fail {
+  color: var(--danger);
+  font-weight: 400;
+}
+
+.ai-changes__more {
+  color: var(--muted);
+  font-style: italic;
+}
+
+/* Вопросы и план ИИ: ждут ответа маркетолога в карточке */
+.action-card.ai-ask.is-pending {
+  border-left-color: var(--accent);
+}
+
+.ai-ask__lead {
+  margin: 0;
+  line-height: 1.45;
+  white-space: pre-line;
+}
+
+.ai-ask__list {
+  display: grid;
+  gap: 0.4rem;
+  margin: 0;
+  padding-left: 1.1rem;
+  font-size: 0.88rem;
+  line-height: 1.4;
+}
+
+.ai-ask__q {
+  display: block;
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.ai-question {
+  display: grid;
+  gap: 0.45rem;
+  padding-top: 0.6rem;
+  border-top: 1px solid var(--line);
+}
+
+.ai-question__title {
+  margin: 0;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.ai-question__options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+
+.ai-option {
+  appearance: none;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 0.4rem 0.7rem;
+  background: #fff;
+  color: var(--ink);
+  font: inherit;
+  font-size: 0.85rem;
+  text-align: left;
+  cursor: pointer;
+}
+
+.ai-option:hover:not(:disabled) {
+  border-color: var(--ink);
+}
+
+.ai-option.is-on {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent-2);
+  font-weight: 600;
+}
+
+.ai-option:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.ai-input {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 0.5rem 0.65rem;
+  background: #fff;
+  color: var(--ink);
+  font: inherit;
+  font-size: 0.88rem;
+}
+
+.ai-input--area {
+  resize: vertical;
+  line-height: 1.45;
+}
+
+.ai-input:focus {
+  outline: 2px solid rgba(0, 122, 126, 0.28);
+  border-color: var(--accent);
+}
+
+.ai-input:disabled {
+  background: var(--paper);
+  color: var(--muted);
+}
+
+.ai-plan__steps {
+  display: grid;
+  gap: 0.45rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ai-plan__step {
+  display: grid;
+  gap: 0.3rem;
+  padding: 0.55rem 0.7rem;
+  border: 1px solid var(--line);
+  background: var(--paper);
+}
+
+.ai-plan__step.is-off {
+  opacity: 0.6;
+}
+
+.ai-plan__title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.ai-plan__diff {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.5rem;
+  margin: 0;
+  font-size: 0.86rem;
+}
+
+.ai-plan__before {
+  color: var(--muted);
+}
+
+.ai-plan__after {
+  font-weight: 600;
+}
+
+.ai-plan__progress {
+  margin: 0;
+  padding-left: 1.1rem;
+  font-size: 0.82rem;
+}
+
 .chat__pending {
   display: flex;
   flex-wrap: wrap;

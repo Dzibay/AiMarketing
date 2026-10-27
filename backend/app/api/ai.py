@@ -48,6 +48,20 @@ class DecideAllBody(BaseModel):
     approve: bool
 
 
+class AnswerBody(BaseModel):
+    # [{n, selected: [вариант…], text}] — n — номер вопроса в карточке.
+    answers: list[dict] = []
+    comment: str = ""
+    skip: bool = False
+
+
+class PlanBody(BaseModel):
+    approve: bool = True
+    # Номера согласованных шагов плана.
+    steps: list[int] = []
+    comment: str = ""
+
+
 class ReviewBody(BaseModel):
     # Пусто — общий разбор пространства; текст карточки сигнала — разбор по ней.
     prompt: str = ""
@@ -147,3 +161,17 @@ def chat_decide_all(chat_id: int, body: DecideAllBody, user_id: int = Depends(re
 @router.post("/ai/actions/{action_id}/decide")
 def action_decide(action_id: int, body: DecideBody, user_id: int = Depends(require_web_user)) -> dict:
     return _call(ai_agent.decide_action, user_id, action_id, approve=body.approve, remember=body.remember)
+
+
+@router.post("/ai/actions/{action_id}/answer")
+def action_answer(action_id: int, body: AnswerBody, user_id: int = Depends(require_web_user)) -> dict:
+    """Ответы в карточке вопросов ИИ; вопросы с key запоминаются в пространстве."""
+    return _call(ai_agent.answer_questions, user_id, action_id, answers=body.answers, comment=body.comment,
+                 skip=body.skip)
+
+
+@router.post("/ai/actions/{action_id}/plan")
+def action_plan(action_id: int, body: PlanBody, user_id: int = Depends(require_web_user)) -> dict:
+    """Решение по плану ИИ: какие шаги делать."""
+    return _call(ai_agent.decide_plan, user_id, action_id, steps=body.steps, comment=body.comment,
+                 approve=body.approve)

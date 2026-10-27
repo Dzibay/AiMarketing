@@ -153,6 +153,10 @@ export const aiApi = {
   decide: (actionId, approve, remember = false) =>
     post(`/api/web/ai/actions/${actionId}/decide`, { approve, remember }),
   decideAll: (chatId, approve) => post(`/api/web/ai/chats/${chatId}/decide-all`, { approve }),
+  /** Ответы в карточке вопросов ИИ: { answers: [{ n, selected, text }], comment } или { skip: true }. */
+  answer: (actionId, payload) => post(`/api/web/ai/actions/${actionId}/answer`, payload),
+  /** Решение по плану ИИ: { approve, steps: [номера шагов], comment }. */
+  plan: (actionId, payload) => post(`/api/web/ai/actions/${actionId}/plan`, payload),
   /** Чем ИИ может помочь: сигналы считает код без ИИ, бесплатно. */
   signals: (workspaceId) => request(`${WS(workspaceId)}/signals`),
   /** «Разбор»: { prompt?, title?, chat_id? } → { chat, message, job }; без chat_id — новый чат. */
