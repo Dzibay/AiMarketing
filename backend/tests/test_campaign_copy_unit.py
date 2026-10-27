@@ -1,6 +1,7 @@
 """Копия кампании: стратегия и ключевые цели из campaigns.get приводятся к полям campaigns.add."""
 
 import copy
+from datetime import date
 
 import pytest
 
@@ -104,6 +105,40 @@ def test_custom_exploration_budget_is_kept():
     block = _strategy_for_add(raw)["Search"]["MaxProfit"]
     assert block["ExplorationBudget"]["IsMinimumExplorationBudgetCustom"] == "YES"
     assert "BudgetType" not in block
+
+
+def test_copy_start_date_follows_moscow_today(monkeypatch):
+    """Сервер в UTC. Ночью по Москве date.today() ещё вчера, и Директ отвергает StartDate."""
+    monkeypatch.setattr(actions, "today_msk", lambda: date(2026, 10, 28))
+    item = {
+        "StartDate": "2020-01-01",
+        "EndDate": "2026-10-27",
+        "TimeZone": "Europe/Moscow",
+        "TextCampaign": {
+            "BiddingStrategy": {
+                "Search": {
+                    "BiddingStrategyType": "PAY_FOR_CONVERSION_MULTIPLE_GOALS",
+                    "PayForConversionMultipleGoals": {
+                        "BudgetType": "CUSTOM_PERIOD_BUDGET",
+                        "CustomPeriodBudget": {
+                            "SpendLimit": 30_000_000_000,
+                            "StartDate": "2026-10-01",
+                            "EndDate": "2026-10-31",
+                            "AutoContinue": "YES",
+                        },
+                    },
+                },
+                "Network": {"BiddingStrategyType": "SERVING_OFF"},
+            }
+        },
+    }
+    body, _ = _copy_body(item, "TEXT_CAMPAIGN", name="Копия", counter_id=None)
+    assert body["StartDate"] == "2026-10-28"
+    assert "EndDate" not in body
+    period = body["TextCampaign"]["BiddingStrategy"]["Search"]["PayForConversionMultipleGoals"]["CustomPeriodBudget"]
+    assert period["StartDate"] == "2026-10-28"
+    assert period["EndDate"] == "2026-11-27"
+    assert period["SpendLimit"] == 30_000_000_000
 
 
 def test_copy_body_sends_strategy_without_budget_type():

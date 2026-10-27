@@ -6,12 +6,13 @@ import base64
 import json
 import logging
 from collections import defaultdict
-from datetime import date
+from datetime import date, timedelta
 from urllib.parse import urlsplit
 
 import httpx
 
 from app import direct_api
+from app.clock import today_msk
 from app.db import pool
 from app.direct_sync import (
     _money_to_kopecks,
@@ -531,7 +532,7 @@ def create_campaign(user_id: int, *, account_id: int, spec: dict, workspace_id: 
     account = _account_creds(user_id, account_id)
     ws = require_workspace(user_id, workspace_id) if workspace_id else None
 
-    today = date.today()
+    today = today_msk()
     start = max(_date(spec.get("start_date"), "дата начала") or today, today)
     end = _date(spec.get("end_date"), "дата окончания")
     if end and end < start:
@@ -953,7 +954,7 @@ def _previous_settings(token, row: dict, ctype: str, changes: dict) -> dict:
     for key in changes:
         if key == "start_date":
             # Дату начала в прошлом Директ не примет — её не возвращаем.
-            if before.get("start_date") and before["start_date"] >= date.today().isoformat():
+            if before.get("start_date") and before["start_date"] >= today_msk().isoformat():
                 previous["start_date"] = before["start_date"]
         elif key == "end_date":
             previous["end_date"] = before.get("end_date") or ""
@@ -1359,10 +1360,30 @@ def _strategy_for_add(strategy: dict | None) -> dict:
                 block.pop("CustomPeriodBudget", None)
             elif kind == "CUSTOM_PERIOD_BUDGET":
                 block.pop("WeeklySpendLimit", None)
+            period = block.get("CustomPeriodBudget")
+            if isinstance(period, dict):
+                block["CustomPeriodBudget"] = _period_from_today(period)
             explore = block.get("ExplorationBudget")
             if isinstance(explore, dict) and explore.get("IsMinimumExplorationBudgetCustom") != "YES":
                 block.pop("ExplorationBudget", None)
     return _clean(out)
+
+
+def _period_from_today(period: dict) -> dict:
+    """Период бюджета из get часто уже начался. add не принимает StartDate раньше сегодня по Москве.
+
+    Длину периода сохраняем: копия получает такой же срок, но с сегодняшнего дня.
+    """
+    today = today_msk()
+    start = _date(period.get("StartDate"), "начало периода бюджета")
+    if start is None or start >= today:
+        return period
+    shifted = dict(period)
+    shifted["StartDate"] = today.isoformat()
+    end = _date(period.get("EndDate"), "конец периода бюджета")
+    if end is not None:
+        shifted["EndDate"] = (today + timedelta(days=max(0, (end - start).days))).isoformat()
+    return shifted
 
 
 # Стратегии с долей рекламных расходов: только у них ценность ключевой цели может браться из Метрики.
@@ -1396,7 +1417,7 @@ def _copy_body(
     src = item.get(block_name) or {}
     strategy = _strategy_for_add(src.get("BiddingStrategy"))
     flat = strategy_from_api(strategy)
-    today = date.today()
+    today = today_msk()
     start = max(_date(item.get("StartDate"), "дата начала") or today, today)
     body: dict = {"Name": name, "StartDate": start.isoformat(), "TimeZone": item.get("TimeZone") or "Europe/Moscow"}
     end = _date(item.get("EndDate"), "дата окончания")
