@@ -21,7 +21,7 @@ from app.direct_sync import (
     update_campaign_local_state,
 )
 from app.journal import ACTION_TITLES, _workspace_for, journal_quiet, log_action
-from app.strategy_info import priority_goals_from_api
+from app.strategy_info import priority_goals_from_api, uses_priority_goals
 from app.yandex import YandexError, get_connection_access_token
 
 log = logging.getLogger("app.actions")
@@ -492,15 +492,22 @@ def _counter_list(values) -> list[int]:
 
 
 def _priority_goals(values) -> list[dict]:
+    """Ключевые цели из формы или ИИ → PriorityGoals. Пустая ценность — 0: цель без ценности тоже ключевая."""
     out = []
     for item in values or []:
         try:
             goal_id = int(item.get("goal_id"))
-            value = float(item.get("value_rub") or 0)
         except (TypeError, ValueError, AttributeError):
+            continue  # строка без выбранной цели
+        if goal_id <= 0:
             continue
-        if goal_id > 0 and value > 0:
-            out.append({"GoalId": goal_id, "Value": _micros(value)})
+        try:
+            value = _micros(item.get("value_rub") or 0)
+        except (TypeError, ValueError, OverflowError):
+            value = -1
+        if value < 0:
+            raise YandexError("goals", f"Ценность цели {goal_id} — число не меньше 0")
+        out.append({"GoalId": goal_id, "Value": value})
     return out
 
 
@@ -1358,6 +1365,30 @@ def _strategy_for_add(strategy: dict | None) -> dict:
     return _clean(out)
 
 
+# Стратегии с долей рекламных расходов: только у них ценность ключевой цели может браться из Метрики.
+_CRR_STRATEGIES = {"AVERAGE_CRR", "PAY_FOR_CONVERSION_CRR"}
+
+
+def _goals_for_add(raw, strategy: dict) -> list[dict]:
+    """Ключевые цели из campaigns.get — все, и с нулевой ценностью: без них стратегия по целям не создаётся.
+
+    Признак «ценность из Метрики» add требует у стратегий с долей расходов, а у остальных YES отклоняет.
+    """
+    crr = any((strategy.get(s) or {}).get("BiddingStrategyType") in _CRR_STRATEGIES for s in ("Search", "Network"))
+    out = []
+    for item in ((raw or {}).get("Items")) or []:
+        try:
+            goal = {"GoalId": int(item["GoalId"]), "Value": int(item.get("Value") or 0)}
+        except (KeyError, TypeError, ValueError, AttributeError):
+            continue
+        if goal["GoalId"] <= 0:
+            continue
+        if crr:
+            goal["IsMetrikaSourceOfValue"] = "YES" if item.get("IsMetrikaSourceOfValue") == "YES" else "NO"
+        out.append(goal)
+    return out
+
+
 def _copy_body(
     item: dict, ctype: str, *, name: str, counter_id: int | None, same_account: bool = False
 ) -> tuple[dict, bool]:
@@ -1404,11 +1435,7 @@ def _copy_body(
     }
     if counters:
         block["CounterIds"] = {"Items": counters}
-    goals = [
-        {"GoalId": int(g["GoalId"]), "Value": int(g["Value"])}
-        for g in ((src.get("PriorityGoals") or {}).get("Items")) or []
-        if g.get("GoalId") and g.get("Value")
-    ]
+    goals = _goals_for_add(src.get("PriorityGoals"), strategy)
     if goals:
         block["PriorityGoals"] = {"Items": goals}
     attribution = attribution_for_api(src.get("AttributionModel"))
@@ -1428,13 +1455,22 @@ def _add_copy(token, client_login: str, body: dict, block_name: str, warnings: l
     try:
         return _added_id(_call_campaigns(token, client_login, "add", {"Campaigns": [body]}))
     except YandexError as exc:
-        # Частая причина — опция или ключевые цели, недоступные в другом кабинете: пробуем проще.
         block = body[block_name]
-        if not (block.get("Settings") or block.get("PriorityGoals")):
-            raise
+        log.warning(
+            "копия кампании не создана: %s; %s",
+            exc.message or exc.code,
+            json.dumps(block, ensure_ascii=False, default=str)[:4000],
+        )
+        # Частая причина — опция или ключевые цели, недоступные в другом кабинете: пробуем проще.
+        # Цели, на которых держится стратегия, не снимаем: без них Директ не примет и её саму.
+        settings = [s for s in block.get("Settings") or [] if s["Option"] == "ADD_METRICA_TAG"]
+        drop_goals = "PriorityGoals" in block and not uses_priority_goals(block.get("BiddingStrategy"))
+        if len(settings) == len(block.get("Settings") or []) and not drop_goals:
+            raise  # упрощать нечего — показываем ошибку Директа как есть
         warnings.append(f"Часть настроек не перенесена ({exc.message or exc.code})")
-        block["Settings"] = [s for s in block.get("Settings") or [] if s["Option"] == "ADD_METRICA_TAG"]
-        block.pop("PriorityGoals", None)
+        block["Settings"] = settings
+        if drop_goals:
+            block.pop("PriorityGoals")
         return _added_id(_call_campaigns(token, client_login, "add", {"Campaigns": [body]}))
 
 

@@ -156,6 +156,7 @@ import ScheduleGrid from '../../components/ScheduleGrid.vue'
 import StrategyFields from '../../components/StrategyFields.vue'
 import { errorText, webApi, wsApi } from '../../api/web'
 import { pushToast } from '../../composables/useToasts'
+import { priorityGoalsForApi } from '../../utils/format'
 
 const props = defineProps({
   workspace: { type: Object, required: true },
@@ -260,8 +261,9 @@ const changes = computed(() => {
     out.daily_budget_rub = form.daily_budget_rub === '' ? 0 : Number(form.daily_budget_rub)
   }
   if (form.attribution_model && form.attribution_model !== b.attribution_model) out.attribution_model = form.attribution_model
-  const goals = form.priority_goals.filter((g) => g.goal_id && g.value_rub > 0)
-  if (!same(goals, b.priority_goals.filter((g) => g.goal_id && g.value_rub > 0))) out.priority_goals = goals
+  // Цели уходят в Директ целиком (SET): цель без ценности, выпавшая из списка, удалилась бы из кампании.
+  const goals = priorityGoalsForApi(form.priority_goals)
+  if (!same(goals, priorityGoalsForApi(b.priority_goals))) out.priority_goals = goals
   if (!same(counterIds(), original.value.counter_ids || [])) out.counter_ids = counterIds()
   if (!same(form.schedule, b.schedule) || form.consider_working_weekends !== b.consider_working_weekends) {
     out.schedule = form.schedule || 'always'

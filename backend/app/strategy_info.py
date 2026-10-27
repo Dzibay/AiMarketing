@@ -33,6 +33,9 @@ STRATEGY_LABELS = {
 
 # Служебные цели стратегий Директа — не цели Метрики: в отчёт по целям их не передать.
 SPECIAL_GOALS = {0: "все цели", 12: "вовлечённые сессии", 13: "ключевые цели кампании"}
+KEY_GOALS_GOAL_ID = 13
+# Стратегии, которые оптимизируют сразу по набору ключевых целей кампании (PriorityGoals).
+MULTI_GOAL_STRATEGIES = frozenset({"AVERAGE_CPA_MULTIPLE_GOALS", "PAY_FOR_CONVERSION_MULTIPLE_GOALS", "MAX_PROFIT"})
 # У целей Метрики номера длинные; короткие — служебные цели Директа.
 _MIN_METRIKA_GOAL_ID = 1000
 
@@ -150,6 +153,21 @@ def priority_goals_from_api(raw) -> list[dict]:
         out.append({"goal_id": goal_id, "value_rub": micros_to_rub(item.get("Value"))})
     out.sort(key=lambda g: g["goal_id"])
     return out
+
+
+def uses_priority_goals(bidding: dict | None) -> bool:
+    """Стратегия держится на ключевых целях кампании: GoalId 13 или стратегия по нескольким целям.
+
+    Без PriorityGoals с целью, отличной от вовлечённых сессий, Директ такую стратегию не примет.
+    """
+    for side in ("Search", "Network"):
+        part = (bidding or {}).get(side) or {}
+        if part.get("BiddingStrategyType") in MULTI_GOAL_STRATEGIES:
+            return True
+        for block in part.values():
+            if isinstance(block, dict) and str(block.get("GoalId")) == str(KEY_GOALS_GOAL_ID):
+                return True
+    return False
 
 
 def campaign_goal_ids(bidding: dict | None, priority_goals: list[dict] | None) -> list[int]:

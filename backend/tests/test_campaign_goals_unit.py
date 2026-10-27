@@ -2,6 +2,9 @@
 
 from datetime import date
 
+import pytest
+
+from app.actions import _priority_goals
 from app.direct_sync import _changes
 from app.stats import goal_columns, parse_goal_day_rows
 from app.strategy_info import (
@@ -11,7 +14,9 @@ from app.strategy_info import (
     micros_to_rub,
     priority_goals_from_api,
     strategy_brief,
+    uses_priority_goals,
 )
+from app.yandex import YandexError
 
 ORDER, CALL = 5001, 5002
 
@@ -74,6 +79,41 @@ def test_priority_goals_and_campaign_goal_ids():
     assert campaign_goal_ids(pay_for(CALL), goals) == [CALL, ORDER]
     # Служебные цели Директа (0, 12, 13) — не цели Метрики: в отчёт по целям их не передать.
     assert campaign_goal_ids(pay_for(13), [{"goal_id": 12}]) == []
+
+
+def test_uses_priority_goals():
+    """Стратегии, которые Директ не создаст без ключевых целей кампании."""
+    max_conv = {"BiddingStrategyType": "WB_MAXIMUM_CONVERSION_RATE", "WbMaximumConversionRate": {"GoalId": 13}}
+    assert uses_priority_goals({"Search": max_conv, "Network": {"BiddingStrategyType": "NETWORK_DEFAULT"}})
+    assert uses_priority_goals({"Search": {"BiddingStrategyType": "SERVING_OFF"},
+                                "Network": {"BiddingStrategyType": "AVERAGE_CPA", "AverageCpa": {"GoalId": "13"}}})
+    multi = {"BiddingStrategyType": "PAY_FOR_CONVERSION_MULTIPLE_GOALS", "PayForConversionMultipleGoals": {}}
+    assert uses_priority_goals({"Search": multi, "Network": {"BiddingStrategyType": "SERVING_OFF"}})
+    assert not uses_priority_goals(pay_for(ORDER))
+    assert not uses_priority_goals({"Search": {"BiddingStrategyType": "HIGHEST_POSITION"}})
+    assert not uses_priority_goals(None)
+
+
+def test_priority_goals_keep_goals_without_value():
+    """Цель без ценности — тоже ключевая: её выбрасывали, и сохранение настроек удаляло её из кампании в Директе."""
+    rows = [
+        {"goal_id": ORDER, "value_rub": 300},
+        {"goal_id": str(CALL), "value_rub": None},
+        {"goal_id": 5003, "value_rub": ""},
+        {"goal_id": 5004, "value_rub": 0},
+        {"goal_id": None, "value_rub": 100},  # строка формы без выбранной цели
+    ]
+    assert _priority_goals(rows) == [
+        {"GoalId": ORDER, "Value": 300_000_000},
+        {"GoalId": CALL, "Value": 0},
+        {"GoalId": 5003, "Value": 0},
+        {"GoalId": 5004, "Value": 0},
+    ]
+    assert _priority_goals(None) == []
+    for bad in (-1, "много"):
+        with pytest.raises(YandexError) as err:
+            _priority_goals([{"goal_id": ORDER, "value_rub": bad}])
+        assert err.value.code == "goals"
 
 
 def test_goal_label():

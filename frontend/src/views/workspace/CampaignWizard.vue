@@ -260,7 +260,7 @@ import Modal from '../../components/ui/Modal.vue'
 import ScheduleGrid from '../../components/ScheduleGrid.vue'
 import StrategyFields from '../../components/StrategyFields.vue'
 import { errorText, wsApi } from '../../api/web'
-import { formatDate, isoDay } from '../../utils/format'
+import { formatDate, isoDay, priorityGoalsForApi } from '../../utils/format'
 
 const props = defineProps({
   open: { type: Boolean, default: false },
@@ -438,7 +438,7 @@ function buildSpec() {
     settings: { ...form.settings },
     attribution_model: form.attribution_model || undefined,
     tracking_params: form.tracking_params || undefined,
-    priority_goals: form.priority_goals.filter((g) => g.goal_id && g.value_rub > 0),
+    priority_goals: priorityGoalsForApi(form.priority_goals),
   }
   if (dailyBudget.value && form.daily_budget_rub !== '') spec.daily_budget_rub = Number(form.daily_budget_rub)
   if (form.with_group) {
