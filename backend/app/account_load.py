@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import logging
+from collections import Counter
 from collections.abc import Callable
 from datetime import date, datetime, timedelta, timezone
 
@@ -17,7 +18,7 @@ from psycopg.types.json import Jsonb
 
 from app import direct_api
 from app.adgroups import ADGROUP_FIELDS, parse_adgroups, upsert_adgroups
-from app.ads import AD_FIELDS, TEXT_AD_FIELDS, parse_ads, upsert_ads
+from app.ads import AD_GET_FIELDS, parse_ads, upsert_ads
 from app.clock import today_msk, yesterday_msk
 from app.db import pool
 from app.direct_reports import fetch_report
@@ -26,7 +27,15 @@ from app.entity_stats import _agg_metrics, write_account_period_stats
 from app.keywords import KEYWORD_FIELDS, parse_keywords, upsert_keywords
 from app.metrika_sync import canonical_counters, sync_counter_goals, sync_counter_stats_range
 from app.search_queries import aggregate_query_rows, upsert_search_queries
-from app.stats import parse_campaign_day_rows, replace_direct_stats, set_account_stats_status
+from app.stats import (
+    goal_columns,
+    parse_campaign_day_rows,
+    parse_goal_day_rows,
+    replace_direct_goal_stats,
+    replace_direct_stats,
+    set_account_stats_status,
+)
+from app.strategy_info import is_metrika_goal, strategy_brief
 from app.yandex import YandexError, get_connection_access_token
 
 log = logging.getLogger("app.account_load")
@@ -44,6 +53,9 @@ STAGE_TITLES = {
 }
 HISTORY_DAYS = 30
 REFRESH_STATS_DAYS = 7
+# Отчёт по целям: Директ принимает до 10 целей за запрос; больше двух запросов не делаем.
+REPORT_GOALS = 10
+MAX_REPORT_GOALS = 20
 # adgroups.get, ads.get и keywords.get принимают до 10 кампаний.
 STRUCTURE_CHUNK = 10
 STRUCTURE_EVERY = timedelta(hours=24)
@@ -306,7 +318,7 @@ class _AccountLoad:
                 self.token,
                 self.login,
                 "ads",
-                {**selection, "FieldNames": AD_FIELDS, "TextAdFieldNames": TEXT_AD_FIELDS},
+                {**selection, **AD_GET_FIELDS},
                 "Ads",
             )
         )
@@ -371,7 +383,76 @@ class _AccountLoad:
         rows = parse_campaign_day_rows(raw)
         replace_direct_stats(self.user_id, self.account_id, date_from, date_to, rows)
         set_account_stats_status(self.account_id, "")
-        self.finish("stats", count=len(rows), date_from=date_from.isoformat(), date_to=date_to.isoformat())
+        goals = self._goal_stats(days, date_to)
+        self.finish("stats", count=len(rows), date_from=date_from.isoformat(), date_to=date_to.isoformat(), **goals)
+
+    def _report_goal_ids(self) -> list[int]:
+        """Цели для отчёта по целям: оплачиваемые в стратегиях, ключевые цели кампаний кабинета
+        и цели пространств с его кампаниями. Оплачиваемые — первыми, всего не больше MAX_REPORT_GOALS."""
+        with pool.connection() as conn:
+            campaigns = conn.execute(
+                """
+                SELECT bidding_strategy, priority_goals FROM direct_campaigns
+                WHERE account_id = %s AND user_id = %s AND state <> 'ARCHIVED'
+                """,
+                (self.account_id, self.user_id),
+            ).fetchall()
+            spaces = conn.execute(
+                """
+                SELECT DISTINCT w.goal_id FROM workspaces w
+                JOIN workspace_campaigns wc ON wc.workspace_id = w.id
+                JOIN direct_campaigns c ON c.id = wc.campaign_row_id
+                WHERE c.account_id = %s AND w.goal_id IS NOT NULL
+                """,
+                (self.account_id,),
+            ).fetchall()
+        paid: Counter[int] = Counter()
+        priority: Counter[int] = Counter()
+        for row in campaigns:
+            paid.update(g for g in strategy_brief(row["bidding_strategy"]).get("paid_goal_ids", []) if is_metrika_goal(g))
+            priority.update(int(g["goal_id"]) for g in row["priority_goals"] or [] if is_metrika_goal(g.get("goal_id")))
+        ordered = [
+            *(g for g, _n in paid.most_common()),
+            *(g for g, _n in priority.most_common()),
+            *(int(r["goal_id"]) for r in spaces if is_metrika_goal(r["goal_id"])),
+        ]
+        return list(dict.fromkeys(ordered))[:MAX_REPORT_GOALS]
+
+    def _goal_stats(self, days: int, date_to: date) -> dict:
+        """Конверсии по отдельным целям — по ним видно, за какие конверсии кампания платит, а какие
+        получает бесплатно. Сбой отчёта по целям не ломает этап статистики."""
+        goal_ids = self._report_goal_ids()
+        if not goal_ids:
+            return {"goal_ids": [], "goal_models": [], "goal_error": ""}
+        known = {int(g) for g in self.stage("stats").get("goal_ids") or []}
+        if not set(goal_ids) <= known:
+            days = HISTORY_DAYS  # по новым целям — сразу вся история
+        date_from = yesterday_msk() - timedelta(days=days - 1)
+        self.report("stats", 0, 0, "Конверсии по целям")
+        loaded: list[int] = []
+        models: set[str] = set()
+        error = ""
+        for chunk in direct_api.chunks(goal_ids, REPORT_GOALS):
+            try:
+                raw = fetch_report(
+                    self.token,
+                    self.login,
+                    report_type="CAMPAIGN_PERFORMANCE_REPORT",
+                    field_names=["Date", "CampaignId", "Conversions", "Revenue"],
+                    date_from=date_from,
+                    date_to=date_to,
+                    goals=chunk,
+                )
+            except YandexError as exc:
+                if exc.code in ("units", "token-expired", "unauthorized"):
+                    raise
+                log.warning("отчёт по целям %s %s: %s %s", self.login, chunk, exc.code, exc.message)
+                error = exc.message or exc.code
+                continue
+            models |= {c["model"] for c in goal_columns(raw).values()}
+            replace_direct_goal_stats(self.user_id, self.account_id, date_from, date_to, chunk, parse_goal_day_rows(raw))
+            loaded.extend(chunk)
+        return {"goal_ids": loaded, "goal_models": sorted(models), "goal_error": error[:300]}
 
     def queries(self) -> None:
         date_to = yesterday_msk()

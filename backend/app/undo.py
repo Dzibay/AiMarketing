@@ -113,8 +113,8 @@ def _keyword_bids(user_id: int, args: dict) -> dict:
     applied = 0
     for (client_login, micros), rows in groups.items():
         for chunk in _chunks(rows, 100):
-            _apply_group(user_id, client_login, chunk, "set_bid", micros)
-            applied += len(chunk)
+            ok, _error = _apply_group(user_id, client_login, chunk, "set_bid", micros)
+            applied += len(ok)
     return {"applied": applied, "missing": len(bids) - len(ids)}
 
 
@@ -169,7 +169,7 @@ def _ads_action(user_id: int, args: dict) -> dict:
 def _ad_update(user_id: int, args: dict) -> dict:
     from app.ads import update_text_ad
 
-    fields = {k: args[k] for k in ("title", "title2", "text", "href") if k in args}
+    fields = {k: args[k] for k in ("title", "title2", "text", "href", "titles", "texts") if k in args}
     return update_text_ad(user_id, int(args["ad_row_id"]), **fields)
 
 
@@ -297,7 +297,9 @@ def describe_step(user_id: int, step: dict) -> str:
         verb = _ITEM_VERBS.get(a.get("action"), a.get("action"))
         return f"{verb} объявления: {_names(user_id, 'direct_ads', 'title', a.get('ad_row_ids'))}"
     if op == "ad_update":
-        return "Вернуть прежний текст объявления: " + ", ".join(k for k in ("title", "title2", "text", "href") if k in a)
+        names = {"title": "заголовок", "title2": "доп. заголовок", "text": "текст", "href": "ссылку",
+                 "titles": "заголовки", "texts": "тексты"}
+        return "Вернуть объявлению " + ", ".join(v for k, v in names.items() if k in a)
     if op == "adgroup_update":
         return f"Вернуть название группы: «{a.get('name')}»"
     if op == "adgroups_delete":

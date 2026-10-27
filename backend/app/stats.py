@@ -5,6 +5,7 @@ from __future__ import annotations
 import csv
 import io
 import logging
+import re
 import time
 import uuid
 from collections.abc import Callable
@@ -147,6 +148,90 @@ def replace_direct_stats(user_id: int, account_id: int, date_from: date, date_to
                     )
                     for row in rows
                     if date_from <= row["day"] <= date_to
+                ],
+            )
+    return len(rows)
+
+
+_GOAL_COLUMN = re.compile(r"^(Conversions|Revenue)_(\d+)_([A-Z]+)$")
+
+
+def goal_columns(raw: list[dict]) -> dict[int, dict]:
+    """Столбцы отчёта с Goals: {цель: {"Conversions": столбец, "Revenue": столбец, "model": модель}}.
+    Если Директ вернул несколько моделей атрибуции, берём первую."""
+    out: dict[int, dict] = {}
+    for column in raw[0].keys() if raw else []:
+        match = _GOAL_COLUMN.match(str(column or ""))
+        if not match:
+            continue
+        metric, goal_id, model = match.group(1), int(match.group(2)), match.group(3)
+        entry = out.setdefault(goal_id, {"model": model})
+        if entry["model"] == model:
+            entry[metric] = column
+    return out
+
+
+def parse_goal_day_rows(raw: list[dict]) -> list[dict]:
+    """CAMPAIGN_PERFORMANCE_REPORT с Goals → строки (день, кампания, цель) с конверсиями.
+    Нули не храним: нет строки — нет конверсий по цели в этот день."""
+    columns = goal_columns(raw)
+    merged: dict[tuple[date, int, int], dict] = {}
+    for item in raw:
+        try:
+            day = date.fromisoformat(str(item.get("Date") or "").strip())
+            cid = int(item.get("CampaignId") or 0)
+        except ValueError:
+            continue
+        if not cid:
+            continue
+        for goal_id, cols in columns.items():
+            conversions = _count(item.get(cols.get("Conversions", "")))
+            revenue = _rub_to_kopecks(item.get(cols.get("Revenue", ""))) if cols.get("Revenue") else 0
+            if not conversions and not revenue:
+                continue
+            row = merged.setdefault(
+                (day, cid, goal_id),
+                {"day": day, "campaign_id": cid, "goal_id": goal_id, "conversions": 0, "revenue_kopecks": 0},
+            )
+            row["conversions"] += conversions
+            row["revenue_kopecks"] += max(revenue, 0)
+    return list(merged.values())
+
+
+def replace_direct_goal_stats(
+    user_id: int, account_id: int, date_from: date, date_to: date, goal_ids: list[int], rows: list[dict]
+) -> int:
+    """Конверсии кабинета по целям goal_ids за период целиком; остальные цели не трогаем."""
+    with pool.connection() as conn:
+        conn.execute(
+            """
+            DELETE FROM stats_daily
+            WHERE user_id = %s AND source = 'direct_goal' AND account_id = %s
+              AND day BETWEEN %s AND %s AND goal_id = ANY(%s)
+            """,
+            (user_id, account_id, date_from, date_to, list(goal_ids)),
+        )
+        with conn.cursor() as cur:
+            cur.executemany(
+                """
+                INSERT INTO stats_daily (
+                    user_id, day, source, account_id, campaign_id, goal_id,
+                    conversions, revenue_kopecks, updated_at
+                )
+                VALUES (%s, %s, 'direct_goal', %s, %s, %s, %s, %s, NOW())
+                """,
+                [
+                    (
+                        user_id,
+                        row["day"],
+                        account_id,
+                        row["campaign_id"],
+                        row["goal_id"],
+                        row["conversions"],
+                        row["revenue_kopecks"],
+                    )
+                    for row in rows
+                    if date_from <= row["day"] <= date_to and row["goal_id"] in goal_ids
                 ],
             )
     return len(rows)

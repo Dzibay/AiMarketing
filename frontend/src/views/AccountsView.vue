@@ -35,20 +35,13 @@
           <p>Кабинеты и все их кампании. Источник каждой кампании сохраняется — с ней работаем через её кабинет.</p>
           <YandexConnectButton purpose="connect" mode="direct" label="Добавить аккаунт Директа" return-to="/cabinet/accounts" />
         </article>
-        <article class="connect-card">
+        <article v-if="sandboxAccounts.length" class="connect-card">
           <div class="connect-card__top">
             <span class="connect-card__badge connect-card__badge--sandbox">Песочница</span>
-            <span v-if="sandboxAccounts.length" class="chip">{{ sandboxAccounts.length }}</span>
+            <span class="chip">{{ sandboxAccounts.length }}</span>
           </div>
           <h3>Песочница Директа</h3>
-          <p>Тестовый Директ без денег и показов: попробовать создание кампаний и ИИ-ассистента без риска.</p>
-          <YandexConnectButton
-            purpose="connect"
-            mode="sandbox"
-            label="Подключить песочницу"
-            variant="ghost"
-            return-to="/cabinet/accounts"
-          />
+          <p>Яндекс отключил песочницу API 15.07.2026: эти кабинеты больше не обновляются — подключение можно удалить.</p>
         </article>
       </div>
       <div class="connect-offers__one">

@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import logging
 import math
+import secrets
 from datetime import datetime, timedelta, timezone
 
 from psycopg.types.json import Jsonb
@@ -22,8 +23,10 @@ from app.journal import acting_as, list_action_logs
 from app.query_cleaning import examples_prompt, memory_examples
 from app.workspaces import (
     AI_CATEGORIES,
+    SCHEME_FACT,
     get_workspace,
     normalize_ai_access,
+    normalize_ai_facts,
     require_workspace,
     update_workspace,
     workspace_campaign_row_ids,
@@ -118,6 +121,15 @@ def _float(args: dict, key: str) -> float | None:
         return float(value)
     except (TypeError, ValueError) as exc:
         raise YandexError("args", f"{key} — число") from exc
+
+
+def _bool(args: dict, key: str, default: bool) -> bool:
+    value = args.get(key)
+    if value in (None, ""):
+        return default
+    if isinstance(value, str):
+        return value.strip().lower() not in ("false", "0", "no", "нет")
+    return bool(value)
 
 
 def _phrases(args: dict, key: str = "phrases") -> list[str]:
@@ -401,6 +413,35 @@ def _t_options(ctx: Context, args: dict) -> dict:
     }
 
 
+def _t_signals(ctx: Context, args: dict) -> dict:
+    from app.insights import get_signals, signals_digest
+
+    return {"digest": signals_digest(get_signals(ctx.user_id, ctx.ws_id))}
+
+
+def _t_history(ctx: Context, args: dict) -> dict:
+    from app.insights import campaign_history
+
+    cid = _int(args, "campaign_row_id")
+    ctx.campaign(cid)
+    return campaign_history(ctx.user_id, ctx.ws_id, cid)
+
+
+def _t_remember(ctx: Context, args: dict) -> dict:
+    """Память ассистента, а не изменение в Директе, — выполняется сразу; забыть можно в настройках."""
+    from app.workspaces import remember_ai_fact
+
+    facts = remember_ai_fact(
+        ctx.user_id,
+        ctx.ws_id,
+        key=str(args.get("key") or ""),
+        question=str(args.get("question") or ""),
+        answer=str(args.get("answer") or ""),
+    )
+    ctx.ws["ai_facts"] = facts
+    return {"remembered": True, "facts_total": len(facts)}
+
+
 READ_TOOLS = {
     "get_workspace_summary": _t_summary,
     "get_analytics": _t_analytics,
@@ -412,6 +453,9 @@ READ_TOOLS = {
     "get_structure_tops": _t_tops,
     "list_recent_actions": _t_actions,
     "get_campaign_options": _t_options,
+    "get_signals": _t_signals,
+    "get_campaign_history": _t_history,
+    "remember_fact": _t_remember,
 }
 
 
@@ -634,6 +678,56 @@ def _x_moderate(ctx: Context, args: dict) -> dict:
     return moderate_campaign(ctx.user_id, cid)
 
 
+def _p_restart(ctx: Context, args: dict) -> Plan:
+    row = ctx.campaign(_int(args, "campaign_row_id"))
+    name = str(args.get("name") or "").strip() or f"{row['name']} (копия)"
+    steps = [f"копия «{name}» в том же кабинете", "на модерацию"]
+    if _bool(args, "pause_source", True):
+        steps.append("оригинал на паузу")
+        return Plan(f"Перезапуск «{row['name']}» копией: " + " → ".join(steps), ["campaigns", "pause_resume"])
+    return Plan(f"Перезапуск «{row['name']}» копией: " + " → ".join(steps) + ", оригинал работает", ["campaigns"])
+
+
+def _x_restart(ctx: Context, args: dict) -> dict:
+    """Копия в том же кабинете → модерация → пауза оригинала. Оригинал останавливаем, только если
+    копия собрана целиком и ушла на модерацию, — иначе кампания осталась бы совсем без показов."""
+    from app.actions import bulk_campaign_action, duplicate_campaign, moderate_campaign
+
+    cid = _int(args, "campaign_row_id")
+    ctx.campaign(cid)
+    copy = duplicate_campaign(
+        ctx.user_id, cid, name=str(args.get("name") or "").strip() or None, workspace_id=ctx.ws_id
+    )
+    new = copy["campaign"]
+    out = {
+        "copy": {
+            "campaign_row_id": new["id"],
+            "name": new["name"],
+            "status": copy["status"],
+            "groups": copy["groups"],
+            "keywords": copy["keywords"],
+            "ads": copy["ads"],
+        },
+        "warnings": copy["warnings"],
+        "source_paused": False,
+    }
+    try:
+        out["moderation"] = moderate_campaign(ctx.user_id, new["id"])
+    except YandexError as exc:
+        out["moderation"] = {"status": "error", "error": exc.message or exc.code}
+    if not _bool(args, "pause_source", True):
+        out["note"] = "Оригинал работает — остановите его, когда копия пройдёт модерацию"
+    elif copy["status"] != "ok" or not out["moderation"].get("sent"):
+        out["note"] = "Оригинал не остановлен: копия собрана не полностью или не ушла на модерацию"
+    else:
+        try:
+            bulk_campaign_action(ctx.user_id, campaign_ids=[cid], action="pause", workspace_id=ctx.ws_id)
+            out["source_paused"] = True
+        except YandexError as exc:
+            out["note"] = f"Оригинал не остановлен: {exc.message or exc.code}"
+    return out
+
+
 def _p_create_adgroup(ctx: Context, args: dict) -> Plan:
     row = ctx.campaign(_int(args, "campaign_row_id"))
     name = str(args.get("name") or "").strip()
@@ -733,12 +827,28 @@ def _x_queries_action(ctx: Context, args: dict) -> dict:
     )
 
 
+def _variants(args: dict, key: str) -> list[str] | None:
+    """Список вариантов (titles/texts) из аргументов модели; None — не передан."""
+    value = args.get(key)
+    if value is None:
+        return None
+    if not isinstance(value, list):
+        raise YandexError("args", f"{key} — список строк")
+    return [str(v).strip() for v in value if str(v or "").strip()]
+
+
 def _p_create_ad(ctx: Context, args: dict) -> Plan:
     group = ctx.adgroup(_int(args, "adgroup_row_id"))
-    for key in ("title", "text", "href"):
-        if not str(args.get(key) or "").strip():
-            raise YandexError("args", f"Укажите {key}")
-    return Plan(f"Объявление в группу «{group['name']}»: «{str(args['title']).strip()}» — {str(args['text']).strip()}", ["ads"])
+    titles = _variants(args, "titles") or [str(args.get("title") or "").strip()]
+    texts = _variants(args, "texts") or [str(args.get("text") or "").strip()]
+    if not titles[0]:
+        raise YandexError("args", "Укажите title или titles")
+    if not texts[0]:
+        raise YandexError("args", "Укажите text или texts")
+    if not str(args.get("href") or "").strip():
+        raise YandexError("args", "Укажите href")
+    more = f" (+{len(titles) - 1} заг., +{len(texts) - 1} текст.)" if len(titles) + len(texts) > 2 else ""
+    return Plan(f"Объявление в группу «{group['name']}»: «{titles[0]}» — {texts[0]}{more}", ["ads"])
 
 
 def _x_create_ad(ctx: Context, args: dict) -> dict:
@@ -749,18 +859,26 @@ def _x_create_ad(ctx: Context, args: dict) -> dict:
     return create_text_ad(
         ctx.user_id,
         adgroup_row_id=group_id,
-        title=str(args["title"]),
+        title=str(args.get("title") or ""),
         title2=str(args.get("title2") or ""),
-        text=str(args["text"]),
+        text=str(args.get("text") or ""),
         href=str(args["href"]),
+        titles=_variants(args, "titles"),
+        texts=_variants(args, "texts"),
     )
+
+
+_AD_FIELDS = ("title", "title2", "text", "href", "titles", "texts")
 
 
 def _p_update_ad(ctx: Context, args: dict) -> Plan:
     row = ctx.ads([_int(args, "ad_row_id")])[0]
-    fields = [k for k in ("title", "title2", "text", "href") if args.get(k) is not None]
+    fields = [k for k in _AD_FIELDS if args.get(k) is not None]
     if not fields:
-        raise YandexError("args", "Укажите, что поменять: title, title2, text или href")
+        raise YandexError("args", "Укажите, что поменять: title, title2, text, href, titles или texts")
+    for key in ("titles", "texts"):
+        if args.get(key) is not None and not _variants(args, key):
+            raise YandexError("args", f"{key} не может быть пустым")
     return Plan(f"Правка объявления «{row['title']}»: {', '.join(fields)}", ["ads"])
 
 
@@ -773,6 +891,8 @@ def _x_update_ad(ctx: Context, args: dict) -> dict:
         ctx.user_id,
         ad_id,
         **{k: str(args[k]) for k in ("title", "title2", "text", "href") if args.get(k) is not None},
+        titles=_variants(args, "titles"),
+        texts=_variants(args, "texts"),
     )
 
 
@@ -809,6 +929,7 @@ WRITE_TOOLS = {
     "create_campaign": (_p_create_campaign, _x_create_campaign),
     "duplicate_campaign": (_p_duplicate, _x_duplicate),
     "moderate_campaign": (_p_moderate, _x_moderate),
+    "restart_campaign_copy": (_p_restart, _x_restart),
     "create_adgroup": (_p_create_adgroup, _x_create_adgroup),
     "keywords_action": (_p_keywords_action, _x_keywords_action),
     "add_keywords": (_p_add_keywords, _x_add_keywords),
@@ -829,12 +950,16 @@ TOOL_LABELS = {
     "get_structure_tops": "Топы ключей и групп",
     "list_recent_actions": "Журнал действий",
     "get_campaign_options": "Справочник для кампаний",
+    "get_signals": "Сигналы пространства",
+    "get_campaign_history": "Кампания по дням",
+    "remember_fact": "Запоминаю ответ",
     "campaigns_action": "Действие с кампаниями",
     "update_campaign_settings": "Настройки кампании",
     "add_campaign_negatives": "Минус-фразы кампании",
     "create_campaign": "Новая кампания",
     "duplicate_campaign": "Копия кампании",
     "moderate_campaign": "Модерация",
+    "restart_campaign_copy": "Перезапуск копией",
     "create_adgroup": "Новая группа",
     "keywords_action": "Ключевые фразы",
     "add_keywords": "Новые ключевые фразы",
@@ -914,6 +1039,29 @@ TOOLS = [
         "Справочник для создания кампаний: типы, стратегии и их параметры, кабинеты пространства, цели Метрики.",
     ),
     _fn(
+        "get_signals",
+        "Выжимка за 30 дней: конверсии за 0 ₽ и их механика, затухание показов (день спада и что менялось рядом), "
+        "падения логинов, серии перезапусков копиями, успешные кампании, пробелы в данных. Начинай разбор с неё.",
+    ),
+    _fn(
+        "get_campaign_history",
+        "Кампания по дням за 30 дней: показы, клики, расход, конверсии по целям, затухание и события рядом "
+        "(изменения настроек, действия). Для проверки гипотезы о причине спада.",
+        {"campaign_row_id": _ID},
+        ["campaign_row_id"],
+    ),
+    _fn(
+        "remember_fact",
+        "Запомнить ответ маркетолога о проекте — только то, что он сам сказал или подтвердил. Тот же key "
+        "заменяет прежний ответ. Механика конверсий за 0 ₽ — key zero_cost_scheme.",
+        {
+            "key": {"type": "string", "description": "латиницей, напр. zero_cost_scheme, success_criteria"},
+            "question": {"type": "string", "description": "о чём вопрос, коротко"},
+            "answer": {"type": "string", "description": "ответ маркетолога своими словами, до 1000 символов"},
+        },
+        ["key", "answer"],
+    ),
+    _fn(
         "campaigns_action",
         "Остановить, запустить, сменить дневной бюджет, архивировать или удалить кампании.",
         {
@@ -959,6 +1107,23 @@ TOOLS = [
     ),
     _fn("moderate_campaign", "Отправить кампанию на модерацию.", {"campaign_row_id": _ID, **_REASON}, ["campaign_row_id"]),
     _fn(
+        "restart_campaign_copy",
+        "Перезапуск затухшей кампании копией в том же кабинете: копия со структурой → модерация → оригинал на "
+        "паузу (только если копия собрана целиком и ушла на модерацию). Копия — новая кампания без накопленной "
+        "статистики.",
+        {
+            "campaign_row_id": _ID,
+            "name": {"type": "string", "description": "название копии; по умолчанию «<название> (копия)»"},
+            "pause_source": {
+                "type": "boolean",
+                "description": "остановить оригинал сразу (по умолчанию да); false — оригинал работает, пока копия "
+                "на модерации",
+            },
+            **_REASON,
+        },
+        ["campaign_row_id"],
+    ),
+    _fn(
         "create_adgroup",
         "Создать группу объявлений в кампании.",
         {"campaign_row_id": _ID, "name": {"type": "string"}, "region_ids": _IDS, **_REASON},
@@ -995,25 +1160,31 @@ TOOLS = [
     ),
     _fn(
         "create_text_ad",
-        "Текстовое объявление в группе: title до 56 символов, title2 до 30, text до 81, href.",
+        "Объявление в группе: title до 56 символов, title2 до 30, text до 81, href. В ЕПК объявление "
+        "комбинаторное — можно передать titles (до 7) и texts (до 3) вместо title/text.",
         {
             "adgroup_row_id": _ID,
             "title": {"type": "string"},
             "title2": {"type": "string"},
             "text": {"type": "string"},
+            "titles": {"type": "array", "items": {"type": "string"}},
+            "texts": {"type": "array", "items": {"type": "string"}},
             "href": {"type": "string"},
             **_REASON,
         },
-        ["adgroup_row_id", "title", "text", "href"],
+        ["adgroup_row_id", "href"],
     ),
     _fn(
         "update_text_ad",
-        "Изменить текстовое объявление (только переданные поля).",
+        "Изменить объявление (только переданные поля). У комбинаторного titles/texts заменяют все "
+        "варианты целиком; title/text меняют первый вариант.",
         {
             "ad_row_id": _ID,
             "title": {"type": "string"},
             "title2": {"type": "string"},
             "text": {"type": "string"},
+            "titles": {"type": "array", "items": {"type": "string"}},
+            "texts": {"type": "array", "items": {"type": "string"}},
             "href": {"type": "string"},
             **_REASON,
         },
@@ -1063,11 +1234,34 @@ def _system_prompt(ctx: Context) -> str:
         "- Отвечай по-русски, кратко и по делу. Цифры бери только из инструментов, ничего не выдумывай.",
         "- Для анализа сначала собери данные инструментами, затем дай выводы и конкретные рекомендации списком.",
         "- Суммы в инструментах — в рублях. Кампании называй по имени; id нужны только для вызова инструментов.",
-        "- Меняй что-либо только инструментами действий и только когда пользователь просит действовать. "
-        "Не спрашивай подтверждения текстом: согласование покажет система. В reason коротко объясни зачем.",
+        "- Разбор начинай с get_signals, если выжимки ещё нет в чате: там уже посчитаны конверсии за 0 ₽, "
+        "затухание, перезапуски копиями и успешные кампании. Кампанию по дням — get_campaign_history. "
+        "Сырые таблицы запрашивай, только когда без них не обойтись.",
+        "- Успех кампании — конверсии почти без расхода, много конверсий или высокий CR, либо критерий "
+        "маркетолога из его ответов. CPA ниже KPI — не главный признак. Что работает — предлагай повторить.",
+        "- Отделяй факты из данных от гипотез и говори, чем гипотезу проверить.",
+        "- Чего не хватает для вывода — спроси: коротко, списком, до 3–5 вопросов за раз. Механику схемы и "
+        "причины спадов не придумывай: выведи из данных и сверь вывод с маркетологом. Подтверждённое им сохрани "
+        "через remember_fact — только его ответы и подтверждения, не свои догадки.",
+        "- Предлагай действия сам, когда их подсказывают данные: вызови инструмент действия — пользователь увидит "
+        "карточку «Выполнить / Отклонить». Не спрашивай разрешения текстом. В reason коротко объясни зачем. "
+        "То, что по доступу выполнится без согласования, делай только по просьбе пользователя или по "
+        "согласованному плану.",
+        "- Перед крупной работой (несколько кампаний, новая кампания, перезапуски) сначала опиши план списком "
+        "«что сделаю → зачем» и дождись ответа.",
+        "- Затухшую кампанию, если причина не в балансе, модерации или настройке, которую проще поправить, "
+        "предлагай перезапустить копией — restart_campaign_copy.",
         "- Если действие отклонено, не повторяй его без новой просьбы. Если ошибка — объясни её пользователю.",
         "- Работай только с кампаниями и кабинетами этого пространства.",
     ]
+    facts = normalize_ai_facts(ws.get("ai_facts"))
+    if not any(f["key"] == SCHEME_FACT for f in facts):
+        lines.append(
+            "- Механика конверсий за 0 ₽ ещё не разобрана. Гипотеза для проверки, не факт: кампания платит за "
+            "конверсии по редкой цели, а заявки по другим целям приходят бесплатно; новой кампании Директ даёт "
+            "показы на обучение, а не видя оплачиваемых конверсий — режет их, и копия начинает заново. "
+            f"Подтверждённый маркетологом вывод сохрани с key {SCHEME_FACT}."
+        )
     brief = normalize_brief(ws.get("brief"))
     if brief_filled(brief):
         lines += ["", "Бриф клиента:"]
@@ -1079,6 +1273,9 @@ def _system_prompt(ctx: Context) -> str:
             lines.append("- Точно не наше: " + ", ".join(brief["not_ours"]))
         if brief["notes"]:
             lines.append(f"- Заметки: {brief['notes']}")
+    if facts:
+        lines += ["", "Что маркетолог уже ответил (учитывай, не переспрашивай):"]
+        lines += [f"- {f['question'] or f['key']}: {f['answer']}" for f in facts]
     examples = examples_prompt(memory_examples(ctx.ws_id, 10))
     if examples:
         lines += ["", "Решения маркетолога по поисковым запросам (учитывай их в предложениях минус-фраз):", examples]
@@ -1119,8 +1316,10 @@ def _parse_args(text: str) -> dict:
 def _message_out(row: dict) -> dict:
     calls = row.get("tool_calls") or []
     content = row.get("content") or ""
-    if row["role"] == "tool" and len(content) > 1500:
-        content = content[:1500] + "…"
+    # Выжимку сигналов показываем целиком: пользователь видит ровно то, на чём ИИ строит выводы.
+    limit = TOOL_RESULT_LIMIT if row.get("tool_name") == "get_signals" else 1500
+    if row["role"] == "tool" and len(content) > limit:
+        content = content[:limit] + "…"
     return {
         "id": row["id"],
         "role": row["role"],
@@ -1296,6 +1495,56 @@ def post_message(user_id: int, chat_id: int, text: str) -> dict:
         )
     job = _submit(user_id, chat_id, f"m{message['id']}")
     return {"message": _message_out(message), "job": public_job(job)}
+
+
+REVIEW_PROMPT = "Сделай разбор пространства: что работает, что затухает и почему, что стоит повторить"
+
+
+def start_review(user_id: int, workspace_id: int, *, prompt: str = "", title: str = "", chat_id: int | None = None) -> dict:
+    """«Разбор» по кнопке: сигналы считает код и сразу кладёт в чат ответом get_signals.
+
+    Модель начинает с готовой выжимки — без хода на её запрос и без чтения сырой статистики.
+    Без chat_id создаётся новый чат.
+    """
+    from app.insights import get_signals, signals_digest
+    from app.jobs import public_job
+
+    text = (prompt or "").strip()[:2000] or REVIEW_PROMPT
+    title = (title or "").strip()[:120] or f"Разбор {today_msk():%d.%m}"
+    ai.check_budget(ai.load_config(user_id, "chat"))
+    require_workspace(user_id, workspace_id)
+    digest = signals_digest(get_signals(user_id, workspace_id))
+    # 9 латинских букв и цифр: такой id примут все OpenAI-совместимые провайдеры.
+    call = {"id": "r" + secrets.token_hex(4), "name": "get_signals", "arguments": "{}"}
+    with pool.connection() as conn:
+        if chat_id is None:
+            chat = conn.execute(
+                "INSERT INTO ai_chats (user_id, workspace_id, title) VALUES (%s, %s, %s) RETURNING *",
+                (user_id, workspace_id, title),
+            ).fetchone()
+        else:
+            chat = _require_chat(conn, user_id, chat_id, lock=True)
+            if chat["workspace_id"] != workspace_id:
+                raise YandexError("not-found")
+            if _chat_out(chat)["status"] == "running":
+                raise YandexError("busy", "ИИ ещё отвечает — дождитесь ответа")
+            _skip_open_actions(conn, chat["id"], "Пропущено: пользователь запустил разбор")
+        message = _insert_message(conn, chat["id"], "user", text)
+        _insert_message(conn, chat["id"], "assistant", tool_calls=[call])
+        _insert_message(
+            conn, chat["id"], "tool", _dump({"digest": digest}), tool_call_id=call["id"], tool_name=call["name"]
+        )
+        conn.execute(
+            """
+            UPDATE ai_chats SET status = 'running', error = '', updated_at = NOW(),
+                   title = CASE WHEN title = '' THEN %s ELSE title END
+            WHERE id = %s
+            """,
+            (title, chat["id"]),
+        )
+        row = conn.execute(_CHAT_SELECT + " WHERE ch.id = %s", (chat["id"],)).fetchone()
+    job = _submit(user_id, chat["id"], f"r{message['id']}")
+    return {"chat": _chat_out(row), "message": _message_out(message), "job": public_job(job)}
 
 
 def _decide(user_id: int, chat_id: int, action_ids: list[int] | None, approve: bool) -> tuple[list[dict], int]:

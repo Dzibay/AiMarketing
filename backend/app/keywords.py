@@ -18,6 +18,22 @@ def _call(access_token: str, client_login: str, method: str, params: dict) -> di
     return direct_api.call(access_token, client_login, "keywords", method, params)
 
 
+def _set_bids(access_token: str, client_login: str, bids: list[tuple[int, int]]) -> dict[int, str]:
+    """Ставки на поиске через keywordbids.set: keywords.update поля Bid не принимает.
+    bids — [(keyword_id, микроединицы)] → {индекс: ошибка Директа} по фразам, что не прошли."""
+    result = direct_api.call(
+        access_token,
+        client_login,
+        "keywordbids",
+        "set",
+        {"KeywordBids": [{"KeywordId": int(kid), "SearchBid": int(micros)} for kid, micros in bids]},
+    )
+    return dict(direct_api.item_errors(result, "SetResults"))
+
+
+_RESULT_KEYS = {"suspend": "SuspendResults", "resume": "ResumeResults", "delete": "DeleteResults"}
+
+
 def _rub_to_micros(rub: float | None) -> int | None:
     if rub is None:
         return None
@@ -31,15 +47,19 @@ KEYWORD_FIELDS = ["Id", "Keyword", "AdGroupId", "State", "Status", "Bid"]
 
 
 def fetch_keywords(access_token: str, client_login: str, adgroup_ids: list[int]) -> list[dict]:
-    if not adgroup_ids:
-        return []
-    result = _call(
-        access_token,
-        client_login,
-        "get",
-        {"SelectionCriteria": {"AdGroupIds": adgroup_ids}, "FieldNames": KEYWORD_FIELDS},
-    )
-    return parse_keywords(result.get("Keywords") or [])
+    raw: list[dict] = []
+    # В AdGroupIds у keywords.get не больше 1000 групп; ответ — страницами.
+    for part in direct_api.chunks(list(adgroup_ids), 1000):
+        raw.extend(
+            direct_api.get_all(
+                access_token,
+                client_login,
+                "keywords",
+                {"SelectionCriteria": {"AdGroupIds": part}, "FieldNames": KEYWORD_FIELDS},
+                "Keywords",
+            )
+        )
+    return parse_keywords(raw)
 
 
 def parse_keywords(raw: list[dict]) -> list[dict]:
@@ -278,7 +298,15 @@ def update_keyword(
     if len(patch) == 1:
         raise YandexError("empty")
     token = get_connection_access_token(row["connection_id"], user_id)
-    _call(token, row["client_login"], "update", {"Keywords": [patch]})
+    if keyword_n is not None:
+        result = _call(token, row["client_login"], "update", {"Keywords": [{"Id": patch["Id"], "Keyword": keyword_n}]})
+        errors = direct_api.item_errors(result, "UpdateResults")
+        if errors:
+            raise YandexError("direct", errors[0][1])
+    if bid_micros is not None:
+        errors = _set_bids(token, row["client_login"], [(int(row["keyword_id"]), bid_micros)])
+        if errors:
+            raise YandexError("direct", next(iter(errors.values())))
     sets = []
     params: list = []
     if keyword_n is not None:
@@ -352,18 +380,20 @@ def bulk_keyword_action(
     failure: YandexError | None = None
     for client_login, group in by_login.items():
         try:
-            _apply_group(user_id, client_login, group, action, bid_micros)
+            ok, error = _apply_group(user_id, client_login, group, action, bid_micros)
         except YandexError as exc:
             failure = failure or exc
             continue
-        done.extend(group)
-        applied += len(group)
+        if error:
+            failure = failure or YandexError("direct", error)
+        done.extend(ok)
+        applied += len(ok)
     status = "ok" if failure is None else ("partial" if done else "error")
     log_action(
         user_id,
         "keywords",
         {"keyword_row_ids": [r["id"] for r in rows], "campaign_row_ids": campaign_ids, "action": action, "bid_rub": bid_rub},
-        {"applied": applied, "error": failure.code if failure else None},
+        {"applied": applied, "error": failure.code if failure else None, "message": failure.message if failure else None},
         status,
         title=_bulk_title(action, rows, bid_micros),
         undo=_bulk_undo(action, done, bid_micros),
@@ -371,28 +401,36 @@ def bulk_keyword_action(
     )
     if failure is not None and not done:
         raise failure
-    return {"applied": applied, "status": status}
+    return {"applied": applied, "status": status, "error": failure.message if failure else None}
 
 
-def _apply_group(user_id: int, client_login: str, group: list[dict], action: str, bid_micros: int | None) -> None:
+def _apply_group(
+    user_id: int, client_login: str, group: list[dict], action: str, bid_micros: int | None
+) -> tuple[list[dict], str | None]:
+    """Действие над фразами одного логина → (что применилось, первая ошибка Директа)."""
     token = get_connection_access_token(group[0]["connection_id"], user_id)
-    ids = [r["id"] for r in group]
     if action == "set_bid":
-        payload = [{"Id": int(r["keyword_id"]), "Bid": bid_micros} for r in group]
-        _call(token, client_login, "update", {"Keywords": payload})
+        errors = _set_bids(token, client_login, [(int(r["keyword_id"]), int(bid_micros or 0)) for r in group])
+    else:
+        result = _call(token, client_login, action, {"SelectionCriteria": {"Ids": [int(r["keyword_id"]) for r in group]}})
+        errors = dict(direct_api.item_errors(result, _RESULT_KEYS[action]))
+    ok = [r for index, r in enumerate(group) if index not in errors]
+    ids = [r["id"] for r in ok]
+    if ids:
         with pool.connection() as conn:
-            conn.execute(
-                "UPDATE direct_keywords SET bid_micros = %s, synced_at = NOW() WHERE id = ANY(%s)",
-                (bid_micros, ids),
-            )
-        return
-    _call(token, client_login, action, {"SelectionCriteria": {"Ids": [int(r["keyword_id"]) for r in group]}})
-    with pool.connection() as conn:
-        if action == "delete":
-            conn.execute("DELETE FROM direct_keywords WHERE user_id = %s AND id = ANY(%s)", (user_id, ids))
-        else:
-            state = "SUSPENDED" if action == "suspend" else "ON"
-            conn.execute("UPDATE direct_keywords SET state = %s, synced_at = NOW() WHERE id = ANY(%s)", (state, ids))
+            if action == "set_bid":
+                conn.execute(
+                    "UPDATE direct_keywords SET bid_micros = %s, synced_at = NOW() WHERE id = ANY(%s)",
+                    (bid_micros, ids),
+                )
+            elif action == "delete":
+                conn.execute("DELETE FROM direct_keywords WHERE user_id = %s AND id = ANY(%s)", (user_id, ids))
+            else:
+                state = "SUSPENDED" if action == "suspend" else "ON"
+                conn.execute("UPDATE direct_keywords SET state = %s, synced_at = NOW() WHERE id = ANY(%s)", (state, ids))
+    if errors:
+        log.warning("keywords.%s: %s", action, errors)
+    return ok, next(iter(errors.values()), None)
 
 
 _BULK_TITLES = {"suspend": "Остановка фраз", "resume": "Запуск фраз", "delete": "Удаление фраз"}

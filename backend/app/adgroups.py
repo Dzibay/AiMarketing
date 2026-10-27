@@ -18,7 +18,7 @@ def _campaign_row(user_id: int, campaign_row_id: int) -> dict:
     with pool.connection() as conn:
         row = conn.execute(
             """
-            SELECT c.id, c.user_id, c.account_id, c.campaign_id, c.name,
+            SELECT c.id, c.user_id, c.account_id, c.campaign_id, c.name, c.campaign_type,
                    a.connection_id, a.client_login, a.enabled
             FROM direct_campaigns c
             JOIN direct_accounts a ON a.id = c.account_id
@@ -104,13 +104,14 @@ def parse_adgroups(raw: list[dict]) -> list[dict]:
 
 
 def fetch_adgroups(access_token: str, client_login: str, campaign_id: int) -> list[dict]:
-    result = _call(
+    raw = direct_api.get_all(
         access_token,
         client_login,
-        "get",
+        "adgroups",
         {"SelectionCriteria": {"CampaignIds": [campaign_id]}, "FieldNames": ADGROUP_FIELDS},
+        "AdGroups",
     )
-    return parse_adgroups(result.get("AdGroups") or [])
+    return parse_adgroups(raw)
 
 
 def upsert_adgroups(user_id: int, account_id: int, campaign_row_id: int, items: list[dict]) -> int:
@@ -194,24 +195,18 @@ def create_adgroup(
     camp = _campaign_row(user_id, campaign_row_id)
     regions = region_ids if region_ids else [225]  # Россия
     token = get_connection_access_token(camp["connection_id"], user_id)
-    result = _call(
-        token,
-        camp["client_login"],
-        "add",
-        {
-            "AdGroups": [
-                {
-                    "Name": name_n,
-                    "CampaignId": int(camp["campaign_id"]),
-                    "RegionIds": regions,
-                }
-            ]
-        },
-    )
+    group: dict = {"Name": name_n, "CampaignId": int(camp["campaign_id"]), "RegionIds": regions}
+    # В ЕПК группа — UNIFIED_AD_GROUP, у неё обязательный OfferRetargeting.
+    group_type = "TEXT_AD_GROUP"
+    if camp.get("campaign_type") == "UNIFIED_CAMPAIGN":
+        group["UnifiedAdGroup"] = {"OfferRetargeting": "NO"}
+        group_type = "UNIFIED_AD_GROUP"
+    result = _call(token, camp["client_login"], "add", {"AdGroups": [group]})
+    errors = direct_api.item_errors(result, "AddResults")
     add = (result.get("AddResults") or [{}])[0]
-    if not add.get("Id"):
+    if errors or not add.get("Id"):
         log.warning("adgroups.add fail: %s", add)
-        raise YandexError("direct")
+        raise YandexError("direct", errors[0][1] if errors else None)
     adgroup_id = int(add["Id"])
     with pool.connection() as conn:
         row = conn.execute(
@@ -220,7 +215,7 @@ def create_adgroup(
                 user_id, account_id, campaign_row_id, adgroup_id,
                 name, status, type, region_ids, synced_at
             )
-            VALUES (%s, %s, %s, %s, %s, '', 'TEXT_AD_GROUP', %s, NOW())
+            VALUES (%s, %s, %s, %s, %s, '', %s, %s, NOW())
             ON CONFLICT (account_id, adgroup_id) DO UPDATE SET
                 name = EXCLUDED.name, synced_at = NOW()
             RETURNING *
@@ -231,6 +226,7 @@ def create_adgroup(
                 campaign_row_id,
                 adgroup_id,
                 name_n,
+                group_type,
                 json.dumps(regions),
             ),
         ).fetchone()
@@ -365,9 +361,10 @@ def _adgroup_row(user_id: int, adgroup_row_id: int) -> dict:
     with pool.connection() as conn:
         row = conn.execute(
             """
-            SELECT g.*, a.connection_id, a.client_login, a.enabled
+            SELECT g.*, c.campaign_type, a.connection_id, a.client_login, a.enabled
             FROM direct_adgroups g
             JOIN direct_accounts a ON a.id = g.account_id
+            JOIN direct_campaigns c ON c.id = g.campaign_row_id
             WHERE g.id = %s AND g.user_id = %s
             """,
             (adgroup_row_id, user_id),

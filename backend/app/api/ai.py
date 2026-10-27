@@ -3,7 +3,7 @@
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
-from app import ai, ai_agent
+from app import ai, ai_agent, insights, workspaces
 from app.api.web import _http
 from app.web_auth import require_web_user
 from app.yandex import YandexError
@@ -48,6 +48,18 @@ class DecideAllBody(BaseModel):
     approve: bool
 
 
+class ReviewBody(BaseModel):
+    # Пусто — общий разбор пространства; текст карточки сигнала — разбор по ней.
+    prompt: str = ""
+    title: str = ""
+    # Не задан — разбор в новом чате.
+    chat_id: int | None = None
+
+
+class ForgetFactBody(BaseModel):
+    key: str
+
+
 def _call(fn, *args, **kwargs):
     try:
         return fn(*args, **kwargs)
@@ -87,6 +99,23 @@ def chats_list(workspace_id: int, user_id: int = Depends(require_web_user)) -> d
 @router.post("/workspaces/{workspace_id}/chats")
 def chats_create(workspace_id: int, body: ChatBody, user_id: int = Depends(require_web_user)) -> dict:
     return _call(ai_agent.create_chat, user_id, workspace_id, body.title)
+
+
+@router.get("/workspaces/{workspace_id}/signals")
+def workspace_signals(workspace_id: int, user_id: int = Depends(require_web_user)) -> dict:
+    """Чем ИИ может помочь — считает код без ИИ, поэтому бесплатно."""
+    return _call(insights.signals_overview, user_id, workspace_id)
+
+
+@router.post("/workspaces/{workspace_id}/review")
+def workspace_review(workspace_id: int, body: ReviewBody, user_id: int = Depends(require_web_user)) -> dict:
+    return _call(ai_agent.start_review, user_id, workspace_id, prompt=body.prompt, title=body.title,
+                 chat_id=body.chat_id)
+
+
+@router.post("/workspaces/{workspace_id}/ai-facts/forget")
+def workspace_forget_fact(workspace_id: int, body: ForgetFactBody, user_id: int = Depends(require_web_user)) -> dict:
+    return _call(workspaces.forget_ai_fact, user_id, workspace_id, body.key)
 
 
 @router.get("/ai/chats/{chat_id}")

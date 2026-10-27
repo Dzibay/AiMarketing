@@ -30,6 +30,15 @@
           <p class="hint">{{ accessText }}</p>
         </div>
         <div class="row-actions">
+          <button
+            class="btn"
+            type="button"
+            :disabled="!canReview"
+            title="Что работает, что затухает и почему, что стоит повторить"
+            @click="startReview()"
+          >
+            {{ reviewing ? 'Запускаем…' : 'Разбор' }}
+          </button>
           <label class="switch" :title="access.full_access ? 'Выключить полный доступ' : 'Включить полный доступ'">
             <input type="checkbox" :checked="access.full_access" :disabled="accessBusy" @change="toggleFullAccess($event)" />
             <span>Полный доступ</span>
@@ -58,6 +67,41 @@
             ИИ видит статистику, кампании, ключевые фразы, объявления и поисковые запросы этого пространства. Любое
             изменение в Директе он сначала покажет вам на согласование.
           </p>
+          <div class="chat__review">
+            <button class="btn btn--accent" type="button" :disabled="!canReview" @click="startReview()">
+              {{ reviewing ? 'Запускаем…' : 'Разбор пространства' }}
+            </button>
+            <span class="hint">
+              Что работает, что затухает и почему, что стоит повторить. Сигналы за 30 дней считает код — ИИ получает
+              короткую выжимку, а не сырые таблицы.
+            </span>
+          </div>
+
+          <p v-if="signalsError" class="hint">Сигналы не посчитались: {{ signalsError }}</p>
+          <template v-else-if="signals?.suggestions.length">
+            <h4 class="chat__subhead">Заметил в данных</h4>
+            <div class="chat__suggestions">
+              <template v-for="s in signals.suggestions" :key="`${s.kind}${s.account_id || ''}`">
+                <RouterLink v-if="!s.prompt" class="quick-action quick-action--warn" to="/cabinet/accounts">
+                  <strong>{{ s.title }}</strong>
+                  <small>{{ s.detail }}</small>
+                </RouterLink>
+                <button v-else type="button" class="quick-action" :disabled="!canReview" @click="startReview(s)">
+                  <strong>{{ s.title }}</strong>
+                  <small>{{ s.detail }}</small>
+                  <small v-if="s.campaigns.length" class="quick-action__more">{{ campaignsText(s) }}</small>
+                </button>
+              </template>
+            </div>
+          </template>
+          <details v-if="signals?.notes.length" class="chat__notes">
+            <summary>Заметки о данных: {{ signals.notes.length }}</summary>
+            <ul>
+              <li v-for="n in signals.notes" :key="n">{{ n }}</li>
+            </ul>
+          </details>
+
+          <h4 class="chat__subhead">Или спросите сами</h4>
           <div class="chat__suggestions">
             <button v-for="s in SUGGESTIONS" :key="s" type="button" class="quick-action" :disabled="!aiConfigured" @click="send(s)">
               {{ s }}
@@ -185,6 +229,9 @@ const loadError = ref('')
 const aiConfigured = ref(true)
 const draft = ref('')
 const sending = ref(false)
+const reviewing = ref(false)
+const signals = ref(null)
+const signalsError = ref('')
 const deciding = ref(false)
 const accessBusy = ref(false)
 const remember = reactive({})
@@ -217,6 +264,9 @@ const placeholder = computed(() => {
 const canSend = computed(
   () => !!draft.value.trim() && !sending.value && status.value !== 'running' && aiConfigured.value,
 )
+const canReview = computed(
+  () => !reviewing.value && !sending.value && status.value !== 'running' && aiConfigured.value,
+)
 
 const thinkingText = computed(() => {
   const messages = chat.value ? data.value.messages : []
@@ -229,6 +279,8 @@ const thinkingText = computed(() => {
 function parseToolResult(content) {
   try {
     const value = JSON.parse(content)
+    // Выжимка сигналов — готовый текст: показываем ровно то, что прочитал ИИ.
+    if (typeof value?.digest === 'string') return { text: value.digest, failed: false }
     return { text: JSON.stringify(value, null, 2), failed: value && value.ok === false }
   } catch {
     return { text: content, failed: false }
@@ -292,6 +344,11 @@ function pretty(value) {
   return typeof value === 'string' ? value : JSON.stringify(value, null, 2)
 }
 
+function campaignsText(card) {
+  const names = card.campaigns.map((c) => `«${c.name}»`).join(', ')
+  return card.campaigns_total > card.campaigns.length ? `${names} и др.` : names
+}
+
 // --- Загрузка и опрос -------------------------------------------------------------------------
 
 function stopPolling() {
@@ -303,6 +360,16 @@ function schedulePoll() {
   stopPolling()
   const needs = status.value === 'running' || actions.value.some((a) => a.status === 'approved')
   if (needs && chatId.value) pollTimer = setTimeout(() => loadChat(chatId.value, true), POLL_MS)
+}
+
+// Сигналы нужны только пустому чату: карточки «чем помочь» вместо догадок.
+async function loadSignals() {
+  signalsError.value = ''
+  try {
+    signals.value = await aiApi.signals(ws.value.id)
+  } catch (err) {
+    signalsError.value = errorText(err)
+  }
 }
 
 async function loadChats() {
@@ -378,6 +445,30 @@ async function send(text) {
   } finally {
     sending.value = false
     nextTick(() => input.value?.focus())
+  }
+}
+
+/** «Разбор»: в пустом чате — здесь же, иначе в новом. card — карточка сигнала: её запрос и название. */
+async function startReview(card = null) {
+  if (!canReview.value) return
+  reviewing.value = true
+  try {
+    const payload = card ? { prompt: card.prompt, title: card.title } : {}
+    if (chat.value && !items.value.length) payload.chat_id = chat.value.id
+    const res = await aiApi.review(ws.value.id, payload)
+    const id = res.chat.id
+    chats.value = [res.chat, ...chats.value.filter((c) => c.id !== id)]
+    stickToBottom = true
+    if (id !== chatId.value) {
+      const go = chatId.value ? router.push : router.replace
+      await go({ path: `/w/${ws.value.id}/chat/${id}` })
+    }
+    await loadChat(id)
+  } catch (err) {
+    if (err?.code === 'ai-not-configured') aiConfigured.value = false
+    pushToast(errorText(err), 'error')
+  } finally {
+    reviewing.value = false
   }
 }
 
@@ -495,6 +586,16 @@ async function handleAsk() {
   if (aiConfigured.value) await send(prompt)
   else draft.value = prompt
 }
+
+// Пустой открытый чат или новый: тогда и считаем сигналы — один раз за визит.
+const showIntro = computed(() => !loadError.value && !items.value.length && (!chatId.value || !!chat.value))
+watch(
+  showIntro,
+  (show) => {
+    if (show && !signals.value && !signalsError.value) loadSignals()
+  },
+  { immediate: true },
+)
 
 watch(chatId, (id) => {
   stopPolling()

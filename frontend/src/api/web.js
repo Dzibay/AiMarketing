@@ -153,6 +153,12 @@ export const aiApi = {
   decide: (actionId, approve, remember = false) =>
     post(`/api/web/ai/actions/${actionId}/decide`, { approve, remember }),
   decideAll: (chatId, approve) => post(`/api/web/ai/chats/${chatId}/decide-all`, { approve }),
+  /** Чем ИИ может помочь: сигналы считает код без ИИ, бесплатно. */
+  signals: (workspaceId) => request(`${WS(workspaceId)}/signals`),
+  /** «Разбор»: { prompt?, title?, chat_id? } → { chat, message, job }; без chat_id — новый чат. */
+  review: (workspaceId, payload = {}) => post(`${WS(workspaceId)}/review`, payload),
+  /** Забыть ответ маркетолога, который ИИ запомнил; возвращает пространство. */
+  forgetFact: (workspaceId, key) => post(`${WS(workspaceId)}/ai-facts/forget`, { key }),
 }
 
 export const webApi = {

@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import logging
 from collections import defaultdict
 from datetime import date
+from urllib.parse import urlsplit
+
+import httpx
 
 from app import direct_api
 from app.db import pool
@@ -17,6 +21,7 @@ from app.direct_sync import (
     update_campaign_local_state,
 )
 from app.journal import ACTION_TITLES, _workspace_for, journal_quiet, log_action
+from app.strategy_info import priority_goals_from_api
 from app.yandex import YandexError, get_connection_access_token
 
 log = logging.getLogger("app.actions")
@@ -173,7 +178,6 @@ MANUAL_LABELS = {
 CAMPAIGN_SETTINGS = {
     "ADD_METRICA_TAG": ("Размечать ссылки для Метрики (yclid)", True),
     "ENABLE_SITE_MONITORING": ("Останавливать показы, если сайт недоступен", True),
-    "ENABLE_AREA_OF_INTEREST_TARGETING": ("Расширенный географический таргетинг", True),
 }
 
 ATTRIBUTION_MODELS = {
@@ -186,6 +190,16 @@ ATTRIBUTION_MODELS = {
     "LSCCD": "Последний значимый переход (кросс-девайс)",
     "FCCD": "Первый переход (кросс-девайс)",
 }
+# С 21.04.2026 LSC, FC, LYDC и LYDCCD выбрать нельзя: Директ переводит их в ближайшие действующие.
+ATTRIBUTION_SELECTABLE = ("AUTO", "LC", "LSCCD", "FCCD")
+_ATTRIBUTION_REPLACED = {"LSC": "LSCCD", "FC": "FCCD", "LYDC": "AUTO", "LYDCCD": "AUTO"}
+
+
+def attribution_for_api(value) -> str | None:
+    """Модель атрибуции из формы, ИИ или исходной кампании → действующая в Директе (None — неизвестная)."""
+    model = str(value or "").strip().upper()
+    model = _ATTRIBUTION_REPLACED.get(model, model)
+    return model if model in ATTRIBUTION_SELECTABLE else None
 
 SCHEDULE_PRESETS = {
     "always": "Круглосуточно, без выходных",
@@ -205,29 +219,33 @@ def campaign_options() -> dict:
         ]
 
     auto = [{"id": k, "label": v[0], "manual": False, "params": params(k)} for k, v in AUTO_STRATEGIES.items()]
-    return {
-        "types": [{"id": k, "label": v} for k, v in CAMPAIGN_TYPES.items()],
-        "search_strategies": [
-            {"id": "HIGHEST_POSITION", "label": "Ручные ставки", "manual": True, "params": []},
-            *auto,
-            {"id": "SERVING_OFF", "label": "Не показывать на поиске", "manual": False, "params": []},
-        ],
+    manual = {"id": "HIGHEST_POSITION", "label": "Ручные ставки", "manual": True, "params": []}
+    off = {"id": "SERVING_OFF", "label": "Не показывать на поиске", "manual": False, "params": []}
+    no_network = {"id": "SERVING_OFF", "label": "Не показывать в сетях"}
+    network_auto = [{"id": "NETWORK_DEFAULT", "label": "Показывать в сетях по стратегии поиска"}, no_network]
+    text = {
+        "search_strategies": [manual, *auto, off],
         "network_by_search": {
-            "HIGHEST_POSITION": [
-                {"id": "SERVING_OFF", "label": "Не показывать в сетях"},
-                {"id": "MAXIMUM_COVERAGE", "label": "Ручные ставки в сетях"},
-            ],
-            "AUTO": [
-                {"id": "NETWORK_DEFAULT", "label": "Показывать в сетях по стратегии поиска"},
-                {"id": "SERVING_OFF", "label": "Не показывать в сетях"},
-            ],
+            "HIGHEST_POSITION": [no_network, {"id": "MAXIMUM_COVERAGE", "label": "Ручные ставки в сетях"}],
+            "AUTO": network_auto,
             "SERVING_OFF": [
                 {"id": "MAXIMUM_COVERAGE", "label": "Ручные ставки в сетях", "manual": True, "params": []},
                 *auto,
             ],
         },
+    }
+    # В ЕПК ручных ставок в сетях нет, а у ручных ставок на поиске бюджет недельный (с 29.06.2026).
+    weekly = {"key": "weekly_budget_rub", "label": STRATEGY_PARAMS["weekly_budget_rub"], "required": False}
+    unified = {
+        "search_strategies": [{**manual, "params": [weekly]}, *auto, off],
+        "network_by_search": {"HIGHEST_POSITION": [no_network], "AUTO": network_auto, "SERVING_OFF": auto},
+    }
+    return {
+        "types": [{"id": k, "label": v} for k, v in CAMPAIGN_TYPES.items()],
+        **text,
+        "by_type": {"TEXT_CAMPAIGN": text, "UNIFIED_CAMPAIGN": unified},
         "settings": [{"id": k, "label": v[0], "default": v[1]} for k, v in CAMPAIGN_SETTINGS.items()],
-        "attribution_models": [{"id": k, "label": v} for k, v in ATTRIBUTION_MODELS.items()],
+        "attribution_models": [{"id": k, "label": ATTRIBUTION_MODELS[k]} for k in ATTRIBUTION_SELECTABLE],
         "schedule_presets": [{"id": k, "label": v} for k, v in SCHEDULE_PRESETS.items()],
         "min_daily_budget_rub": 300,
         "min_weekly_budget_rub": 300,
@@ -253,26 +271,39 @@ def _auto_block(kind: str, strategy: dict) -> dict:
     return {"BiddingStrategyType": kind, struct: block}
 
 
-def build_bidding_strategy(strategy: dict | None) -> tuple[dict, bool]:
-    """Стратегия из формы → BiddingStrategy API и признак ручного управления ставками."""
+def build_bidding_strategy(strategy: dict | None, ctype: str = "TEXT_CAMPAIGN") -> tuple[dict, bool]:
+    """Стратегия из формы → BiddingStrategy API и признак ручного управления ставками.
+
+    В ЕПК в сетях ручных ставок (MAXIMUM_COVERAGE) нет, а недельный бюджет ручных ставок
+    задаётся в HighestPosition.WeeklySpendLimit.
+    """
     strategy = strategy or {}
+    unified = ctype == "UNIFIED_CAMPAIGN"
     search = str(strategy.get("search") or "HIGHEST_POSITION").upper()
     network = str(strategy.get("network") or "").upper()
+    if unified and network == "MAXIMUM_COVERAGE":
+        raise YandexError("strategy", "В ЕПК ручных ставок в сетях нет — в сетях работает только автостратегия")
     if search == "HIGHEST_POSITION":
         network = network or "SERVING_OFF"
         if network not in ("SERVING_OFF", "MAXIMUM_COVERAGE"):
             raise YandexError("strategy", "При ручных ставках на поиске в сетях — ручные ставки или без показов")
-        return {
-            "Search": {"BiddingStrategyType": "HIGHEST_POSITION"},
-            "Network": {"BiddingStrategyType": network},
-        }, True
+        manual: dict = {"BiddingStrategyType": "HIGHEST_POSITION"}
+        if unified and strategy.get("weekly_budget_rub") not in (None, "", 0, "0"):
+            try:
+                weekly = float(strategy["weekly_budget_rub"])
+            except (TypeError, ValueError) as exc:
+                raise YandexError("strategy", "Ручные ставки: недельный бюджет — не число") from exc
+            if weekly <= 0:
+                raise YandexError("strategy", "Ручные ставки: недельный бюджет должен быть больше нуля")
+            manual["HighestPosition"] = {"WeeklySpendLimit": _micros(weekly)}
+        return {"Search": manual, "Network": {"BiddingStrategyType": network}}, True
     if search in AUTO_STRATEGIES:
         network = network or "NETWORK_DEFAULT"
         if network not in ("NETWORK_DEFAULT", "SERVING_OFF"):
             raise YandexError("strategy", "При автостратегии на поиске сети работают по ней же или выключены")
         return {"Search": _auto_block(search, strategy), "Network": {"BiddingStrategyType": network}}, False
     if search == "SERVING_OFF":
-        network = network or "MAXIMUM_COVERAGE"
+        network = network or ("" if unified else "MAXIMUM_COVERAGE")
         if network == "MAXIMUM_COVERAGE":
             return {
                 "Search": {"BiddingStrategyType": "SERVING_OFF"},
@@ -304,10 +335,22 @@ def strategy_from_api(bidding: dict | None) -> dict:
             if value is None:
                 continue
             out[key] = int(value) if key == "goal_id" else _rub(value)
+    weekly = manual_weekly_limit(bidding)
+    if weekly:
+        out["weekly_budget_rub"] = _rub(weekly)
     out["manual"] = out["search"] == "HIGHEST_POSITION" or (
         out["search"] == "SERVING_OFF" and out["network"] == "MAXIMUM_COVERAGE"
     )
     return out
+
+
+def manual_weekly_limit(bidding: dict | None) -> int | None:
+    """Недельный бюджет ручных ставок ЕПК в микроединицах; None — не задан (тогда работает дневной)."""
+    search = (bidding or {}).get("Search") or {}
+    if search.get("BiddingStrategyType") != "HIGHEST_POSITION":
+        return None
+    value = (search.get("HighestPosition") or {}).get("WeeklySpendLimit")
+    return int(value) if value else None
 
 
 def strategy_label(strategy: dict) -> str:
@@ -490,7 +533,7 @@ def create_campaign(user_id: int, *, account_id: int, spec: dict, workspace_id: 
     strategy = dict(spec.get("strategy") or {})
     if ws and ws.get("goal_id") and not strategy.get("goal_id"):
         strategy["goal_id"] = ws["goal_id"]
-    bidding, manual = build_bidding_strategy(strategy)
+    bidding, manual = build_bidding_strategy(strategy, ctype)
 
     body: dict = {"Name": name, "StartDate": start.isoformat(), "TimeZone": "Europe/Moscow"}
     if end:
@@ -500,6 +543,8 @@ def create_campaign(user_id: int, *, account_id: int, spec: dict, workspace_id: 
     if daily not in (None, "", 0):
         if not manual:
             raise YandexError("budget", "Дневной бюджет — только для ручных ставок; у автостратегии задайте недельный")
+        if manual_weekly_limit(bidding):
+            raise YandexError("budget", "Задан недельный бюджет ручных ставок — дневной не нужен")
         if float(daily) <= 0:
             raise YandexError("budget")
         body["DailyBudget"] = {"Amount": _micros(daily), "Mode": "STANDARD"}
@@ -523,8 +568,8 @@ def create_campaign(user_id: int, *, account_id: int, spec: dict, workspace_id: 
     goals = _priority_goals(spec.get("priority_goals"))
     if goals:
         block["PriorityGoals"] = {"Items": goals}
-    attribution = str(spec.get("attribution_model") or "").upper()
-    if attribution in ATTRIBUTION_MODELS:
+    attribution = attribution_for_api(spec.get("attribution_model"))
+    if attribution:
         block["AttributionModel"] = attribution
     tracking = str(spec.get("tracking_params") or "").strip().lstrip("?")
     if tracking:
@@ -550,6 +595,9 @@ def create_campaign(user_id: int, *, account_id: int, spec: dict, workspace_id: 
         negative_keywords=negatives,
         counter_ids=counters,
         start_date=start.isoformat(),
+        bidding_strategy=bidding,
+        priority_goals=priority_goals_from_api(goals),
+        attribution_model=block.get("AttributionModel") or "",
     )
     if ws:
         attach_campaign(user_id, int(ws["id"]), row["id"])
@@ -623,6 +671,8 @@ def _create_first_group(user_id: int, campaign_row_id: int, group: dict, *, manu
                 title2=ad.get("title2") or "",
                 text=ad["text"],
                 href=ad["href"],
+                titles=[str(t) for t in ad.get("titles") or []] or None,
+                texts=[str(t) for t in ad.get("texts") or []] or None,
             )
         except YandexError as exc:
             warnings.append(f"Объявление не создано: {exc.message or exc.code}")
@@ -671,7 +721,15 @@ _SETTINGS_FIELDS = [
     "TimeZone",
     "ClientInfo",
 ]
-_BLOCK_FIELDS = ["BiddingStrategy", "Settings", "CounterIds", "PriorityGoals", "AttributionModel", "TrackingParams"]
+_BLOCK_FIELDS = [
+    "BiddingStrategy",
+    "Settings",
+    "CounterIds",
+    "PriorityGoals",
+    "AttributionModel",
+    "TrackingParams",
+    "NegativeKeywordSharedSetIds",
+]
 
 
 def _supported(row: dict) -> str:
@@ -776,14 +834,16 @@ def update_campaign_settings(user_id: int, campaign_row_id: int, changes: dict) 
         patch["EndDate"] = end.isoformat() if end else None
         changed.append("дата окончания")
     manual = None
+    weekly_manual = False
     if "strategy" in changes and changes["strategy"]:
-        bidding, manual = build_bidding_strategy(changes["strategy"])
+        bidding, manual = build_bidding_strategy(changes["strategy"], ctype)
         block["BiddingStrategy"] = bidding
         flat = strategy_from_api(bidding)
         local["strategy"] = flat["search"] if flat["search"] != "SERVING_OFF" else flat["network"]
         changed.append("стратегия")
-        if not manual:
-            # У автостратегий дневного бюджета нет — Директ откажет, если он останется.
+        weekly_manual = bool(manual_weekly_limit(bidding))
+        if not manual or weekly_manual:
+            # У автостратегий и у ручных ставок с недельным бюджетом дневного нет — Директ откажет, если он останется.
             patch["DailyBudget"] = None
             local["daily_budget_kopecks"] = None
     if "daily_budget_rub" in changes:
@@ -794,6 +854,8 @@ def update_campaign_settings(user_id: int, campaign_row_id: int, changes: dict) 
         else:
             if manual is False:
                 raise YandexError("budget", "Дневной бюджет — только для ручных ставок")
+            if weekly_manual:
+                raise YandexError("budget", "Задан недельный бюджет ручных ставок — дневной не нужен")
             if float(daily) <= 0:
                 raise YandexError("budget")
             patch["DailyBudget"] = {"Amount": _micros(daily), "Mode": "STANDARD"}
@@ -825,8 +887,8 @@ def update_campaign_settings(user_id: int, campaign_row_id: int, changes: dict) 
         block["PriorityGoals"] = {"Items": [{**g, "Operation": "SET"} for g in goals]} if goals else None
         changed.append("ключевые цели")
     if "attribution_model" in changes:
-        model = str(changes["attribution_model"] or "").upper()
-        if model not in ATTRIBUTION_MODELS:
+        model = attribution_for_api(changes["attribution_model"])
+        if not model:
             raise YandexError("attribution", "Неизвестная модель атрибуции")
         block["AttributionModel"] = model
         changed.append("атрибуция")
@@ -1258,7 +1320,6 @@ def moderate_campaign(user_id: int, campaign_row_id: int) -> dict:
 _COPYABLE_OPTIONS = {
     "ADD_METRICA_TAG",
     "ADD_TO_FAVORITES",
-    "ENABLE_AREA_OF_INTEREST_TARGETING",
     "ENABLE_COMPANY_INFO",
     "ENABLE_SITE_MONITORING",
     "EXCLUDE_PAUSED_COMPETING_ADS",
@@ -1297,7 +1358,9 @@ def _strategy_for_add(strategy: dict | None) -> dict:
     return _clean(out)
 
 
-def _copy_body(item: dict, ctype: str, *, name: str, counter_id: int | None) -> tuple[dict, bool]:
+def _copy_body(
+    item: dict, ctype: str, *, name: str, counter_id: int | None, same_account: bool = False
+) -> tuple[dict, bool]:
     block_name = _TYPE_BLOCK[ctype]
     src = item.get(block_name) or {}
     strategy = _strategy_for_add(src.get("BiddingStrategy"))
@@ -1309,7 +1372,8 @@ def _copy_body(item: dict, ctype: str, *, name: str, counter_id: int | None) -> 
     if end and end >= start:
         body["EndDate"] = end.isoformat()
     daily = (item.get("DailyBudget") or {}).get("Amount")
-    if daily and flat["manual"]:
+    # Недельный бюджет ручных ставок ЕПК и дневной вместе Директ не принимает.
+    if daily and flat["manual"] and not manual_weekly_limit(strategy):
         body["DailyBudget"] = {"Amount": int(daily), "Mode": (item.get("DailyBudget") or {}).get("Mode") or "STANDARD"}
     for key in ("NegativeKeywords", "ExcludedSites"):
         items = ((item.get(key) or {}).get("Items")) or []
@@ -1347,10 +1411,15 @@ def _copy_body(item: dict, ctype: str, *, name: str, counter_id: int | None) -> 
     ]
     if goals:
         block["PriorityGoals"] = {"Items": goals}
-    if src.get("AttributionModel"):
-        block["AttributionModel"] = src["AttributionModel"]
+    attribution = attribution_for_api(src.get("AttributionModel"))
+    if attribution:
+        block["AttributionModel"] = attribution
     if src.get("TrackingParams"):
         block["TrackingParams"] = src["TrackingParams"]
+    shared = ((src.get("NegativeKeywordSharedSetIds") or {}).get("Items")) or []
+    if same_account and shared:
+        # Наборы минус-фраз — объекты кабинета: в своём кабинете подключаем те же.
+        block["NegativeKeywordSharedSetIds"] = {"Items": shared}
     body[block_name] = block
     return body, flat["manual"]
 
@@ -1427,6 +1496,288 @@ def _copy_callouts(src_token, src_login, dst_token, dst_login, ext_ids: set[int]
         return {}
 
 
+# Поля для копии: без ResponsiveAdFieldNames Директ отдаёт комбинаторное объявление
+# как TextAd с одним заголовком, текстом и картинкой.
+_AD_COPY_FIELDS = {
+    "FieldNames": ["Id", "AdGroupId", "Type", "State"],
+    "TextAdFieldNames": [
+        "Title",
+        "Title2",
+        "Text",
+        "Href",
+        "DisplayUrlPath",
+        "Mobile",
+        "SitelinkSetId",
+        "AdImageHash",
+        "VCardId",
+        "AdExtensions",
+        "TurboPageId",
+        "VideoExtension",
+        "BusinessId",
+        "ErirAdDescription",
+    ],
+    "TextAdPriceExtensionFieldNames": ["Price", "OldPrice", "PriceQualifier", "PriceCurrency"],
+    "ResponsiveAdFieldNames": [
+        "Titles",
+        "Texts",
+        "Href",
+        "DisplayUrlPath",
+        "SitelinkSetId",
+        "AdImages",
+        "VideoExtensions",
+        "AdExtensions",
+        "PriceExtension",
+        "BusinessId",
+        "ErirAdDescription",
+    ],
+    "TextImageAdFieldNames": ["Href", "AdImageHash", "TurboPageId"],
+}
+_KEYWORD_COPY_FIELDS = {
+    "FieldNames": [
+        "Id",
+        "AdGroupId",
+        "Keyword",
+        "State",
+        "Bid",
+        "ContextBid",
+        "StrategyPriority",
+        "UserParam1",
+        "UserParam2",
+        "AutotargetingSearchBidIsAuto",
+    ],
+    "AutotargetingSettingsCategoriesFieldNames": ["Exact", "Narrow", "Alternative", "Accessory", "Broader"],
+    "AutotargetingSettingsBrandOptionsFieldNames": ["WithoutBrands", "WithAdvertiserBrand", "WithCompetitorsBrand"],
+}
+AUTOTARGETING = "---autotargeting"
+# Картинки качаем только с серверов Яндекса и не больше 10 МБ; Директ советует грузить по 3 за вызов.
+_IMAGE_HOSTS = (".yandex.net", ".yandex.ru", ".yandex.com", ".yastatic.net")
+_IMAGE_MAX_BYTES = 10 * 1024 * 1024
+_IMAGE_BATCH = 3
+
+
+def _group_for_add(group: dict, campaign_id: int, *, unified: bool) -> dict:
+    entry = {
+        "Name": group.get("Name") or "Группа",
+        "CampaignId": campaign_id,
+        "RegionIds": group.get("RegionIds") or [225],
+        "NegativeKeywords": {"Items": group["NegativeKeywords"]["Items"]}
+        if (group.get("NegativeKeywords") or {}).get("Items")
+        else None,
+        "TrackingParams": group.get("TrackingParams") or None,
+    }
+    if unified:
+        # Группа ЕПК без UnifiedAdGroup.OfferRetargeting не создаётся.
+        offer = (group.get("UnifiedAdGroup") or {}).get("OfferRetargeting")
+        entry["UnifiedAdGroup"] = {"OfferRetargeting": offer if offer in ("YES", "NO") else "NO"}
+    return _clean(entry)
+
+
+def _is_autotargeting(keyword: dict) -> bool:
+    return str(keyword.get("Keyword") or "").strip().lower() == AUTOTARGETING
+
+
+def _keyword_for_add(keyword: dict, group_id: int, *, manual: bool, unified: bool) -> dict:
+    auto = _is_autotargeting(keyword)
+    entry = {
+        "AdGroupId": group_id,
+        "Keyword": AUTOTARGETING if auto else keyword["Keyword"],
+        "UserParam1": keyword.get("UserParam1") or None,
+        "UserParam2": keyword.get("UserParam2") or None,
+    }
+    if manual:
+        entry["Bid"] = keyword.get("Bid") or None
+        if not unified:
+            # В ЕПК при ручных ставках сетей нет — ставка в сетях не нужна.
+            entry["ContextBid"] = keyword.get("ContextBid") or None
+    elif keyword.get("StrategyPriority") in ("LOW", "NORMAL", "HIGH"):
+        entry["StrategyPriority"] = keyword["StrategyPriority"]
+    if auto:
+        if keyword.get("AutotargetingSearchBidIsAuto") in ("YES", "NO"):
+            entry["AutotargetingSearchBidIsAuto"] = keyword["AutotargetingSearchBidIsAuto"]
+        if keyword.get("AutotargetingSettings"):
+            entry["AutotargetingSettings"] = keyword["AutotargetingSettings"]
+    return _clean(entry)
+
+
+def _ad_body(ad: dict) -> dict:
+    return ad.get("ResponsiveAd") or ad.get("TextAd") or ad.get("TextImageAd") or {}
+
+
+def _ad_image_hashes(ad: dict) -> list[str]:
+    if ad.get("ResponsiveAd"):
+        items = ((ad["ResponsiveAd"].get("AdImages") or {}).get("Items")) or []
+        return [str(i["ImageHash"]) for i in items if i.get("ImageHash")]
+    body = ad.get("TextAd") or ad.get("TextImageAd") or {}
+    return [str(body["AdImageHash"])] if body.get("AdImageHash") else []
+
+
+def _source_only(body: dict) -> bool:
+    """Визитка, турбо-страница, видео или организация — их в другой кабинет не перенести."""
+    return bool(
+        body.get("VCardId")
+        or body.get("TurboPageId")
+        or body.get("BusinessId")
+        or (body.get("VideoExtension") or {}).get("CreativeId")
+        or ((body.get("VideoExtensions") or {}).get("Items"))
+    )
+
+
+def _price_extension(value: dict | None) -> dict | None:
+    value = value or {}
+    if not (value.get("Price") and value.get("PriceQualifier") and value.get("PriceCurrency")):
+        return None
+    return _clean({k: value.get(k) for k in ("Price", "OldPrice", "PriceQualifier", "PriceCurrency")})
+
+
+def _ad_for_add(
+    ad: dict,
+    *,
+    unified: bool,
+    same: bool,
+    sitelinks: dict[int, int],
+    callouts: dict[int, int],
+    images: dict[str, str],
+) -> dict | None:
+    """Объявление из ads.get → элемент ads.add без AdGroupId; None — такой вид не копируем."""
+
+    def image(value) -> str | None:
+        if not value:
+            return None
+        return str(value) if same else images.get(str(value))
+
+    def sitelink(body: dict) -> int | None:
+        set_id = int(body.get("SitelinkSetId") or 0)
+        return (set_id or None) if same else sitelinks.get(set_id)
+
+    def extensions(body: dict) -> list[int] | None:
+        ids = [
+            int(e["AdExtensionId"])
+            for e in body.get("AdExtensions") or []
+            if e.get("AdExtensionId") and e.get("Type") in (None, "CALLOUT")
+        ]
+        return (ids if same else [callouts[i] for i in ids if i in callouts]) or None
+
+    if ad.get("ResponsiveAd"):
+        r = ad["ResponsiveAd"]
+        entry = {
+            "Titles": [str(t["Title"]) for t in r.get("Titles") or [] if t.get("Title")],
+            "Texts": [str(t["Text"]) for t in r.get("Texts") or [] if t.get("Text")],
+            "Href": r.get("Href") or None,
+            "DisplayUrlPath": r.get("DisplayUrlPath") or None,
+            "SitelinkSetId": sitelink(r),
+            "AdExtensionIds": extensions(r),
+            "AdImageHashes": [h for h in (image(x) for x in _ad_image_hashes(ad)) if h] or None,
+            "PriceExtension": _price_extension(r.get("PriceExtension")),
+            "ErirAdDescription": r.get("ErirAdDescription") or None,
+        }
+        if same:
+            videos = ((r.get("VideoExtensions") or {}).get("Items")) or []
+            entry["VideoExtensionIds"] = [int(v["CreativeId"]) for v in videos if v.get("CreativeId")] or None
+            entry["BusinessId"] = r.get("BusinessId") or None
+        if not entry["Titles"] or not entry["Texts"]:
+            return None
+        return {"ResponsiveAd": _clean(entry)}
+    if ad.get("TextAd"):
+        t = ad["TextAd"]
+        if not t.get("Title") or not t.get("Text"):
+            return None
+        # В ЕПК Директ сам превратит TextAd в комбинаторное; Mobile=YES, визитку и турбо-страницу группа ЕПК не примет.
+        entry = {
+            "Title": t["Title"],
+            "Title2": t.get("Title2") or None,
+            "Text": t["Text"],
+            "Href": t.get("Href") or None,
+            "Mobile": "NO" if unified else (t.get("Mobile") or "NO"),
+            "DisplayUrlPath": t.get("DisplayUrlPath") or None,
+            "SitelinkSetId": sitelink(t),
+            "AdExtensionIds": extensions(t),
+            "AdImageHash": image(t.get("AdImageHash")),
+            "PriceExtension": _price_extension(t.get("PriceExtension")),
+            "ErirAdDescription": t.get("ErirAdDescription") or None,
+        }
+        if same:
+            creative = (t.get("VideoExtension") or {}).get("CreativeId")
+            entry["VideoExtension"] = {"CreativeId": int(creative)} if creative else None
+            entry["BusinessId"] = t.get("BusinessId") or None
+            if not unified:
+                entry["VCardId"] = t.get("VCardId") or None
+                entry["TurboPageId"] = t.get("TurboPageId") or None
+        return {"TextAd": _clean(entry)}
+    if ad.get("TextImageAd"):
+        t = ad["TextImageAd"]
+        picture = image(t.get("AdImageHash"))
+        if not picture:
+            return None
+        entry = {"AdImageHash": picture, "Href": t.get("Href") or None}
+        if same and not unified:
+            entry["TurboPageId"] = t.get("TurboPageId") or None
+        if not entry["Href"] and not entry.get("TurboPageId"):
+            return None
+        return {"TextImageAd": _clean(entry)}
+    return None
+
+
+def _download_image(url) -> bytes | None:
+    parts = urlsplit(str(url or ""))
+    host = (parts.hostname or "").lower()
+    if parts.scheme not in ("http", "https") or not host.endswith(_IMAGE_HOSTS):
+        return None
+    try:
+        with httpx.Client(timeout=30.0, follow_redirects=False) as client:
+            response = client.get(str(url))
+    except httpx.HTTPError as exc:
+        log.warning("image download %s: %s", host, exc)
+        return None
+    if response.status_code != 200 or not response.content or len(response.content) > _IMAGE_MAX_BYTES:
+        return None
+    return response.content
+
+
+def _copy_images(src_token, src_login, dst_token, dst_login, hashes: set[str], warnings: list[str]) -> dict[str, str]:
+    """Картинки живут в библиотеке кабинета: для другого кабинета скачиваем оригиналы и загружаем заново."""
+    if not hashes:
+        return {}
+    try:
+        found = _get_all(
+            src_token,
+            src_login,
+            "adimages",
+            {"SelectionCriteria": {"AdImageHashes": sorted(hashes)}, "FieldNames": ["AdImageHash", "OriginalUrl", "Name"]},
+            "AdImages",
+        )
+    except YandexError as exc:
+        warnings.append(f"Картинки не скопированы: {exc.message or exc.code}")
+        return {}
+    out: dict[str, str] = {}
+    errors: list[str] = []
+    for chunk in direct_api.chunks([i for i in found if i.get("AdImageHash")], _IMAGE_BATCH):
+        items, sources = [], []
+        for img in chunk:
+            data = _download_image(img.get("OriginalUrl"))
+            if data is None:
+                continue
+            name = str(img.get("Name") or img["AdImageHash"])[:255]
+            items.append({"ImageData": base64.b64encode(data).decode("ascii"), "Name": name})
+            sources.append(str(img["AdImageHash"]))
+        if not items:
+            continue
+        try:
+            result = direct_api.call(dst_token, dst_login, "adimages", "add", {"AdImages": items})
+        except YandexError as exc:
+            errors.append(exc.message or exc.code)
+            continue
+        item_errs = dict(direct_api.item_errors(result, "AddResults"))
+        errors.extend(item_errs.values())
+        for index, (source, res) in enumerate(zip(sources, result.get("AddResults") or [])):
+            if index not in item_errs and res.get("AdImageHash"):
+                out[source] = str(res["AdImageHash"])
+    lost = len(hashes) - len(out)
+    if lost:
+        reason = f" ({errors[0]})" if errors else ""
+        warnings.append(f"Не скопировано картинок: {lost}{reason} — объявления созданы без них")
+    return out
+
+
 def duplicate_campaign(
     user_id: int,
     campaign_row_id: int,
@@ -1437,9 +1788,10 @@ def duplicate_campaign(
     progress=None,
 ) -> dict:
     """
-    Копия кампании со структурой: настройки, группы, фразы (со ставками при ручной стратегии),
-    текстовые объявления. В другой кабинет быстрые ссылки и уточнения пересоздаются, картинки,
-    визитки и турбо-страницы — нет (они живут в кабинете-источнике).
+    Копия кампании со структурой: настройки, группы, фразы и автотаргетинг (со ставками при ручной
+    стратегии), объявления — комбинаторные со всеми заголовками, текстами и картинками, текстовые
+    и графические. В другой кабинет быстрые ссылки, уточнения и картинки пересоздаются; визитки,
+    турбо-страницы, видео, организации и наборы минус-фраз — нет (они живут в кабинете-источнике).
     """
     from app.adgroups import sync_campaign_adgroups
     from app.ads import sync_campaign_ads
@@ -1467,7 +1819,11 @@ def duplicate_campaign(
 
     step(0, "Читаю настройки кампании")
     item = _fetch_campaign(src_token, src["client_login"], src["campaign_id"], ctype)
-    body, manual = _copy_body(item, ctype, name=new_name, counter_id=int(ws["counter_id"]) if ws else None)
+    body, manual = _copy_body(
+        item, ctype, name=new_name, counter_id=int(ws["counter_id"]) if ws else None, same_account=same
+    )
+    if not same and ((item.get(block_name) or {}).get("NegativeKeywordSharedSetIds") or {}).get("Items"):
+        warnings.append("Наборы минус-фраз живут в исходном кабинете — подключите их к копии вручную")
 
     step(1, "Создаю кампанию")
     new_campaign_id = _add_copy(dst_token, dst["client_login"], body, block_name, warnings)
@@ -1485,6 +1841,10 @@ def duplicate_campaign(
         negative_keywords=((body.get("NegativeKeywords") or {}).get("Items")) or [],
         counter_ids=((body[block_name].get("CounterIds") or {}).get("Items")) or [],
         start_date=body["StartDate"],
+        bidding_strategy=body[block_name]["BiddingStrategy"],
+        priority_goals=priority_goals_from_api(body[block_name].get("PriorityGoals")),
+        attribution_model=body[block_name].get("AttributionModel") or "",
+        source_row_id=campaign_row_id,
     )
     if ws:
         attach_campaign(user_id, int(ws["id"]), row["id"])
@@ -1492,73 +1852,61 @@ def duplicate_campaign(
 
     try:
         step(2, "Копирую группы")
+        unified = ctype == "UNIFIED_CAMPAIGN"
+        group_fields: dict = {"FieldNames": ["Id", "Name", "RegionIds", "NegativeKeywords", "TrackingParams", "Type"]}
+        if unified:
+            group_fields["UnifiedAdGroupFieldNames"] = ["OfferRetargeting"]
         groups = _get_all(
             src_token,
             src["client_login"],
             "adgroups",
-            {
-                "SelectionCriteria": {"CampaignIds": [int(src["campaign_id"])]},
-                "FieldNames": ["Id", "Name", "RegionIds", "NegativeKeywords", "TrackingParams", "Type"],
-            },
+            {"SelectionCriteria": {"CampaignIds": [int(src["campaign_id"])]}, **group_fields},
             "AdGroups",
         )
         skipped = [g for g in groups if g.get("Type") not in _GROUP_TYPES]
         if skipped:
             warnings.append(f"Пропущено групп особых типов: {len(skipped)}")
         groups = [g for g in groups if g.get("Type") in _GROUP_TYPES]
-        payload = [
-            _clean(
-                {
-                    "Name": g.get("Name") or "Группа",
-                    "CampaignId": new_campaign_id,
-                    "RegionIds": g.get("RegionIds") or [225],
-                    "NegativeKeywords": {"Items": g["NegativeKeywords"]["Items"]}
-                    if (g.get("NegativeKeywords") or {}).get("Items")
-                    else None,
-                    "TrackingParams": g.get("TrackingParams") or None,
-                }
-            )
-            for g in groups
-        ]
+        payload = [_group_for_add(g, new_campaign_id, unified=unified) for g in groups]
         new_group_ids, errors = _add_batches(dst_token, dst["client_login"], "adgroups", "AdGroups", payload)
         warnings.extend(f"Группа: {e}" for e in errors[:5])
         group_map = {int(g["Id"]): new for g, new in zip(groups, new_group_ids) if new}
         out["groups"] = len(group_map)
 
-        step(3, "Копирую ключевые фразы")
+        step(3, "Копирую ключевые фразы и автотаргетинг")
         keywords = []
         if group_map:
             keywords = _get_all(
                 src_token,
                 src["client_login"],
                 "keywords",
-                {
-                    "SelectionCriteria": {"CampaignIds": [int(src["campaign_id"])]},
-                    "FieldNames": ["Id", "AdGroupId", "Keyword", "State", "Bid", "ContextBid", "UserParam1", "UserParam2"],
-                },
+                {"SelectionCriteria": {"CampaignIds": [int(src["campaign_id"])]}, **_KEYWORD_COPY_FIELDS},
                 "Keywords",
             )
-        keywords = [
-            k
-            for k in keywords
-            if int(k.get("AdGroupId") or 0) in group_map and not str(k.get("Keyword") or "").startswith("---")
-        ]
-        payload = []
-        for k in keywords:
-            entry = {
-                "AdGroupId": group_map[int(k["AdGroupId"])],
-                "Keyword": k["Keyword"],
-                "UserParam1": k.get("UserParam1") or None,
-                "UserParam2": k.get("UserParam2") or None,
-            }
-            if manual:
-                entry["Bid"] = k.get("Bid") or None
-                entry["ContextBid"] = k.get("ContextBid") or None
-            payload.append(_clean(entry))
-        new_kw_ids, errors = _add_batches(dst_token, dst["client_login"], "keywords", "Keywords", payload)
+        keywords = [k for k in keywords if int(k.get("AdGroupId") or 0) in group_map]
+        phrases = [k for k in keywords if not _is_autotargeting(k)]
+        autos = [k for k in keywords if _is_autotargeting(k)]
+        new_kw_ids, errors = _add_batches(
+            dst_token,
+            dst["client_login"],
+            "keywords",
+            "Keywords",
+            [_keyword_for_add(k, group_map[int(k["AdGroupId"])], manual=manual, unified=unified) for k in phrases],
+        )
         warnings.extend(f"Фраза: {e}" for e in errors[:5])
+        auto_ids, errors = _add_batches(
+            dst_token,
+            dst["client_login"],
+            "keywords",
+            "Keywords",
+            [_keyword_for_add(k, group_map[int(k["AdGroupId"])], manual=manual, unified=unified) for k in autos],
+        )
+        warnings.extend(f"Автотаргетинг: {e}" for e in errors[:3])
         out["keywords"] = sum(1 for x in new_kw_ids if x)
-        suspended = [new for k, new in zip(keywords, new_kw_ids) if new and k.get("State") == "SUSPENDED"]
+        out["autotargeting"] = sum(1 for x in auto_ids if x)
+        suspended = [
+            new for k, new in zip(phrases + autos, new_kw_ids + auto_ids) if new and k.get("State") == "SUSPENDED"
+        ]
         for chunk in direct_api.chunks(suspended, 10_000):
             try:
                 direct_api.call(dst_token, dst["client_login"], "keywords", "suspend", {"SelectionCriteria": {"Ids": chunk}})
@@ -1572,35 +1920,21 @@ def duplicate_campaign(
                 src_token,
                 src["client_login"],
                 "ads",
-                {
-                    "SelectionCriteria": {"CampaignIds": [int(src["campaign_id"])], "Types": ["TEXT_AD"]},
-                    "FieldNames": ["Id", "AdGroupId", "Type", "State"],
-                    "TextAdFieldNames": [
-                        "Title",
-                        "Title2",
-                        "Text",
-                        "Href",
-                        "DisplayUrlPath",
-                        "Mobile",
-                        "SitelinkSetId",
-                        "AdImageHash",
-                        "VCardId",
-                        "AdExtensions",
-                        "TurboPageId",
-                    ],
-                },
+                {"SelectionCriteria": {"CampaignIds": [int(src["campaign_id"])]}, **_AD_COPY_FIELDS},
                 "Ads",
             )
-        ads = [a for a in ads if int(a.get("AdGroupId") or 0) in group_map and a.get("TextAd") and a.get("State") != "ARCHIVED"]
+        ads = [a for a in ads if int(a.get("AdGroupId") or 0) in group_map and a.get("State") != "ARCHIVED"]
         sitelinks: dict[int, int] = {}
         callouts: dict[int, int] = {}
+        images: dict[str, str] = {}
         if not same:
+            bodies = [_ad_body(a) for a in ads]
             sitelinks = _copy_sitelinks(
                 src_token,
                 src["client_login"],
                 dst_token,
                 dst["client_login"],
-                {int(a["TextAd"]["SitelinkSetId"]) for a in ads if a["TextAd"].get("SitelinkSetId")},
+                {int(b["SitelinkSetId"]) for b in bodies if b.get("SitelinkSetId")},
                 warnings,
             )
             callouts = _copy_callouts(
@@ -1610,45 +1944,33 @@ def duplicate_campaign(
                 dst["client_login"],
                 {
                     int(e["AdExtensionId"])
-                    for a in ads
-                    for e in a["TextAd"].get("AdExtensions") or []
+                    for b in bodies
+                    for e in b.get("AdExtensions") or []
                     if e.get("AdExtensionId") and e.get("Type") in (None, "CALLOUT")
                 },
                 warnings,
             )
-            if any(a["TextAd"].get("AdImageHash") or a["TextAd"].get("VCardId") or a["TextAd"].get("TurboPageId") for a in ads):
-                warnings.append("Картинки, визитки и турбо-страницы живут в исходном кабинете — добавьте их в копии вручную")
+            step(4, "Копирую картинки объявлений")
+            images = _copy_images(
+                src_token,
+                src["client_login"],
+                dst_token,
+                dst["client_login"],
+                {h for a in ads for h in _ad_image_hashes(a)},
+                warnings,
+            )
+            if any(_source_only(b) for b in bodies):
+                warnings.append("Визитки, турбо-страницы, видео и организации живут в исходном кабинете — добавьте их в копии вручную")
         payload = []
+        other = 0
         for a in ads:
-            t = a["TextAd"]
-            ext_ids = [int(e["AdExtensionId"]) for e in t.get("AdExtensions") or [] if e.get("AdExtensionId")]
-            entry = {
-                "Title": t.get("Title"),
-                "Title2": t.get("Title2") or None,
-                "Text": t.get("Text"),
-                "Href": t.get("Href") or None,
-                "Mobile": t.get("Mobile") or "NO",
-                "DisplayUrlPath": t.get("DisplayUrlPath") or None,
-            }
-            if same:
-                entry.update(
-                    {
-                        "SitelinkSetId": t.get("SitelinkSetId") or None,
-                        "AdImageHash": t.get("AdImageHash") or None,
-                        "VCardId": t.get("VCardId") or None,
-                        "TurboPageId": t.get("TurboPageId") or None,
-                        "AdExtensionIds": ext_ids or None,
-                    }
-                )
-            else:
-                mapped_exts = [callouts[i] for i in ext_ids if i in callouts]
-                entry.update(
-                    {
-                        "SitelinkSetId": sitelinks.get(int(t.get("SitelinkSetId") or 0)),
-                        "AdExtensionIds": mapped_exts or None,
-                    }
-                )
-            payload.append({"AdGroupId": group_map[int(a["AdGroupId"])], "TextAd": _clean(entry)})
+            entry = _ad_for_add(a, unified=unified, same=same, sitelinks=sitelinks, callouts=callouts, images=images)
+            if entry is None:
+                other += 1
+                continue
+            payload.append({"AdGroupId": group_map[int(a["AdGroupId"])], **entry})
+        if other:
+            warnings.append(f"Не скопировано объявлений других видов: {other}")
         new_ad_ids, errors = _add_batches(dst_token, dst["client_login"], "ads", "Ads", payload)
         warnings.extend(f"Объявление: {e}" for e in errors[:5])
         out["ads"] = sum(1 for x in new_ad_ids if x)

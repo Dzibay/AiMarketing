@@ -62,11 +62,12 @@
         v-if="options"
         v-model="form.strategy"
         :options="options"
+        :campaign-type="original?.type || ''"
         :goals="options.goals || []"
         :default-goal-id="workspace.goal_id"
       />
       <div class="form-grid">
-        <div v-if="manual" class="field">
+        <div v-if="dailyBudget" class="field">
           <label>Дневной бюджет, ₽ (0 — без ограничения)</label>
           <input v-model="form.daily_budget_rub" type="number" min="0" step="1" />
         </div>
@@ -195,6 +196,10 @@ const manual = computed(
     form.strategy?.search === 'HIGHEST_POSITION' ||
     (form.strategy?.search === 'SERVING_OFF' && form.strategy?.network === 'MAXIMUM_COVERAGE'),
 )
+// Недельный бюджет ручных ставок ЕПК заменяет дневной — оба Директ не принимает.
+const dailyBudget = computed(
+  () => manual.value && !(original.value?.type === 'UNIFIED_CAMPAIGN' && form.strategy?.weekly_budget_rub),
+)
 
 function lines(text) {
   return String(text || '')
@@ -251,7 +256,7 @@ const changes = computed(() => {
     if (form[key] !== b[key]) out[key] = form[key]
   }
   if (!same(cleanStrategy(form.strategy), b.strategy)) out.strategy = cleanStrategy(form.strategy)
-  if (manual.value && String(form.daily_budget_rub ?? '') !== String(b.daily_budget_rub ?? '')) {
+  if (dailyBudget.value && String(form.daily_budget_rub ?? '') !== String(b.daily_budget_rub ?? '')) {
     out.daily_budget_rub = form.daily_budget_rub === '' ? 0 : Number(form.daily_budget_rub)
   }
   if (form.attribution_model && form.attribution_model !== b.attribution_model) out.attribution_model = form.attribution_model

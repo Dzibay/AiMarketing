@@ -68,11 +68,12 @@
           <StrategyFields
             v-model="form.strategy"
             :options="options"
+            :campaign-type="form.type"
             :goals="options.goals"
             :default-goal-id="options.goal_id"
           />
           <div class="form-grid">
-            <div v-if="manual" class="field">
+            <div v-if="dailyBudget" class="field">
               <label>Дневной бюджет, ₽ (необязательно)</label>
               <input
                 v-model="form.daily_budget_rub"
@@ -181,7 +182,7 @@
               <label>Заголовок 1 <span class="field-hint">{{ form.group.ad.title.length }}/56</span></label>
               <input v-model="form.group.ad.title" type="text" maxlength="56" />
             </div>
-            <div class="field">
+            <div v-if="!unified" class="field">
               <label>Заголовок 2 <span class="field-hint">{{ form.group.ad.title2.length }}/30</span></label>
               <input v-model="form.group.ad.title2" type="text" maxlength="30" />
             </div>
@@ -193,6 +194,19 @@
               <label>Текст <span class="field-hint">{{ form.group.ad.text.length }}/81</span></label>
               <textarea v-model="form.group.ad.text" rows="2" maxlength="81" />
             </div>
+            <template v-if="unified">
+              <div class="field field--wide">
+                <label>Ещё заголовки — по одному на строку, до 6 <span class="field-hint">до 56 символов</span></label>
+                <textarea v-model="form.group.ad.more_titles" rows="3" />
+              </div>
+              <div class="field field--wide">
+                <label>Ещё тексты — по одному на строку, до 2 <span class="field-hint">до 81 символа</span></label>
+                <textarea v-model="form.group.ad.more_texts" rows="2" />
+              </div>
+              <p class="field-hint field--wide">
+                В ЕПК объявление комбинаторное: Директ сам собирает показы из заголовков и текстов.
+              </p>
+            </template>
           </template>
           <p v-else class="field-hint field--wide">
             Группы, фразы и объявления можно добавить потом на странице кампании.
@@ -298,7 +312,14 @@ function blankForm() {
       region_ids: '',
       keywords: '',
       bid_rub: '',
-      ad: { title: '', title2: '', text: '', href: site ? (/^https?:\/\//i.test(site) ? site : `https://${site}`) : '' },
+      ad: {
+        title: '',
+        title2: '',
+        text: '',
+        more_titles: '',
+        more_texts: '',
+        href: site ? (/^https?:\/\//i.test(site) ? site : `https://${site}`) : '',
+      },
     },
   }
 }
@@ -318,19 +339,23 @@ const manual = computed(
     form.strategy.search === 'HIGHEST_POSITION' ||
     (form.strategy.search === 'SERVING_OFF' && form.strategy.network === 'MAXIMUM_COVERAGE'),
 )
+const unified = computed(() => form.type === 'UNIFIED_CAMPAIGN')
+// Недельный бюджет ручных ставок ЕПК заменяет дневной — оба Директ не принимает.
+const dailyBudget = computed(() => manual.value && !(unified.value && form.strategy.weekly_budget_rub))
 const typeLabel = computed(() => options.value?.types.find((t) => t.id === form.type)?.label || form.type)
 const strategySummary = computed(() => {
   const o = options.value
   if (!o) return ''
-  const s = o.search_strategies.find((x) => x.id === form.strategy.search)?.label || form.strategy.search
-  const net = Object.values(o.network_by_search || {})
+  const t = o.by_type?.[form.type] || o
+  const s = t.search_strategies.find((x) => x.id === form.strategy.search)?.label || form.strategy.search
+  const net = Object.values(t.network_by_search || {})
     .flat()
     .find((x) => x.id === form.strategy.network)?.label
   const parts = [`поиск: ${s}`, `сети: ${net || form.strategy.network || '—'}`]
   if (form.strategy.weekly_budget_rub) parts.push(`неделя ${form.strategy.weekly_budget_rub} ₽`)
   if (form.strategy.average_cpc_rub) parts.push(`клик ${form.strategy.average_cpc_rub} ₽`)
   if (form.strategy.average_cpa_rub) parts.push(`конверсия ${form.strategy.average_cpa_rub} ₽`)
-  if (manual.value && form.daily_budget_rub) parts.push(`день ${form.daily_budget_rub} ₽`)
+  if (dailyBudget.value && form.daily_budget_rub) parts.push(`день ${form.daily_budget_rub} ₽`)
   return parts.join(' · ')
 })
 
@@ -376,7 +401,7 @@ function validate() {
   }
   if (step.value === 1) {
     const daily = Number(form.daily_budget_rub)
-    if (manual.value && form.daily_budget_rub !== '' && daily < options.value.min_daily_budget_rub)
+    if (dailyBudget.value && form.daily_budget_rub !== '' && daily < options.value.min_daily_budget_rub)
       return `Дневной бюджет — от ${options.value.min_daily_budget_rub} ₽`
     const weekly = Number(form.strategy.weekly_budget_rub)
     if (form.strategy.weekly_budget_rub != null && weekly && weekly < options.value.min_weekly_budget_rub)
@@ -415,12 +440,20 @@ function buildSpec() {
     tracking_params: form.tracking_params || undefined,
     priority_goals: form.priority_goals.filter((g) => g.goal_id && g.value_rub > 0),
   }
-  if (manual.value && form.daily_budget_rub !== '') spec.daily_budget_rub = Number(form.daily_budget_rub)
+  if (dailyBudget.value && form.daily_budget_rub !== '') spec.daily_budget_rub = Number(form.daily_budget_rub)
   if (form.with_group) {
     const g = form.group
     spec.group = { name: g.name || 'Группа 1', region_ids: regionIds(), keywords: g.keywords }
     if (manual.value && g.bid_rub !== '') spec.group.bid_rub = Number(g.bid_rub)
-    if (g.ad.title && g.ad.text && g.ad.href) spec.group.ad = { ...g.ad }
+    if (g.ad.title && g.ad.text && g.ad.href) {
+      const { more_titles: moreTitles, more_texts: moreTexts, ...ad } = g.ad
+      if (unified.value) {
+        ad.title2 = ''
+        ad.titles = [ad.title, ...lines(moreTitles)].slice(0, 7)
+        ad.texts = [ad.text, ...lines(moreTexts)].slice(0, 3)
+      }
+      spec.group.ad = ad
+    }
   }
   return spec
 }

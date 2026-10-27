@@ -3,7 +3,7 @@
     <div class="field">
       <label>Стратегия на поиске</label>
       <select :value="model.search" @change="setSearch($event.target.value)">
-        <option v-for="s in options.search_strategies" :key="s.id" :value="s.id">{{ s.label }}</option>
+        <option v-for="s in opts.search_strategies" :key="s.id" :value="s.id">{{ s.label }}</option>
       </select>
     </div>
     <div class="field">
@@ -32,7 +32,10 @@
       />
     </div>
     <p class="field-hint field--wide">
-      <template v-if="manual">
+      <template v-if="manual && unified">
+        Ручные ставки ЕПК: ставки на ключевых фразах, показы только на поиске. Расход можно ограничить недельным бюджетом.
+      </template>
+      <template v-else-if="manual">
         Ручные ставки: ставки задаются на ключевых фразах, можно ограничить дневной бюджет.
       </template>
       <template v-else-if="params.length">
@@ -46,19 +49,23 @@
 </template>
 
 <script setup>
-import { computed } from 'vue'
+import { computed, watch } from 'vue'
 
 const props = defineProps({
   modelValue: { type: Object, required: true },
   options: { type: Object, required: true },
   goals: { type: Array, default: () => [] },
   defaultGoalId: { type: Number, default: null },
+  // В ЕПК свой набор: ручные ставки только на поиске, с недельным бюджетом.
+  campaignType: { type: String, default: '' },
 })
 const emit = defineEmits(['update:modelValue'])
 
 const model = computed(() => props.modelValue)
+const opts = computed(() => props.options.by_type?.[props.campaignType] || props.options)
+const unified = computed(() => props.campaignType === 'UNIFIED_CAMPAIGN')
 function networksFor(search) {
-  const by = props.options.network_by_search || {}
+  const by = opts.value.network_by_search || {}
   if (search === 'HIGHEST_POSITION') return by.HIGHEST_POSITION || []
   if (search === 'SERVING_OFF') return by.SERVING_OFF || []
   return by.AUTO || []
@@ -66,7 +73,7 @@ function networksFor(search) {
 
 function paramsFor(search, network) {
   if (search === 'SERVING_OFF') return networksFor(search).find((n) => n.id === network)?.params || []
-  return props.options.search_strategies.find((s) => s.id === search)?.params || []
+  return (opts.value.search_strategies || []).find((s) => s.id === search)?.params || []
 }
 
 const networkChoices = computed(() => networksFor(model.value.search))
@@ -98,4 +105,14 @@ function setSearch(search) {
 function setNetwork(network) {
   emitWith({ network })
 }
+
+// Сменили тип кампании — стратегия могла стать недоступной (ручные ставки в сетях в ЕПК).
+watch(
+  () => props.campaignType,
+  () => {
+    const searches = opts.value.search_strategies || []
+    const search = searches.some((s) => s.id === model.value.search) ? model.value.search : searches[0]?.id || ''
+    setSearch(search)
+  },
+)
 </script>

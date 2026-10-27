@@ -268,6 +268,26 @@
         </button>
       </div>
     </form>
+    <div class="ai-facts">
+      <h3>Что ИИ запомнил</h3>
+      <p class="hint">
+        Ваши ответы из чата — например, как устроена схема конверсий за 0 ₽. ИИ учитывает их в каждом чате пространства
+        и не переспрашивает. Устаревший ответ забудьте — ИИ спросит снова.
+      </p>
+      <p v-if="!ws.ai_facts?.length" class="hint">Пока ничего: ИИ запоминает только то, что вы сами ответили или подтвердили.</p>
+      <ul v-else class="ai-facts__list">
+        <li v-for="f in ws.ai_facts" :key="f.key" class="ai-facts__item">
+          <div class="ai-facts__text">
+            <strong>{{ f.question || f.key }}</strong>
+            <span>{{ f.answer }}</span>
+            <small v-if="f.at">{{ formatDateTime(f.at) }}</small>
+          </div>
+          <button class="btn btn--ghost" type="button" :disabled="!!forgetting" @click="forgetFact(f)">
+            {{ forgetting === f.key ? 'Забываем…' : 'Забыть' }}
+          </button>
+        </li>
+      </ul>
+    </div>
   </section>
 
   <section class="panel">
@@ -293,10 +313,10 @@
 import { askConfirm } from '../../composables/useConfirm'
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { RouterLink } from 'vue-router'
-import { errorText, jobProgressText, webApi, wsApi } from '../../api/web'
+import { aiApi, errorText, jobProgressText, webApi, wsApi } from '../../api/web'
 import { pushToast } from '../../composables/useToasts'
 import { loadWorkspaces, useWorkspaces } from '../../composables/useWorkspaces'
-import { CAMPAIGN_STATES, CAMPAIGN_TYPES, plural, rub } from '../../utils/format'
+import { CAMPAIGN_STATES, CAMPAIGN_TYPES, formatDateTime, plural, rub } from '../../utils/format'
 import BriefPanel from './BriefPanel.vue'
 import { useWs } from './context'
 
@@ -598,6 +618,21 @@ async function saveAi() {
     aiError.value = errorText(err)
   } finally {
     aiBusy.value = false
+  }
+}
+
+const forgetting = ref('')
+
+async function forgetFact(fact) {
+  if (!await askConfirm(`Забыть ответ «${fact.question || fact.key}»? ИИ спросит об этом снова.`)) return
+  forgetting.value = fact.key
+  try {
+    patch(await aiApi.forgetFact(ws.value.id, fact.key))
+    pushToast('Ответ забыт', 'ok')
+  } catch (err) {
+    pushToast(errorText(err), 'error')
+  } finally {
+    forgetting.value = ''
   }
 }
 

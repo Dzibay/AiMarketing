@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import copy
+from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 
 from psycopg.types.json import Jsonb
@@ -35,6 +36,10 @@ DEFAULT_AI_ACCESS = {
     "max_change_pct": 30,
 }
 KPI_TYPES = ("", "cpa", "drr")
+# Ответов маркетолога, которые ИИ помнит по пространству; старые вытесняются.
+MAX_AI_FACTS = 30
+# Ключ ответа о механике конверсий за 0 ₽.
+SCHEME_FACT = "zero_cost_scheme"
 
 
 def _iso(value) -> str | None:
@@ -55,6 +60,24 @@ def normalize_ai_access(raw: dict | None) -> dict:
     except (TypeError, ValueError):
         pct = out["max_change_pct"]
     out["max_change_pct"] = max(0, min(pct, 500))
+    return out
+
+
+def fact_key(raw) -> str:
+    return "_".join(str(raw or "").lower().split())[:60]
+
+
+def normalize_ai_facts(raw) -> list[dict]:
+    """Что ИИ запомнил со слов маркетолога: [{key, question, answer, at}], без пустых ответов."""
+    out = []
+    for item in raw if isinstance(raw, list) else []:
+        if not isinstance(item, dict):
+            continue
+        key = fact_key(item.get("key"))
+        answer = str(item.get("answer") or "").strip()[:1000]
+        if key and answer:
+            question = str(item.get("question") or "").strip()[:300]
+            out.append({"key": key, "question": question, "answer": answer, "at": item.get("at") or None})
     return out
 
 
@@ -184,7 +207,7 @@ def auto_attach_campaigns(user_id: int, campaign_row_ids: list[int]) -> int:
 _WS_COLUMNS = """
     w.id, w.user_id, w.client_row_id, w.counter_id, w.counter_row_id, w.name, w.site,
     w.kpi_type, w.kpi_target, w.monthly_budget_kopecks, w.goal_id, w.ai_notes, w.ai_access, w.brief,
-    w.archived_at, w.created_at, w.updated_at,
+    w.ai_facts, w.archived_at, w.created_at, w.updated_at,
     cl.name AS client_name, cl.kpi_type AS client_kpi_type, cl.kpi_target AS client_kpi_target,
     m.name AS counter_name, m.site AS counter_site, m.enabled AS counter_enabled,
     y.yandex_login AS counter_login,
@@ -224,6 +247,7 @@ def _ws_out(row: dict) -> dict:
         "ai_notes": row["ai_notes"],
         "brief": normalize_brief(row.get("brief")),
         "ai_access": normalize_ai_access(row.get("ai_access")),
+        "ai_facts": normalize_ai_facts(row.get("ai_facts")),
         "archived": row.get("archived_at") is not None,
         "campaigns_count": int(row.get("campaigns_count") or 0),
         "accounts_count": int(row.get("accounts_count") or 0),
@@ -398,6 +422,37 @@ def update_workspace(user_id: int, workspace_id: int, **fields) -> dict:
                 f"UPDATE workspaces SET {', '.join(sets)}, updated_at = NOW() WHERE id = %s AND user_id = %s",
                 (*params, workspace_id, user_id),
             )
+    return get_workspace(user_id, workspace_id)
+
+
+def _edit_facts(user_id: int, workspace_id: int, edit) -> list[dict]:
+    with pool.connection() as conn:
+        row = conn.execute(
+            "SELECT ai_facts FROM workspaces WHERE id = %s AND user_id = %s FOR UPDATE", (workspace_id, user_id)
+        ).fetchone()
+        if row is None:
+            raise YandexError("not-found")
+        facts = edit(normalize_ai_facts(row["ai_facts"]))[-MAX_AI_FACTS:]
+        conn.execute(
+            "UPDATE workspaces SET ai_facts = %s, updated_at = NOW() WHERE id = %s", (Jsonb(facts), workspace_id)
+        )
+    return facts
+
+
+def remember_ai_fact(user_id: int, workspace_id: int, *, key: str, question: str, answer: str) -> list[dict]:
+    """Запомнить ответ маркетолога; тот же key заменяет прежний ответ."""
+    key = fact_key(key)
+    answer = (answer or "").strip()
+    if not key or not answer:
+        raise YandexError("args", "Нужны key и answer")
+    fact = normalize_ai_facts([{"key": key, "question": question, "answer": answer}])[0]
+    fact["at"] = datetime.now(timezone.utc).isoformat()
+    return _edit_facts(user_id, workspace_id, lambda facts: [*(f for f in facts if f["key"] != key), fact])
+
+
+def forget_ai_fact(user_id: int, workspace_id: int, key: str) -> dict:
+    key = fact_key(key)
+    _edit_facts(user_id, workspace_id, lambda facts: [f for f in facts if f["key"] != key])
     return get_workspace(user_id, workspace_id)
 
 

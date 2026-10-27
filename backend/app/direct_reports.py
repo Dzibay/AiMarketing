@@ -41,9 +41,15 @@ def fetch_report(
     date_from: date,
     date_to: date,
     filters: list[dict] | None = None,
+    goals: list[int] | None = None,
+    attribution_models: list[str] | None = None,
     deadline_seconds: float = DEADLINE_SECONDS,
 ) -> list[dict]:
-    """Строки TSV-отчёта (ключи — FieldNames). Ошибка Директа — YandexError."""
+    """Строки TSV-отчёта (ключи — FieldNames). Ошибка Директа — YandexError.
+
+    goals — до 10 целей Метрики: вместо Conversions/Revenue приходят столбцы
+    Conversions_<цель>_<модель атрибуции> и Revenue_<цель>_<модель>.
+    """
     headers = {
         **direct_api.headers(token, client_login),
         "processingMode": "auto",
@@ -69,6 +75,10 @@ def fetch_report(
             "IncludeDiscount": "NO",
         }
     }
+    if goals:
+        body["params"]["Goals"] = [int(g) for g in goals]
+    if attribution_models:
+        body["params"]["AttributionModels"] = list(attribution_models)
     url = direct_api.v5_url(token, "reports")
     deadline = time.monotonic() + deadline_seconds
     while True:

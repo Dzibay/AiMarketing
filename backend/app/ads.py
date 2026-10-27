@@ -1,8 +1,16 @@
-"""Объявления Яндекс Директа (TextAd)."""
+"""Объявления Яндекс Директа: текстовые (TextAd), комбинаторные (ResponsiveAd) и графические.
+
+В ЕПК с 30.06.2026 текстово-графические объявления только редактируются, новые — комбинаторные
+(RESPONSIVE_AD): до 7 заголовков, до 3 текстов, до 5 картинок. Читаем их через
+ResponsiveAdFieldNames: без него Директ отдаёт комбинаторное как TextAd с первым заголовком,
+текстом и картинкой, а правка через TextAd оставляет в объявлении по одному варианту.
+"""
 
 from __future__ import annotations
 
 import logging
+
+from psycopg.types.json import Jsonb
 
 from app import direct_api
 from app.adgroups import _adgroup_row
@@ -19,23 +27,75 @@ def _call(access_token: str, client_login: str, method: str, params: dict) -> di
 
 
 AD_FIELDS = ["Id", "AdGroupId", "Type", "State", "Status"]
-TEXT_AD_FIELDS = ["Title", "Title2", "Text", "Href"]
+TEXT_AD_FIELDS = ["Title", "Title2", "Text", "Href", "AdImageHash"]
+RESPONSIVE_AD_FIELDS = ["Titles", "Texts", "Href", "AdImages"]
+TEXT_IMAGE_AD_FIELDS = ["Href", "AdImageHash"]
+# Поля ads.get для списков: без ResponsiveAdFieldNames комбинаторные теряют варианты.
+AD_GET_FIELDS = {
+    "FieldNames": AD_FIELDS,
+    "TextAdFieldNames": TEXT_AD_FIELDS,
+    "ResponsiveAdFieldNames": RESPONSIVE_AD_FIELDS,
+    "TextImageAdFieldNames": TEXT_IMAGE_AD_FIELDS,
+}
+
+# Пределы Директа: заголовок до 56 символов, текст до 81, у комбинаторного до 7 заголовков и 3 текстов.
+TITLE_LEN = 56
+TITLE2_LEN = 30
+TEXT_LEN = 81
+MAX_TITLES = 7
+MAX_TEXTS = 3
+# В AdGroupIds у ads.get не больше 1000 групп.
+GET_GROUPS = 1000
+
+_RESULT_KEYS = {
+    "suspend": "SuspendResults",
+    "resume": "ResumeResults",
+    "archive": "ArchiveResults",
+    "unarchive": "UnarchiveResults",
+    "delete": "DeleteResults",
+}
+
+
+def clean_variants(values, limit: int, length: int) -> list[str]:
+    """Варианты заголовков или текстов: без пустых и повторов, обрезанные до пределов Директа."""
+    out: list[str] = []
+    for value in values or []:
+        text = str(value or "").strip()[:length].strip()
+        if text and text not in out:
+            out.append(text)
+        if len(out) >= limit:
+            break
+    return out
+
+
+def _href(value: str | None) -> str:
+    href = (value or "").strip()[:1024]
+    if href and not href.startswith("http://") and not href.startswith("https://"):
+        href = "https://" + href
+    return href
+
+
+def _first_error(result: dict, key: str) -> str | None:
+    errors = direct_api.item_errors(result, key)
+    return errors[0][1] if errors else None
 
 
 def fetch_ads(access_token: str, client_login: str, adgroup_ids: list[int]) -> list[dict]:
-    if not adgroup_ids:
-        return []
-    result = _call(
-        access_token,
-        client_login,
-        "get",
-        {
-            "SelectionCriteria": {"AdGroupIds": adgroup_ids},
-            "FieldNames": AD_FIELDS,
-            "TextAdFieldNames": TEXT_AD_FIELDS,
-        },
-    )
-    return parse_ads(result.get("Ads") or [])
+    items: list[dict] = []
+    for part in direct_api.chunks(list(adgroup_ids), GET_GROUPS):
+        items.extend(
+            direct_api.get_all(
+                access_token, client_login, "ads", {"SelectionCriteria": {"AdGroupIds": part}, **AD_GET_FIELDS}, "Ads"
+            )
+        )
+    return parse_ads(items)
+
+
+def fetch_ad(access_token: str, client_login: str, ad_id: int) -> dict | None:
+    """Объявление как оно сейчас в Директе — или None, если его там нет."""
+    result = _call(access_token, client_login, "get", {"SelectionCriteria": {"Ids": [int(ad_id)]}, **AD_GET_FIELDS})
+    found = parse_ads(result.get("Ads") or [])
+    return found[0] if found else None
 
 
 def parse_ads(raw: list[dict]) -> list[dict]:
@@ -45,18 +105,45 @@ def parse_ads(raw: list[dict]) -> list[dict]:
         aid = item.get("Id")
         if aid is None:
             continue
+        ad_type = str(item.get("Type") or "")
+        responsive = item.get("ResponsiveAd") or {}
         text_ad = item.get("TextAd") or {}
+        image_ad = item.get("TextImageAd") or {}
+        title2 = ""
+        if responsive:
+            ad_type = ad_type if ad_type and ad_type != "TEXT_AD" else "RESPONSIVE_AD"
+            titles = [str(t.get("Title") or "") for t in responsive.get("Titles") or [] if t.get("Title")]
+            texts = [str(t.get("Text") or "") for t in responsive.get("Texts") or [] if t.get("Text")]
+            images = [
+                str(i.get("ImageHash"))
+                for i in (responsive.get("AdImages") or {}).get("Items") or []
+                if i.get("ImageHash")
+            ]
+            href = responsive.get("Href")
+        elif text_ad:
+            titles = [str(text_ad["Title"])] if text_ad.get("Title") else []
+            texts = [str(text_ad["Text"])] if text_ad.get("Text") else []
+            images = [str(text_ad["AdImageHash"])] if text_ad.get("AdImageHash") else []
+            title2 = str(text_ad.get("Title2") or "")
+            href = text_ad.get("Href")
+        else:
+            titles, texts = [], []
+            images = [str(image_ad["AdImageHash"])] if image_ad.get("AdImageHash") else []
+            href = image_ad.get("Href")
         items.append(
             {
                 "ad_id": int(aid),
                 "adgroup_id": int(item.get("AdGroupId") or 0),
-                "type": str(item.get("Type") or ""),
+                "type": ad_type,
                 "state": str(item.get("State") or ""),
                 "status": str(item.get("Status") or ""),
-                "title": str(text_ad.get("Title") or ""),
-                "title2": str(text_ad.get("Title2") or ""),
-                "text": str(text_ad.get("Text") or ""),
-                "href": str(text_ad.get("Href") or ""),
+                "title": titles[0] if titles else "",
+                "title2": title2,
+                "text": texts[0] if texts else "",
+                "href": str(href or ""),
+                "titles": titles,
+                "texts": texts,
+                "image_hashes": images,
             }
         )
     return items
@@ -73,9 +160,10 @@ def upsert_ads(user_id: int, account_id: int, adgroup_row_by_direct_id: dict[int
                 """
                 INSERT INTO direct_ads (
                     user_id, account_id, adgroup_row_id, ad_id,
-                    type, state, status, title, title2, text, href, synced_at
+                    type, state, status, title, title2, text, href,
+                    titles, texts, image_hashes, synced_at
                 )
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
                 ON CONFLICT (account_id, ad_id) DO UPDATE SET
                     adgroup_row_id = EXCLUDED.adgroup_row_id,
                     type = EXCLUDED.type,
@@ -85,6 +173,9 @@ def upsert_ads(user_id: int, account_id: int, adgroup_row_by_direct_id: dict[int
                     title2 = EXCLUDED.title2,
                     text = EXCLUDED.text,
                     href = EXCLUDED.href,
+                    titles = EXCLUDED.titles,
+                    texts = EXCLUDED.texts,
+                    image_hashes = EXCLUDED.image_hashes,
                     synced_at = NOW()
                 """,
                 (
@@ -99,6 +190,9 @@ def upsert_ads(user_id: int, account_id: int, adgroup_row_by_direct_id: dict[int
                     item.get("title2") or "",
                     item.get("text") or "",
                     item.get("href") or "",
+                    Jsonb(list(item.get("titles") or [])),
+                    Jsonb(list(item.get("texts") or [])),
+                    Jsonb(list(item.get("image_hashes") or [])),
                 ),
             )
             count += 1
@@ -161,55 +255,61 @@ def list_ads(user_id: int, *, campaign_row_id: int | None = None, adgroup_row_id
     return [_public(r) for r in rows]
 
 
+def _is_unified(group: dict) -> bool:
+    return group.get("type") == "UNIFIED_AD_GROUP" or group.get("campaign_type") == "UNIFIED_CAMPAIGN"
+
+
 def create_text_ad(
     user_id: int,
     *,
     adgroup_row_id: int,
-    title: str,
-    text: str,
     href: str,
+    title: str = "",
+    text: str = "",
     title2: str = "",
+    titles: list[str] | None = None,
+    texts: list[str] | None = None,
 ) -> dict:
-    title_n = (title or "").strip()[:56]
-    text_n = (text or "").strip()[:81]
-    href_n = (href or "").strip()[:1024]
-    title2_n = (title2 or "").strip()[:30]
-    if not title_n or not text_n or not href_n:
+    """Новое объявление: в ЕПК — комбинаторное со всеми вариантами, в остальных — TextAd."""
+    titles_n = clean_variants(titles or [title], MAX_TITLES, TITLE_LEN)
+    texts_n = clean_variants(texts or [text], MAX_TEXTS, TEXT_LEN)
+    href_n = _href(href)
+    title2_n = (title2 or "").strip()[:TITLE2_LEN]
+    if not titles_n or not texts_n or not href_n:
         raise YandexError("empty")
-    if not href_n.startswith("http://") and not href_n.startswith("https://"):
-        href_n = "https://" + href_n
     group = _adgroup_row(user_id, adgroup_row_id)
     token = get_connection_access_token(group["connection_id"], user_id)
-    text_ad: dict = {
-        "Title": title_n,
-        "Text": text_n,
-        "Href": href_n,
-        "Mobile": "NO",
-    }
-    if title2_n:
-        text_ad["Title2"] = title2_n
-    result = _call(
-        token,
-        group["client_login"],
-        "add",
-        {"Ads": [{"AdGroupId": int(group["adgroup_id"]), "TextAd": text_ad}]},
-    )
+    if _is_unified(group):
+        ad_type = "RESPONSIVE_AD"
+        title2_n = ""  # в комбинаторном объявлении дополнительного заголовка нет
+        payload = {"ResponsiveAd": {"Titles": titles_n, "Texts": texts_n, "Href": href_n}}
+    else:
+        ad_type = "TEXT_AD"
+        titles_n, texts_n = titles_n[:1], texts_n[:1]
+        text_ad: dict = {"Title": titles_n[0], "Text": texts_n[0], "Href": href_n, "Mobile": "NO"}
+        if title2_n:
+            text_ad["Title2"] = title2_n
+        payload = {"TextAd": text_ad}
+    result = _call(token, group["client_login"], "add", {"Ads": [{"AdGroupId": int(group["adgroup_id"]), **payload}]})
+    error = _first_error(result, "AddResults")
     add = (result.get("AddResults") or [{}])[0]
-    if not add.get("Id"):
+    if error or not add.get("Id"):
         log.warning("ads.add fail: %s", add)
-        raise YandexError("direct")
+        raise YandexError("direct", error)
     ad_id = int(add["Id"])
     with pool.connection() as conn:
         row = conn.execute(
             """
             INSERT INTO direct_ads (
                 user_id, account_id, adgroup_row_id, ad_id,
-                type, state, status, title, title2, text, href, synced_at
+                type, state, status, title, title2, text, href,
+                titles, texts, synced_at
             )
-            VALUES (%s, %s, %s, %s, 'TEXT_AD', 'OFF', '', %s, %s, %s, %s, NOW())
+            VALUES (%s, %s, %s, %s, %s, 'OFF', '', %s, %s, %s, %s, %s, %s, NOW())
             ON CONFLICT (account_id, ad_id) DO UPDATE SET
-                title = EXCLUDED.title, title2 = EXCLUDED.title2,
-                text = EXCLUDED.text, href = EXCLUDED.href, synced_at = NOW()
+                type = EXCLUDED.type, title = EXCLUDED.title, title2 = EXCLUDED.title2,
+                text = EXCLUDED.text, href = EXCLUDED.href,
+                titles = EXCLUDED.titles, texts = EXCLUDED.texts, synced_at = NOW()
             RETURNING *
             """,
             (
@@ -217,19 +317,29 @@ def create_text_ad(
                 group["account_id"],
                 adgroup_row_id,
                 ad_id,
-                title_n,
+                ad_type,
+                titles_n[0],
                 title2_n,
-                text_n,
+                texts_n[0],
                 href_n,
+                Jsonb(titles_n),
+                Jsonb(texts_n),
             ),
         ).fetchone()
     log_action(
         user_id,
         "ads",
-        {"adgroup_row_id": adgroup_row_id, "campaign_row_id": group["campaign_row_id"], "title": title_n, "href": href_n},
+        {
+            "adgroup_row_id": adgroup_row_id,
+            "campaign_row_id": group["campaign_row_id"],
+            "title": titles_n[0],
+            "titles": titles_n,
+            "texts": texts_n,
+            "href": href_n,
+        },
         {"ad_id": ad_id},
         "ok",
-        title=f"Объявление в группу «{group['name']}»: «{title_n}»",
+        title=f"Объявление в группу «{group['name']}»: «{titles_n[0]}»",
         undo={
             "label": "Удалить объявление",
             "danger": True,
@@ -240,6 +350,10 @@ def create_text_ad(
     return _public(row)
 
 
+def _replace_first(current: list[str], value: str) -> list[str]:
+    return [value] + current[1:] if current else [value]
+
+
 def update_text_ad(
     user_id: int,
     ad_row_id: int,
@@ -248,61 +362,119 @@ def update_text_ad(
     title2: str | None = None,
     text: str | None = None,
     href: str | None = None,
+    titles: list[str] | None = None,
+    texts: list[str] | None = None,
 ) -> dict:
+    """Правка объявления. Комбинаторное правим через ResponsiveAd целиком — иначе Директ
+    оставит в нём по одному заголовку, тексту и картинке."""
     row = _ad_row(user_id, ad_row_id)
-    text_ad: dict = {}
-    if title is not None:
-        text_ad["Title"] = (title or "").strip()[:56]
-    if title2 is not None:
-        text_ad["Title2"] = (title2 or "").strip()[:30]
-    if text is not None:
-        text_ad["Text"] = (text or "").strip()[:81]
-    if href is not None:
-        href_n = (href or "").strip()[:1024]
-        if href_n and not href_n.startswith("http://") and not href_n.startswith("https://"):
-            href_n = "https://" + href_n
-        text_ad["Href"] = href_n
-    if not text_ad:
-        raise YandexError("empty")
     token = get_connection_access_token(row["connection_id"], user_id)
-    _call(
-        token,
-        row["client_login"],
-        "update",
-        {"Ads": [{"Id": int(row["ad_id"]), "TextAd": text_ad}]},
-    )
-    sets = []
-    params: list = []
-    mapping = {
-        "Title": ("title", title),
-        "Title2": ("title2", title2),
-        "Text": ("text", text),
-        "Href": ("href", href),
+    # Читаем объявление из Директа: тип в базе мог устареть (ТГО обновляются до комбинаторных),
+    # а варианты — поменяться в интерфейсе Директа после синхронизации.
+    current = fetch_ad(token, row["client_login"], int(row["ad_id"])) or {
+        "type": row.get("type") or "",
+        "title": row.get("title") or "",
+        "title2": row.get("title2") or "",
+        "text": row.get("text") or "",
+        "href": row.get("href") or "",
+        "titles": list(row.get("titles") or []),
+        "texts": list(row.get("texts") or []),
     }
-    for api_key, (col, val) in mapping.items():
-        if api_key in text_ad:
-            sets.append(f"{col} = %s")
-            params.append(text_ad[api_key])
-    sets.append("synced_at = NOW()")
-    params.extend([ad_row_id, user_id])
+    cur_titles = list(current.get("titles") or ([current["title"]] if current.get("title") else []))
+    cur_texts = list(current.get("texts") or ([current["text"]] if current.get("text") else []))
+    responsive = current.get("type") == "RESPONSIVE_AD"
+    new_titles = None
+    if titles is not None:
+        new_titles = clean_variants(titles, MAX_TITLES if responsive else 1, TITLE_LEN)
+    elif title is not None:
+        new_titles = clean_variants(_replace_first(cur_titles, title), MAX_TITLES if responsive else 1, TITLE_LEN)
+    new_texts = None
+    if texts is not None:
+        new_texts = clean_variants(texts, MAX_TEXTS if responsive else 1, TEXT_LEN)
+    elif text is not None:
+        new_texts = clean_variants(_replace_first(cur_texts, text), MAX_TEXTS if responsive else 1, TEXT_LEN)
+    if new_titles == [] or new_texts == []:
+        raise YandexError("empty")
+    href_n = _href(href) if href is not None else None
+    title2_n = (title2 or "").strip()[:TITLE2_LEN] if title2 is not None and not responsive else None
+
+    changes: dict = {}
+    if new_titles is not None:
+        changes["titles"] = new_titles
+    if new_texts is not None:
+        changes["texts"] = new_texts
+    if title2_n is not None:
+        changes["title2"] = title2_n
+    if href_n is not None:
+        changes["href"] = href_n
+    if not changes:
+        raise YandexError("empty")
+
+    if responsive:
+        ad: dict = {}
+        if new_titles is not None:
+            ad["Titles"] = new_titles
+        if new_texts is not None:
+            ad["Texts"] = new_texts
+        if href_n is not None:
+            ad["Href"] = href_n
+        if not ad:
+            raise YandexError("empty")
+        payload = {"ResponsiveAd": ad}
+    else:
+        ad = {}
+        if new_titles is not None:
+            ad["Title"] = new_titles[0]
+        if title2_n is not None:
+            ad["Title2"] = title2_n
+        if new_texts is not None:
+            ad["Text"] = new_texts[0]
+        if href_n is not None:
+            ad["Href"] = href_n
+        payload = {"TextAd": ad}
+    result = _call(token, row["client_login"], "update", {"Ads": [{"Id": int(row["ad_id"]), **payload}]})
+    error = _first_error(result, "UpdateResults")
+    if error:
+        log.warning("ads.update fail: %s", result)
+        raise YandexError("direct", error)
+
+    final_titles = new_titles if new_titles is not None else cur_titles
+    final_texts = new_texts if new_texts is not None else cur_texts
     with pool.connection() as conn:
         updated = conn.execute(
-            f"""
-            UPDATE direct_ads SET {', '.join(sets)}
+            """
+            UPDATE direct_ads SET
+                type = %s, title = %s, title2 = %s, text = %s, href = %s,
+                titles = %s, texts = %s, synced_at = NOW()
             WHERE id = %s AND user_id = %s
             RETURNING *
             """,
-            params,
+            (
+                current.get("type") or row.get("type") or "",
+                final_titles[0] if final_titles else "",
+                title2_n if title2_n is not None else ("" if responsive else current.get("title2") or ""),
+                final_texts[0] if final_texts else "",
+                href_n if href_n is not None else current.get("href") or "",
+                Jsonb(final_titles),
+                Jsonb(final_texts),
+                ad_row_id,
+                user_id,
+            ),
         ).fetchone()
-    columns = {"Title": "title", "Title2": "title2", "Text": "text", "Href": "href"}
-    back = {col: row.get(col) or "" for key, col in columns.items() if key in text_ad and text_ad[key] != (row.get(col) or "")}
+    previous = {
+        "titles": cur_titles,
+        "texts": cur_texts,
+        "title2": current.get("title2") or "",
+        "href": current.get("href") or "",
+    }
+    back = {key: previous[key] for key, value in changes.items() if value != previous[key]}
     log_action(
         user_id,
         "ads",
-        {"ad_row_ids": [ad_row_id], "campaign_row_ids": campaigns_of(user_id, "ad", [ad_row_id]), "changes": text_ad},
+        {"ad_row_ids": [ad_row_id], "campaign_row_ids": campaigns_of(user_id, "ad", [ad_row_id]), "changes": changes},
         {"ad_id": row["ad_id"]},
         "ok",
-        title=f"Правка объявления «{row.get('title') or row['ad_id']}»",
+        title=f"Правка объявления «{(cur_titles or [row.get('title')])[0] or row['ad_id']}»",
         undo={
             "label": "Вернуть прежний текст",
             "steps": [{"op": "ad_update", "args": {"ad_row_id": ad_row_id, **back}}] if back else [],
@@ -327,12 +499,14 @@ def bulk_ad_action(user_id: int, *, ad_row_ids: list[int], action: str) -> dict:
     failure: YandexError | None = None
     for client_login, group in by_login.items():
         try:
-            _apply_group(user_id, client_login, group, action)
+            ok, error = _apply_group(user_id, client_login, group, action)
         except YandexError as exc:
             failure = failure or exc
             continue
-        done.extend(group)
-        applied += len(group)
+        if error:
+            failure = failure or YandexError("direct", error)
+        done.extend(ok)
+        applied += len(ok)
     status = "ok" if failure is None else ("partial" if done else "error")
     names = ", ".join(f"«{r.get('title') or r['ad_id']}»" for r in rows[:3]) + (
         f" и ещё {len(rows) - 3}" if len(rows) > 3 else ""
@@ -341,7 +515,7 @@ def bulk_ad_action(user_id: int, *, ad_row_ids: list[int], action: str) -> dict:
         user_id,
         "ads",
         {"ad_row_ids": [r["id"] for r in rows], "campaign_row_ids": campaign_ids, "action": action},
-        {"applied": applied, "error": failure.code if failure else None},
+        {"applied": applied, "error": failure.code if failure else None, "message": failure.message if failure else None},
         status,
         title=f"{_BULK_TITLES[action]}: {names}",
         undo=_bulk_undo(action, done),
@@ -349,7 +523,7 @@ def bulk_ad_action(user_id: int, *, ad_row_ids: list[int], action: str) -> dict:
     )
     if failure is not None and not done:
         raise failure
-    return {"applied": applied, "status": status}
+    return {"applied": applied, "status": status, "error": failure.message if failure else None}
 
 
 _STATES = {"suspend": "SUSPENDED", "resume": "ON", "archive": "ARCHIVED", "unarchive": "OFF"}
@@ -362,18 +536,25 @@ _BULK_TITLES = {
 }
 
 
-def _apply_group(user_id: int, client_login: str, group: list[dict], action: str) -> None:
+def _apply_group(user_id: int, client_login: str, group: list[dict], action: str) -> tuple[list[dict], str | None]:
+    """Действие над объявлениями одного логина → (что применилось, первая ошибка Директа)."""
     token = get_connection_access_token(group[0]["connection_id"], user_id)
-    _call(token, client_login, action, {"SelectionCriteria": {"Ids": [int(r["ad_id"]) for r in group]}})
-    ids = [r["id"] for r in group]
-    with pool.connection() as conn:
-        if action == "delete":
-            conn.execute("DELETE FROM direct_ads WHERE user_id = %s AND id = ANY(%s)", (user_id, ids))
-        else:
-            conn.execute(
-                "UPDATE direct_ads SET state = %s, synced_at = NOW() WHERE id = ANY(%s)",
-                (_STATES[action], ids),
-            )
+    result = _call(token, client_login, action, {"SelectionCriteria": {"Ids": [int(r["ad_id"]) for r in group]}})
+    errors = dict(direct_api.item_errors(result, _RESULT_KEYS[action]))
+    ok = [r for index, r in enumerate(group) if index not in errors]
+    ids = [r["id"] for r in ok]
+    if ids:
+        with pool.connection() as conn:
+            if action == "delete":
+                conn.execute("DELETE FROM direct_ads WHERE user_id = %s AND id = ANY(%s)", (user_id, ids))
+            else:
+                conn.execute(
+                    "UPDATE direct_ads SET state = %s, synced_at = NOW() WHERE id = ANY(%s)",
+                    (_STATES[action], ids),
+                )
+    if errors:
+        log.warning("ads.%s: %s", action, errors)
+    return ok, next(iter(errors.values()), None)
 
 
 def _bulk_undo(action: str, done: list[dict]) -> dict | None:
@@ -414,6 +595,8 @@ def _ad_row(user_id: int, ad_row_id: int) -> dict:
 
 
 def _public(row: dict) -> dict:
+    title = row.get("title") or ""
+    text = row.get("text") or ""
     return {
         "id": row["id"],
         "account_id": row["account_id"],
@@ -422,10 +605,13 @@ def _public(row: dict) -> dict:
         "type": row.get("type") or "",
         "state": row.get("state") or "",
         "status": row.get("status") or "",
-        "title": row.get("title") or "",
+        "title": title,
         "title2": row.get("title2") or "",
-        "text": row.get("text") or "",
+        "text": text,
         "href": row.get("href") or "",
+        "titles": list(row.get("titles") or ([title] if title else [])),
+        "texts": list(row.get("texts") or ([text] if text else [])),
+        "image_hashes": list(row.get("image_hashes") or []),
         "adgroup_name": row.get("adgroup_name") or "",
         "adgroup_id": row.get("adgroup_id"),
         "synced_at": row["synced_at"].isoformat() if row.get("synced_at") else None,

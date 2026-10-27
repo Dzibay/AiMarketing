@@ -110,6 +110,8 @@ def create_oauth_state(*, purpose: str, user_id: int | None = None, mode: str = 
         raise YandexError("purpose")
     if mode not in OAUTH_MODES:
         raise YandexError("mode")
+    if mode == "sandbox":
+        raise YandexError("sandbox", direct_api.SANDBOX_CLOSED)
     if purpose == "connect" and user_id is None:
         raise YandexError("unauthorized")
     _purge_expired_states()
@@ -529,6 +531,8 @@ CLIENT_FIELDS = ["ClientId", "ClientInfo", "Login", "Currency", "Type"]
 
 def _direct_get(access_token: str, service: str, params: dict) -> tuple[list[dict], str]:
     """get в clients / agencyclients: (элементы, ошибка_или_пусто) — ошибка в формате ``direct_sync_error``."""
+    if direct_api.is_sandbox(access_token):
+        return [], f"direct-denied|{direct_api.SANDBOX_CLOSED}"
     url = direct_api.v5_url(access_token, service)
     try:
         response = direct_api.post_json(

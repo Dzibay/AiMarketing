@@ -100,6 +100,7 @@
             <div class="ad-preview">
               <strong>{{ ad.title }}<template v-if="ad.title2"> — {{ ad.title2 }}</template></strong>
               <span>{{ ad.text }}</span>
+              <small v-if="variantsLabel(ad)">{{ variantsLabel(ad) }}</small>
               <small>
                 {{ displayHost(ad.href) }} · {{ CAMPAIGN_STATES[ad.state] || ad.state || '—' }} /
                 {{ CAMPAIGN_STATUSES[ad.status] || ad.status || '—' }} · {{ ad.adgroup_name }}
@@ -325,14 +326,28 @@
           <label>Заголовок 1 <span class="field-hint">{{ adForm.title.length }}/56</span></label>
           <input v-model="adForm.title" type="text" maxlength="56" required />
         </div>
-        <div class="field field--wide">
+        <div v-if="!adResponsive" class="field field--wide">
           <label>Заголовок 2 <span class="field-hint">{{ adForm.title2.length }}/30</span></label>
           <input v-model="adForm.title2" type="text" maxlength="30" />
+        </div>
+        <div v-else class="field field--wide">
+          <label>Ещё заголовки — по одному на строку, до 6 <span class="field-hint">до 56 символов</span></label>
+          <textarea v-model="adForm.more_titles" rows="3"></textarea>
         </div>
         <div class="field field--wide">
           <label>Текст <span class="field-hint">{{ adForm.text.length }}/81</span></label>
           <textarea v-model="adForm.text" rows="2" maxlength="81" required></textarea>
         </div>
+        <div v-if="adResponsive" class="field field--wide">
+          <label>Ещё тексты — по одному на строку, до 2 <span class="field-hint">до 81 символа</span></label>
+          <textarea v-model="adForm.more_texts" rows="2"></textarea>
+        </div>
+        <p v-if="adResponsive" class="field-hint field--wide">
+          Комбинаторное объявление ЕПК: Директ сам собирает показы из заголовков и текстов.
+          <template v-if="adModal.item?.image_hashes?.length">
+            Картинки ({{ adModal.item.image_hashes.length }}) остаются как есть.
+          </template>
+        </p>
         <div class="field field--wide">
           <label>Ссылка</label>
           <input v-model="adForm.href" type="url" placeholder="https://…" required />
@@ -386,7 +401,36 @@ const selectedQueries = ref(new Set())
 const kwSearch = ref('')
 const groupForm = reactive({ name: '' })
 const adModal = reactive({ open: false, item: null })
-const adForm = reactive({ adgroup_row_id: '', title: '', title2: '', text: '', href: '' })
+const adForm = reactive({
+  adgroup_row_id: '',
+  title: '',
+  title2: '',
+  text: '',
+  more_titles: '',
+  more_texts: '',
+  href: '',
+})
+// Комбинаторное объявление: так Директ создаёт новые объявления в ЕПК.
+const adResponsive = computed(() =>
+  adModal.item
+    ? adModal.item.type === 'RESPONSIVE_AD'
+    : (campaign.value?.campaign_type || campaign.value?.type) === 'UNIFIED_CAMPAIGN',
+)
+
+function variantsLabel(ad) {
+  const parts = []
+  if ((ad.titles || []).length > 1) parts.push(`заголовков: ${ad.titles.length}`)
+  if ((ad.texts || []).length > 1) parts.push(`текстов: ${ad.texts.length}`)
+  if ((ad.image_hashes || []).length) parts.push(`картинок: ${ad.image_hashes.length}`)
+  return parts.join(' · ')
+}
+
+function variantLines(text) {
+  return String(text || '')
+    .split('\n')
+    .map((l) => l.trim())
+    .filter(Boolean)
+}
 const kwForm = reactive({ adgroup_row_id: '', text: '', bid_rub: '' })
 const negForm = reactive({ text: '' })
 
@@ -591,16 +635,24 @@ function saveNegatives() {
 function openAdForm(ad) {
   adModal.item = ad
   adForm.adgroup_row_id = ad ? String(ad.adgroup_row_id) : selectedGroup.value ? String(selectedGroup.value) : ''
-  adForm.title = ad?.title || ''
+  adForm.title = ad?.titles?.[0] || ad?.title || ''
   adForm.title2 = ad?.title2 || ''
-  adForm.text = ad?.text || ''
+  adForm.text = ad?.texts?.[0] || ad?.text || ''
+  adForm.more_titles = (ad?.titles || []).slice(1).join('\n')
+  adForm.more_texts = (ad?.texts || []).slice(1).join('\n')
   adForm.href = ad?.href || ''
   adModal.open = true
 }
 
 function saveAd() {
   return run(async () => {
-    const fields = { title: adForm.title, title2: adForm.title2, text: adForm.text, href: adForm.href }
+    const fields = adResponsive.value
+      ? {
+          titles: [adForm.title, ...variantLines(adForm.more_titles)].slice(0, 7),
+          texts: [adForm.text, ...variantLines(adForm.more_texts)].slice(0, 3),
+          href: adForm.href,
+        }
+      : { title: adForm.title, title2: adForm.title2, text: adForm.text, href: adForm.href }
     if (adModal.item) await webApi.patchAd(adModal.item.id, fields)
     else await webApi.createAd({ adgroup_row_id: Number(adForm.adgroup_row_id), ...fields })
     pushToast(adModal.item ? 'Объявление обновлено — уйдёт на модерацию' : 'Объявление создано черновиком')

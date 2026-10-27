@@ -179,6 +179,9 @@ class TextAdBody(BaseModel):
     title2: str = ""
     text: str = ""
     href: str = ""
+    # Варианты комбинаторного объявления ЕПК: до 7 заголовков и 3 текстов.
+    titles: list[str] | None = None
+    texts: list[str] | None = None
 
 
 class TextAdPatchBody(BaseModel):
@@ -186,6 +189,8 @@ class TextAdPatchBody(BaseModel):
     title2: str | None = None
     text: str | None = None
     href: str | None = None
+    titles: list[str] | None = None
+    texts: list[str] | None = None
 
 
 class AdActionBody(BaseModel):
@@ -790,6 +795,8 @@ def web_create_ad(body: TextAdBody, user_id: int = Depends(require_web_user)) ->
             title2=body.title2,
             text=body.text,
             href=body.href,
+            titles=body.titles,
+            texts=body.texts,
         )
     except YandexError as exc:
         raise _http(exc) from exc
@@ -809,6 +816,8 @@ def web_patch_ad(
             title2=body.title2,
             text=body.text,
             href=body.href,
+            titles=body.titles,
+            texts=body.texts,
         )
     except YandexError as exc:
         raise _http(exc) from exc

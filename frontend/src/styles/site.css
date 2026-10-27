@@ -2972,6 +2972,56 @@ body.has-modal {
   font-size: 0.82rem;
 }
 
+.ai-facts {
+  display: grid;
+  gap: 0.5rem;
+  margin-top: 1.4rem;
+  padding-top: 1.1rem;
+  border-top: 1px solid var(--line);
+}
+
+.ai-facts h3 {
+  margin: 0;
+  font-size: 0.95rem;
+}
+
+.ai-facts .hint {
+  margin: 0;
+}
+
+.ai-facts__list {
+  display: grid;
+  gap: 0.5rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ai-facts__item {
+  display: flex;
+  gap: 1rem;
+  align-items: flex-start;
+  justify-content: space-between;
+  padding: 0.7rem 0.9rem;
+  border: 1px solid var(--line);
+}
+
+.ai-facts__text {
+  display: grid;
+  gap: 0.2rem;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.ai-facts__text span {
+  white-space: pre-wrap;
+}
+
+.ai-facts__text small {
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
 /* --- Чат с ИИ --- */
 
 .chat {
@@ -3118,6 +3168,53 @@ body.has-modal {
 
 .chat__suggestions .quick-action {
   font-size: 0.9rem;
+}
+
+.chat__review {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem 1rem;
+  align-items: center;
+}
+
+.chat__review .hint {
+  flex: 1 1 260px;
+  font-size: 0.88rem;
+}
+
+.chat__subhead {
+  margin: 0.4rem 0 0;
+  font-size: 0.78rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+
+.chat__notes {
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.chat__notes summary {
+  cursor: pointer;
+}
+
+.chat__notes ul {
+  margin: 0.35rem 0 0;
+  padding-left: 1.1rem;
+}
+
+.quick-action--warn {
+  border-color: rgba(161, 92, 0, 0.35);
+  background: rgba(161, 92, 0, 0.06);
+}
+
+.quick-action__more {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .msg {

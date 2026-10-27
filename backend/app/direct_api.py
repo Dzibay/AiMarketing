@@ -1,8 +1,7 @@
-"""Общий клиент API Директа: боевой и песочница.
+"""Общий клиент API Директа.
 
-Песочница — тот же OAuth-токен, но другие адреса API. Чтобы не протаскивать флаг через
-все вызовы, токен подключения-песочницы — это строка с признаком ``sandbox``: модули
-просто передают его дальше, а адрес выбирает ``v5_url``.
+Токен подключения-песочницы — строка с признаком ``sandbox``. Песочницу Яндекс отключил
+15.07.2026: вызовы с таким токеном сразу падают с понятной ошибкой, а не уходят на мёртвый адрес.
 """
 
 from __future__ import annotations
@@ -25,6 +24,8 @@ LIVE4_SANDBOX = "https://api-sandbox.direct.yandex.ru/live/v4/json/"
 
 # Наибольшая страница get в API v5.
 PAGE_LIMIT = 10000
+
+SANDBOX_CLOSED = "Песочница API Директа отключена Яндексом 15.07.2026 — подключите боевой кабинет"
 
 # Баллы из заголовка Units последнего ответа по логину клиента: (потрачено, остаток, лимит).
 _units: dict[str, tuple[int, int, int]] = {}
@@ -121,6 +122,8 @@ def call(token, client_login: str | None, service: str, method: str, params: dic
     """POST в сервис API v5; ошибка запроса целиком — YandexError, результат — payload["result"]."""
     from app.yandex import YandexError, direct_api_error
 
+    if is_sandbox(token):
+        raise YandexError("sandbox", SANDBOX_CLOSED)
     # get идемпотентен. add/update при 504 могли уже пройти на стороне Директа — не повторяем.
     try:
         response = post_json(
