@@ -47,7 +47,6 @@ def main() -> None:
     code, me = req("GET", "/api/web/me", token=token)
     print("me", code, me.get("user", {}).get("email"))
     print("campaigns", req("GET", "/api/web/direct/campaigns", token=token))
-    print("analytics", req("GET", "/api/web/analytics", token=token)[0])
     code, rule = req(
         "POST",
         "/api/web/rules",
@@ -64,12 +63,13 @@ def main() -> None:
     print("run", req("POST", f"/api/web/rules/{rule['id']}/run?dry_run=true", token=token))
     print("dup", req("POST", "/api/web/register", {"email": "qa@example.com", "password": "password123"}))
     print("login", req("POST", "/api/web/login", {"email": "qa@example.com", "password": "password123"})[0])
-    print("links", req("GET", "/api/web/links", token=token))
-    code, analytics = req("GET", "/api/web/analytics", token=token)
-    assert code == 200, analytics
-    assert "links_count" in analytics, analytics
-    assert "cpa_goal_kopecks" in analytics.get("totals", {}), analytics
-    print("analytics_links", code, analytics.get("links_count"))
+    # Аналитика живёт в рабочих пространствах (одно на счётчик Метрики); у нового пользователя их нет.
+    code, workspaces = req("GET", "/api/web/workspaces", token=token)
+    print("workspaces", code, len(workspaces.get("items") or []))
+    assert code == 200 and workspaces.get("items") == [], workspaces
+    code, overview = req("GET", "/api/web/overview", token=token)
+    print("overview", code, len(overview.get("workspaces") or []), len(overview.get("problems") or []))
+    assert code == 200 and "totals" in overview and "problems" in overview, overview
     code, client = req(
         "POST",
         "/api/web/clients",
