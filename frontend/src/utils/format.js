@@ -57,6 +57,18 @@ export function formatDateTime(iso) {
   return new Date(iso).toLocaleString('ru-RU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })
 }
 
+/** «только что», «12 мин назад», «3 ч назад», дальше — дата и время. */
+export function timeAgo(iso, now = Date.now()) {
+  if (!iso) return ''
+  const minutes = Math.round((now - new Date(iso).getTime()) / 60000)
+  if (Number.isNaN(minutes)) return ''
+  if (minutes < 1) return 'только что'
+  if (minutes < 60) return `${minutes} мин назад`
+  const hours = Math.round(minutes / 60)
+  if (hours < 24) return `${hours} ч назад`
+  return formatDateTime(iso)
+}
+
 export function formatDate(iso) {
   if (!iso) return '—'
   const d = iso.length === 10 ? new Date(`${iso}T00:00:00`) : new Date(iso)

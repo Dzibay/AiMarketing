@@ -47,6 +47,8 @@ def test_handlers_cover_web_and_scheduler_kinds():
     expected = {
         "sync_connection",
         "sync_account_campaigns",
+        "load_account",
+        "load_counter",
         "sync_campaign_structure",
         "sync_search_queries",
         "sync_goals",
@@ -57,7 +59,7 @@ def test_handlers_cover_web_and_scheduler_kinds():
         "run_rules",
     }
     assert expected <= set(HANDLERS)
-    assert set(SCHEDULES) == {"connections", "campaigns", "stats", "today", "digest", "rules", "purge_jobs"}
+    assert set(SCHEDULES) == {"connections", "accounts", "counters", "today", "digest", "rules", "purge_jobs"}
     assert all(interval >= 60 for interval, _ in SCHEDULES.values())
 
 

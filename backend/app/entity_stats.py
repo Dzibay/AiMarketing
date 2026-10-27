@@ -7,14 +7,13 @@ import io
 import logging
 import time
 from datetime import date, timedelta
-from decimal import Decimal
 
 import httpx
 
 from app import direct_api
 from app.adgroups import _campaign_row
 from app.db import pool
-from app.stats import _rub_to_kopecks
+from app.stats import _count, _rub_to_kopecks
 from app.sync_runs import finish_run, start_run
 from app.yandex import YandexError, get_connection_access_token
 
@@ -112,10 +111,10 @@ def _agg_metrics(rows: list[dict], id_field: str) -> dict[int, dict]:
         if bucket is None:
             bucket = {"impressions": 0, "clicks": 0, "cost_kopecks": 0, "conversions": 0}
             out[eid] = bucket
-        bucket["impressions"] += int(Decimal(str(item.get("Impressions") or 0)))
-        bucket["clicks"] += int(Decimal(str(item.get("Clicks") or 0)))
+        bucket["impressions"] += _count(item.get("Impressions"))
+        bucket["clicks"] += _count(item.get("Clicks"))
         bucket["cost_kopecks"] += _rub_to_kopecks(item.get("Cost"))
-        bucket["conversions"] += int(Decimal(str(item.get("Conversions") or 0)))
+        bucket["conversions"] += _count(item.get("Conversions"))
     return out
 
 
@@ -283,3 +282,57 @@ def sync_campaign_entity_stats(
         log.exception("entity stats")
         finish_run(run_id, status="error", error="direct")
         raise YandexError("direct") from exc
+
+
+def write_account_period_stats(
+    user_id: int,
+    account_id: int,
+    *,
+    date_from: date,
+    date_to: date,
+    adgroup_metrics: dict[int, dict],
+    keyword_metrics: dict[int, dict],
+) -> None:
+    """Периодная статистика всех групп и фраз кабинета: у кого нет строк в отчёте — нули."""
+
+    def _params(metrics: dict[int, dict]) -> list[tuple]:
+        return [
+            (m["impressions"], m["clicks"], m["cost_kopecks"], m["conversions"], account_id, entity_id)
+            for entity_id, m in metrics.items()
+        ]
+
+    with pool.connection() as conn:
+        for table in ("direct_adgroups", "direct_keywords"):
+            conn.execute(
+                f"""
+                UPDATE {table} SET
+                    period_impressions = 0,
+                    period_clicks = 0,
+                    period_cost_kopecks = 0,
+                    period_conversions = 0,
+                    stats_from = %s,
+                    stats_to = %s,
+                    stats_synced_at = NOW()
+                WHERE user_id = %s AND account_id = %s
+                """,
+                (date_from, date_to, user_id, account_id),
+            )
+        with conn.cursor() as cur:
+            cur.executemany(
+                """
+                UPDATE direct_adgroups SET
+                    period_impressions = %s, period_clicks = %s,
+                    period_cost_kopecks = %s, period_conversions = %s
+                WHERE account_id = %s AND adgroup_id = %s
+                """,
+                _params(adgroup_metrics),
+            )
+            cur.executemany(
+                """
+                UPDATE direct_keywords SET
+                    period_impressions = %s, period_clicks = %s,
+                    period_cost_kopecks = %s, period_conversions = %s
+                WHERE account_id = %s AND keyword_id = %s
+                """,
+                _params(keyword_metrics),
+            )

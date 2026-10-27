@@ -85,6 +85,7 @@ export const wsApi = {
   list: (archived = false) => request(`/api/web/workspaces${query({ archived })}`),
   refresh: () => post('/api/web/workspaces/refresh'),
   get: (id) => request(WS(id)),
+  load: (id) => request(`${WS(id)}/load`),
   update: (id, payload) => patch(WS(id), payload),
   summary: (id) => request(`${WS(id)}/summary`),
   analytics: (id, params = {}) => request(`${WS(id)}/analytics${query(params)}`),
@@ -171,8 +172,11 @@ export const webApi = {
     request(`/api/web/metrika/${id}`, { method: 'PATCH', body: JSON.stringify({ enabled }) }),
   patchDirect: (id, enabled) =>
     request(`/api/web/direct/${id}`, { method: 'PATCH', body: JSON.stringify({ enabled }) }),
-  syncAccount: (accountId, onProgress) =>
-    runJob(`/api/web/direct/${accountId}/sync`, undefined, onProgress),
+  // Загрузки кабинетов и счётчиков идут минутами: ставим задачу и не ждём — прогресс в шапке и на карточке.
+  refreshAccount: (accountId) => post(`/api/web/direct/${accountId}/sync`),
+  reloadAccount: (accountId) => post(`/api/web/direct/${accountId}/load`),
+  loadCounter: (counterRowId) => post(`/api/web/metrika/${counterRowId}/load`),
+  loads: () => request('/api/web/loads'),
   clients: () => request('/api/web/clients'),
   createClient: (payload) => request('/api/web/clients', { method: 'POST', body: JSON.stringify(payload) }),
   patchClient: (id, payload) =>
@@ -379,11 +383,15 @@ export const ERRORS = {
   'ai-json': 'ИИ ответил не по формату. Попробуйте ещё раз.',
   site: 'Не удалось прочитать сайт.',
   undo: 'Это действие нельзя откатить.',
+  units: 'Закончились баллы API Директа — загрузка продолжится автоматически, когда они восстановятся.',
+  stopped: 'Загрузка остановлена: кабинет выключен.',
 }
 
 export const JOB_LABELS = {
   sync_connection: 'Синк аккаунта Яндекса',
   sync_account_campaigns: 'Синк кампаний',
+  load_account: 'Загрузка кабинета Директа',
+  load_counter: 'Загрузка счётчика Метрики',
   sync_campaign_structure: 'Синк структуры кампании',
   sync_search_queries: 'Синк поисковых запросов',
   sync_goals: 'Синк целей Метрики',

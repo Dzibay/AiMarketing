@@ -157,15 +157,35 @@
                 № {{ m.counter_id }}
                 <template v-if="m.site"> · {{ m.site }}</template>
                 · @{{ connectionLogin(m.connection_id) }}
-                <template v-if="goalCounts[m.id] != null"> · целей: {{ goalCounts[m.id] }}</template>
               </small>
+              <template v-if="m.enabled">
+                <p v-if="counterLoad(m).canonical === false" class="sync-status">
+                  Этот счётчик виден и через другой подключённый логин — данные загружаются там.
+                </p>
+                <template v-else>
+                  <LoadStages :stages="counterLoad(m).stages" :active="Boolean(counterLoad(m).job)" />
+                  <div class="sync-status">
+                    <template v-if="counterLoad(m).job">{{ jobText(counterLoad(m).job) }}</template>
+                    <template v-else-if="counterLoad(m).loaded_at">
+                      загружен {{ formatDateTime(counterLoad(m).loaded_at) }}, визиты — каждые 6 часов
+                    </template>
+                    <template v-else>ещё не загружен целиком</template>
+                  </div>
+                </template>
+              </template>
             </div>
             <div class="row-actions">
               <RouterLink v-if="workspaceFor(m)" class="btn btn--ghost" :to="`/w/${workspaceFor(m).id}/summary`">
                 Пространство
               </RouterLink>
-              <button class="btn btn--ghost" type="button" :disabled="goalsBusy === m.id" @click="syncGoals(m)">
-                {{ goalsBusy === m.id ? 'Цели…' : 'Обновить цели' }}
+              <button
+                v-if="m.enabled && counterLoad(m).canonical !== false"
+                class="btn btn--ghost"
+                type="button"
+                :disabled="Boolean(counterLoad(m).job) || loadBusy === `c${m.id}`"
+                @click="loadCounter(m)"
+              >
+                {{ counterLoad(m).job ? 'Загружается…' : 'Обновить данные' }}
               </button>
               <button class="btn btn--ghost" type="button" @click="toggleCounter(m)">
                 {{ m.enabled ? 'Выключить' : 'Включить' }}
@@ -187,7 +207,9 @@
         </div>
         <p class="hint">
           Кампании кабинета раскладываются по пространствам по счётчику в их настройках; остальные можно добавить
-          вручную в настройках пространства.
+          вручную в настройках пространства. Включённый кабинет загружается целиком за 30 дней, дальше данные
+          актуализируются сами: кампании и изменения структуры — каждый час, статистика — каждые 6 часов, поисковые
+          запросы — раз в сутки.
         </p>
         <div v-if="filteredAccounts.length" class="list">
           <div v-for="a in filteredAccounts" :key="a.id" class="list-row" :class="{ 'is-off': !a.enabled }">
@@ -203,16 +225,50 @@
                 · {{ a.campaigns }} {{ plural(a.campaigns, 'кампания', 'кампании', 'кампаний') }}
                 · {{ a.workspaces ? `в ${a.workspaces} ${plural(a.workspaces, 'пространстве', 'пространствах', 'пространствах')}` : 'не в пространстве' }}
               </small>
-              <div v-if="a.last_sync_status" class="sync-status" :class="syncClass(a.last_sync_status)">
+              <template v-if="a.enabled">
+                <LoadStages :stages="accountLoad(a).stages" :active="Boolean(accountLoad(a).job)" />
+                <div class="sync-status">
+                  <template v-if="accountLoad(a).job">{{ jobText(accountLoad(a).job) }}</template>
+                  <template v-else-if="accountLoad(a).loaded_at">
+                    загружен {{ formatDateTime(accountLoad(a).loaded_at) }}, дальше актуализируем каждый час
+                  </template>
+                  <template v-else>ещё не загружен целиком — продолжим автоматически</template>
+                  <template v-if="accountLoad(a).units">
+                    · баллы API: {{ num(accountLoad(a).units.left) }} из {{ num(accountLoad(a).units.limit) }}
+                  </template>
+                </div>
+              </template>
+              <div
+                v-if="a.last_sync_status && a.last_sync_status !== 'ok'"
+                class="sync-status"
+                :class="syncClass(a.last_sync_status)"
+              >
                 кампании: {{ SYNC_STATUS[a.last_sync_status] || a.last_sync_status }}
                 <template v-if="a.last_sync_at"> · {{ formatDateTime(a.last_sync_at) }}</template>
                 <template v-if="a.last_sync_error"> · {{ errorDetail(a.last_sync_error) }}</template>
               </div>
             </div>
             <div class="row-actions">
-              <button class="btn btn--ghost" type="button" :disabled="accountBusy === a.id" @click="syncAccount(a)">
-                {{ accountBusy === a.id ? 'Кампании…' : 'Обновить кампании' }}
-              </button>
+              <template v-if="a.enabled">
+                <button
+                  class="btn btn--ghost"
+                  type="button"
+                  :disabled="Boolean(accountLoad(a).job) || loadBusy === `a${a.id}`"
+                  title="Кампании, изменения структуры, свежая статистика"
+                  @click="refreshAccount(a)"
+                >
+                  {{ accountLoad(a).job ? 'Загружается…' : 'Обновить' }}
+                </button>
+                <button
+                  class="btn btn--ghost"
+                  type="button"
+                  :disabled="Boolean(accountLoad(a).job) || loadBusy === `a${a.id}`"
+                  title="Все кампании, группы, объявления, фразы, статистика и запросы за 30 дней — с нуля"
+                  @click="reloadAccount(a)"
+                >
+                  Загрузить заново
+                </button>
+              </template>
               <button class="btn btn--ghost" type="button" @click="toggleAccount(a)">
                 {{ a.enabled ? 'Выключить' : 'Включить' }}
               </button>
@@ -253,12 +309,14 @@ import { askConfirm } from '../composables/useConfirm'
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { RouterLink } from 'vue-router'
 import AppShell from '../components/AppShell.vue'
+import LoadStages from '../components/LoadStages.vue'
 import YandexConnectButton from '../components/YandexConnectButton.vue'
 import { errorDetail, errorText, JOB_LABELS, jobProgressText, webApi } from '../api/web'
+import { jobText, refreshLoads, useLoads } from '../composables/useLoads'
 import { pushToast } from '../composables/useToasts'
 import { loadWorkspaces } from '../composables/useWorkspaces'
 import { useHead } from '../utils/useHead'
-import { formatDateTime, plural } from '../utils/format'
+import { formatDateTime, num, plural } from '../utils/format'
 
 useHead('Аккаунты — AiMarketing', true)
 
@@ -276,6 +334,8 @@ const RUN_KINDS = {
   metrika_goals: 'Цели Метрики',
 }
 const JOBS_POLL_MS = 3000
+// Загрузки кабинетов и счётчиков показываем на их карточках, а не в общем списке задач.
+const LOAD_KINDS = new Set(['load_account', 'load_counter'])
 
 const loading = ref(true)
 const me = ref({ connections: [], metrika: [], direct: [], workspaces: [] })
@@ -283,12 +343,13 @@ const syncRuns = ref([])
 const runsLimit = ref(15)
 const activeJobs = ref([])
 const busyId = ref(null)
-const accountBusy = ref(null)
-const goalsBusy = ref(null)
-const goalCounts = ref({})
+const loadBusy = ref('')
 const counterSearch = ref('')
 const accountSearch = ref('')
 let jobsTimer = null
+
+// Загрузка закончилась — тихо обновляем счётчики кампаний и пространства.
+const loads = useLoads({ onFinished: () => reloadAll() })
 
 const connections = computed(() => me.value.connections || [])
 const counters = computed(() => me.value.metrika || [])
@@ -296,6 +357,17 @@ const accounts = computed(() => me.value.direct || [])
 const connById = computed(() => new Map(connections.value.map((c) => [c.id, c])))
 const sandboxAccounts = computed(() => accounts.value.filter(isSandbox))
 const liveAccounts = computed(() => accounts.value.filter((a) => !isSandbox(a)))
+const accountLoads = computed(() => new Map(loads.overview.value.accounts.map((a) => [a.id, a])))
+const counterLoads = computed(() => new Map(loads.overview.value.counters.map((c) => [c.id, c])))
+
+/** Этапы загрузки: свежие из опроса /loads, до первого ответа — из профиля. */
+function accountLoad(a) {
+  return accountLoads.value.get(a.id) || { ...(a.load || {}), job: null }
+}
+
+function counterLoad(m) {
+  return counterLoads.value.get(m.id) || { ...(m.load || {}), job: null }
+}
 
 function isSandbox(account) {
   return Boolean(connById.value.get(account.connection_id)?.sandbox)
@@ -351,7 +423,7 @@ async function pollJobs() {
   jobsTimer = null
   try {
     const data = await webApi.jobs({ active: true })
-    const next = data.items || []
+    const next = (data.items || []).filter((j) => !LOAD_KINDS.has(j.kind))
     const nextIds = new Set(next.map((j) => j.id))
     const finished = activeJobs.value.some((j) => !nextIds.has(j.id))
     activeJobs.value = next
@@ -369,9 +441,9 @@ async function syncConnection(c) {
       if (!jobsTimer) pollJobs()
     })
     const parts = [`счётчиков ${res.metrika ?? 0}`, `кабинетов ${res.direct ?? 0}`]
-    if (res.campaigns != null) parts.push(`кампаний ${res.campaigns}`)
-    pushToast(`Обновлено: ${parts.join(', ')}`)
-    await reloadAll()
+    const tail = res.loads ? ` Загружаем данные: ${res.loads} — прогресс на карточках и в шапке.` : ''
+    pushToast(`Обновлено: ${parts.join(', ')}.${tail}`)
+    await Promise.all([reloadAll(), refreshLoads()])
   } catch (err) {
     pushToast(errorText(err), 'error')
   } finally {
@@ -417,6 +489,7 @@ async function toggleCounter(m) {
     m.enabled = res.enabled
     await loadWorkspaces(true).catch(() => null)
     if (m.enabled) await load(true)
+    refreshLoads()
   } catch (err) {
     pushToast(errorText(err), 'error')
   }
@@ -426,40 +499,50 @@ async function toggleAccount(a) {
   try {
     const res = await webApi.patchDirect(a.id, !a.enabled)
     a.enabled = res.enabled
+    // Включили — сервер сразу ставит загрузку; выключили — идущая остановится на ближайшем шаге.
+    refreshLoads()
   } catch (err) {
     pushToast(errorText(err), 'error')
   }
 }
 
-async function syncAccount(a) {
-  accountBusy.value = a.id
+/** Ставит загрузку и не ждёт её: прогресс виден на карточке и в шапке. */
+async function startLoad(key, call, message) {
+  loadBusy.value = key
   try {
-    const res = await webApi.syncAccount(a.id)
-    pushToast(`Кампаний в кабинете: ${res.campaigns ?? 0}`)
-    await reloadAll()
+    await call()
+    pushToast(message)
+    await refreshLoads()
   } catch (err) {
     pushToast(errorText(err), 'error')
   } finally {
-    accountBusy.value = null
+    loadBusy.value = ''
   }
 }
 
-async function syncGoals(m) {
-  goalsBusy.value = m.id
-  try {
-    const res = await webApi.syncGoals(m.id)
-    goalCounts.value = { ...goalCounts.value, [m.id]: res.goals ?? 0 }
-    pushToast(`Целей у счётчика: ${res.goals ?? 0}`)
-  } catch (err) {
-    pushToast(errorText(err), 'error')
-  } finally {
-    goalsBusy.value = null
-  }
+function refreshAccount(a) {
+  return startLoad(`a${a.id}`, () => webApi.refreshAccount(a.id), 'Обновляем кабинет — прогресс на карточке')
+}
+
+async function reloadAccount(a) {
+  const ok = await askConfirm(
+    `Загрузить кабинет ${a.name || a.client_login} заново? Перечитаем все кампании, группы, объявления, фразы, статистику и запросы за 30 дней — это займёт время и баллы API Директа.`,
+  )
+  if (!ok) return
+  return startLoad(`a${a.id}`, () => webApi.reloadAccount(a.id), 'Загружаем кабинет заново — прогресс на карточке')
+}
+
+function loadCounter(m) {
+  return startLoad(`c${m.id}`, () => webApi.loadCounter(m.id), 'Обновляем цели и визиты счётчика')
 }
 
 onMounted(async () => {
+  loads.start()
   await load()
   pollJobs()
 })
-onUnmounted(() => clearTimeout(jobsTimer))
+onUnmounted(() => {
+  clearTimeout(jobsTimer)
+  loads.stop()
+})
 </script>

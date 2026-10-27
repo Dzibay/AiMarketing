@@ -1,4 +1,4 @@
-from app import yandex
+from app import direct_api, yandex
 from app.yandex import YandexError, direct_api_error, direct_sync_error
 
 
@@ -60,7 +60,7 @@ def _fake_httpx(monkeypatch, responses):
             calls.append((service, json["params"]))
             return responses[service]
 
-    monkeypatch.setattr(yandex.httpx, "Client", Client)
+    monkeypatch.setattr(direct_api.httpx, "Client", Client)
     return calls
 
 
@@ -77,7 +77,8 @@ def test_direct_sync_error_keeps_direct_answer():
     assert direct_sync_error({"error_code": 53, "error_string": "Ошибка авторизации"}, 200) == (
         "direct|Ошибка авторизации (ошибка 53)"
     )
-    assert direct_sync_error(None, 502) == "direct|HTTP 502"
+    assert direct_sync_error(None, 502) == "direct|сервис не ответил (HTTP 502)"
+    assert direct_sync_error(None, 400) == "direct|HTTP 400"
     assert direct_sync_error(None, 200) == "direct"
 
 
@@ -152,3 +153,72 @@ def test_fetch_direct_clients_agency_error(monkeypatch):
         },
     )
     assert yandex.fetch_direct_clients("token") == ([], "direct-denied|Нет прав (ошибка 54)")
+
+
+def _sequence_client(monkeypatch, responses):
+    """Каждый post забирает следующий ответ из списка."""
+    pending = list(responses)
+    calls = []
+
+    class Client:
+        def __init__(self, *a, **kw):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def post(self, url, headers=None, json=None):
+            calls.append(url.rsplit("/", 1)[-1])
+            return pending.pop(0)
+
+    monkeypatch.setattr(direct_api.httpx, "Client", Client)
+    monkeypatch.setattr(direct_api.time, "sleep", lambda _seconds: None)
+    return calls
+
+
+def test_fetch_direct_clients_retries_gateway_504(monkeypatch):
+    calls = _sequence_client(
+        monkeypatch,
+        [
+            _Resp(504, {}),
+            _Resp(504, {}),
+            _Resp(200, {"result": {"Clients": [{"Login": "shop", "ClientId": 7, "ClientInfo": "Магазин"}]}}),
+        ],
+    )
+    clients, error = yandex.fetch_direct_clients("token")
+    assert error == ""
+    assert clients[0]["client_login"] == "shop"
+    assert calls == ["clients", "clients", "clients"]
+
+
+def test_fetch_direct_clients_reports_504_after_retries(monkeypatch):
+    calls = _sequence_client(monkeypatch, [_Resp(504, {}), _Resp(504, {}), _Resp(504, {})])
+    clients, error = yandex.fetch_direct_clients("token")
+    assert clients == []
+    assert error == "direct|сервис не ответил (HTTP 504)"
+    assert len(calls) == 3
+
+
+def test_call_retries_get_but_not_add(monkeypatch):
+    calls = _sequence_client(
+        monkeypatch,
+        [
+            _Resp(504, {}),
+            _Resp(200, {"result": {"Campaigns": []}}),
+        ],
+    )
+    result = direct_api.call("token", None, "campaigns", "get", {"FieldNames": ["Id"]})
+    assert result == {"Campaigns": []}
+    assert calls == ["campaigns", "campaigns"]
+
+    one = _sequence_client(monkeypatch, [_Resp(504, {})])
+    try:
+        direct_api.call("token", None, "campaigns", "add", {"Campaigns": []})
+    except YandexError as exc:
+        assert exc.code == "direct"
+    else:
+        raise AssertionError("add при HTTP 504 должен упасть")
+    assert one == ["campaigns"]

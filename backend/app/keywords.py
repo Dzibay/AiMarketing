@@ -27,6 +27,9 @@ def _rub_to_micros(rub: float | None) -> int | None:
     return int(round(value * 1_000_000))
 
 
+KEYWORD_FIELDS = ["Id", "Keyword", "AdGroupId", "State", "Status", "Bid"]
+
+
 def fetch_keywords(access_token: str, client_login: str, adgroup_ids: list[int]) -> list[dict]:
     if not adgroup_ids:
         return []
@@ -34,13 +37,15 @@ def fetch_keywords(access_token: str, client_login: str, adgroup_ids: list[int])
         access_token,
         client_login,
         "get",
-        {
-            "SelectionCriteria": {"AdGroupIds": adgroup_ids},
-            "FieldNames": ["Id", "Keyword", "AdGroupId", "State", "Status", "Bid"],
-        },
+        {"SelectionCriteria": {"AdGroupIds": adgroup_ids}, "FieldNames": KEYWORD_FIELDS},
     )
+    return parse_keywords(result.get("Keywords") or [])
+
+
+def parse_keywords(raw: list[dict]) -> list[dict]:
+    """Фразы из ответа keywords.get → строки для upsert_keywords."""
     items = []
-    for item in result.get("Keywords") or []:
+    for item in raw:
         kid = item.get("Id")
         if kid is None:
             continue

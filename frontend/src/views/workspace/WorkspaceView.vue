@@ -29,6 +29,10 @@
               </template>
             </span>
             <span v-if="ws.goal_name">цель «{{ ws.goal_name }}»</span>
+            <span v-if="refreshing" class="ws-head__sync">
+              <span class="spinner" aria-hidden="true"></span>
+              обновляем данные
+            </span>
           </p>
         </div>
         <div class="row-actions">
@@ -44,6 +48,25 @@
         Пространство в архиве. Вернуть его можно в <RouterLink :to="`/w/${ws.id}/settings`">настройках</RouterLink>.
       </p>
 
+      <div v-if="pendingItems.length" class="notice ws-loading" role="status">
+        <div class="ws-loading__head">
+          <span v-if="pendingItems.some((i) => i.job)" class="spinner" aria-hidden="true"></span>
+          <strong>Данные ещё загружаются</strong>
+          <span v-if="loadPercent != null" class="ws-loading__pct">{{ loadPercent }}%</span>
+        </div>
+        <div class="load-bar"><span :style="{ width: `${loadPercent || 0}%` }"></span></div>
+        <p>
+          Пока загрузка не закончится, кампании и цифры неполные — разделы обновятся сами. Подробнее — в
+          <RouterLink to="/cabinet/accounts">Аккаунтах</RouterLink>.
+        </p>
+        <ul class="ws-loading__list">
+          <li v-for="item in pendingItems" :key="item.key">
+            <strong>{{ item.title }}</strong>
+            <span>{{ loadLine(item) }}</span>
+          </li>
+        </ul>
+      </div>
+
       <nav class="ws-tabs" aria-label="Разделы пространства">
         <RouterLink
           v-for="tab in tabs"
@@ -56,16 +79,17 @@
         </RouterLink>
       </nav>
 
-      <RouterView :key="ws.id" />
+      <RouterView :key="`${ws.id}:${dataVersion}`" />
     </template>
   </AppShell>
 </template>
 
 <script setup>
-import { computed, provide, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, provide, ref, watch } from 'vue'
 import { RouterLink, RouterView, useRoute } from 'vue-router'
 import AppShell from '../../components/AppShell.vue'
-import { errorText, wsApi } from '../../api/web'
+import { errorDetail, errorText, wsApi } from '../../api/web'
+import { jobPercent, jobText, stageProblem } from '../../composables/useLoads'
 import { patchWorkspaceInList, rememberWorkspace } from '../../composables/useWorkspaces'
 import { useHead } from '../../utils/useHead'
 import { plural, rubles } from '../../utils/format'
@@ -131,13 +155,102 @@ function patch(updated) {
 
 provide(WS_KEY, { ws, reload, patch })
 
+// --- Загрузка данных кабинетов и счётчика пространства ---
+
+const LOAD_ACTIVE_MS = 3000
+const LOAD_WAIT_MS = 30000
+// Разделы с данными из Яндекса: их перерисовываем, когда догрузился очередной этап.
+const DATA_ROUTES = ['ws-summary', 'ws-analytics', 'ws-campaigns', 'ws-campaign', 'ws-queries']
+
+const wsLoad = ref(null)
+const dataVersion = ref(0)
+let loadTimer = null
+
+const loadItems = computed(() => {
+  const d = wsLoad.value
+  if (!d) return []
+  return [
+    ...d.accounts.filter((a) => a.enabled).map((a) => ({ ...a, key: `a${a.id}`, title: a.name || a.client_login })),
+    ...d.counters
+      .filter((c) => c.enabled && c.canonical)
+      .map((c) => ({ ...c, key: `c${c.id}`, title: `Метрика, счётчик № ${c.counter_id}` })),
+  ]
+})
+/** Ещё ни разу не загружены целиком — вместо нулей показываем плашку. */
+const pendingItems = computed(() => loadItems.value.filter((i) => !i.loaded_at))
+/** Всё загружено, идёт плановая актуализация — только тихая отметка в шапке. */
+const refreshing = computed(() => !pendingItems.value.length && loadItems.value.some((i) => i.job))
+
+function stagesDone(item) {
+  return (item.stages || []).filter((s) => s.status === 'ok').length
+}
+
+/** Процент по незагруженным: у идущей задачи — её прогресс, у ждущей — доля готовых этапов. */
+const loadPercent = computed(() => {
+  const items = pendingItems.value
+  if (!items.length) return null
+  const sum = items.reduce((acc, i) => {
+    if (i.job?.status === 'running') return acc + jobPercent(i.job)
+    const total = (i.stages || []).length
+    return acc + (total ? (100 * stagesDone(i)) / total : 0)
+  }, 0)
+  return Math.round(sum / items.length)
+})
+
+function loadLine(item) {
+  if (item.job) return jobText(item.job)
+  const problem = stageProblem(item)
+  if (problem?.error === 'units' || problem?.skipped === 'units') {
+    return 'закончились баллы API Директа — продолжим автоматически'
+  }
+  if (problem) return `${problem.title}: ${errorDetail(problem.error)}`
+  return 'в очереди на загрузку'
+}
+
+function progressMark(data) {
+  // Сколько этапов готово у незагруженных и сколько незагруженных: изменилось — есть новые данные.
+  const items = [...(data?.accounts || []), ...(data?.counters || [])]
+  return items.map((i) => `${i.id}:${i.loaded_at ? 'L' : stagesDone(i)}`).join(',')
+}
+
+async function pollLoad(id) {
+  clearTimeout(loadTimer)
+  loadTimer = null
+  let data = null
+  try {
+    data = await wsApi.load(id)
+  } catch {
+    // Сеть моргнула — попробуем на следующем тике.
+  }
+  if (Number(route.params.wsId) !== id) return
+  if (data) {
+    const before = wsLoad.value ? progressMark(wsLoad.value) : null
+    wsLoad.value = data
+    if (before !== null && before !== progressMark(data)) {
+      reload()
+      if (DATA_ROUTES.includes(route.name)) dataVersion.value += 1
+    }
+  }
+  const anyJob = loadItems.value.some((i) => i.job)
+  if (anyJob || pendingItems.value.length) {
+    loadTimer = setTimeout(() => pollLoad(id), anyJob ? LOAD_ACTIVE_MS : LOAD_WAIT_MS)
+  }
+}
+
 watch(
   () => Number(route.params.wsId),
   (id, prev) => {
     if (!id || id === prev) return
     ws.value = null
+    wsLoad.value = null
     load(id)
+    pollLoad(id)
   },
   { immediate: true },
 )
+
+onBeforeUnmount(() => {
+  clearTimeout(loadTimer)
+  loadTimer = null
+})
 </script>

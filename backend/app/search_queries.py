@@ -8,7 +8,6 @@ import logging
 import time
 from collections import defaultdict
 from datetime import date, timedelta
-from decimal import Decimal
 
 import httpx
 
@@ -26,7 +25,7 @@ from app.query_cleaning import (
     remember_decisions,
     snapshot_labels,
 )
-from app.stats import _rub_to_kopecks
+from app.stats import _count, _rub_to_kopecks
 from app.sync_runs import finish_run, start_run
 from app.yandex import YandexError, get_connection_access_token
 
@@ -109,9 +108,13 @@ def fetch_search_query_report(
     text = response.text.strip()
     if not text:
         return []
-    reader = csv.DictReader(io.StringIO(text), delimiter="\t")
+    return aggregate_query_rows(csv.DictReader(io.StringIO(text), delimiter="\t"))
+
+
+def aggregate_query_rows(rows) -> list[dict]:
+    """Строки SEARCH_QUERY_PERFORMANCE_REPORT → по одной на (группа, запрос без регистра)."""
     aggregated: dict[tuple[int, str], dict] = {}
-    for item in reader:
+    for item in rows:
         query = str(item.get("Query") or "").strip()
         if not query:
             continue
@@ -132,10 +135,10 @@ def fetch_search_query_report(
                 "conversions": 0,
             }
             aggregated[key] = row
-        row["impressions"] += int(Decimal(str(item.get("Impressions") or 0)))
-        row["clicks"] += int(Decimal(str(item.get("Clicks") or 0)))
+        row["impressions"] += _count(item.get("Impressions"))
+        row["clicks"] += _count(item.get("Clicks"))
         row["cost_kopecks"] += _rub_to_kopecks(item.get("Cost"))
-        row["conversions"] += int(Decimal(str(item.get("Conversions") or 0)))
+        row["conversions"] += _count(item.get("Conversions"))
         if not row["matched_keyword"]:
             row["matched_keyword"] = str(item.get("Criterion") or "")[:1024]
     return list(aggregated.values())

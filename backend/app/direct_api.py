@@ -8,15 +8,26 @@
 from __future__ import annotations
 
 import logging
+import time
 
 import httpx
 
 log = logging.getLogger("app.direct_api")
 
+# Шлюз Директа (особенно песочница) часто отвечает так на живой запрос. Повтор уместен
+# только для чтения: add при 504 мог уже создать объект.
+TRANSIENT_STATUS = frozenset({502, 503, 504})
+
 V5 = "https://api.direct.yandex.com/json/v5/"
 V5_SANDBOX = "https://api-sandbox.direct.yandex.com/json/v5/"
 LIVE4 = "https://api.direct.yandex.ru/live/v4/json/"
 LIVE4_SANDBOX = "https://api-sandbox.direct.yandex.ru/live/v4/json/"
+
+# Наибольшая страница get в API v5.
+PAGE_LIMIT = 10000
+
+# Баллы из заголовка Units последнего ответа по логину клиента: (потрачено, остаток, лимит).
+_units: dict[str, tuple[int, int, int]] = {}
 
 
 class AccessToken(str):
@@ -53,19 +64,75 @@ def headers(token, client_login: str | None = None) -> dict:
     return out
 
 
+def post_json(
+    url: str,
+    *,
+    headers: dict | None,
+    body: dict,
+    timeout: float,
+    attempts: int = 1,
+) -> httpx.Response:
+    """POST JSON. attempts>1 повторяет 502/503/504 и обрыв соединения."""
+    last_error: Exception | None = None
+    response: httpx.Response | None = None
+    attempts = max(1, attempts)
+    for attempt in range(attempts):
+        try:
+            with httpx.Client(timeout=timeout) as client:
+                response = client.post(url, headers=headers, json=body)
+        except httpx.HTTPError as exc:
+            last_error = exc
+            response = None
+            log.warning("Директ %s: %s (попытка %s/%s)", url, exc, attempt + 1, attempts)
+        else:
+            if response.status_code not in TRANSIENT_STATUS:
+                return response
+            last_error = None
+            log.warning("Директ %s HTTP %s (попытка %s/%s)", url, response.status_code, attempt + 1, attempts)
+        if attempt + 1 < attempts:
+            time.sleep(0.5 * (attempt + 1))
+    if response is not None:
+        return response
+    assert last_error is not None
+    raise last_error
+
+
+def _remember_units(client_login: str | None, response: httpx.Response) -> None:
+    headers = getattr(response, "headers", None) or {}
+    parts = str(headers.get("Units") or "").split("/")
+    if len(parts) != 3:
+        return
+    try:
+        spent, left, limit = (int(p) for p in parts)
+    except ValueError:
+        return
+    _units[(client_login or "").lower()] = (spent, left, limit)
+
+
+def last_units(client_login: str | None) -> dict | None:
+    """Баллы клиента по последнему ответу API в этом процессе: {"spent", "left", "limit"}."""
+    found = _units.get((client_login or "").lower())
+    if found is None:
+        return None
+    return {"spent": found[0], "left": found[1], "limit": found[2]}
+
+
 def call(token, client_login: str | None, service: str, method: str, params: dict, *, timeout: float = 60.0) -> dict:
     """POST в сервис API v5; ошибка запроса целиком — YandexError, результат — payload["result"]."""
     from app.yandex import YandexError, direct_api_error
 
+    # get идемпотентен. add/update при 504 могли уже пройти на стороне Директа — не повторяем.
     try:
-        with httpx.Client(timeout=timeout) as client:
-            response = client.post(
-                v5_url(token, service),
-                headers=headers(token, client_login),
-                json={"method": method, "params": params},
-            )
+        response = post_json(
+            v5_url(token, service),
+            headers=headers(token, client_login),
+            body={"method": method, "params": params},
+            timeout=timeout,
+            attempts=3 if method == "get" else 1,
+        )
     except httpx.HTTPError as exc:
         raise YandexError("direct") from exc
+    _remember_units(client_login, response)
     try:
         payload = response.json() if response.content else {}
     except ValueError:
@@ -75,6 +142,19 @@ def call(token, client_login: str | None, service: str, method: str, params: dic
         log.warning("%s.%s %s %s", service, method, response.status_code, err or payload)
         raise direct_api_error(payload, response.status_code)
     return payload.get("result") or {}
+
+
+def get_all(token, client_login: str | None, service: str, params: dict, key: str) -> list[dict]:
+    """get со всеми страницами: Директ ставит LimitedBy, если ответ обрезан лимитом страницы."""
+    items: list[dict] = []
+    offset = 0
+    while True:
+        result = call(token, client_login, service, "get", {**params, "Page": {"Limit": PAGE_LIMIT, "Offset": offset}})
+        items.extend(result.get(key) or [])
+        limited = result.get("LimitedBy")
+        if not limited or int(limited) <= offset:
+            return items
+        offset = int(limited)
 
 
 def item_errors(result: dict, key: str) -> list[tuple[int, str]]:

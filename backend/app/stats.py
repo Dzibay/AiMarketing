@@ -82,6 +82,76 @@ def upsert_direct_stat(
         )
 
 
+def parse_campaign_day_rows(raw: list[dict]) -> list[dict]:
+    """Строки CAMPAIGN_PERFORMANCE_REPORT с Date → по строке на (день, кампания)."""
+    merged: dict[tuple[date, int], dict] = {}
+    for item in raw:
+        try:
+            day = date.fromisoformat(str(item.get("Date") or "").strip())
+            cid = int(item.get("CampaignId") or 0)
+        except ValueError:
+            continue
+        if not cid:
+            continue
+        row = merged.setdefault(
+            (day, cid),
+            {
+                "day": day,
+                "campaign_id": cid,
+                "impressions": 0,
+                "clicks": 0,
+                "cost_kopecks": 0,
+                "conversions": 0,
+                "revenue_kopecks": 0,
+            },
+        )
+        row["impressions"] += _count(item.get("Impressions"))
+        row["clicks"] += _count(item.get("Clicks"))
+        row["cost_kopecks"] += _rub_to_kopecks(item.get("Cost"))
+        row["conversions"] += _count(item.get("Conversions"))
+        row["revenue_kopecks"] += _rub_to_kopecks(item.get("Revenue"))
+    return list(merged.values())
+
+
+def replace_direct_stats(user_id: int, account_id: int, date_from: date, date_to: date, rows: list[dict]) -> int:
+    """Статистика кабинета за период целиком: старые строки периода удаляются — в том числе
+    кампаний, которых в новом отчёте нет."""
+    with pool.connection() as conn:
+        conn.execute(
+            """
+            DELETE FROM stats_daily
+            WHERE user_id = %s AND source = 'direct' AND account_id = %s AND day BETWEEN %s AND %s
+            """,
+            (user_id, account_id, date_from, date_to),
+        )
+        with conn.cursor() as cur:
+            cur.executemany(
+                """
+                INSERT INTO stats_daily (
+                    user_id, day, source, account_id, campaign_id,
+                    impressions, clicks, cost_kopecks, conversions, revenue_kopecks, updated_at
+                )
+                VALUES (%s, %s, 'direct', %s, %s, %s, %s, %s, %s, %s, NOW())
+                """,
+                [
+                    (
+                        user_id,
+                        row["day"],
+                        account_id,
+                        row["campaign_id"],
+                        row["impressions"],
+                        row["clicks"],
+                        row["cost_kopecks"],
+                        row["conversions"],
+                        row["revenue_kopecks"],
+                    )
+                    for row in rows
+                    if date_from <= row["day"] <= date_to
+                ],
+            )
+    return len(rows)
+
+
 def fetch_direct_campaign_report(access_token: str, client_login: str, day: date) -> list[dict]:
     headers = {
         "Authorization": f"Bearer {access_token}",
@@ -160,7 +230,7 @@ def fetch_direct_campaign_report(access_token: str, client_login: str, day: date
     return rows
 
 
-def _set_account_stats_status(account_id: int, error: str) -> None:
+def set_account_stats_status(account_id: int, error: str) -> None:
     with pool.connection() as conn:
         conn.execute(
             """
@@ -202,11 +272,11 @@ def sync_direct_stats_for_user(user_id: int, day: date | None = None) -> dict:
                     conversions=row["conversions"],
                     revenue_kopecks=row["revenue_kopecks"],
                 )
-            _set_account_stats_status(account["id"], "")
+            set_account_stats_status(account["id"], "")
             synced += 1
         except Exception as exc:
             log.exception("direct stats account %s", account["id"])
-            _set_account_stats_status(account["id"], getattr(exc, "code", "") or "internal")
+            set_account_stats_status(account["id"], getattr(exc, "code", "") or "internal")
             errors += 1
     return {"day": day.isoformat(), "synced": synced, "errors": errors}
 

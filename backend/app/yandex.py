@@ -54,6 +54,9 @@ def direct_api_error(payload: dict | None, status_code: int) -> YandexError:
             if detail:
                 break
     code = "direct-denied" if status_code in (400, 403) else "direct"
+    if str(err.get("error_code") or "") == "152":
+        # Кончились баллы: восстанавливаются в течение суток, повтор позже пройдёт.
+        code = "units"
     return YandexError(code, detail or None)
 
 
@@ -76,7 +79,9 @@ def direct_sync_error(err: dict | None, status_code: int) -> str:
         text = f"{title} (ошибка {number})" if title else f"Ошибка {number}"
     if detail and detail != title:
         text = f"{text}. {detail}" if text else detail
-    if not text and status_code >= 400:
+    if not text and status_code in (502, 503, 504):
+        text = f"сервис не ответил (HTTP {status_code})"
+    elif not text and status_code >= 400:
         text = f"HTTP {status_code}"
     # «;» и «|» разделяют части строки статуса синка.
     text = text.replace(";", ",").replace("|", "/")
@@ -526,10 +531,13 @@ def _direct_get(access_token: str, service: str, params: dict) -> tuple[list[dic
     """get в clients / agencyclients: (элементы, ошибка_или_пусто) — ошибка в формате ``direct_sync_error``."""
     url = direct_api.v5_url(access_token, service)
     try:
-        with httpx.Client(timeout=30.0) as client:
-            response = client.post(
-                url, headers=direct_api.headers(access_token), json={"method": "get", "params": params}
-            )
+        response = direct_api.post_json(
+            url,
+            headers=direct_api.headers(access_token),
+            body={"method": "get", "params": params},
+            timeout=30.0,
+            attempts=3,
+        )
     except httpx.HTTPError as exc:
         log.warning("Директ %s: %s", url, exc)
         return [], "direct"
@@ -750,7 +758,16 @@ def _metrika_out(row: dict) -> dict:
         "site": row["site"],
         "enabled": row["enabled"],
         "synced_at": _iso(row.get("synced_at")),
+        "load": _counter_load(row),
     }
+
+
+def _counter_load(row: dict) -> dict | None:
+    if "load_state" not in row:
+        return None
+    from app.account_load import counter_load_out
+
+    return counter_load_out(row)
 
 
 def _direct_out(row: dict) -> dict:
@@ -769,14 +786,24 @@ def _direct_out(row: dict) -> dict:
         "synced_at": _iso(row.get("synced_at")),
         "campaigns": int(row.get("campaigns") or 0),
         "workspaces": int(row.get("workspaces") or 0),
+        "load": _account_load(row),
     }
+
+
+def _account_load(row: dict) -> dict | None:
+    if "load_state" not in row:
+        return None
+    from app.account_load import account_load_out
+
+    return account_load_out(row)
 
 
 def list_metrika(user_id: int) -> list[dict]:
     with pool.connection() as conn:
         rows = conn.execute(
             """
-            SELECT id, connection_id, client_row_id, counter_id, name, site, enabled, synced_at
+            SELECT id, connection_id, client_row_id, counter_id, name, site, enabled, synced_at,
+                   load_state, loaded_at
             FROM metrika_counters
             WHERE user_id = %s
             ORDER BY name ASC, counter_id ASC
@@ -792,6 +819,7 @@ def list_direct(user_id: int) -> list[dict]:
             """
             SELECT id, connection_id, client_row_id, client_login, client_id, name, currency,
                    enabled, last_sync_at, last_sync_status, last_sync_error, synced_at,
+                   load_state, loaded_at, units_left, units_limit, units_at,
                    (SELECT COUNT(*) FROM direct_campaigns c WHERE c.account_id = direct_accounts.id) AS campaigns,
                    (SELECT COUNT(*) FROM workspace_accounts wa WHERE wa.account_id = direct_accounts.id) AS workspaces
             FROM direct_accounts
@@ -809,7 +837,8 @@ def set_metrika_enabled(user_id: int, item_id: int, enabled: bool) -> dict:
             """
             UPDATE metrika_counters SET enabled = %s
             WHERE id = %s AND user_id = %s
-            RETURNING id, connection_id, client_row_id, counter_id, name, site, enabled, synced_at
+            RETURNING id, connection_id, client_row_id, counter_id, name, site, enabled, synced_at,
+                      load_state, loaded_at
             """,
             (enabled, item_id, user_id),
         ).fetchone()
@@ -825,7 +854,8 @@ def set_direct_enabled(user_id: int, item_id: int, enabled: bool) -> dict:
             UPDATE direct_accounts SET enabled = %s
             WHERE id = %s AND user_id = %s
             RETURNING id, connection_id, client_row_id, client_login, client_id, name, currency,
-                      enabled, last_sync_at, last_sync_status, last_sync_error, synced_at
+                      enabled, last_sync_at, last_sync_status, last_sync_error, synced_at,
+                      load_state, loaded_at, units_left, units_limit, units_at
             """,
             (enabled, item_id, user_id),
         ).fetchone()

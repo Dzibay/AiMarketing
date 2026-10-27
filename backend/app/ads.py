@@ -18,6 +18,10 @@ def _call(access_token: str, client_login: str, method: str, params: dict) -> di
     return direct_api.call(access_token, client_login, "ads", method, params)
 
 
+AD_FIELDS = ["Id", "AdGroupId", "Type", "State", "Status"]
+TEXT_AD_FIELDS = ["Title", "Title2", "Text", "Href"]
+
+
 def fetch_ads(access_token: str, client_login: str, adgroup_ids: list[int]) -> list[dict]:
     if not adgroup_ids:
         return []
@@ -27,12 +31,17 @@ def fetch_ads(access_token: str, client_login: str, adgroup_ids: list[int]) -> l
         "get",
         {
             "SelectionCriteria": {"AdGroupIds": adgroup_ids},
-            "FieldNames": ["Id", "AdGroupId", "Type", "State", "Status"],
-            "TextAdFieldNames": ["Title", "Title2", "Text", "Href"],
+            "FieldNames": AD_FIELDS,
+            "TextAdFieldNames": TEXT_AD_FIELDS,
         },
     )
+    return parse_ads(result.get("Ads") or [])
+
+
+def parse_ads(raw: list[dict]) -> list[dict]:
+    """Объявления из ответа ads.get → строки для upsert_ads."""
     items = []
-    for item in result.get("Ads") or []:
+    for item in raw:
         aid = item.get("Id")
         if aid is None:
             continue

@@ -8,6 +8,7 @@ import threading
 from collections.abc import Callable
 from datetime import date
 
+from app.account_load import run_account, run_counter
 from app.actions import duplicate_campaign
 from app.adgroups import sync_campaign_adgroups
 from app.ads import sync_campaign_ads
@@ -19,9 +20,9 @@ from app.direct_balance import sync_balances_for_user
 from app.direct_sync import sync_account_campaigns
 from app.entity_stats import sync_campaign_entity_stats
 from app.journal import acting_as
-from app.jobs import PRIORITY_BACKGROUND, complete, enqueue, fail, heartbeat, set_progress
+from app.jobs import PRIORITY_BACKGROUND, PRIORITY_USER, complete, enqueue, fail, heartbeat, set_progress
 from app.keywords import sync_campaign_keywords
-from app.metrika_sync import sync_counter_goals
+from app.metrika_sync import canonical_counters, sync_counter_goals
 from app.negative_lists import apply_negative_list
 from app.query_cleaning import apply_decisions, classify_queries, sync_workspace_queries
 from app.rules import run_enabled_rules_for_user
@@ -55,45 +56,41 @@ def _day(payload: dict, key: str) -> date | None:
 
 
 def _sync_connection(user_id: int, payload: dict, progress: Progress) -> dict:
-    """Аккаунты и счётчики подключения; deep — ещё кампании всех кабинетов и цели счётчиков."""
+    """
+    Аккаунты и счётчики подключения, затем загрузка данных отдельными задачами: deep (подключение,
+    «Синхронизировать») — всех включённых кабинетов и счётчиков вперёд очереди; плановый —
+    только ещё ни разу не загруженных (новых), остальных актуализирует расписание.
+    """
     connection_id = _int(payload, "connection_id")
+    deep = bool(payload.get("deep"))
     progress(0, 1, "Аккаунты и счётчики")
     result = sync_connection(user_id, connection_id)
-    if not payload.get("deep"):
-        return result
     with pool.connection() as conn:
         accounts = conn.execute(
             """
-            SELECT id, client_login FROM direct_accounts
-            WHERE connection_id = %s AND user_id = %s AND enabled
+            SELECT id FROM direct_accounts
+            WHERE connection_id = %s AND user_id = %s AND enabled AND (%s OR loaded_at IS NULL)
             ORDER BY id
             """,
-            (connection_id, user_id),
+            (connection_id, user_id, deep),
         ).fetchall()
-        counters = conn.execute(
-            """
-            SELECT id, name FROM metrika_counters
-            WHERE connection_id = %s AND user_id = %s AND enabled
-            ORDER BY id
-            """,
-            (connection_id, user_id),
-        ).fetchall()
-    total = 1 + len(accounts) + len(counters)
-    campaigns = 0
-    errors: list[str] = []
-    for n, account in enumerate(accounts, start=1):
-        progress(n, total, f"Кампании {account['client_login']}")
-        try:
-            campaigns += int(sync_account_campaigns(user_id, int(account["id"])).get("campaigns") or 0)
-        except YandexError as exc:
-            errors.append(f"{account['client_login']}: {exc.message or exc.code}")
-    for n, counter in enumerate(counters, start=1 + len(accounts)):
-        progress(n, total, f"Цели {counter['name'] or counter['id']}")
-        try:
-            sync_counter_goals(user_id, int(counter["id"]))
-        except YandexError as exc:
-            errors.append(f"{counter['name'] or counter['id']}: {exc.message or exc.code}")
-    return {**result, "campaigns": campaigns, "deep_errors": errors[:20]}
+    counters = [
+        c for c in canonical_counters(user_id) if c["connection_id"] == connection_id and (deep or c["loaded_at"] is None)
+    ]
+    priority = PRIORITY_USER if deep else PRIORITY_BACKGROUND
+    for account in accounts:
+        submit("load_account", user_id, {"account_id": int(account["id"])}, priority=priority)
+    for counter in counters:
+        submit("load_counter", user_id, {"counter_row_id": int(counter["id"])}, priority=priority)
+    return {**result, "loads": len(accounts) + len(counters)}
+
+
+def _load_account(user_id: int, payload: dict, progress: Progress) -> dict:
+    return run_account(user_id, _int(payload, "account_id"), progress)
+
+
+def _load_counter(user_id: int, payload: dict, progress: Progress) -> dict:
+    return run_counter(user_id, _int(payload, "counter_row_id"), progress)
 
 
 def _sync_account_campaigns(user_id: int, payload: dict, progress: Progress) -> dict:
@@ -218,6 +215,8 @@ def _undo_action(user_id: int, payload: dict, progress: Progress) -> dict:
 HANDLERS: dict[str, Handler] = {
     "sync_connection": _sync_connection,
     "sync_account_campaigns": _sync_account_campaigns,
+    "load_account": _load_account,
+    "load_counter": _load_counter,
     "sync_campaign_structure": _sync_campaign_structure,
     "sync_search_queries": _sync_search_queries,
     "sync_goals": _sync_goals,

@@ -218,7 +218,7 @@ def sync_account_campaigns(user_id: int, account_id: int) -> dict:
         _set_account_sync(account_id, "ok")
         meta = {"campaigns": saved["count"], "removed": saved["removed"], "attached": attached}
         finish_run(run_id, status="ok", meta=meta)
-        return {**meta, "status": "ok"}
+        return {**meta, "fresh": saved["fresh"], "status": "ok"}
     except YandexError as exc:
         _set_account_sync(account_id, "error", exc.code)
         finish_run(run_id, status="error", error=exc.code)

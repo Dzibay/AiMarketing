@@ -77,26 +77,13 @@ def _parse_phrases(value) -> list[str]:
     return cleaned
 
 
-def fetch_adgroups(access_token: str, client_login: str, campaign_id: int) -> list[dict]:
-    result = _call(
-        access_token,
-        client_login,
-        "get",
-        {
-            "SelectionCriteria": {"CampaignIds": [campaign_id]},
-            "FieldNames": [
-                "Id",
-                "Name",
-                "CampaignId",
-                "Status",
-                "Type",
-                "RegionIds",
-                "NegativeKeywords",
-            ],
-        },
-    )
+ADGROUP_FIELDS = ["Id", "Name", "CampaignId", "Status", "Type", "RegionIds", "NegativeKeywords"]
+
+
+def parse_adgroups(raw: list[dict]) -> list[dict]:
+    """Группы из ответа adgroups.get → строки для upsert_adgroups."""
     items = []
-    for item in result.get("AdGroups") or []:
+    for item in raw:
         gid = item.get("Id")
         if gid is None:
             continue
@@ -105,6 +92,7 @@ def fetch_adgroups(access_token: str, client_login: str, campaign_id: int) -> li
         items.append(
             {
                 "adgroup_id": int(gid),
+                "campaign_id": int(item.get("CampaignId") or 0),
                 "name": str(item.get("Name") or ""),
                 "status": str(item.get("Status") or ""),
                 "type": str(item.get("Type") or ""),
@@ -113,6 +101,16 @@ def fetch_adgroups(access_token: str, client_login: str, campaign_id: int) -> li
             }
         )
     return items
+
+
+def fetch_adgroups(access_token: str, client_login: str, campaign_id: int) -> list[dict]:
+    result = _call(
+        access_token,
+        client_login,
+        "get",
+        {"SelectionCriteria": {"CampaignIds": [campaign_id]}, "FieldNames": ADGROUP_FIELDS},
+    )
+    return parse_adgroups(result.get("AdGroups") or [])
 
 
 def upsert_adgroups(user_id: int, account_id: int, campaign_row_id: int, items: list[dict]) -> int:

@@ -43,6 +43,10 @@ BACKOFF_BASE_SECONDS = 30
 BACKOFF_MAX_SECONDS = 30 * 60
 STALE_AFTER_SECONDS = 5 * 60
 
+# Долгие загрузки кабинетов и счётчиков: одновременно не больше лимита, чтобы исполнитель
+# всегда оставался свободным для действий пользователя.
+HEAVY_KINDS = ("load_account", "load_counter")
+
 
 def backoff_seconds(attempt: int) -> int:
     """Пауза перед повтором после попытки №attempt (1, 2, …): 30 с, 60 с, 120 с … до 30 мин."""
@@ -68,6 +72,7 @@ def public_job(row: dict) -> dict:
         "id": row["id"],
         "kind": row["kind"],
         "status": row["status"],
+        "priority": row.get("priority"),
         "payload": row.get("payload") or {},
         "attempts": row["attempts"],
         "max_attempts": row["max_attempts"],
@@ -129,7 +134,8 @@ def enqueue(
     raise RuntimeError(f"не удалось поставить задачу {kind} ({dedupe_key})")
 
 
-def claim(worker_id: str) -> dict | None:
+def claim(worker_id: str, *, heavy_limit: int = 0) -> dict | None:
+    """Берёт следующую задачу; heavy_limit > 0 — тяжёлых (HEAVY_KINDS) в работе не больше стольких."""
     with pool.connection() as conn:
         return conn.execute(
             """
@@ -145,13 +151,18 @@ def claim(worker_id: str) -> dict | None:
             WHERE id = (
                 SELECT id FROM jobs
                 WHERE status = 'queued' AND run_after <= NOW()
+                  AND (
+                    %s <= 0
+                    OR NOT (kind = ANY(%s))
+                    OR (SELECT COUNT(*) FROM jobs r WHERE r.status = 'running' AND r.kind = ANY(%s)) < %s
+                  )
                 ORDER BY priority, run_after, id
                 FOR UPDATE SKIP LOCKED
                 LIMIT 1
             )
             RETURNING *
             """,
-            (worker_id,),
+            (worker_id, heavy_limit, list(HEAVY_KINDS), list(HEAVY_KINDS), heavy_limit),
         ).fetchone()
 
 

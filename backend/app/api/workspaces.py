@@ -11,6 +11,7 @@ from app.actions import (
     moderate_campaign,
     update_campaign_settings,
 )
+from app.account_load import load_overview
 from app.adgroups import list_adgroups
 from app.ads import list_ads
 from app.analytics import parse_range, workspace_analytics, workspace_summary
@@ -139,6 +140,22 @@ def ws_get(workspace_id: int, user_id: int = Depends(require_web_user)) -> dict:
         return get_workspace(user_id, workspace_id)
     except YandexError as exc:
         raise _http(exc) from exc
+
+
+@router.get("/{workspace_id}/load")
+def ws_load(workspace_id: int, user_id: int = Depends(require_web_user)) -> dict:
+    """Загрузка кабинетов и счётчика пространства: пока идёт — вместо нулей показываем плашку."""
+    ws = _ws(user_id, workspace_id)
+    with pool.connection() as conn:
+        account_ids = [
+            int(r["account_id"])
+            for r in conn.execute(
+                "SELECT account_id FROM workspace_accounts WHERE workspace_id = %s AND user_id = %s",
+                (workspace_id, user_id),
+            )
+        ]
+    counter_ids = [int(ws["counter_row_id"])] if ws.get("counter_row_id") else []
+    return load_overview(user_id, account_ids=account_ids, counter_ids=counter_ids)
 
 
 @router.patch("/{workspace_id}")

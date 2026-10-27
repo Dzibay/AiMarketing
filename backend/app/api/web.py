@@ -34,6 +34,7 @@ from app.ads import (
     list_ads,
     update_text_ad,
 )
+from app.account_load import load_overview, reset_account_load
 from app.direct_sync import get_campaign, list_campaigns
 from app.keywords import (
     bulk_keyword_action,
@@ -50,7 +51,7 @@ from app.search_queries import (
 from app.db import pool
 from app.job_handlers import submit
 from app.jobs import PRIORITY_USER, get_job, list_jobs, public_job
-from app.metrika_sync import list_goals
+from app.metrika_sync import canonical_counters, list_goals
 from app.oauth_codes import consume_oauth_code, issue_oauth_code
 from app.rules import (
     create_rule,
@@ -515,9 +516,11 @@ def web_patch_metrika(
         out = set_metrika_enabled(user_id, item_id, body.enabled)
     except YandexError as exc:
         raise _http(exc) from exc
-    # Включённый счётчик сразу получает своё пространство.
+    # Включённый счётчик сразу получает своё пространство и загрузку данных.
     if body.enabled:
         ensure_workspaces(user_id)
+        if any(int(c["id"]) == item_id for c in canonical_counters(user_id)):
+            submit("load_counter", user_id, {"counter_row_id": item_id}, priority=PRIORITY_USER)
     return out
 
 
@@ -528,9 +531,13 @@ def web_patch_direct(
     user_id: int = Depends(require_web_user),
 ) -> dict:
     try:
-        return set_direct_enabled(user_id, item_id, body.enabled)
+        out = set_direct_enabled(user_id, item_id, body.enabled)
     except YandexError as exc:
         raise _http(exc) from exc
+    # Включили — догружаем (или актуализируем); выключили — идущая загрузка остановится сама.
+    if body.enabled:
+        submit("load_account", user_id, {"account_id": item_id}, priority=PRIORITY_USER)
+    return out
 
 
 @router.get("/clients")
@@ -597,7 +604,36 @@ def web_sync_account_campaigns(
     user_id: int = Depends(require_web_user),
 ) -> dict:
     _require_owned("direct_accounts", account_id, user_id)
-    return _start_job("sync_account_campaigns", user_id, {"account_id": account_id})
+    return _start_job("load_account", user_id, {"account_id": account_id})
+
+
+@router.post("/direct/{account_id}/load")
+def web_reload_account(
+    account_id: int,
+    user_id: int = Depends(require_web_user),
+) -> dict:
+    """Загрузить кабинет заново: все этапы за 30 дней с нуля."""
+    _require_owned("direct_accounts", account_id, user_id)
+    try:
+        reset_account_load(user_id, account_id)
+    except YandexError as exc:
+        raise _http(exc) from exc
+    return _start_job("load_account", user_id, {"account_id": account_id})
+
+
+@router.post("/metrika/{counter_row_id}/load")
+def web_load_counter(
+    counter_row_id: int,
+    user_id: int = Depends(require_web_user),
+) -> dict:
+    _require_owned("metrika_counters", counter_row_id, user_id)
+    return _start_job("load_counter", user_id, {"counter_row_id": counter_row_id})
+
+
+@router.get("/loads")
+def web_loads(user_id: int = Depends(require_web_user)) -> dict:
+    """Этапы загрузки кабинетов и счётчиков и идущие задачи — для индикатора в шапке."""
+    return load_overview(user_id)
 
 
 @router.get("/direct/campaigns")

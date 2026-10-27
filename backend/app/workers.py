@@ -8,11 +8,11 @@ import socket
 import threading
 from collections.abc import Callable
 
-from app.clock import yesterday_msk
 from app.config import settings
 from app.digest import users_due_for_digest
 from app.job_handlers import run_job, submit
 from app.jobs import claim, claim_schedule, purge_finished, requeue_stale
+from app.metrika_sync import canonical_counters
 from app.rules import list_users_with_rules
 from app.stats import list_user_ids_with_accounts
 from app.telegram_notify import poll_updates_once, telegram_configured
@@ -33,15 +33,15 @@ def _enqueue_connections() -> None:
         submit("sync_connection", user_id, {"connection_id": connection_id})
 
 
-def _enqueue_campaigns() -> None:
+def _enqueue_accounts() -> None:
+    """Актуализация кабинетов: задача сама решает, что пора перечитать (account_load)."""
     for account_id, user_id in list_enabled_direct_account_ids():
-        submit("sync_account_campaigns", user_id, {"account_id": account_id})
+        submit("load_account", user_id, {"account_id": account_id})
 
 
-def _enqueue_stats() -> None:
-    day = yesterday_msk().isoformat()
-    for user_id in list_user_ids_with_accounts():
-        submit("stats_day", user_id, {"day": day})
+def _enqueue_counters() -> None:
+    for counter in canonical_counters():
+        submit("load_counter", int(counter["user_id"]), {"counter_row_id": int(counter["id"])})
 
 
 def _enqueue_today() -> None:
@@ -69,8 +69,9 @@ def _purge_jobs() -> None:
 # поэтому рестарт процесса не сбрасывает расписание, а несколько воркеров не дублируют запуск.
 SCHEDULES: dict[str, tuple[int, Callable[[], None]]] = {
     "connections": (3600, _enqueue_connections),
-    "campaigns": (7200, _enqueue_campaigns),
-    "stats": (21600, _enqueue_stats),
+    # Кампании, структура по Changes API, статистика за неделю, запросы — каждая по своей давности.
+    "accounts": (3600, _enqueue_accounts),
+    "counters": (3600, _enqueue_counters),
     "today": (3600, _enqueue_today),
     # Часто, но дёшево: один запрос; дайджест уходит в течение 10 минут после часа пользователя.
     "digest": (600, _enqueue_digests),
@@ -125,9 +126,10 @@ def _scheduler_loop() -> None:
 
 
 def _runner_loop(worker_id: str) -> None:
+    heavy_limit = max(1, settings.worker_concurrency - 1)
     while not _stop.is_set():
         try:
-            job = claim(worker_id)
+            job = claim(worker_id, heavy_limit=heavy_limit)
         except Exception:
             log.exception("claim job")
             _stop.wait(5)

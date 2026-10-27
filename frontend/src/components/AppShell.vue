@@ -7,6 +7,7 @@
           <span class="brand__name">Ai<span>Marketing</span></span>
         </RouterLink>
         <WorkspacePicker />
+        <LoadsIndicator />
         <nav class="app-nav" aria-label="Кабинет">
           <RouterLink to="/cabinet" :class="{ active: route.path === '/cabinet' }">Обзор</RouterLink>
           <RouterLink to="/cabinet/accounts" :class="{ active: isActive('/cabinet/accounts') }">Аккаунты</RouterLink>
@@ -31,7 +32,9 @@
 <script setup>
 import { onMounted } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
+import LoadsIndicator from './LoadsIndicator.vue'
 import WorkspacePicker from './WorkspacePicker.vue'
+import { resetLoads } from '../composables/useLoads'
 import { clearSession, getSession } from '../composables/useSession'
 import { loadWorkspaces, resetWorkspaces } from '../composables/useWorkspaces'
 import { ApiError, errorText } from '../api/web'
@@ -47,6 +50,7 @@ function isActive(path) {
 function logout() {
   clearSession()
   resetWorkspaces()
+  resetLoads()
   router.replace('/login')
 }
 
