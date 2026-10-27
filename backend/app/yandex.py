@@ -519,54 +519,63 @@ def fetch_metrika_counters(access_token: str) -> list[dict]:
     return result
 
 
-def fetch_direct_clients(access_token: str) -> tuple[list[dict], str]:
-    """Возвращает (клиенты, ошибка_или_пусто) — ошибка в формате ``direct_sync_error``."""
-    headers = direct_api.headers(access_token)
-    body = {
-        "method": "get",
-        "params": {
-            "SelectionCriteria": {},
-            "FieldNames": ["ClientId", "ClientInfo", "Login", "Currency"],
-        },
-    }
-    clients: list[dict] = []
-    # Показываем ошибку clients.get: agencyclients.get у обычного рекламодателя падает всегда.
-    first_error = ""
-    for url in (direct_api.v5_url(access_token, "clients"), direct_api.v5_url(access_token, "agencyclients")):
-        try:
-            with httpx.Client(timeout=30.0) as client:
-                response = client.post(url, headers=headers, json=body)
-        except httpx.HTTPError as exc:
-            log.warning("Директ %s: %s", url, exc)
-            first_error = first_error or "direct"
-            continue
-        try:
-            payload = response.json() if response.content else {}
-        except ValueError:
-            payload = {}
-        err = payload.get("error") if isinstance(payload, dict) else None
-        if err or response.status_code >= 400:
-            log.warning("Директ отказ %s: %s %s", url, response.status_code, err or response.text[:300])
-            first_error = first_error or direct_sync_error(err, response.status_code)
-            continue
-        result = (payload.get("result") or {}).get("Clients") or (payload.get("result") or {}).get(
-            "AgencyClients"
-        ) or []
-        for item in result:
-            login = str(item.get("Login") or "").strip()
-            if not login:
-                continue
-            clients.append(
-                {
-                    "client_login": login,
-                    "client_id": int(item["ClientId"]) if item.get("ClientId") is not None else None,
-                    "name": str(item.get("ClientInfo") or login),
-                    "currency": str(item.get("Currency") or ""),
-                }
+CLIENT_FIELDS = ["ClientId", "ClientInfo", "Login", "Currency", "Type"]
+
+
+def _direct_get(access_token: str, service: str, params: dict) -> tuple[list[dict], str]:
+    """get в clients / agencyclients: (элементы, ошибка_или_пусто) — ошибка в формате ``direct_sync_error``."""
+    url = direct_api.v5_url(access_token, service)
+    try:
+        with httpx.Client(timeout=30.0) as client:
+            response = client.post(
+                url, headers=direct_api.headers(access_token), json={"method": "get", "params": params}
             )
-        if clients:
-            return clients, ""
-    return clients, first_error
+    except httpx.HTTPError as exc:
+        log.warning("Директ %s: %s", url, exc)
+        return [], "direct"
+    try:
+        payload = response.json() if response.content else {}
+    except ValueError:
+        payload = {}
+    err = payload.get("error") if isinstance(payload, dict) else None
+    if err or response.status_code >= 400:
+        log.warning("Директ отказ %s: %s %s", url, response.status_code, err or response.text[:300])
+        return [], direct_sync_error(err, response.status_code)
+    result = payload.get("result") or {}
+    return list(result.get("Clients") or result.get("AgencyClients") or []), ""
+
+
+def fetch_direct_clients(access_token: str) -> tuple[list[dict], str]:
+    """Кабинеты логина: у рекламодателя — он сам, у агентства — его клиенты.
+
+    Возвращает (кабинеты, ошибка_или_пусто) — ошибка в формате ``direct_sync_error``.
+    """
+    # clients.get отдаёт параметры самого логина (у агентства — агентства) и SelectionCriteria
+    # не принимает: с ним Директ отвечает ошибкой 8000.
+    items, error = _direct_get(access_token, "clients", {"FieldNames": CLIENT_FIELDS})
+    if error:
+        return [], error
+    if any(str(item.get("Type") or "").upper() == "AGENCY" for item in items):
+        # Пустой SelectionCriteria — все клиенты агентства, включая архивных.
+        items, error = _direct_get(
+            access_token, "agencyclients", {"SelectionCriteria": {}, "FieldNames": CLIENT_FIELDS}
+        )
+        if error:
+            return [], error
+    clients: list[dict] = []
+    for item in items:
+        login = str(item.get("Login") or "").strip()
+        if not login:
+            continue
+        clients.append(
+            {
+                "client_login": login,
+                "client_id": int(item["ClientId"]) if item.get("ClientId") is not None else None,
+                "name": str(item.get("ClientInfo") or login),
+                "currency": str(item.get("Currency") or ""),
+            }
+        )
+    return clients, ""
 
 
 def upsert_metrika(user_id: int, connection_id: int, counters: list[dict]) -> tuple[int, list[int]]:

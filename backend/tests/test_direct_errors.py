@@ -56,8 +56,9 @@ def _fake_httpx(monkeypatch, responses):
             return False
 
         def post(self, url, headers=None, json=None):
-            calls.append(url)
-            return responses[url.rsplit("/", 1)[-1]]
+            service = url.rsplit("/", 1)[-1]
+            calls.append((service, json["params"]))
+            return responses[service]
 
     monkeypatch.setattr(yandex.httpx, "Client", Client)
     return calls
@@ -80,7 +81,7 @@ def test_direct_sync_error_keeps_direct_answer():
     assert direct_sync_error(None, 200) == "direct"
 
 
-def test_fetch_direct_clients_reports_clients_error(monkeypatch):
+def test_fetch_direct_clients_stops_on_clients_error(monkeypatch):
     calls = _fake_httpx(
         monkeypatch,
         {
@@ -91,7 +92,7 @@ def test_fetch_direct_clients_reports_clients_error(monkeypatch):
     clients, error = yandex.fetch_direct_clients("token")
     assert clients == []
     assert error == "direct-denied|Незавершенная регистрация (ошибка 58)"
-    assert len(calls) == 2
+    assert [c[0] for c in calls] == ["clients"]
 
 
 def test_fetch_direct_clients_reads_error_from_http_4xx(monkeypatch):
@@ -114,4 +115,40 @@ def test_fetch_direct_clients_ok(monkeypatch):
     clients, error = yandex.fetch_direct_clients("token")
     assert error == ""
     assert clients == [{"client_login": "shop", "client_id": 7, "name": "Магазин", "currency": ""}]
-    assert len(calls) == 1
+    # clients.get не принимает SelectionCriteria: живой Директ отвечает на него ошибкой 8000.
+    assert calls == [("clients", {"FieldNames": yandex.CLIENT_FIELDS})]
+
+
+def test_fetch_direct_clients_agency_lists_its_clients(monkeypatch):
+    calls = _fake_httpx(
+        monkeypatch,
+        {
+            "clients": _Resp(200, {"result": {"Clients": [{"Login": "agency", "ClientId": 1, "Type": "AGENCY"}]}}),
+            "agencyclients": _Resp(
+                200,
+                {
+                    "result": {
+                        "Clients": [
+                            {"Login": "shop-a", "ClientId": 11, "ClientInfo": "Магазин А", "Currency": "RUB"},
+                            {"Login": "shop-b", "ClientId": 12, "ClientInfo": "Магазин Б", "Currency": "RUB"},
+                        ]
+                    }
+                },
+            ),
+        },
+    )
+    clients, error = yandex.fetch_direct_clients("token")
+    assert error == ""
+    assert [c["client_login"] for c in clients] == ["shop-a", "shop-b"]
+    assert calls[1] == ("agencyclients", {"SelectionCriteria": {}, "FieldNames": yandex.CLIENT_FIELDS})
+
+
+def test_fetch_direct_clients_agency_error(monkeypatch):
+    _fake_httpx(
+        monkeypatch,
+        {
+            "clients": _Resp(200, {"result": {"Clients": [{"Login": "agency", "Type": "AGENCY"}]}}),
+            "agencyclients": _Resp(200, {"error": {"error_code": 54, "error_string": "Нет прав"}}),
+        },
+    )
+    assert yandex.fetch_direct_clients("token") == ([], "direct-denied|Нет прав (ошибка 54)")
