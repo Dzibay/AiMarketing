@@ -85,6 +85,7 @@ def regions(monkeypatch):
 @pytest.fixture
 def no_memory(monkeypatch):
     monkeypatch.setattr(ai_agent, "memory_examples", lambda ws_id, limit: {})
+    monkeypatch.setattr(ai_agent, "_running_experiments", lambda ctx: [])
 
 
 @pytest.fixture

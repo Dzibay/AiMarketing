@@ -119,6 +119,7 @@ const tabs = computed(() => [
   },
   { name: 'queries', path: 'queries', label: 'Поисковые запросы', names: ['ws-queries'] },
   { name: 'actions', path: 'actions', label: 'Действия и правила', names: ['ws-actions'] },
+  { name: 'experiments', path: 'experiments', label: 'Эксперименты', names: ['ws-experiments'] },
   { name: 'chat', path: 'chat', label: 'ИИ-чат', names: ['ws-chat'] },
   { name: 'settings', path: 'settings', label: 'Настройки', names: ['ws-settings'] },
 ])

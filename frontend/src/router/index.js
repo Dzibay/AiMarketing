@@ -58,6 +58,11 @@ const router = createRouter({
         },
         { path: 'queries', name: 'ws-queries', component: () => import('../views/workspace/WsQueries.vue') },
         { path: 'actions', name: 'ws-actions', component: () => import('../views/workspace/WsActions.vue') },
+        {
+          path: 'experiments',
+          name: 'ws-experiments',
+          component: () => import('../views/workspace/WsExperiments.vue'),
+        },
         { path: 'chat/:chatId(\\d+)?', name: 'ws-chat', component: () => import('../views/workspace/WsChat.vue') },
         {
           path: 'settings',

@@ -161,6 +161,13 @@ export const aiApi = {
   signals: (workspaceId) => request(`${WS(workspaceId)}/signals`),
   /** «Разбор»: { prompt?, title?, chat_id? } → { chat, message, job }; без chat_id — новый чат. */
   review: (workspaceId, payload = {}) => post(`${WS(workspaceId)}/review`, payload),
+  /** Эксперименты ИИ с прогрессом: { items, today }; прогресс считает код, без ИИ. */
+  experiments: (workspaceId) => request(`${WS(workspaceId)}/experiments`),
+  /** Разбор итогов эксперимента ИИ: { chat_id? } → { chat, message, job }. */
+  reviewExperiment: (workspaceId, id, payload = {}) =>
+    post(`${WS(workspaceId)}/experiments/${id}/review`, payload),
+  /** Итог вручную: { verdict, conclusion } или { cancel: true } → обновлённый список. */
+  finishExperiment: (workspaceId, id, payload) => post(`${WS(workspaceId)}/experiments/${id}/finish`, payload),
   /** Забыть ответ маркетолога, который ИИ запомнил; возвращает пространство. */
   forgetFact: (workspaceId, key) => post(`${WS(workspaceId)}/ai-facts/forget`, { key }),
 }

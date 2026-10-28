@@ -81,7 +81,7 @@
           <template v-else-if="signals?.suggestions.length">
             <h4 class="chat__subhead">Заметил в данных</h4>
             <div class="chat__suggestions">
-              <template v-for="s in signals.suggestions" :key="`${s.kind}${s.account_id || ''}`">
+              <template v-for="s in signals.suggestions" :key="`${s.kind}${s.account_id || ''}${s.experiment_id || ''}`">
                 <RouterLink v-if="!s.prompt" class="quick-action quick-action--warn" to="/cabinet/accounts">
                   <strong>{{ s.title }}</strong>
                   <small>{{ s.detail }}</small>
@@ -502,14 +502,19 @@ async function send(text) {
   }
 }
 
-/** «Разбор»: в пустом чате — здесь же, иначе в новом. card — карточка сигнала: её запрос и название. */
+/**
+ * «Разбор»: в пустом чате — здесь же, иначе в новом. card — карточка сигнала (её запрос и название)
+ * или эксперимента, по которому пора подвести итоги.
+ */
 async function startReview(card = null) {
   if (!canReview.value) return
   reviewing.value = true
   try {
-    const payload = card ? { prompt: card.prompt, title: card.title } : {}
+    const payload = card && !card.experiment_id ? { prompt: card.prompt, title: card.title } : {}
     if (chat.value && !items.value.length) payload.chat_id = chat.value.id
-    const res = await aiApi.review(ws.value.id, payload)
+    const res = card?.experiment_id
+      ? await aiApi.reviewExperiment(ws.value.id, card.experiment_id, payload)
+      : await aiApi.review(ws.value.id, payload)
     const id = res.chat.id
     chats.value = [res.chat, ...chats.value.filter((c) => c.id !== id)]
     stickToBottom = true
@@ -637,6 +642,8 @@ function askPrompt(q) {
       return `Разбери кампанию${q.name ? ` «${q.name}»` : ''} (campaign_row_id ${q.cid}): настройки и стратегия, структура, ключевые фразы, объявления, поисковые запросы и статистика. Найди проблемы и предложи правки.`
     case 'audit':
       return 'Проведи аудит всех кампаний пространства: структура, стратегии и бюджеты, минус-фразы, объявления, поисковые запросы, расход без конверсий. Дай список проблем по важности и план правок.'
+    case 'experiment':
+      return 'Предложи эксперимент: какую гипотезу стоит проверить в этом пространстве — перезапуск копией, новое гео, другие ключи или тип кампании, — на каких кампаниях и почему. Опирайся на то, что уже работает, и на прошлые эксперименты.'
     default:
       return ''
   }

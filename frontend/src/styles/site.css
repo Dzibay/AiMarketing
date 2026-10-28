@@ -3873,3 +3873,102 @@ body.has-modal {
 .apply-summary .cell-note {
   display: block;
 }
+
+/* --- Эксперименты ИИ --- */
+
+.exp-list {
+  display: grid;
+  gap: 1rem;
+}
+
+.exp-card {
+  display: grid;
+  gap: 0.85rem;
+  padding: 1rem 1.1rem;
+  border: 1px solid var(--line);
+  background: #fff;
+}
+
+.exp-card.is-due {
+  border-left: 3px solid var(--accent);
+}
+
+.exp-card__head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  justify-content: space-between;
+  align-items: flex-start;
+}
+
+.exp-card__head strong {
+  display: block;
+  font-size: 1.05rem;
+  margin-bottom: 0.3rem;
+}
+
+.exp-card__head small {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  align-items: center;
+  color: var(--muted);
+}
+
+.exp-card .metric-grid {
+  margin-bottom: 0;
+}
+
+.exp-text {
+  margin: 0 0 0.65rem;
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+
+.exp-card > .exp-text {
+  margin: 0;
+}
+
+.exp-facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 0.65rem 1rem;
+  margin: 0;
+}
+
+.exp-facts dt,
+.exp-sub {
+  margin: 0 0 0.3rem;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.exp-facts dd {
+  margin: 0;
+  line-height: 1.45;
+}
+
+.exp-term {
+  display: grid;
+  gap: 0.4rem;
+}
+
+.exp-term p {
+  margin: 0;
+}
+
+.exp-finish {
+  display: grid;
+  gap: 0.65rem;
+  padding: 0.85rem 0.95rem;
+  border: 1px solid var(--line);
+  background: var(--paper);
+}
+
+.exp-finish .field,
+.exp-finish .hint {
+  margin: 0;
+}

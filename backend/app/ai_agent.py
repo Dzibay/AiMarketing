@@ -14,7 +14,7 @@ from datetime import date, datetime, timedelta, timezone
 
 from psycopg.types.json import Jsonb
 
-from app import ai
+from app import ai, experiments
 from app.actions import BULK_ACTIONS, campaign_options
 from app.brief import brief_filled, normalize_brief
 from app.clock import today_msk
@@ -226,6 +226,8 @@ class Context:
         self.ws_id = workspace_id
         self.ws = get_workspace(user_id, workspace_id)
         self.access = normalize_ai_access(self.ws.get("ai_access"))
+        # Действие ai_actions, которое сейчас выполняется: эксперимент запоминает, из какого чата запущен.
+        self.action: dict | None = None
 
     def account_ids(self) -> set[int]:
         return {int(a["id"]) for a in self.ws.get("accounts") or []}
@@ -511,6 +513,17 @@ def _t_regions(ctx: Context, args: dict) -> dict:
     return geo.search_regions(ctx.user_id, str(args.get("query") or ""))
 
 
+def _t_experiments(ctx: Context, args: dict) -> dict:
+    items = experiments.experiments_overview(ctx.user_id, ctx.ws_id)["items"]
+    full = None
+    if args.get("experiment_id") not in (None, ""):
+        exp_id = _int(args, "experiment_id")
+        if not any(e["id"] == exp_id for e in items):
+            raise YandexError("not-found", f"Эксперимента #{exp_id} нет в этом пространстве")
+        full = {exp_id}
+    return {"digest": experiments.digest(items, full)}
+
+
 READ_TOOLS = {
     "get_workspace_summary": _t_summary,
     "get_analytics": _t_analytics,
@@ -526,6 +539,7 @@ READ_TOOLS = {
     "get_campaign_history": _t_history,
     "remember_fact": _t_remember,
     "find_regions": _t_regions,
+    "get_experiments": _t_experiments,
 }
 
 
@@ -884,6 +898,99 @@ def _x_copy_geo(ctx: Context, args: dict) -> dict:
     return out
 
 
+_EXPERIMENT_NOTE = (
+    "Сервис сам ничего не останавливает: расход держит недельный бюджет в Директе. Срок считается с первого "
+    "дня показов; прогресс и итоги — get_experiments."
+)
+
+
+def _experiment_args(ctx: Context, args: dict) -> tuple[dict, list[dict], dict | None]:
+    """Эксперимент, тестовые кампании и образец для start_experiment. Кампании идущего эксперимента не берём:
+    две проверки на одной кампании смешали бы результаты."""
+    d = experiments.normalize_definition(args)
+    rows = ctx.campaigns(d["campaign_row_ids"])
+    source = ctx.campaign(d["source_campaign_row_id"]) if d["source_campaign_row_id"] else None
+    busy = experiments.busy_campaigns(ctx.user_id, ctx.ws_id)
+    taken = [
+        f"«{r['name']}» — в #{busy[int(r['id'])]['id']} «{busy[int(r['id'])]['title']}»"
+        for r in rows
+        if int(r["id"]) in busy
+    ]
+    if taken:
+        raise YandexError(
+            "busy",
+            "Кампании уже в идущих экспериментах: " + "; ".join(taken)
+            + ". Заверши эксперимент (finish_experiment) или возьми другие кампании",
+        )
+    return d, rows, source
+
+
+def _p_start_experiment(ctx: Context, args: dict) -> Plan:
+    d, rows, _source = _experiment_args(ctx, args)
+    set_limit = _bool(args, "set_limit", True)
+    limit = f"лимит {_money(d['weekly_budget_rub'])}/нед. на кампанию" + ("" if set_limit else " (ставит маркетолог)")
+    summary = (
+        f"Эксперимент «{d['title']}»: {_names(rows)}, {limit}, {_count(d['days'], 'день', 'дня', 'дней')}, "
+        f"успех — {experiments.criterion_text(d)}"
+    )
+    if set_limit:
+        # Новый потолок расхода — всегда на согласование, кроме полного доступа.
+        return Plan(summary, ["campaigns", "budget"], math.inf)
+    return Plan(summary, ["campaigns"])
+
+
+def _x_start_experiment(ctx: Context, args: dict) -> dict:
+    """Лимиты в Директе → запись эксперимента. Лимит не встал — эксперимент не записываем."""
+    d, rows, _source = _experiment_args(ctx, args)
+    limits = experiments.apply_limits(ctx.user_id, rows, d["weekly_budget_rub"]) if _bool(args, "set_limit", True) else []
+    action = getattr(ctx, "action", None) or {}
+    exp = experiments.create_experiment(
+        ctx.user_id, ctx.ws_id, d, chat_id=action.get("chat_id"), action_id=action.get("id")
+    )
+    started = exp["started_on"]
+    return {
+        "experiment": {
+            "id": exp["id"],
+            "title": exp["title"],
+            "started_on": _iso(started),
+            "days": exp["days"],
+            "ends_on": _iso(started + timedelta(days=int(exp["days"]) - 1)),
+        },
+        "limits": limits,
+        "note": _EXPERIMENT_NOTE if limits else "Лимит в Директе не меняли — его ставит маркетолог. " + _EXPERIMENT_NOTE,
+    }
+
+
+def _finish_args(ctx: Context, args: dict) -> tuple[dict, str, str, bool]:
+    exp = experiments.get_experiment(ctx.user_id, _int(args, "experiment_id"), workspace_id=ctx.ws_id)
+    if exp["status"] != "running":
+        status = experiments.STATUS_LABELS.get(exp["status"], exp["status"])
+        raise YandexError("finished", f"Эксперимент «{exp['title']}» уже {status}")
+    cancel = _bool(args, "cancel", False)
+    verdict, conclusion = experiments.normalize_finish(args.get("verdict"), args.get("conclusion"), cancel)
+    if not cancel and not conclusion:
+        raise YandexError("args", "Укажите conclusion — что узнали и что делать дальше")
+    return exp, verdict, conclusion, cancel
+
+
+def _p_finish_experiment(ctx: Context, args: dict) -> Plan:
+    exp, verdict, _conclusion, cancel = _finish_args(ctx, args)
+    if cancel:
+        return Plan(f"Отменить эксперимент «{exp['title']}»", ["campaigns"])
+    return Plan(f"Итоги эксперимента «{exp['title']}»: гипотеза {experiments.VERDICTS[verdict]}", ["campaigns"])
+
+
+def _x_finish_experiment(ctx: Context, args: dict) -> dict:
+    exp, verdict, conclusion, cancel = _finish_args(ctx, args)
+    row = experiments.finish_experiment(
+        ctx.user_id, int(exp["id"]), verdict=verdict, conclusion=conclusion, cancel=cancel, workspace_id=ctx.ws_id
+    )
+    return {
+        "experiment": {"id": row["id"], "title": row["title"], "status": row["status"], "verdict": row["verdict"]},
+        "note": "Кампании эксперимента не тронуты: остановить или масштабировать — отдельными действиями",
+    }
+
+
 def _p_create_adgroup(ctx: Context, args: dict) -> Plan:
     row = ctx.campaign(_int(args, "campaign_row_id"))
     name = str(args.get("name") or "").strip()
@@ -1087,6 +1194,8 @@ WRITE_TOOLS = {
     "moderate_campaign": (_p_moderate, _x_moderate),
     "restart_campaign_copy": (_p_restart, _x_restart),
     "copy_campaign_geo": (_p_copy_geo, _x_copy_geo),
+    "start_experiment": (_p_start_experiment, _x_start_experiment),
+    "finish_experiment": (_p_finish_experiment, _x_finish_experiment),
     "create_adgroup": (_p_create_adgroup, _x_create_adgroup),
     "keywords_action": (_p_keywords_action, _x_keywords_action),
     "add_keywords": (_p_add_keywords, _x_add_keywords),
@@ -1572,6 +1681,47 @@ def _d_copy_geo(ctx: Context, args: dict) -> list[dict]:
     ]
 
 
+def _d_start_experiment(ctx: Context, args: dict) -> list[dict]:
+    d, rows, source = _experiment_args(ctx, args)
+    out: list[dict] = []
+    if _bool(args, "set_limit", True):
+        names = _goal_names(ctx)
+        for row in rows:
+            settings = _current_settings(ctx, int(row["id"]))
+            try:
+                plan = experiments.limit_plan({**settings, "name": row["name"]}, d["weekly_budget_rub"])
+            except YandexError as exc:
+                out.append(_ch(f"Лимит «{row['name']}»", _strategy_text(settings.get("strategy"), names), _fail(exc)))
+                continue
+            after = plan["after"] + (f"; {plan['note']}" if plan["note"] else "")
+            out.append(_ch(f"Лимит «{row['name']}»", plan["before"], after))
+    else:
+        out.append(
+            _ch("Лимит в Директе", "как есть", f"не меняем — {_money(d['weekly_budget_rub'])}/нед. на кампанию ставит маркетолог")
+        )
+    ends = today_msk() + timedelta(days=d["days"] - 1)
+    out += [
+        _ch("Срок теста", "—", f"{_count(d['days'], 'день', 'дня', 'дней')} с первого дня показов, примерно до {ends:%d.%m}"),
+        _ch("Критерий успеха", "—", experiments.criterion_text(d)),
+    ]
+    if source:
+        out.append(_ch("Сравнение", "—", f"с «{source['name']}»"))
+    out.append(_ch("Остановка", "—", "только по вашему решению после итогов"))
+    return out
+
+
+def _d_finish_experiment(ctx: Context, args: dict) -> list[dict]:
+    exp, verdict, conclusion, cancel = _finish_args(ctx, args)
+    status = experiments.STATUS_LABELS["cancelled" if cancel else "finished"]
+    rows = [_ch(f"Эксперимент «{exp['title']}»", experiments.STATUS_LABELS["running"], status)]
+    if verdict:
+        rows.append(_ch("Гипотеза", "проверяется", experiments.VERDICTS[verdict]))
+    if conclusion:
+        rows.append(_ch("Вывод", "—", conclusion))
+    rows.append(_ch("Кампании эксперимента", "как есть", "без изменений"))
+    return rows
+
+
 def _d_create_adgroup(ctx: Context, args: dict) -> list[dict]:
     from app import geo
 
@@ -1719,6 +1869,8 @@ _DIFFS = {
     "moderate_campaign": _d_moderate,
     "restart_campaign_copy": _d_restart,
     "copy_campaign_geo": _d_copy_geo,
+    "start_experiment": _d_start_experiment,
+    "finish_experiment": _d_finish_experiment,
     "create_adgroup": _d_create_adgroup,
     "keywords_action": _d_keywords_action,
     "add_keywords": _d_add_keywords,
@@ -1863,6 +2015,7 @@ TOOL_LABELS = {
     "get_campaign_history": "Кампания по дням",
     "remember_fact": "Запоминаю ответ",
     "find_regions": "Поиск регионов",
+    "get_experiments": "Эксперименты",
     "ask_questions": "Вопросы перед работой",
     "propose_plan": "План работ",
     "campaigns_action": "Действие с кампаниями",
@@ -1873,6 +2026,8 @@ TOOL_LABELS = {
     "moderate_campaign": "Модерация",
     "restart_campaign_copy": "Перезапуск копией",
     "copy_campaign_geo": "Копия на новое гео",
+    "start_experiment": "Запуск эксперимента",
+    "finish_experiment": "Итоги эксперимента",
     "create_adgroup": "Новая группа",
     "keywords_action": "Ключевые фразы",
     "add_keywords": "Новые ключевые фразы",
@@ -1983,6 +2138,12 @@ TOOLS = [
         "минус перед id исключает регион.",
         {"query": {"type": "string", "description": "название, напр. «Казань» или «Татарстан»"}},
         ["query"],
+    ),
+    _fn(
+        "get_experiments",
+        "Эксперименты пространства: гипотезы, тестовые кампании, лимиты, критерии успеха и прогресс, посчитанный "
+        "кодом по загруженной статистике, и выводы прошлых экспериментов. С experiment_id — этот подробно.",
+        {"experiment_id": _ID},
     ),
     _fn(
         "ask_questions",
@@ -2109,6 +2270,52 @@ TOOLS = [
         ["campaign_row_id", "region_ids"],
     ),
     _fn(
+        "start_experiment",
+        "Запустить эксперимент: записать гипотезу, тестовые кампании, срок и критерий успеха и поставить кампаниям "
+        "лимит ₽ в неделю в Директе (недельный бюджет стратегии; у ручных ставок ТГО — дневной не больше лимита/7). "
+        "Сервис ничего не останавливает сам — расход держит только этот бюджет. Тестовые кампании создай заранее "
+        "(copy_campaign_geo, restart_campaign_copy, create_campaign). Срок считается с первого дня показов.",
+        {
+            "title": {"type": "string", "description": "коротко, напр. «Казань: копия Поиска Москва»"},
+            "hypothesis": {"type": "string", "description": "что проверяем и на каких данных это основано"},
+            "kind": {"type": "string", "enum": list(experiments.KINDS)},
+            "campaign_row_ids": {**_IDS, "description": "тестовые кампании, до 10"},
+            "source_campaign_row_id": {**_ID, "description": "кампания-образец для сравнения, если есть"},
+            "weekly_budget_rub": {
+                "type": "number",
+                "description": "лимит ₽ в неделю на каждую тестовую кампанию — из ответа маркетолога, от 300",
+            },
+            "set_limit": {
+                "type": "boolean",
+                "description": "поставить лимит в Директе (по умолчанию да); false — маркетолог ставит сам",
+            },
+            "days": {"type": "integer", "description": "срок теста, 3–90 дней, по умолчанию 14"},
+            "criterion": {
+                "type": "string",
+                "enum": list(experiments.CRITERIA),
+                "description": "zero_cost — конверсии за ~0 ₽; conversions — от target конверсий за срок; cr — CR "
+                "от target %; custom — свой критерий словами в criterion_text",
+            },
+            "target": {"type": "number", "description": "zero_cost и conversions — конверсий за весь срок; cr — CR в %"},
+            "criterion_text": {"type": "string", "description": "критерий словами: для custom обязательно, иначе уточнение"},
+            **_REASON,
+        },
+        ["title", "hypothesis", "campaign_row_ids", "weekly_budget_rub", "criterion"],
+    ),
+    _fn(
+        "finish_experiment",
+        "Записать итог эксперимента, когда маркетолог согласен с выводом: подтвердилась ли гипотеза и что дальше. "
+        "Кампании не трогает — остановить или масштабировать их отдельными действиями. cancel — отменить без итога.",
+        {
+            "experiment_id": _ID,
+            "verdict": {"type": "string", "enum": list(experiments.VERDICTS)},
+            "conclusion": {"type": "string", "description": "что узнали и что делать дальше, 1–4 предложения"},
+            "cancel": {"type": "boolean", "description": "отменить эксперимент; verdict тогда не нужен"},
+            **_REASON,
+        },
+        ["experiment_id"],
+    ),
+    _fn(
         "create_adgroup",
         "Создать группу объявлений в кампании.",
         {"campaign_row_id": _ID, "name": {"type": "string"}, "region_ids": _IDS, **_REASON},
@@ -2184,6 +2391,15 @@ TOOLS = [
 ]
 
 
+def _running_experiments(ctx: Context) -> list[dict]:
+    """Идущие эксперименты для системного промпта; без них ход не должен падать."""
+    try:
+        return experiments.running_experiments(ctx.user_id, ctx.ws_id)
+    except Exception:
+        log.warning("Идущие эксперименты пространства %s не загружены", ctx.ws_id, exc_info=True)
+        return []
+
+
 def _system_prompt(ctx: Context) -> str:
     ws = ctx.ws
     access = ctx.access
@@ -2242,6 +2458,13 @@ def _system_prompt(ctx: Context) -> str:
         "предлагай перезапустить копией — restart_campaign_copy.",
         "- Копию кампании на другой регион делай через copy_campaign_geo; id регионов бери из find_regions, "
         "не по памяти.",
+        "- Гипотезы проверяй экспериментом: 1) ask_questions — лимит ₽ в неделю на кампанию, срок в днях и критерий "
+        "успеха (общий критерий клиента запоминай с key success_criteria); 2) propose_plan; 3) тестовые кампании — "
+        "инструментами копий; 4) start_experiment. Деньги ограничивает только недельный бюджет в Директе: сервис "
+        "сам ничего не останавливает. Кампанию идущего эксперимента в новый не бери.",
+        "- Итоги эксперимента разбирай по get_experiments, если выжимки ещё нет в чате. Подтвердилось — предложи "
+        "масштабировать (копия на новое гео, другие ключи или тип); нет — остановить тестовые кампании "
+        "(campaigns_action). Итог записывай finish_experiment, когда маркетолог согласен с выводом.",
         "- Если действие отклонено, не повторяй его без новой просьбы. Если ошибка — объясни её пользователю.",
         "- Работай только с кампаниями и кабинетами этого пространства.",
     ]
@@ -2267,6 +2490,18 @@ def _system_prompt(ctx: Context) -> str:
     if facts:
         lines += ["", "Что маркетолог уже ответил (учитывай, не переспрашивай):"]
         lines += [f"- {f['question'] or f['key']}: {f['answer']}" for f in facts]
+    running = _running_experiments(ctx)
+    if running:
+        lines += [
+            "",
+            "Идут эксперименты (не меняй настройки их кампаний без просьбы маркетолога — это ломает тест; "
+            "прогресс и итоги — get_experiments):",
+        ]
+        lines += [
+            f"- #{e['id']} «{e['title']}»: с {e['started_on']:%d.%m} на {_count(int(e['days']), 'день', 'дня', 'дней')}, "
+            "кампании " + ", ".join(f"[{i}]" for i in e["campaign_row_ids"] or [])
+            for e in running
+        ]
     examples = examples_prompt(memory_examples(ctx.ws_id, 10))
     if examples:
         lines += ["", "Решения маркетолога по поисковым запросам (учитывай их в предложениях минус-фраз):", examples]
@@ -2307,8 +2542,8 @@ def _parse_args(text: str) -> dict:
 def _message_out(row: dict) -> dict:
     calls = row.get("tool_calls") or []
     content = row.get("content") or ""
-    # Выжимку сигналов показываем целиком: пользователь видит ровно то, на чём ИИ строит выводы.
-    limit = TOOL_RESULT_LIMIT if row.get("tool_name") == "get_signals" else 1500
+    # Выжимки показываем целиком: пользователь видит ровно то, на чём ИИ строит выводы.
+    limit = TOOL_RESULT_LIMIT if row.get("tool_name") in ("get_signals", "get_experiments") else 1500
     if row["role"] == "tool" and len(content) > limit:
         content = content[:limit] + "…"
     return {
@@ -2529,15 +2764,50 @@ def start_review(user_id: int, workspace_id: int, *, prompt: str = "", title: st
     Без chat_id создаётся новый чат.
     """
     from app.insights import get_signals, signals_digest
-    from app.jobs import public_job
 
     text = (prompt or "").strip()[:2000] or REVIEW_PROMPT
     title = (title or "").strip()[:120] or f"Разбор {today_msk():%d.%m}"
     ai.check_budget(ai.load_config(user_id, "chat"))
     require_workspace(user_id, workspace_id)
     digest = signals_digest(get_signals(user_id, workspace_id))
+    return _start_with_digest(
+        user_id, workspace_id, chat_id, text=text, title=title, tool="get_signals", args={}, digest=digest,
+        skip_reason="Пропущено: пользователь запустил разбор",
+    )
+
+
+def start_experiment_review(user_id: int, workspace_id: int, experiment_id: int, *, chat_id: int | None = None) -> dict:
+    """«Разобрать итоги» эксперимента по кнопке: прогресс считает код и кладёт в чат ответом get_experiments."""
+    ai.check_budget(ai.load_config(user_id, "chat"))
+    items = experiments.experiments_overview(user_id, workspace_id)["items"]
+    exp = next((e for e in items if e["id"] == experiment_id), None)
+    if exp is None:
+        raise YandexError("not-found", "Эксперимент не найден")
+    return _start_with_digest(
+        user_id,
+        workspace_id,
+        chat_id,
+        text=f"Разбери итоги эксперимента «{exp['title']}»: подтвердилась ли гипотеза и что делать дальше",
+        title=f"Итоги: {exp['title']}"[:120],
+        tool="get_experiments",
+        args={"experiment_id": experiment_id},
+        digest=experiments.digest(items, {experiment_id}),
+        skip_reason="Пропущено: пользователь запустил разбор итогов эксперимента",
+    )
+
+
+def _start_with_digest(
+    user_id: int, workspace_id: int, chat_id: int | None, *, text: str, title: str, tool: str, args: dict,
+    digest: str, skip_reason: str,
+) -> dict:
+    """Ход по кнопке: сообщение пользователя, вызов tool и готовый ответ на него — модель начинает с данных.
+
+    Без chat_id создаётся новый чат.
+    """
+    from app.jobs import public_job
+
     # 9 латинских букв и цифр: такой id примут все OpenAI-совместимые провайдеры.
-    call = {"id": "r" + secrets.token_hex(4), "name": "get_signals", "arguments": "{}"}
+    call = {"id": "r" + secrets.token_hex(4), "name": tool, "arguments": json.dumps(args, ensure_ascii=False)}
     with pool.connection() as conn:
         if chat_id is None:
             chat = conn.execute(
@@ -2550,7 +2820,7 @@ def start_review(user_id: int, workspace_id: int, *, prompt: str = "", title: st
                 raise YandexError("not-found")
             if _chat_out(chat)["status"] == "running":
                 raise YandexError("busy", "ИИ ещё отвечает — дождитесь ответа")
-            _skip_open_actions(conn, chat["id"], "Пропущено: пользователь запустил разбор")
+            _skip_open_actions(conn, chat["id"], skip_reason)
         message = _insert_message(conn, chat["id"], "user", text)
         _insert_message(conn, chat["id"], "assistant", tool_calls=[call])
         _insert_message(
@@ -2890,6 +3160,7 @@ def _run_action(ctx: Context, action: dict) -> None:
     args = dict(action["args"] or {})
     args.pop("_diff", None)
     result = None
+    ctx.action = action
     try:
         result = execute(ctx, args)
         status, error = "done", ""
@@ -2901,6 +3172,8 @@ def _run_action(ctx: Context, action: dict) -> None:
         log.exception("ИИ-действие %s", action["id"])
         status, error = "error", "Внутренняя ошибка при выполнении"
         payload = {"ok": False, "error": error}
+    finally:
+        ctx.action = None
     with pool.connection() as conn:
         conn.execute(
             "UPDATE ai_actions SET status = %s, result = %s, error = %s WHERE id = %s",

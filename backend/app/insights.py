@@ -789,10 +789,15 @@ def get_signals(user_id: int, ws_id: int, today: date | None = None) -> dict:
 
 
 def signals_overview(user_id: int, ws_id: int, today: date | None = None) -> dict:
-    """Для чата: карточки «чем помочь» с названиями кампаний и заметки о данных."""
+    """Для чата: карточки «чем помочь» с названиями кампаний и заметки о данных.
+
+    Первыми — эксперименты, по которым пора подвести итоги.
+    """
+    from app.experiments import chat_cards  # лениво: experiments сам импортирует insights
+
     signals = get_signals(user_id, ws_id, today)
     campaigns = signals["campaigns"]
-    cards = []
+    cards = [{**c, "campaigns": [], "campaigns_total": 0} for c in chat_cards(user_id, ws_id, today)]
     for s in signals["suggestions"]:
         ids = s.get("campaign_row_ids") or []
         cards.append({**s, "campaigns": [{"id": i, "name": campaigns[i]["name"]} for i in ids[:5]], "campaigns_total": len(ids)})

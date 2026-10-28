@@ -3,7 +3,7 @@
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
-from app import ai, ai_agent, insights, workspaces
+from app import ai, ai_agent, experiments, insights, workspaces
 from app.api.web import _http
 from app.web_auth import require_web_user
 from app.yandex import YandexError
@@ -70,6 +70,18 @@ class ReviewBody(BaseModel):
     chat_id: int | None = None
 
 
+class ExperimentReviewBody(BaseModel):
+    # Не задан — разбор итогов в новом чате.
+    chat_id: int | None = None
+
+
+class ExperimentFinishBody(BaseModel):
+    # success | fail | unclear; при отмене не нужен.
+    verdict: str = ""
+    conclusion: str = ""
+    cancel: bool = False
+
+
 class ForgetFactBody(BaseModel):
     key: str
 
@@ -125,6 +137,28 @@ def workspace_signals(workspace_id: int, user_id: int = Depends(require_web_user
 def workspace_review(workspace_id: int, body: ReviewBody, user_id: int = Depends(require_web_user)) -> dict:
     return _call(ai_agent.start_review, user_id, workspace_id, prompt=body.prompt, title=body.title,
                  chat_id=body.chat_id)
+
+
+@router.get("/workspaces/{workspace_id}/experiments")
+def workspace_experiments(workspace_id: int, user_id: int = Depends(require_web_user)) -> dict:
+    """Эксперименты ИИ с прогрессом — считает код по загруженной статистике, без ИИ."""
+    return _call(experiments.experiments_overview, user_id, workspace_id)
+
+
+@router.post("/workspaces/{workspace_id}/experiments/{experiment_id}/review")
+def experiment_review(
+    workspace_id: int, experiment_id: int, body: ExperimentReviewBody, user_id: int = Depends(require_web_user)
+) -> dict:
+    return _call(ai_agent.start_experiment_review, user_id, workspace_id, experiment_id, chat_id=body.chat_id)
+
+
+@router.post("/workspaces/{workspace_id}/experiments/{experiment_id}/finish")
+def experiment_finish(
+    workspace_id: int, experiment_id: int, body: ExperimentFinishBody, user_id: int = Depends(require_web_user)
+) -> dict:
+    """Итог эксперимента вручную. Кампании не трогает — их останавливают отдельно."""
+    return _call(experiments.finish_and_list, user_id, workspace_id, experiment_id, verdict=body.verdict,
+                 conclusion=body.conclusion, cancel=body.cancel)
 
 
 @router.post("/workspaces/{workspace_id}/ai-facts/forget")

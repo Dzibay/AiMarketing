@@ -142,6 +142,7 @@ def test_every_tool_has_schema_and_label():
 @pytest.fixture
 def no_memory(monkeypatch):
     monkeypatch.setattr(ai_agent, "memory_examples", lambda ws_id, limit: {})
+    monkeypatch.setattr(ai_agent, "_running_experiments", lambda ctx: [])
 
 
 def test_prompt_offers_scheme_hypothesis_until_marketer_confirms(no_memory):
