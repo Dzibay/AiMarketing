@@ -35,9 +35,6 @@
             </span>
           </p>
         </div>
-        <div class="row-actions">
-          <RouterLink class="btn btn--accent" :to="`/w/${ws.id}/chat`">Спросить ИИ</RouterLink>
-        </div>
       </div>
 
       <p v-if="!ws.counter_ok" class="notice notice--warn">
@@ -71,18 +68,6 @@
         </ul>
       </div>
 
-      <nav class="ws-tabs" aria-label="Разделы пространства">
-        <RouterLink
-          v-for="tab in tabs"
-          :key="tab.name"
-          :to="`/w/${ws.id}/${tab.path}`"
-          :class="{ active: tab.names.includes(route.name) }"
-        >
-          {{ tab.label }}
-          <span v-if="tab.badge" class="ws-tabs__badge">{{ tab.badge }}</span>
-        </RouterLink>
-      </nav>
-
       <RouterView :key="`${ws.id}:${dataVersion}`" />
     </template>
   </AppShell>
@@ -110,23 +95,6 @@ watch(
     if (name) document.title = `${name} — AiMarketing`
   },
 )
-
-const tabs = computed(() => [
-  { name: 'summary', path: 'summary', label: 'Сводка', names: ['ws-summary'] },
-  { name: 'analytics', path: 'analytics', label: 'Аналитика', names: ['ws-analytics'] },
-  {
-    name: 'campaigns',
-    path: 'campaigns',
-    label: 'Кампании',
-    names: ['ws-campaigns', 'ws-campaign'],
-    badge: ws.value?.campaigns_count || '',
-  },
-  { name: 'queries', path: 'queries', label: 'Поисковые запросы', names: ['ws-queries'] },
-  { name: 'actions', path: 'actions', label: 'Действия и правила', names: ['ws-actions'] },
-  { name: 'experiments', path: 'experiments', label: 'Эксперименты', names: ['ws-experiments'] },
-  { name: 'chat', path: 'chat', label: 'ИИ-чат', names: ['ws-chat'] },
-  { name: 'settings', path: 'settings', label: 'Настройки', names: ['ws-settings'] },
-])
 
 const siteUrl = computed(() => {
   const site = (ws.value?.site || '').trim()

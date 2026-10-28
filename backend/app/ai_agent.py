@@ -336,6 +336,7 @@ def _t_summary(ctx: Context, args: dict) -> dict:
 
     out = workspace_summary(ctx.user_id, ctx.ws_id)
     out.pop("recent_actions", None)
+    out["week"].pop("prev_by_day", None)
     return out
 
 
@@ -343,6 +344,7 @@ def _t_analytics(ctx: Context, args: dict) -> dict:
     from app.analytics import workspace_analytics
 
     out = workspace_analytics(ctx.user_id, ctx.ws_id, **_range_args(args), with_tops=False)
+    out.pop("prev_by_day", None)
     if not args.get("include_days"):
         out.pop("by_day", None)
     return out

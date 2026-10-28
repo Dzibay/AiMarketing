@@ -3,9 +3,21 @@
   <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="theme-color" content="#051c2c">
+    <meta name="theme-color" content="#eef3ef">
     <link rel="icon" type="image/png" href="/favicon.png">
     <title>AiMarketing</title>
+    <script>
+      // Тема до первой отрисовки, без вспышки: выбор пользователя, иначе — системная.
+      (function () {
+        var theme
+        try { theme = localStorage.getItem('aimarketing-theme') } catch (e) {}
+        if (theme !== 'light' && theme !== 'dark') {
+          theme = window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
+        }
+        document.documentElement.dataset.theme = theme
+        document.querySelector('meta[name="theme-color"]').content = theme === 'dark' ? '#141a17' : '#eef3ef'
+      })()
+    </script>
   </head>
   <body>
     <div id="app"></div>

@@ -1,7 +1,7 @@
 <template>
   <div ref="root" class="ws-picker" :class="{ 'is-open': open }">
     <button class="ws-picker__toggle" type="button" :aria-expanded="open" @click="toggle">
-      <span class="ws-picker__label">Счётчик</span>
+      <span class="ws-picker__label" title="Счётчик Метрики"><Gauge aria-hidden="true" /></span>
       <span class="ws-picker__current">
         <template v-if="current">
           {{ current.name }}
@@ -9,7 +9,7 @@
         </template>
         <template v-else>{{ workspaces.length ? 'Выберите пространство' : 'Нет счётчиков' }}</template>
       </span>
-      <span class="ws-picker__caret" aria-hidden="true">▾</span>
+      <span class="ws-picker__caret" aria-hidden="true"><ChevronDown /></span>
     </button>
 
     <div v-if="open" class="ws-picker__menu">
@@ -54,6 +54,7 @@
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
+import { ChevronDown, Gauge } from '@lucide/vue'
 import { useWorkspaces } from '../composables/useWorkspaces'
 
 const route = useRoute()

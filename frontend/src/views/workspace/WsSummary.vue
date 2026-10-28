@@ -22,26 +22,49 @@
 
     <div class="stats-grid">
       <div class="stat-card">
-        <small>Сегодня</small>
+        <div class="stat-card__head">
+          <span class="stat-card__icon"><CalendarClock aria-hidden="true" /></span>
+          <small>Сегодня</small>
+        </div>
         <strong>{{ rub(row.spend_today) }}</strong>
         <span class="cell-note">вчера {{ rub(row.spend_yesterday) }}</span>
       </div>
       <div class="stat-card">
-        <small>Расход 7 дней</small>
-        <strong>{{ rub(week.totals.cost_kopecks) }}</strong>
-        <span class="cell-note" :class="deltaTone(week.compare.cost_kopecks, true)">
-          {{ delta(week.compare.cost_kopecks) || '—' }} к прошлой неделе
-        </span>
+        <div class="stat-card__head">
+          <span class="stat-card__icon is-blue"><Wallet aria-hidden="true" /></span>
+          <small>Расход 7 дней</small>
+        </div>
+        <div class="stat-card__value">
+          <strong>{{ rub(week.totals.cost_kopecks) }}</strong>
+          <span v-if="week.compare.cost_kopecks != null" class="delta" :class="deltaTone(week.compare.cost_kopecks, true)">
+            {{ delta(week.compare.cost_kopecks) }}
+          </span>
+        </div>
+        <span class="cell-note">к прошлой неделе</span>
+        <Sparkline :points="week.by_day" :prev-points="week.prev_by_day" value-key="cost_kopecks" color="var(--c-blue)" />
       </div>
       <div class="stat-card">
-        <small>Конверсии 7 дней</small>
-        <strong>{{ num(week.totals.conversions) }}</strong>
-        <span class="cell-note" :class="deltaTone(week.compare.conversions)">
-          {{ delta(week.compare.conversions) || '—' }} · {{ conversionsSource }}
-        </span>
+        <div class="stat-card__head">
+          <span class="stat-card__icon"><Target aria-hidden="true" /></span>
+          <small>Конверсии 7 дней</small>
+        </div>
+        <div class="stat-card__value">
+          <strong>{{ num(week.totals.conversions) }}</strong>
+          <span v-if="week.compare.conversions != null" class="delta" :class="deltaTone(week.compare.conversions)">
+            {{ delta(week.compare.conversions) }}
+          </span>
+        </div>
+        <span class="cell-note">{{ conversionsSource }}</span>
+        <Sparkline :points="week.by_day" :prev-points="week.prev_by_day" value-key="conversions" />
       </div>
       <div class="stat-card">
-        <small>{{ week.kpi?.type === 'drr' ? 'ДРР' : 'CPA' }} 7 дней</small>
+        <div class="stat-card__head">
+          <span class="stat-card__icon is-amber">
+            <BadgePercent v-if="week.kpi?.type === 'drr'" aria-hidden="true" />
+            <Crosshair v-else aria-hidden="true" />
+          </span>
+          <small>{{ week.kpi?.type === 'drr' ? 'ДРР' : 'CPA' }} 7 дней</small>
+        </div>
         <strong :class="KPI_TONES[week.kpi?.status]">
           {{ week.kpi?.type ? kpiValue(week.kpi) : rub(week.totals.cpa_kopecks) }}
         </strong>
@@ -49,9 +72,19 @@
           <RouterLink v-if="!week.kpi?.type" :to="`/w/${ws.id}/settings`">задать KPI</RouterLink>
           <template v-else>{{ kpiTarget(week.kpi) }}</template>
         </span>
+        <Sparkline
+          v-if="week.kpi?.type !== 'drr'"
+          :points="week.by_day"
+          :prev-points="week.prev_by_day"
+          value-key="cpa_kopecks"
+          color="var(--c-amber)"
+        />
       </div>
       <div class="stat-card">
-        <small>Бюджет месяца</small>
+        <div class="stat-card__head">
+          <span class="stat-card__icon is-teal"><PiggyBank aria-hidden="true" /></span>
+          <small>Бюджет месяца</small>
+        </div>
         <template v-if="row.budget">
           <strong :class="BUDGET_TONES[row.budget.status]">
             {{ row.budget.pace_pct != null ? `${row.budget.pace_pct}%` : rub(row.budget.spent_kopecks) }}
@@ -67,7 +100,10 @@
         </template>
       </div>
       <div class="stat-card">
-        <small>Баланс кабинетов</small>
+        <div class="stat-card__head">
+          <span class="stat-card__icon is-blue"><Landmark aria-hidden="true" /></span>
+          <small>Баланс кабинетов</small>
+        </div>
         <strong>{{ row.balance_kopecks != null ? rub(row.balance_kopecks) : '—' }}</strong>
         <span class="cell-note" :class="balanceTone(row.days_on_balance)">
           {{ row.days_on_balance != null ? `хватит ≈ на ${row.days_on_balance} дн.` : 'нет данных о расходе' }}
@@ -89,6 +125,7 @@
       </div>
       <TrendChart
         :points="week.by_day"
+        :prev-points="week.prev_by_day"
         :value-key="chartKey"
         :label="METRIC_BY_KEY[chartKey].label"
         :format-value="METRIC_BY_KEY[chartKey].fmt"
@@ -197,6 +234,8 @@
 <script setup>
 import { computed, onMounted, ref } from 'vue'
 import { RouterLink } from 'vue-router'
+import { BadgePercent, CalendarClock, Crosshair, Landmark, PiggyBank, Target, Wallet } from '@lucide/vue'
+import Sparkline from '../../components/Sparkline.vue'
 import TrendChart from '../../components/TrendChart.vue'
 import { errorDetail, errorText, jobProgressText, webApi, wsApi } from '../../api/web'
 import { pushToast } from '../../composables/useToasts'

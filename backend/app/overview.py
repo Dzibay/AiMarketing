@@ -463,6 +463,7 @@ def build_overview(user_id: int, today: date | None = None, now: datetime | None
     campaign_week_cost: dict[tuple[int, int], int] = defaultdict(int)
     has_unassigned_spend = False
     today_updated: datetime | None = None
+    day_totals: dict[date, list[int]] = defaultdict(lambda: [0, 0])
     for r in data["stats"]:
         account_id = r["account_id"]
         if account_id not in accounts_by_id:
@@ -473,6 +474,8 @@ def build_overview(user_id: int, today: date | None = None, now: datetime | None
         day, cost = r["day"], r["cost_kopecks"]
         loaded_days[account_id].add(day)
         _add_day(ws_sums[ws_id], r, **period)
+        day_totals[day][0] += cost
+        day_totals[day][1] += r["conversions"]
         if ws_id is None and cost:
             has_unassigned_spend = True
         if week_from <= day <= yesterday:
@@ -756,6 +759,12 @@ def build_overview(user_id: int, today: date | None = None, now: datetime | None
         for key in ("spend_today", "spend_yesterday", "conversions_yesterday", "spend_7d", "conversions_7d"):
             totals[key] += row[key]
     ordered_folders = sorted(folders.values(), key=lambda f: (f["id"] is None, f["name"].lower()))
+    # Две недели по дням до вчера — спарклайны карточек обзора (первые 7 дней — «было»).
+    by_day = []
+    for i in range(13, -1, -1):
+        d = yesterday - timedelta(days=i)
+        cost, conv = day_totals.get(d, (0, 0))
+        by_day.append({"day": d.isoformat(), "cost_kopecks": cost, "conversions": conv})
     return {
         "today": today.isoformat(),
         "yesterday": yesterday.isoformat(),
@@ -763,5 +772,6 @@ def build_overview(user_id: int, today: date | None = None, now: datetime | None
         "workspaces": list(rows.values()),
         "folders": ordered_folders,
         "totals": dict(totals),
+        "by_day": by_day,
         "problems": problems,
     }
