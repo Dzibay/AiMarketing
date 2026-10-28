@@ -97,7 +97,7 @@
                   <option :value="null">Цель</option>
                   <option v-for="goal in options.goals" :key="goal.goal_id" :value="goal.goal_id">{{ goal.name }}</option>
                 </select>
-                <input v-model.number="g.value_rub" type="number" min="0" step="1" placeholder="ценность, ₽" />
+                <input v-model.number="g.value_rub" type="number" min="0.3" step="any" placeholder="ценность от 0,3 ₽" />
                 <button class="btn btn--ghost" type="button" @click="form.priority_goals.splice(i, 1)">Убрать</button>
               </div>
               <button

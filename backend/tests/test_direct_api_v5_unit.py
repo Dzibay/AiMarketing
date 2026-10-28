@@ -83,15 +83,42 @@ def test_unified_manual_has_weekly_limit_and_no_network_bids():
 def test_text_campaign_manual_ignores_weekly_limit():
     bidding, manual = build_bidding_strategy({"search": "HIGHEST_POSITION", "weekly_budget_rub": 5000})
     assert manual is True and "HighestPosition" not in bidding["Search"]
-    bidding, manual = build_bidding_strategy({"search": "SERVING_OFF"})
-    assert bidding["Network"]["BiddingStrategyType"] == "MAXIMUM_COVERAGE" and manual is True
 
 
-def test_options_by_type_hide_network_manual_bids_in_unified():
+def test_no_manual_bids_in_networks():
+    """Директ ведёт текстовые кампании как ЕПК: MAXIMUM_COVERAGE он отклоняет у любого типа."""
+    for ctype in ("TEXT_CAMPAIGN", "UNIFIED_CAMPAIGN"):
+        for strategy in ({"search": "SERVING_OFF"}, {"search": "SERVING_OFF", "network": "MAXIMUM_COVERAGE"},
+                         {"search": "HIGHEST_POSITION", "network": "MAXIMUM_COVERAGE"}):
+            with pytest.raises(YandexError):
+                build_bidding_strategy(strategy, ctype)
+
+
+def test_multiple_goals_strategies():
+    bidding, manual = build_bidding_strategy({"search": "PAY_FOR_CONVERSION_MULTIPLE_GOALS", "weekly_budget_rub": 7000})
+    assert manual is False
+    assert bidding == {
+        "Search": {"BiddingStrategyType": "PAY_FOR_CONVERSION_MULTIPLE_GOALS",
+                   "PayForConversionMultipleGoals": {"WeeklySpendLimit": 7_000_000_000}},
+        "Network": {"BiddingStrategyType": "NETWORK_DEFAULT"},
+    }
+    # Из Директа приходят ещё BudgetType и BudgetIncreasePercent — форме нужен только бюджет.
+    raw = {"Search": {"BiddingStrategyType": "SERVING_OFF"},
+           "Network": {"BiddingStrategyType": "AVERAGE_CPA_MULTIPLE_GOALS", "AverageCpaMultipleGoals": {
+               "WeeklySpendLimit": 3_000_000_000, "BudgetType": "WEEKLY_BUDGET", "BudgetIncreasePercent": 0}}}
+    flat = strategy_from_api(raw)
+    assert (flat["network"], flat["weekly_budget_rub"], flat["manual"]) == ("AVERAGE_CPA_MULTIPLE_GOALS", 3000, False)
+    with pytest.raises(YandexError):
+        build_bidding_strategy({"search": "PAY_FOR_CONVERSION_MULTIPLE_GOALS"})  # без недельного бюджета
+
+
+def test_options_by_type_hide_network_manual_bids():
     opts = campaign_options()
+    for ctype in ("TEXT_CAMPAIGN", "UNIFIED_CAMPAIGN"):
+        networks = [n["id"] for side in opts["by_type"][ctype]["network_by_search"].values() for n in side]
+        assert "MAXIMUM_COVERAGE" not in networks
+        assert "PAY_FOR_CONVERSION_MULTIPLE_GOALS" in {s["id"] for s in opts["by_type"][ctype]["search_strategies"]}
     unified = opts["by_type"]["UNIFIED_CAMPAIGN"]
-    networks = [n["id"] for side in unified["network_by_search"].values() for n in side]
-    assert "MAXIMUM_COVERAGE" not in networks
     assert [n["id"] for n in unified["network_by_search"]["HIGHEST_POSITION"]] == ["SERVING_OFF"]
     manual = next(s for s in unified["search_strategies"] if s["id"] == "HIGHEST_POSITION")
     assert [p["key"] for p in manual["params"]] == ["weekly_budget_rub"]
@@ -249,3 +276,37 @@ def test_keyword_bids_go_through_keywordbids(monkeypatch):
     assert calls[0][:2] == ("keywordbids", "set")
     assert calls[0][2]["KeywordBids"][0] == {"KeywordId": 1, "SearchBid": 5_000_000}
     assert list(errors) == [1]
+
+
+def test_campaign_negatives_accept_leading_minus():
+    """Минус-фразы копируют из интерфейса Директа с «-» — API такой минус отклоняет."""
+    assert actions._negatives("бесплатно\n-отзывы\n-скачать -торрент") == ["бесплатно", "отзывы", "скачать", "торрент"]
+    assert actions._negatives(["-бесплатно", "бесплатно"]) == ["бесплатно"]
+    with pytest.raises(YandexError) as err:
+        actions._negatives("купить -б/у")  # минус внутри фразы Директ тоже отклоняет
+    assert err.value.code == "phrase" and "купить -б/у" in err.value.message
+
+
+def test_busy_direct_is_retried_even_for_add(monkeypatch):
+    """Ошибка 1000 «Сервис временно недоступен» — запрос не выполнен: повторяем, в том числе add."""
+    import httpx
+
+    replies = [{"error": {"error_code": 1000, "error_string": "Сервис временно недоступен"}},
+               {"result": {"AddResults": [{"Id": 7}]}}]
+    calls = []
+
+    def fake_post(*_a, **_k):
+        calls.append(1)
+        return httpx.Response(200, json=replies[len(calls) - 1])
+
+    monkeypatch.setattr(direct_api, "post_json", fake_post)
+    monkeypatch.setattr(direct_api, "BUSY_DELAY", 0)
+    token = direct_api.AccessToken("t")
+    assert direct_api.call(token, None, "campaigns", "add", {}) == {"AddResults": [{"Id": 7}]}
+    assert len(calls) == 2
+
+    calls.clear()
+    replies[:] = [replies[0]] * 3
+    with pytest.raises(YandexError) as exc:
+        direct_api.call(token, None, "campaigns", "add", {})
+    assert exc.value.message == "Сервис временно недоступен" and len(calls) == 3

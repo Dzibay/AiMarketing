@@ -34,7 +34,9 @@ def _campaign_row(user_id: int, campaign_row_id: int) -> dict:
 
 
 def _call(access_token: str, client_login: str, method: str, params: dict) -> dict:
-    return direct_api.call(access_token, client_login, "adgroups", method, params)
+    # Группы ЕПК v5 не создаёт («не поддерживается в v5, используйте v501»).
+    unified = any("UnifiedAdGroup" in g for g in params.get("AdGroups") or [])
+    return direct_api.call(access_token, client_login, "adgroups", method, params, version="v501" if unified else "v5")
 
 
 def _negatives_from_api(item: dict) -> list[str]:

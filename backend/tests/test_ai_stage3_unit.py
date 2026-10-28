@@ -146,6 +146,11 @@ def test_limit_auto_strategy_gets_weekly_budget():
     assert no_weekly["changes"]["strategy"]["weekly_budget_rub"] == 3000
     networks = experiments.limit_plan(_settings(ctype="TEXT_CAMPAIGN", search="SERVING_OFF", network="WB_MAXIMUM_CLICKS"), 3000)
     assert networks["changes"] == {"strategy": {"search": "SERVING_OFF", "network": "WB_MAXIMUM_CLICKS", "weekly_budget_rub": 3000}}
+    # Оплата за конверсии по нескольким целям — недельный бюджет тоже в стратегии.
+    multi = experiments.limit_plan(_settings(ctype="TEXT_CAMPAIGN", search="SERVING_OFF",
+                                             network="PAY_FOR_CONVERSION_MULTIPLE_GOALS", weekly_budget_rub=7000.0), 3000)
+    assert multi["changes"] == {"strategy": {"search": "SERVING_OFF", "network": "PAY_FOR_CONVERSION_MULTIPLE_GOALS",
+                                             "weekly_budget_rub": 3000}}
 
 
 def test_limit_never_raises_a_smaller_budget():

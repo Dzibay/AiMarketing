@@ -48,10 +48,7 @@
           <label>Окончание (пусто — без даты)</label>
           <input v-model="form.end_date" type="date" :min="form.start_date" />
         </div>
-        <div class="field field--wide">
-          <label>Информация о клиенте (видна только в Директе)</label>
-          <input v-model.trim="form.client_info" type="text" maxlength="255" />
-        </div>
+        <!-- «Информации о клиенте» нет: Директ ведёт кампании как ЕПК, где ClientInfo не поддерживается. -->
       </div>
     </section>
 
@@ -88,7 +85,7 @@
               </option>
               <option v-if="g.goal_id && !goalKnown(g.goal_id)" :value="g.goal_id">Цель {{ g.goal_id }}</option>
             </select>
-            <input v-model.number="g.value_rub" type="number" min="0" step="1" placeholder="ценность, ₽" />
+            <input v-model.number="g.value_rub" type="number" min="0.3" step="any" placeholder="ценность от 0,3 ₽" />
             <button class="btn btn--ghost" type="button" @click="form.priority_goals.splice(i, 1)">Убрать</button>
           </div>
           <button class="btn btn--ghost" type="button" @click="form.priority_goals.push({ goal_id: null, value_rub: null })">
@@ -261,7 +258,7 @@ const changes = computed(() => {
     out.daily_budget_rub = form.daily_budget_rub === '' ? 0 : Number(form.daily_budget_rub)
   }
   if (form.attribution_model && form.attribution_model !== b.attribution_model) out.attribution_model = form.attribution_model
-  // Цели уходят в Директ целиком (SET): цель без ценности, выпавшая из списка, удалилась бы из кампании.
+  // Цели уходят в Директ целиком (SET): цель, выпавшая из списка, удалилась бы из кампании.
   const goals = priorityGoalsForApi(form.priority_goals)
   if (!same(goals, priorityGoalsForApi(b.priority_goals))) out.priority_goals = goals
   if (!same(counterIds(), original.value.counter_ids || [])) out.counter_ids = counterIds()

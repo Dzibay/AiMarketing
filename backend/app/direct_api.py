@@ -16,6 +16,7 @@ log = logging.getLogger("app.direct_api")
 # Шлюз Директа (особенно песочница) часто отвечает так на живой запрос. Повтор уместен
 # только для чтения: add при 504 мог уже создать объект.
 TRANSIENT_STATUS = frozenset({502, 503, 504})
+BUSY_CODE, BUSY_ATTEMPTS, BUSY_DELAY = "1000", 3, 2.0
 
 V5 = "https://api.direct.yandex.com/json/v5/"
 V5_SANDBOX = "https://api-sandbox.direct.yandex.com/json/v5/"
@@ -137,22 +138,28 @@ def call(
 
     if is_sandbox(token):
         raise YandexError("sandbox", SANDBOX_CLOSED)
-    # get идемпотентен. add/update при 504 могли уже пройти на стороне Директа — не повторяем.
-    try:
-        response = post_json(
-            v5_url(token, service, version),
-            headers=headers(token, client_login),
-            body={"method": method, "params": params},
-            timeout=timeout,
-            attempts=3 if method == "get" else 1,
-        )
-    except httpx.HTTPError as exc:
-        raise YandexError("direct") from exc
-    _remember_units(client_login, response)
-    try:
-        payload = response.json() if response.content else {}
-    except ValueError:
-        payload = {}
+    for attempt in range(BUSY_ATTEMPTS):
+        # get идемпотентен. add/update при 504 могли уже пройти на стороне Директа — не повторяем.
+        try:
+            response = post_json(
+                v5_url(token, service, version),
+                headers=headers(token, client_login),
+                body={"method": method, "params": params},
+                timeout=timeout,
+                attempts=3 if method == "get" else 1,
+            )
+        except httpx.HTTPError as exc:
+            raise YandexError("direct") from exc
+        _remember_units(client_login, response)
+        try:
+            payload = response.json() if response.content else {}
+        except ValueError:
+            payload = {}
+        # «Сервис временно недоступен» (1000): запрос не выполнен, повтор безопасен и для add/update.
+        if str((payload.get("error") or {}).get("error_code") or "") != BUSY_CODE or attempt + 1 == BUSY_ATTEMPTS:
+            break
+        log.warning("%s.%s: Директ временно недоступен (попытка %s/%s)", service, method, attempt + 1, BUSY_ATTEMPTS)
+        time.sleep(BUSY_DELAY * (attempt + 1))
     if response.status_code >= 400 or payload.get("error"):
         err = payload.get("error") or {}
         log.warning("%s.%s %s %s", service, method, response.status_code, err or payload)

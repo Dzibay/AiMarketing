@@ -269,7 +269,10 @@ def test_add_copy_drops_goals_the_strategy_does_not_use(monkeypatch):
 
 
 def test_duplicate_campaign_reads_ads_of_the_source_campaign(monkeypatch):
-    """Цикл по фразам затирал src: объявления читались по логину фразы, и копия падала с KeyError."""
+    """Цикл по фразам затирал src: объявления читались по логину фразы, и копия падала с KeyError.
+
+    Комбинаторные объявления v5 не создаёт («используйте v501») — копия оставалась без объявлений.
+    """
     source = {
         "id": 10,
         "account_id": 1,
@@ -289,10 +292,14 @@ def test_duplicate_campaign_reads_ads_of_the_source_campaign(monkeypatch):
             {"Id": 32, "AdGroupId": 1, "Keyword": "---autotargeting", "Bid": 3_000_000},
         ],
         ("keywords", 222): [{"Id": 42, "AdGroupId": 2, "Keyword": "---autotargeting"}],
-        ("ads", 111): [{"Id": 51, "AdGroupId": 1, "TextAd": text_ad}],
+        ("ads", 111): [
+            {"Id": 51, "AdGroupId": 1, "TextAd": text_ad},
+            {"Id": 52, "AdGroupId": 1, "ResponsiveAd": {"Titles": [{"Title": "Слоны"}], "Texts": [{"Text": "Купите"}]}},
+        ],
     }
     reads: list[tuple] = []
     journal: list[dict] = []
+    added: list[tuple] = []
 
     def get_all(token, login, service, params, key, *, version="v5"):
         campaign_id = params["SelectionCriteria"]["CampaignIds"][0]
@@ -300,6 +307,7 @@ def test_duplicate_campaign_reads_ads_of_the_source_campaign(monkeypatch):
         return found[(service, campaign_id)]
 
     def add_batches(token, login, service, key, objects, *, version="v5"):
+        added.append((service, version, [next(iter(set(o) - {"AdGroupId"})) for o in objects]))
         first = {"adgroups": 2, "keywords": 41, "ads": 61}[service]
         return [first + i for i in range(len(objects))], []
 
@@ -319,7 +327,7 @@ def test_duplicate_campaign_reads_ads_of_the_source_campaign(monkeypatch):
 
     out = actions.duplicate_campaign(7, 10, target_account_id=2)
     assert out["status"] == "ok"
-    assert (out["groups"], out["keywords"], out["autotargeting"], out["ads"]) == (1, 1, 1, 1)
+    assert (out["groups"], out["keywords"], out["autotargeting"], out["ads"]) == (1, 1, 1, 2)
     # Объявления — из исходной кампании в её кабинете, автотаргетинг — из созданной копии.
     assert reads == [
         ("client-src", "adgroups", 111),
@@ -327,4 +335,5 @@ def test_duplicate_campaign_reads_ads_of_the_source_campaign(monkeypatch):
         ("client-dst", "keywords", 222),
         ("client-src", "ads", 111),
     ]
+    assert [a for a in added if a[0] == "ads"] == [("ads", "v5", ["TextAd"]), ("ads", "v501", ["ResponsiveAd"])]
     assert journal[0]["title"] == "Копия «Поиск» → «Поиск (копия)» (client-dst)"

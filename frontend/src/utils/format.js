@@ -151,9 +151,12 @@ export const CAMPAIGN_TYPES = {
   CPM_BANNER_CAMPAIGN: 'Медийная',
 }
 
-/** Ключевые цели для API: строки без цели пропускаем, пустая ценность — 0 (цель без ценности тоже ключевая). */
+/** Ключевые цели для API: строки без цели пропускаем. Пустую ценность не подменяем:
+ *  Директ требует от 0,3 ₽, и сервер назовёт цель, которую нужно заполнить. */
 export function priorityGoalsForApi(goals) {
-  return (goals || []).filter((g) => g.goal_id).map((g) => ({ goal_id: g.goal_id, value_rub: Number(g.value_rub) || 0 }))
+  return (goals || [])
+    .filter((g) => g.goal_id)
+    .map((g) => ({ goal_id: g.goal_id, value_rub: g.value_rub === '' || g.value_rub == null ? null : Number(g.value_rub) }))
 }
 
 const CONNECTION_PROBLEMS = new Set(['token', 'connection_sync', 'account_sync', 'stats_error', 'stats_stale', 'balance'])

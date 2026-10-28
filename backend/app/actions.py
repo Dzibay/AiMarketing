@@ -36,7 +36,10 @@ ADD_BATCH = 1000  # adgroups/keywords/ads.add — до 1000 объектов з�
 
 
 def _call_campaigns(access_token: str, client_login: str, method: str, params: dict) -> dict:
-    return direct_api.call(access_token, client_login, "campaigns", method, params)
+    # ЕПК v5 не создаёт и не правит («тип кампании не поддерживается в v5, используйте v501»);
+    # существующие ЕПК v5 отдаёт как TEXT_CAMPAIGN, и TextCampaign через v5 с ними работает.
+    unified = "UnifiedCampaignFieldNames" in params or any("UnifiedCampaign" in c for c in params.get("Campaigns") or [])
+    return direct_api.call(access_token, client_login, "campaigns", method, params, version="v501" if unified else "v5")
 
 
 def _account_creds(user_id: int, account_id: int) -> dict:
@@ -161,6 +164,17 @@ AUTO_STRATEGIES = {
             "bid_ceiling_rub": ("BidCeiling", False),
         },
     ),
+    # По нескольким целям: цена конверсии — ценности ключевых целей кампании (PriorityGoals).
+    "PAY_FOR_CONVERSION_MULTIPLE_GOALS": (
+        "Оплата за конверсии по нескольким целям",
+        "PayForConversionMultipleGoals",
+        {"weekly_budget_rub": ("WeeklySpendLimit", True)},
+    ),
+    "AVERAGE_CPA_MULTIPLE_GOALS": (
+        "Средняя цена конверсии по нескольким целям",
+        "AverageCpaMultipleGoals",
+        {"weekly_budget_rub": ("WeeklySpendLimit", True), "bid_ceiling_rub": ("BidCeiling", False)},
+    ),
     "PAY_FOR_CONVERSION": (
         "Оплата за конверсии",
         "PayForConversion",
@@ -226,23 +240,12 @@ def campaign_options() -> dict:
     off = {"id": "SERVING_OFF", "label": "Не показывать на поиске", "manual": False, "params": []}
     no_network = {"id": "SERVING_OFF", "label": "Не показывать в сетях"}
     network_auto = [{"id": "NETWORK_DEFAULT", "label": "Показывать в сетях по стратегии поиска"}, no_network]
-    text = {
-        "search_strategies": [manual, *auto, off],
-        "network_by_search": {
-            "HIGHEST_POSITION": [no_network, {"id": "MAXIMUM_COVERAGE", "label": "Ручные ставки в сетях"}],
-            "AUTO": network_auto,
-            "SERVING_OFF": [
-                {"id": "MAXIMUM_COVERAGE", "label": "Ручные ставки в сетях", "manual": True, "params": []},
-                *auto,
-            ],
-        },
-    }
-    # В ЕПК ручных ставок в сетях нет, а у ручных ставок на поиске бюджет недельный (с 29.06.2026).
+    # Ручных ставок в сетях нет: Директ ведёт текстовые кампании как ЕПК и MAXIMUM_COVERAGE отклоняет.
+    networks = {"HIGHEST_POSITION": [no_network], "AUTO": network_auto, "SERVING_OFF": auto}
+    text = {"search_strategies": [manual, *auto, off], "network_by_search": networks}
+    # У ручных ставок ЕПК на поиске бюджет недельный (с 29.06.2026); v5 для ТГО HighestPosition не знает.
     weekly = {"key": "weekly_budget_rub", "label": STRATEGY_PARAMS["weekly_budget_rub"], "required": False}
-    unified = {
-        "search_strategies": [{**manual, "params": [weekly]}, *auto, off],
-        "network_by_search": {"HIGHEST_POSITION": [no_network], "AUTO": network_auto, "SERVING_OFF": auto},
-    }
+    unified = {"search_strategies": [{**manual, "params": [weekly]}, *auto, off], "network_by_search": networks}
     return {
         "types": [{"id": k, "label": v} for k, v in CAMPAIGN_TYPES.items()],
         **text,
@@ -277,19 +280,19 @@ def _auto_block(kind: str, strategy: dict) -> dict:
 def build_bidding_strategy(strategy: dict | None, ctype: str = "TEXT_CAMPAIGN") -> tuple[dict, bool]:
     """Стратегия из формы → BiddingStrategy API и признак ручного управления ставками.
 
-    В ЕПК в сетях ручных ставок (MAXIMUM_COVERAGE) нет, а недельный бюджет ручных ставок
-    задаётся в HighestPosition.WeeklySpendLimit.
+    Ручных ставок в сетях (MAXIMUM_COVERAGE) Директ больше не принимает, а недельный бюджет
+    ручных ставок ЕПК задаётся в HighestPosition.WeeklySpendLimit.
     """
     strategy = strategy or {}
     unified = ctype == "UNIFIED_CAMPAIGN"
     search = str(strategy.get("search") or "HIGHEST_POSITION").upper()
     network = str(strategy.get("network") or "").upper()
-    if unified and network == "MAXIMUM_COVERAGE":
-        raise YandexError("strategy", "В ЕПК ручных ставок в сетях нет — в сетях работает только автостратегия")
+    if network == "MAXIMUM_COVERAGE":
+        raise YandexError("strategy", "Ручных ставок в сетях в Директе нет — в сетях работает только автостратегия")
     if search == "HIGHEST_POSITION":
         network = network or "SERVING_OFF"
-        if network not in ("SERVING_OFF", "MAXIMUM_COVERAGE"):
-            raise YandexError("strategy", "При ручных ставках на поиске в сетях — ручные ставки или без показов")
+        if network != "SERVING_OFF":
+            raise YandexError("strategy", "При ручных ставках на поиске показов в сетях нет")
         manual: dict = {"BiddingStrategyType": "HIGHEST_POSITION"}
         if unified and strategy.get("weekly_budget_rub") not in (None, "", 0, "0"):
             try:
@@ -306,12 +309,6 @@ def build_bidding_strategy(strategy: dict | None, ctype: str = "TEXT_CAMPAIGN") 
             raise YandexError("strategy", "При автостратегии на поиске сети работают по ней же или выключены")
         return {"Search": _auto_block(search, strategy), "Network": {"BiddingStrategyType": network}}, False
     if search == "SERVING_OFF":
-        network = network or ("" if unified else "MAXIMUM_COVERAGE")
-        if network == "MAXIMUM_COVERAGE":
-            return {
-                "Search": {"BiddingStrategyType": "SERVING_OFF"},
-                "Network": {"BiddingStrategyType": "MAXIMUM_COVERAGE"},
-            }, True
         if network in AUTO_STRATEGIES:
             return {"Search": {"BiddingStrategyType": "SERVING_OFF"}, "Network": _auto_block(network, strategy)}, False
         raise YandexError("strategy", "Кампания должна показываться хотя бы на поиске или в сетях")
@@ -428,12 +425,11 @@ def _phrases(value) -> list[str]:
 
 
 def _negatives(value) -> list[str]:
-    from app.negative_lists import CAMPAIGN_CHARS_LIMIT, negatives_length
+    from app.negative_lists import _validated
 
-    phrases = _phrases(value)
-    if negatives_length(phrases) > CAMPAIGN_CHARS_LIMIT:
-        raise YandexError("negatives-limit")
-    return phrases
+    # Как в списках минус-фраз: «-слово -слово» из интерфейса Директа (минус в начале API отклоняет),
+    # проверка слов и лимита длины.
+    return _validated(value)
 
 
 def _sites(value) -> list[str]:
@@ -494,8 +490,11 @@ def _counter_list(values) -> list[int]:
     return out
 
 
+MIN_GOAL_VALUE_MICROS = 300_000  # Директ: Value обязательно, от 0,3 ₽; 0 и пустое отклоняет
+
+
 def _priority_goals(values) -> list[dict]:
-    """Ключевые цели из формы или ИИ → PriorityGoals. Пустая ценность — 0: цель без ценности тоже ключевая."""
+    """Ключевые цели из формы или ИИ → PriorityGoals. Без ценности цель не передать: Директ требует от 0,3 ₽."""
     out = []
     for item in values or []:
         try:
@@ -508,8 +507,8 @@ def _priority_goals(values) -> list[dict]:
             value = _micros(item.get("value_rub") or 0)
         except (TypeError, ValueError, OverflowError):
             value = -1
-        if value < 0:
-            raise YandexError("goals", f"Ценность цели {goal_id} — число не меньше 0")
+        if value < MIN_GOAL_VALUE_MICROS:
+            raise YandexError("goals", f"Укажите ценность цели {goal_id}: Директ принимает от 0,3 ₽")
         out.append({"GoalId": goal_id, "Value": value})
     return out
 
@@ -1393,7 +1392,7 @@ _CRR_STRATEGIES = {"AVERAGE_CRR", "PAY_FOR_CONVERSION_CRR"}
 
 
 def _goals_for_add(raw, strategy: dict) -> list[dict]:
-    """Ключевые цели из campaigns.get — все, и с нулевой ценностью: без них стратегия по целям не создаётся.
+    """Ключевые цели из campaigns.get — все: без них стратегия по целям не создаётся.
 
     Признак «ценность из Метрики» add требует у стратегий с долей расходов, а у остальных YES отклоняет.
     """
@@ -2019,7 +2018,9 @@ def duplicate_campaign(
             warnings.append(f"Пропущено групп особых типов: {len(skipped)}")
         groups = [g for g in groups if g.get("Type") in _GROUP_TYPES]
         payload = [_group_for_add(g, new_campaign_id, unified=unified) for g in groups]
-        new_group_ids, errors = _add_batches(dst_token, dst["client_login"], "adgroups", "AdGroups", payload)
+        new_group_ids, errors = _add_batches(
+            dst_token, dst["client_login"], "adgroups", "AdGroups", payload, version="v501" if unified else "v5"
+        )  # группы ЕПК v5 не создаёт
         warnings.extend(f"Группа: {e}" for e in errors[:5])
         group_map = {int(g["Id"]): new for g, new in zip(groups, new_group_ids) if new}
         out["groups"] = len(group_map)
@@ -2191,7 +2192,7 @@ def duplicate_campaign(
             if any(_source_only(b) for b in bodies):
                 warnings.append("Визитки, турбо-страницы, видео и организации живут в исходном кабинете — добавьте их в копии вручную")
         payload = []
-        shopping_payload = []
+        v501_payload = []  # товарные и комбинаторные v5 не создаёт
         other = 0
         shopping_skipped = 0
         for a in ads:
@@ -2203,8 +2204,8 @@ def duplicate_campaign(
                     other += 1
                 continue
             ready = {"AdGroupId": group_map[int(a["AdGroupId"])], **entry}
-            if "ShoppingAd" in entry:
-                shopping_payload.append(ready)
+            if "ShoppingAd" in entry or "ResponsiveAd" in entry:
+                v501_payload.append(ready)
             else:
                 payload.append(ready)
         if shopping_skipped and not same:
@@ -2216,11 +2217,11 @@ def duplicate_campaign(
         if other:
             warnings.append(f"Не скопировано объявлений других видов: {other}")
         new_ad_ids, errors = _add_batches(dst_token, dst["client_login"], "ads", "Ads", payload)
-        shop_ids, shop_errors = _add_batches(
-            dst_token, dst["client_login"], "ads", "Ads", shopping_payload, version="v501"
+        v501_ids, v501_errors = _add_batches(
+            dst_token, dst["client_login"], "ads", "Ads", v501_payload, version="v501"
         )
-        warnings.extend(f"Объявление: {e}" for e in (errors + shop_errors)[:5])
-        out["ads"] = sum(1 for x in new_ad_ids + shop_ids if x)
+        warnings.extend(f"Объявление: {e}" for e in (errors + v501_errors)[:5])
+        out["ads"] = sum(1 for x in new_ad_ids + v501_ids if x)
         warnings.append("Корректировки ставок не копируются — проверьте их в копии")
     except YandexError as exc:
         warnings.append(f"Структура скопирована не полностью: {exc.message or exc.code}")

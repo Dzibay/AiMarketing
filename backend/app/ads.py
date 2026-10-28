@@ -23,7 +23,9 @@ log = logging.getLogger("app.ads")
 
 
 def _call(access_token: str, client_login: str, method: str, params: dict) -> dict:
-    return direct_api.call(access_token, client_login, "ads", method, params)
+    # Комбинаторные add/update v5 отклоняет («не поддерживается в v5, используйте v501»).
+    responsive = any("ResponsiveAd" in ad for ad in params.get("Ads") or [])
+    return direct_api.call(access_token, client_login, "ads", method, params, version="v501" if responsive else "v5")
 
 
 AD_FIELDS = ["Id", "AdGroupId", "Type", "State", "Status"]

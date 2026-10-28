@@ -94,26 +94,21 @@ def test_uses_priority_goals():
     assert not uses_priority_goals(None)
 
 
-def test_priority_goals_keep_goals_without_value():
-    """Цель без ценности — тоже ключевая: её выбрасывали, и сохранение настроек удаляло её из кампании в Директе."""
+def test_priority_goals_need_value():
+    """Цель без ценности не выбрасываем молча (сохранение удаляло её из кампании), но и 0 не шлём:
+    Директ требует Value от 0,3 ₽ и отклоняет 0 и пустое — пользователь видит, какую цель заполнить."""
     rows = [
         {"goal_id": ORDER, "value_rub": 300},
-        {"goal_id": str(CALL), "value_rub": None},
-        {"goal_id": 5003, "value_rub": ""},
-        {"goal_id": 5004, "value_rub": 0},
+        {"goal_id": str(CALL), "value_rub": "0.3"},
         {"goal_id": None, "value_rub": 100},  # строка формы без выбранной цели
     ]
-    assert _priority_goals(rows) == [
-        {"GoalId": ORDER, "Value": 300_000_000},
-        {"GoalId": CALL, "Value": 0},
-        {"GoalId": 5003, "Value": 0},
-        {"GoalId": 5004, "Value": 0},
-    ]
+    assert _priority_goals(rows) == [{"GoalId": ORDER, "Value": 300_000_000}, {"GoalId": CALL, "Value": 300_000}]
     assert _priority_goals(None) == []
-    for bad in (-1, "много"):
+    for bad in (None, "", 0, 0.29, -1, "много"):
         with pytest.raises(YandexError) as err:
             _priority_goals([{"goal_id": ORDER, "value_rub": bad}])
         assert err.value.code == "goals"
+        assert str(ORDER) in err.value.message
 
 
 def test_goal_label():
