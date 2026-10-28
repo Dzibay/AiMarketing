@@ -2461,10 +2461,12 @@ textarea {
   color: var(--danger);
 }
 
-/* Узкая колонка иконок слева. */
+/* Узкая колонка иконок слева. Sticky делает свой контекст наложения, поэтому z-index нужен самой колонке:
+   иначе подсказки уходят под карточки контента (он идёт в DOM позже). Ниже шапки (30) и модалок. */
 .rail {
   grid-area: rail;
   position: sticky;
+  z-index: 25;
   top: calc(0.85rem + 66px + 1.25rem);
   align-self: start;
   display: flex;
