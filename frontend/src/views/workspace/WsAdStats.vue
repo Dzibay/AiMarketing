@@ -248,6 +248,13 @@
       <div v-if="!shown.length" class="empty">Нет объявлений под фильтр.</div>
     </template>
   </section>
+
+  <HeadlinesPanel
+    :summary="report?.headlines || null"
+    :campaigns="campaigns"
+    :picked-ids="campaignIds"
+    @changed="report && !busy && loadReport()"
+  />
 </template>
 
 <script setup>
@@ -258,6 +265,7 @@ import { askConfirm } from '../../composables/useConfirm'
 import { pushToast } from '../../composables/useToasts'
 import { formatDate, num, pct, plural, rub, rubAi } from '../../utils/format'
 import { useWs } from './context'
+import HeadlinesPanel from './HeadlinesPanel.vue'
 
 const AI_MAX = 20
 const LIMITS = { title: 56, title2: 30, text: 81, word: 22 }

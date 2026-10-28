@@ -77,6 +77,8 @@
     </form>
   </section>
 
+  <LinkTemplatePanel />
+
   <BriefPanel />
 
   <section class="panel">
@@ -318,6 +320,7 @@ import { pushToast } from '../../composables/useToasts'
 import { loadWorkspaces, useWorkspaces } from '../../composables/useWorkspaces'
 import { CAMPAIGN_STATES, CAMPAIGN_TYPES, formatDateTime, plural, rub } from '../../utils/format'
 import BriefPanel from './BriefPanel.vue'
+import LinkTemplatePanel from './LinkTemplatePanel.vue'
 import { useWs } from './context'
 
 const COUNTER_TONES = { ok: 'tone-ok', unknown: 'tone-warn', sandbox: 'tone-warn' }

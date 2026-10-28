@@ -205,7 +205,7 @@ def auto_attach_campaigns(user_id: int, campaign_row_ids: list[int]) -> int:
 # --- Чтение ---------------------------------------------------------------------------------
 
 _WS_COLUMNS = """
-    w.id, w.user_id, w.client_row_id, w.counter_id, w.counter_row_id, w.name, w.site,
+    w.id, w.user_id, w.client_row_id, w.counter_id, w.counter_row_id, w.name, w.site, w.url_template,
     w.kpi_type, w.kpi_target, w.monthly_budget_kopecks, w.goal_id, w.ai_notes, w.ai_access, w.brief,
     w.ai_facts, w.archived_at, w.created_at, w.updated_at,
     cl.name AS client_name, cl.kpi_type AS client_kpi_type, cl.kpi_target AS client_kpi_target,
@@ -231,6 +231,7 @@ def _ws_out(row: dict) -> dict:
         "id": row["id"],
         "name": row["name"],
         "site": row["site"] or row.get("counter_site") or "",
+        "url_template": row.get("url_template") or "",
         "client_id": row["client_row_id"],
         "client_name": row.get("client_name") or "",
         "counter_id": row["counter_id"],
@@ -367,6 +368,11 @@ def update_workspace(user_id: int, workspace_id: int, **fields) -> dict:
     if "site" in fields:
         sets.append("site = %s")
         params.append((fields["site"] or "").strip()[:300])
+    if "url_template" in fields:
+        from app.links import clean_template
+
+        sets.append("url_template = %s")
+        params.append(clean_template(fields["url_template"]))
     if "client_id" in fields:
         client_id = fields["client_id"]
         if client_id is not None:

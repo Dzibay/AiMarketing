@@ -240,8 +240,12 @@ def ad_report(user_id: int, payload: dict, progress: Progress | None = None) -> 
             net["best_ad_row_id"] = best["ad_row_id"] if best else None
     rows.sort(key=lambda r: (-r["total"]["cost_kopecks"], -r["total"]["clicks"], -r["total"]["impressions"]))
     progress(1, 1, "Готово")
+    from app.headlines import report_rows, summarize
+
     return {
         "ads": rows,
+        # Заголовки: точные — из объявлений с одним заголовком и загруженных отчётов Мастера.
+        "headlines": summarize(rows, report_rows(user_id, workspace_id, campaigns)),
         "missing": missing,
         "errors": errors,
         "period": {"from": date_from.isoformat(), "to": date_to.isoformat()},

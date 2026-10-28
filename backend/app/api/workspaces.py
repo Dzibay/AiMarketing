@@ -61,6 +61,7 @@ router = APIRouter(prefix="/web/workspaces", tags=["workspaces"])
 class WorkspacePatchBody(BaseModel):
     name: str | None = None
     site: str | None = None
+    url_template: str | None = None
     client_id: int | None = None
     kpi_type: str | None = None
     kpi_target: float | None = None
@@ -146,6 +147,16 @@ class PlacementsAiBody(BaseModel):
 class AdReportBody(BaseModel):
     days: int = 30
     campaign_ids: list[int] = Field(default_factory=list)
+
+
+class LinksFixBody(BaseModel):
+    campaign_ids: list[int] = Field(default_factory=list)
+
+
+class HeadlineReportBody(BaseModel):
+    filename: str = ""
+    data: str
+    campaign_row_id: int | None = None
 
 
 class AdsAiItem(BaseModel):
@@ -481,6 +492,61 @@ def ws_ad_report(workspace_id: int, body: AdReportBody, user_id: int = Depends(r
     payload = {**body.model_dump(), "workspace_id": workspace_id}
     job = submit("ad_report", user_id, payload, priority=PRIORITY_USER, max_attempts=2)
     return {"job": public_job(job)}
+
+
+@router.get("/{workspace_id}/links")
+def ws_links(workspace_id: int, user_id: int = Depends(require_web_user)) -> dict:
+    """Кампании, у которых ссылки не по шаблону сайта (по данным последней синхронизации)."""
+    from app.links import workspace_link_issues
+
+    _ws(user_id, workspace_id)
+    return workspace_link_issues(user_id, workspace_id)
+
+
+@router.post("/{workspace_id}/links/fix")
+def ws_links_fix(workspace_id: int, body: LinksFixBody, user_id: int = Depends(require_web_user)) -> dict:
+    """Метки кампаний и адреса объявлений — по шаблону сайта; задачей, с откатом в журнале."""
+    _ws(user_id, workspace_id)
+    if not body.campaign_ids:
+        raise _http(YandexError("empty", "Не выбраны кампании"))
+    _own_campaigns(user_id, workspace_id, body.campaign_ids)
+    payload = {"campaign_ids": sorted(set(body.campaign_ids))[:50], "workspace_id": workspace_id}
+    job = submit("fix_links", user_id, payload, priority=PRIORITY_USER, max_attempts=1)
+    return {"job": public_job(job)}
+
+
+@router.get("/{workspace_id}/headline-reports")
+def ws_headline_reports(workspace_id: int, user_id: int = Depends(require_web_user)) -> dict:
+    from app.headlines import list_reports
+
+    _ws(user_id, workspace_id)
+    return {"items": list_reports(user_id, workspace_id)}
+
+
+@router.post("/{workspace_id}/headline-reports")
+def ws_headline_upload(workspace_id: int, body: HeadlineReportBody, user_id: int = Depends(require_web_user)) -> dict:
+    """Таблица заголовков из Мастера отчётов Директа (CSV или XLSX в base64)."""
+    from app.headlines import save_report
+
+    _ws(user_id, workspace_id)
+    try:
+        return save_report(
+            user_id, workspace_id, filename=body.filename, data=body.data, campaign_row_id=body.campaign_row_id
+        )
+    except YandexError as exc:
+        raise _http(exc) from exc
+
+
+@router.delete("/{workspace_id}/headline-reports/{report_id}")
+def ws_headline_delete(workspace_id: int, report_id: int, user_id: int = Depends(require_web_user)) -> dict:
+    from app.headlines import delete_report
+
+    _ws(user_id, workspace_id)
+    try:
+        delete_report(user_id, workspace_id, report_id)
+    except YandexError as exc:
+        raise _http(exc) from exc
+    return {"status": "ok"}
 
 
 @router.post("/{workspace_id}/ads/ai")

@@ -68,6 +68,8 @@ _GOAL_FIELDS = ["PriorityGoals", "AttributionModel"]
 _GOAL_TYPES = ("TEXT_CAMPAIGN", "DYNAMIC_TEXT_CAMPAIGN", "UNIFIED_CAMPAIGN")
 # Попытки campaigns.get: (ЕПК, ключевые цели) — старые аккаунты API могут не знать ЕПК или поля целей.
 _GET_ATTEMPTS = ((True, True), (True, False), (False, True), (False, False))
+# Метки ссылок (TrackingParams) — для проверки по шаблону сайта.
+_TRACKING_TYPES = ("TEXT_CAMPAIGN", "UNIFIED_CAMPAIGN")
 
 
 def _campaigns_get(access_token: str, client_login: str, *, unified: bool, goals: bool) -> dict:
@@ -75,12 +77,12 @@ def _campaigns_get(access_token: str, client_login: str, *, unified: bool, goals
     params = {
         "SelectionCriteria": {},
         "FieldNames": ["Id", "Name", "Type", "State", "Status", "DailyBudget", "NegativeKeywords", "StartDate"],
-        "TextCampaignFieldNames": fields,
+        "TextCampaignFieldNames": [*fields, "TrackingParams"],
         "DynamicTextCampaignFieldNames": fields,
         "SmartCampaignFieldNames": ["BiddingStrategy", "CounterId"],
     }
     if unified:
-        params["UnifiedCampaignFieldNames"] = fields
+        params["UnifiedCampaignFieldNames"] = [*fields, "TrackingParams"]
     return direct_api.call(access_token, client_login, "campaigns", "get", params)
 
 
@@ -132,6 +134,7 @@ def fetch_campaigns(access_token: str, client_login: str) -> list[dict]:
         neg_raw = item.get("NegativeKeywords") or {}
         negatives = _parse_phrases(neg_raw.get("Items") if isinstance(neg_raw, dict) else [])
         goals_known = goals and str(item.get("Type") or "") in _GOAL_TYPES
+        tracking_known = str(item.get("Type") or "") in _TRACKING_TYPES
         out.append(
             {
                 "campaign_id": int(cid),
@@ -147,6 +150,7 @@ def fetch_campaigns(access_token: str, client_login: str) -> list[dict]:
                 "negative_keywords": negatives,
                 "counter_ids": _counter_ids(item),
                 "start_date": item.get("StartDate") or None,
+                "tracking_params": str(block.get("TrackingParams") or "") if tracking_known else None,
             }
         )
     return out
@@ -179,14 +183,14 @@ _UPSERT_SQL = """
     INSERT INTO direct_campaigns (
         user_id, account_id, campaign_id, name, campaign_type,
         state, status, strategy, bidding_strategy, priority_goals, attribution_model,
-        daily_budget_kopecks, negative_keywords, counter_ids, start_date, source_row_id, synced_at
+        daily_budget_kopecks, negative_keywords, counter_ids, start_date, source_row_id, tracking_params, synced_at
     )
     VALUES (
         %(user)s, %(account)s, %(campaign_id)s, %(name)s, %(type)s,
         %(state)s, %(status)s, %(strategy)s,
         COALESCE(%(bidding)s::jsonb, '{}'::jsonb), COALESCE(%(goals)s::jsonb, '[]'::jsonb),
         COALESCE(%(attribution)s::text, ''),
-        %(daily)s, %(negatives)s, %(counters)s, %(start_date)s, %(source)s::bigint, NOW()
+        %(daily)s, %(negatives)s, %(counters)s, %(start_date)s, %(source)s::bigint, %(tracking)s::text, NOW()
     )
     ON CONFLICT (account_id, campaign_id) DO UPDATE SET
         name = EXCLUDED.name,
@@ -202,6 +206,7 @@ _UPSERT_SQL = """
         counter_ids = EXCLUDED.counter_ids,
         start_date = EXCLUDED.start_date,
         source_row_id = COALESCE(%(source)s::bigint, direct_campaigns.source_row_id),
+        tracking_params = COALESCE(%(tracking)s::text, direct_campaigns.tracking_params),
         synced_at = NOW()
 """
 
@@ -227,6 +232,7 @@ def _upsert_params(user_id: int, account_id: int, item: dict) -> dict:
         "counters": Jsonb(list(item.get("counter_ids") or [])),
         "start_date": item.get("start_date"),
         "source": item.get("source_row_id"),
+        "tracking": item.get("tracking_params"),
     }
 
 

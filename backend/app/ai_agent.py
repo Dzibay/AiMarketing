@@ -577,6 +577,70 @@ def _t_experiments(ctx: Context, args: dict) -> dict:
     return {"digest": experiments.digest(items, full)}
 
 
+def _days(args: dict, default: int = 30) -> int:
+    try:
+        return max(1, min(int(args.get("days") or default), 90))
+    except (TypeError, ValueError):
+        return default
+
+
+def _scope_ids(ctx: Context, args: dict) -> list[int] | None:
+    """campaign_row_ids из аргументов (проверены на пространство) или None — все кампании."""
+    if args.get("campaign_row_ids") in (None, "", []):
+        return None
+    ids = _ids(args, "campaign_row_ids")
+    ctx.campaigns(ids)
+    return ids
+
+
+def _t_headlines(ctx: Context, args: dict) -> dict:
+    from app import headlines
+
+    return headlines.headline_stats(ctx.user_id, ctx.ws_id, _scope_ids(ctx, args), _days(args))
+
+
+_SLICE_FIELDS = ("key", "label", "impressions", "clicks", "cost_kopecks", "conversions", "ctr", "cr", "cpa_kopecks", "bounce_rate")
+
+
+def _t_slices(ctx: Context, args: dict) -> dict:
+    from app import slices
+
+    dimension = str(args.get("dimension") or "")
+    if dimension not in slices.DIMENSIONS:
+        raise YandexError("args", f"dimension — одно из {list(slices.DIMENSIONS)}")
+    report = slices.slice_report(
+        ctx.user_id,
+        {"workspace_id": ctx.ws_id, "dimension": dimension, "campaign_ids": _scope_ids(ctx, args), "days": _days(args)},
+    )
+    items = report["items"]
+    limit = 40 if dimension != "hour" else 24
+    out_items = []
+    for r in items[:limit]:
+        item = {k: r[k] for k in _SLICE_FIELDS if r.get(k) is not None}
+        for k in ("visits", "kind", "reasons", "current_pct", "suggested_pct"):
+            if r.get(k) not in (None, [], ""):
+                item[k] = r[k]
+        out_items.append(item)
+    return {
+        "dimension": dimension,
+        "period": {"from": report["date_from"], "to": report["date_to"]},
+        "goal_name": report["goal_name"],
+        "totals": report["totals"],
+        "items_total": len(items),
+        "items": out_items,
+        "note": "Суммы в копейках. Площадки — только РСЯ; корректировки ставок (current_pct, suggested_pct) — в %.",
+    }
+
+
+def _t_links(ctx: Context, args: dict) -> dict:
+    from app import links
+
+    out = links.workspace_link_issues(ctx.user_id, ctx.ws_id, _scope_ids(ctx, args))
+    if not out["configured"]:
+        out["note"] = "Шаблон ссылки сайта не задан — попроси маркетолога задать его в настройках пространства"
+    return out
+
+
 READ_TOOLS = {
     "get_workspace_summary": _t_summary,
     "get_analytics": _t_analytics,
@@ -594,6 +658,9 @@ READ_TOOLS = {
     "find_regions": _t_regions,
     "get_wordstat": _t_wordstat,
     "get_experiments": _t_experiments,
+    "get_headline_stats": _t_headlines,
+    "get_slices": _t_slices,
+    "check_links": _t_links,
 }
 
 
@@ -1045,7 +1112,7 @@ def _p_create_variants(ctx: Context, args: dict) -> Plan:
     row, items, exp = _variants_args(ctx, args)
     names = ", ".join(f"«{v['name']}»" for v in items)
     steps = [f"{_count(len(items), 'вариант', 'варианта', 'вариантов')} «{row['name']}»: {names}"]
-    steps.append("на модерацию" if _bool(args, "moderate", True) else "черновиками")
+    steps.append("на модерацию" if _bool(args, "moderate", False) else "черновиками")
     if exp:
         steps.append(
             f"эксперимент «{exp['title']}», лимит {_money(exp['weekly_budget_rub'])}/нед. на вариант, "
@@ -1076,7 +1143,7 @@ def _x_create_variants(ctx: Context, args: dict) -> dict:
         row["id"],
         items,
         workspace_id=ctx.ws_id,
-        moderate=_bool(args, "moderate", True),
+        moderate=_bool(args, "moderate", False),
         tick=(lambda: _touch(chat_id)) if chat_id else None,
     )
     out: dict = {"source": {"campaign_row_id": row["id"], "name": row["name"]}, "variants": made}
@@ -1333,6 +1400,37 @@ def _x_ads_action(ctx: Context, args: dict) -> dict:
     return bulk_ad_action(ctx.user_id, ad_row_ids=ids, action=str(args["action"]))
 
 
+def _links_args(ctx: Context, args: dict) -> tuple[list[dict], dict]:
+    """Кампании с косяками ссылок из запрошенных: без шаблона или без косяков — ошибка для модели."""
+    from app import links
+
+    rows = ctx.campaigns(_ids(args, "campaign_row_ids"))
+    issues = links.workspace_link_issues(ctx.user_id, ctx.ws_id, [r["id"] for r in rows])
+    if not issues["configured"]:
+        raise YandexError("args", "Шаблон ссылки сайта не задан — его задают в настройках пространства")
+    bad = {c["campaign_row_id"]: c for c in issues["campaigns"]}
+    picked = [r for r in rows if r["id"] in bad]
+    if not picked:
+        raise YandexError("args", "В этих кампаниях ссылки по шаблону — исправлять нечего")
+    return picked, bad
+
+
+def _p_fix_links(ctx: Context, args: dict) -> Plan:
+    rows, bad = _links_args(ctx, args)
+    ads = sum(1 for r in rows for a in bad[r["id"]]["ads"] if a["fixable"])
+    summary = f"Ссылки по шаблону сайта: {_names(rows)}"
+    if ads:
+        summary += f"; {_count(ads, 'объявление', 'объявления', 'объявлений')} уйдут на модерацию"
+    return Plan(summary, ["campaigns", "ads"] if ads else ["campaigns"])
+
+
+def _x_fix_links(ctx: Context, args: dict) -> dict:
+    from app import links
+
+    rows, _bad = _links_args(ctx, args)
+    return links.fix_links(ctx.user_id, [r["id"] for r in rows])
+
+
 WRITE_TOOLS = {
     "campaigns_action": (_p_campaigns_action, _x_campaigns_action),
     "update_campaign_settings": (_p_update_settings, _x_update_settings),
@@ -1352,6 +1450,7 @@ WRITE_TOOLS = {
     "create_text_ad": (_p_create_ad, _x_create_ad),
     "update_text_ad": (_p_update_ad, _x_update_ad),
     "ads_action": (_p_ads_action, _x_ads_action),
+    "fix_links": (_p_fix_links, _x_fix_links),
 }
 
 
@@ -1860,7 +1959,11 @@ def _d_start_experiment(ctx: Context, args: dict) -> list[dict]:
 
 
 def _variant_texts(spec: dict, group: bool = False) -> str:
-    if group:
+    if spec.get("per_title"):
+        n = _count(len(spec["titles"]), "объявление", "объявления", "объявлений")
+        where = f"{n} — по одному на заголовок" + ("" if group else " в каждой группе")
+        where += ", скопированные объявления остаются" if spec.get("keep_old") else ", скопированные объявления убираются"
+    elif group:
         where = "тексты объявлений группы" if spec["mode"] == "replace" else "новое объявление"
     else:
         where = "во всех объявлениях копии" if spec["mode"] == "replace" else "новое объявление в каждой группе"
@@ -1882,6 +1985,8 @@ def _variant_phrases(spec: dict) -> str:
 
 def _variant_groups(v: dict, source: list[dict]) -> tuple[str, str]:
     """Строка «до / после» для изменений по группам варианта."""
+    from app import variants
+
     before = ", ".join(f"«{g['name']}»" for g in sorted(source, key=lambda g: int(g["id"])))
     after = []
     for g in v["groups"]:
@@ -1893,8 +1998,12 @@ def _variant_groups(v: dict, source: list[dict]) -> tuple[str, str]:
             content.append("фразы " + _variant_phrases(g["keywords"]))
         if "ads" in g:
             content.append(_variant_texts(g["ads"], group=True))
-        head = f"новая группа «{g['name']}»" if g.get("new") else f"«{g['source_name']}»"
-        after.append(f"{head}: " + "; ".join(content))
+        if g.get("new"):
+            head = f"новая группа «{g['name']}»"
+        else:
+            name = g.get("rename") or (variants.group_name(g["source_name"], v["label"]) if v.get("label") else "")
+            head = f"«{g['source_name']}»" + (f" → «{name}»" if name and name != g["source_name"] else "")
+        after.append(f"{head}: " + "; ".join(content) if content else head)
     return before, " / ".join(after)
 
 
@@ -1913,7 +2022,7 @@ def _d_create_variants(ctx: Context, args: dict) -> list[dict]:
         if any(k in v for v in items for k in ("schedule", "priority_goals", "weekly_budget_rub"))
         else {}
     )
-    state = "на модерацию" if _bool(args, "moderate", True) else "черновиками"
+    state = "на модерацию" if _bool(args, "moderate", False) else "черновиками"
     source_groups = None
     out = [_ch("Новые кампании", "нет", f"{_count(len(items), 'копия', 'копии', 'копий')} «{row['name']}» — {state}")]
     for v in items:
@@ -1944,6 +2053,8 @@ def _d_create_variants(ctx: Context, args: dict) -> list[dict]:
         if "keywords" in v:
             content.append("фразы " + _variant_phrases(v["keywords"]))
         if content:
+            if v.get("label"):
+                content.append(f"изменённые группы — «… — {v['label']}»")
             out.append(_ch(f"{title}: объявления и фразы", "как у оригинала", "; ".join(content)))
         if "groups" in v:
             if source_groups is None:
@@ -2114,6 +2225,19 @@ def _d_ads_action(ctx: Context, args: dict) -> list[dict]:
     return [_ch(f"«{r['title'] or r['id']}»", _state_label(r["state"], r["status"]), _AD_AFTER[action]) for r in rows]
 
 
+def _d_fix_links(ctx: Context, args: dict) -> list[dict]:
+    rows, bad = _links_args(ctx, args)
+    out = []
+    for r in rows:
+        c = bad[r["id"]]
+        if c["campaign_problems"]:
+            out.append(_ch(f"«{r['name']}»: метки", c["tracking"] or "нет", c["fixed_tracking"]))
+        for a in c["ads"]:
+            what = f"«{r['name']}»: «{a['title'] or a['ad_id']}»"
+            out.append(_ch(what, a["href"] or "нет", a["fixed_href"] if a["fixable"] else "правьте в Директе"))
+    return out
+
+
 _DIFFS = {
     "campaigns_action": _d_campaigns_action,
     "update_campaign_settings": _d_update_settings,
@@ -2133,6 +2257,7 @@ _DIFFS = {
     "create_text_ad": _d_create_ad,
     "update_text_ad": _d_update_ad,
     "ads_action": _d_ads_action,
+    "fix_links": _d_fix_links,
 }
 
 
@@ -2272,6 +2397,9 @@ TOOL_LABELS = {
     "find_regions": "Поиск регионов",
     "get_wordstat": "Вордстат",
     "get_experiments": "Эксперименты",
+    "get_headline_stats": "Статистика заголовков",
+    "get_slices": "Срезы статистики",
+    "check_links": "Проверка ссылок",
     "ask_questions": "Вопросы перед работой",
     "propose_plan": "План работ",
     "campaigns_action": "Действие с кампаниями",
@@ -2292,6 +2420,7 @@ TOOL_LABELS = {
     "create_text_ad": "Новое объявление",
     "update_text_ad": "Правка объявления",
     "ads_action": "Объявления",
+    "fix_links": "Ссылки по шаблону",
 }
 
 
@@ -2418,6 +2547,35 @@ TOOLS = [
         "Эксперименты пространства: гипотезы, тестовые кампании, лимиты, критерии успеха и прогресс, посчитанный "
         "кодом по загруженной статистике, и выводы прошлых экспериментов. С experiment_id — этот подробно.",
         {"experiment_id": _ID},
+    ),
+    _fn(
+        "get_headline_stats",
+        "Какие заголовки приносят конверсии ключевой цели: точные цифры заголовков (объявления с одним "
+        "заголовком и загруженные отчёты Мастера, лучшие — сверху по конверсиям, enough — хватает ли данных) и "
+        "комбинаторные объявления (mixed) с общими цифрами на все их заголовки. Основа для масштабирования "
+        "выгодных заголовков.",
+        {
+            "campaign_row_ids": {**_IDS, "description": "кампании; по умолчанию все кампании пространства"},
+            "days": {"type": "integer", "description": "период, дней (1–90, по умолчанию 30)"},
+        },
+    ),
+    _fn(
+        "get_slices",
+        "Срез статистики кампаний: placement — площадки РСЯ, device — устройства, demography — пол и возраст, "
+        "region — регионы, hour — часы (по визитам Метрики). Конверсии ключевой цели, CR, CPA, текущие и "
+        "предложенные корректировки.",
+        {
+            "dimension": {"type": "string", "enum": ["placement", "device", "demography", "region", "hour"]},
+            "campaign_row_ids": {**_IDS, "description": "кампании; по умолчанию все"},
+            "days": {"type": "integer", "description": "период, дней (1–90, по умолчанию 30)"},
+        },
+        ["dimension"],
+    ),
+    _fn(
+        "check_links",
+        "Проверка ссылок кампаний по шаблону сайта из настроек: домен, ref и каждая utm-метка (метки — в "
+        "параметрах кампании). Косяки с исправленными значениями; исправить — fix_links.",
+        {"campaign_row_ids": {**_IDS, "description": "кампании; по умолчанию все"}},
     ),
     _fn(
         "ask_questions",
@@ -2583,6 +2741,9 @@ TOOLS = [
         "фразы. В каждом варианте задай только то, что меняется; остальное — как у оригинала. Оригинал не трогает. "
         "В кампании с несколькими группами фразы и тексты задавай по группам (groups): правки групп оригинала, "
         "remove — не копировать слабую группу, name — новая группа для теста. "
+        "Тест заголовков — ads.per_title: по объявлению на каждый заголовок (тексты, ссылка и расширения общие), "
+        "тогда у каждого заголовка своя статистика. Копия называется «{label} · дд.мм», изменённые группы — "
+        "«{группа} — {label}». Копии создаются черновиками; на модерацию — отдельно moderate_campaign после согласия. "
         "Вариант с ошибкой на любом шаге остаётся черновиком. С experiment — сразу эксперимент по вариантам с "
         "лимитом ₽/нед. и сравнением с оригиналом. Вызывай после того, как маркетолог одобрил варианты в propose_plan.",
         {
@@ -2594,7 +2755,15 @@ TOOLS = [
                 "items": {
                     "type": "object",
                     "properties": {
-                        "name": {"type": "string", "description": "название копии, у вариантов разные"},
+                        "name": {
+                            "type": "string",
+                            "description": "название копии, у вариантов разные; по умолчанию «{label} · дд.мм»",
+                        },
+                        "label": {
+                            "type": "string",
+                            "description": "короткое имя гипотезы до 40 знаков («Скорость подключения») — для "
+                            "названий копии и изменённых групп; по умолчанию — начало idea",
+                        },
                         "idea": {"type": "string", "description": "гипотеза варианта одной фразой"},
                         "plan_step": {"type": "integer", "description": "номер одобренного шага propose_plan"},
                         "region_ids": {**_IDS, "description": "регионы показа (find_regions); минус — исключить"},
@@ -2621,7 +2790,21 @@ TOOLS = [
                                     "description": "replace — новые тексты во всех объявлениях копии (быстрые ссылки "
                                     "и картинки остаются); add — новое объявление в каждой группе рядом со старыми",
                                 },
-                                "titles": {"type": "array", "items": {"type": "string"}, "description": "до 7, ≤56 знаков"},
+                                "per_title": {
+                                    "type": "boolean",
+                                    "description": "тест заголовков: по объявлению на каждый заголовок из titles "
+                                    "(до 10) с общими texts, ссылкой и расширениями; mode — add",
+                                },
+                                "keep_old": {
+                                    "type": "boolean",
+                                    "description": "с per_title: оставить скопированные объявления (по умолчанию "
+                                    "убираются — их смесь заголовков размывает тест)",
+                                },
+                                "titles": {
+                                    "type": "array",
+                                    "items": {"type": "string"},
+                                    "description": "до 7 (с per_title — до 10), ≤56 знаков",
+                                },
                                 "texts": {"type": "array", "items": {"type": "string"}, "description": "до 3, ≤81 знака"},
                                 "title2": {"type": "string", "description": "≤30 знаков"},
                                 "href": {"type": "string", "description": "другая ссылка; по умолчанию — как у оригинала"},
@@ -2651,6 +2834,11 @@ TOOLS = [
                                 "properties": {
                                     "group_id": {**_ID, "description": "группа оригинала (id из get_campaign)"},
                                     "remove": {"type": "boolean", "description": "не копировать эту группу"},
+                                    "rename": {
+                                        "type": "string",
+                                        "description": "своё название группы в копии; по умолчанию изменённая "
+                                        "группа — «{группа} — {label}»",
+                                    },
                                     "name": {"type": "string", "description": "новая группа (без group_id): нужны keywords и ads"},
                                     "keywords": {
                                         "type": "object",
@@ -2674,6 +2862,11 @@ TOOLS = [
                                                 "description": "replace — новые тексты в объявлениях группы; add — "
                                                 "новое объявление в группе (у новой группы — всегда)",
                                             },
+                                            "per_title": {
+                                                "type": "boolean",
+                                                "description": "по объявлению на каждый заголовок (тест заголовков)",
+                                            },
+                                            "keep_old": {"type": "boolean"},
                                             "titles": {"type": "array", "items": {"type": "string"}},
                                             "texts": {"type": "array", "items": {"type": "string"}},
                                             "title2": {"type": "string"},
@@ -2688,7 +2881,8 @@ TOOLS = [
             },
             "moderate": {
                 "type": "boolean",
-                "description": "отправить собранные варианты на модерацию (по умолчанию да); false — черновики",
+                "description": "сразу на модерацию (по умолчанию нет — черновики; модерацию согласуй отдельным "
+                "шагом и отправь moderate_campaign)",
             },
             "experiment": {
                 "type": "object",
@@ -2794,6 +2988,14 @@ TOOLS = [
         {"ad_row_ids": _IDS, "action": {"type": "string", "enum": list(_AD_ACTIONS)}, **_REASON},
         ["ad_row_ids", "action"],
     ),
+    _fn(
+        "fix_links",
+        "Привести ссылки кампаний к шаблону сайта (после check_links): метки — в параметры кампании, без "
+        "модерации; ссылки объявлений с косяком — адрес и ref по шаблону, такие объявления уйдут на модерацию. "
+        "Откат — в журнале.",
+        {"campaign_row_ids": _IDS, **_REASON},
+        ["campaign_row_ids"],
+    ),
 ]
 
 
@@ -2872,7 +3074,8 @@ def _system_prompt(ctx: Context) -> str:
         "основа новых текстов и фраз), бриф, для новых ключей — get_wordstat; 3) propose_plan — шаг на каждый вариант: что меняется и какую "
         "гипотезу проверяет; варианты отличаются друг от друга одним-двумя параметрами, иначе не понять, что "
         "сработало; 4) create_campaign_variants только с одобренными вариантами — одним вызовом или по вызову на "
-        "вариант, как решил маркетолог. Тексты пиши в пределах Директа (заголовок до 56 знаков, текст до 81), "
+        "вариант, как решил маркетолог; копии создаются черновиками (moderate=false), на модерацию — отдельным "
+        "шагом после согласия (moderate_campaign по каждой копии). Тексты пиши в пределах Директа (заголовок до 56 знаков, текст до 81), "
         "без выдуманных цен и обещаний, которых нет в объявлениях оригинала или брифе. Ключи расширяй "
         "get_wordstat: 1–5 главных фраз (конвертящие запросы, ключи оригинала) с регионами варианта; бери "
         "запросы по теме бизнеса с заметной частотой, частоты называй из ответа, нецелевые слова оттуда — "
@@ -2884,6 +3087,25 @@ def _system_prompt(ctx: Context) -> str:
         "варианту, что меняется в какой группе. Если create_campaign_variants не создался или варианты собрались "
         "с ошибками, не переделывай план сам: объясни ошибку простыми словами и спроси через ask_questions, как "
         "поступить.",
+        "- Масштабировать выгодные заголовки — по шагам; каждый шаг согласуй отдельно и без ответа к следующему не "
+        "переходи. 1) Максимальный анализ выбранной кампании: get_headline_stats, get_campaign, get_search_queries "
+        "с with_conversions, get_campaign_history, get_slices (device, demography, region, для сетей — placement). "
+        "Отчёт: лучшие заголовки по конверсиям ключевой цели с CR и CPA (enough=false — честно скажи, что выводы "
+        "предварительные), что их объединяет (оффер, выгода, ключ, формулировка), где кампания теряет деньги. "
+        "Если почти всё в mixed — точных цифр заголовков нет: предложи загрузить отчёт Мастера по заголовкам "
+        "(экран «Объявления») или начать с теста. Затем ask_questions — какие заголовки масштабировать (варианты — "
+        "лучшие заголовки). 2) Новые заголовки: к каждому выбранному 2–4 близких — тот же смысл и выгода, другая "
+        "формулировка или порядок слов, ключ из конвертящих запросов, до 56 знаков; покажи списком и спроси через "
+        "ask_questions, что поправить или убрать. 3) Структура теста — propose_plan: копии только выбранной "
+        "кампании; label гипотезы, названия копии «{label} · дд.мм» и групп «{группа} — {label}»; ads.per_title с "
+        "одобренными заголовками плюс исходный лучший как контроль; тексты — лучшие тексты оригинала; недельный "
+        "бюджет. 4) create_campaign_variants с moderate=false — черновики. 5) Отдельно спроси, отправлять ли на "
+        "модерацию, и только после согласия — moderate_campaign по каждой копии. Быстрые ссылки и уточнения "
+        "копия и новые объявления берут у оригинала.",
+        "- Ссылки: в настройках пространства задаётся шаблон ссылки сайта (адрес и ref — в объявлении, utm — в "
+        "метках кампании). При разборе кампаний вызывай check_links; косяки (другой домен, нет ref, неверные или "
+        "задвоенные utm) показывай как проблему с предложением исправить — fix_links после согласия. Новые "
+        "кампании, копии и объявления сервис строит по шаблону сам.",
         "- Провальную кампанию сначала разбери: get_signals, get_campaign_history, get_campaign_settings, "
         "get_search_queries. Затем предложи, что лучше: исправить на месте (минус-фразы, ставки, настройки, тексты "
         "— если ошибка одна и понятная, а история кампании ценна) или исправленные копии через "

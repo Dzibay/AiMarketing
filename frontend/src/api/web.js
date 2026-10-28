@@ -116,6 +116,13 @@ export const wsApi = {
   adReport: (id, payload, onProgress) => runJob(`${WS(id)}/ads/report`, payload, onProgress),
   adsAi: (id, payload, onProgress) => runJob(`${WS(id)}/ads/ai`, payload, onProgress),
   adsAb: (id, payload, onProgress) => runJob(`${WS(id)}/ads/ab`, payload, onProgress),
+  /** Ссылки не по шаблону сайта и их исправление (метки кампании + адреса объявлений). */
+  linkIssues: (id) => request(`${WS(id)}/links`),
+  fixLinks: (id, campaignIds, onProgress) => runJob(`${WS(id)}/links/fix`, { campaign_ids: campaignIds }, onProgress),
+  /** Таблицы заголовков из Мастера отчётов. */
+  headlineReports: (id) => request(`${WS(id)}/headline-reports`),
+  uploadHeadlineReport: (id, payload) => post(`${WS(id)}/headline-reports`, payload),
+  deleteHeadlineReport: (id, reportId) => del(`${WS(id)}/headline-reports/${reportId}`),
   campaign: (id, cid) => request(`${WS(id)}/campaigns/${cid}`),
   campaignSettings: (id, cid) => request(`${WS(id)}/campaigns/${cid}/settings`),
   updateCampaignSettings: (id, cid, changes) => patch(`${WS(id)}/campaigns/${cid}/settings`, { changes }),
@@ -449,6 +456,7 @@ export const JOB_LABELS = {
   ad_report: 'Статистика объявлений',
   ads_ai: 'Тексты объявлений ИИ',
   ads_ab: 'Новые варианты объявлений',
+  fix_links: 'Ссылки по шаблону сайта',
 }
 
 export function jobProgressText(job) {

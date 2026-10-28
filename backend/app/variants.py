@@ -7,6 +7,11 @@
 
 В кампании с несколькими группами фразы и объявления задаются по группам (groups): у каждой группы
 оригинала свои фразы и тексты, ненужную группу можно не копировать, а для теста — добавить новую.
+
+Тест заголовков — ads.per_title: по объявлению на каждый заголовок с теми же текстами, ссылкой и
+расширениями. Директ не отдаёт статистику заголовков внутри комбинаторного объявления, а у объявления
+с одним заголовком его цифры и есть цифры заголовка. Копия и изменённые группы называются по гипотезе
+и дате, чтобы тест было видно в кабинете.
 """
 
 from __future__ import annotations
@@ -15,6 +20,7 @@ import logging
 
 from app import actions, direct_api, experiments, geo
 from app.ads import MAX_TEXTS, MAX_TITLES, TEXT_LEN, TITLE2_LEN, TITLE_LEN
+from app.clock import today_msk
 from app.yandex import YandexError
 
 log = logging.getLogger(__name__)
@@ -22,6 +28,9 @@ log = logging.getLogger(__name__)
 MAX_VARIANTS = 5
 MAX_PHRASES = 200
 MAX_GROUP_ITEMS = 20
+# Заголовков в тесте per_title: по объявлению на каждый, в группе Директа до 50 объявлений.
+MAX_PER_TITLE = 10
+LABEL_LEN = 40
 # create_keywords и bulk_keyword_action берут до 100 фраз за раз.
 KEYWORD_BATCH = 100
 AD_MODES = ("replace", "add")
@@ -57,13 +66,23 @@ def _strings(value, who: str, key: str, limit: int, length: int) -> list[str]:
     return out
 
 
+def _flag(value) -> bool:
+    if isinstance(value, str):
+        return value.strip().lower() in ("1", "true", "yes", "да")
+    return bool(value)
+
+
 def _ads(raw, who: str) -> dict:
     if not isinstance(raw, dict):
-        raise YandexError("args", f"{who}: ads — объект {{titles, texts, href, mode}}")
-    mode = str(raw.get("mode") or "replace").strip().lower()
+        raise YandexError("args", f"{who}: ads — объект {{titles, texts, href, mode, per_title}}")
+    per_title = _flag(raw.get("per_title"))
+    mode = str(raw.get("mode") or ("add" if per_title else "replace")).strip().lower()
     if mode not in AD_MODES:
         raise YandexError("args", f"{who}: ads.mode — одно из {list(AD_MODES)}")
-    titles = _strings(raw.get("titles") or raw.get("title"), who, "titles", MAX_TITLES, TITLE_LEN)
+    if per_title and mode != "add":
+        raise YandexError("args", f"{who}: per_title создаёт новые объявления — только с mode=add")
+    limit = MAX_PER_TITLE if per_title else MAX_TITLES
+    titles = _strings(raw.get("titles") or raw.get("title"), who, "titles", limit, TITLE_LEN)
     texts = _strings(raw.get("texts") or raw.get("text"), who, "texts", MAX_TEXTS, TEXT_LEN)
     title2 = _text(raw.get("title2"), 1000)
     if len(title2) > TITLE2_LEN:
@@ -72,7 +91,12 @@ def _ads(raw, who: str) -> dict:
         raise YandexError("args", f"{who}: для нового объявления (mode=add) нужны titles и texts")
     if not titles and not texts:
         raise YandexError("args", f"{who}: в ads нет ни titles, ни texts")
-    return {"mode": mode, "titles": titles, "texts": texts, "title2": title2, "href": _text(raw.get("href"), 1024)}
+    out = {"mode": mode, "titles": titles, "texts": texts, "title2": title2, "href": _text(raw.get("href"), 1024)}
+    if per_title:
+        out["per_title"] = True
+        # Старые объявления копии с несколькими заголовками размывают тест — по умолчанию убираем.
+        out["keep_old"] = _flag(raw.get("keep_old"))
+    return out
 
 
 def _keywords(raw, who: str) -> dict:
@@ -115,17 +139,22 @@ def _group_item(item, who: str) -> dict:
         ad = _ads({**ads, "mode": "add"} if isinstance(ads, dict) else ads, who)
         return {"new": True, "name": name, "keywords": spec, "ads": ad}
     group_id = int(experiments._number(item.get("group_id"), "group_id"))
+    rename = _text(item.get("rename"), 255)
     if item.get("remove"):
-        if keywords not in (None, {}, []) or ads not in (None, {}):
-            raise YandexError("args", f"{who}: группу {group_id} убираем (remove) — keywords и ads ей не нужны")
+        if keywords not in (None, {}, []) or ads not in (None, {}) or rename:
+            raise YandexError("args", f"{who}: группу {group_id} убираем (remove) — keywords, ads и rename ей не нужны")
         return {"group_id": group_id, "remove": True}
     out: dict = {"group_id": group_id}
     if keywords not in (None, {}, []):
         out["keywords"] = _keywords(keywords, who)
     if ads not in (None, {}):
         out["ads"] = _ads(ads, who)
+    if rename:
+        out["rename"] = rename
     if len(out) == 1:
-        raise YandexError("args", f"{who}: группа {group_id} ничего не меняет — задай keywords, ads или remove: true")
+        raise YandexError(
+            "args", f"{who}: группа {group_id} ничего не меняет — задай keywords, ads, rename или remove: true"
+        )
     return out
 
 
@@ -152,10 +181,45 @@ def _groups(raw, who: str) -> list[dict]:
     return out
 
 
+def short_label(text: str, limit: int = LABEL_LEN) -> str:
+    """Короткое имя гипотезы для названий: по границе слова, без хвостовой пунктуации."""
+    text = _text(text, 1000)
+    if len(text) > limit:
+        cut = text[: limit + 1]
+        words = cut.split(" ")[:-1] if " " in cut else [text[:limit]]
+        # «…за 5 минут и без» — хвостовые предлоги и союзы отбрасываем.
+        while len(words) > 1 and words[-1].casefold() in _TAIL_WORDS:
+            words.pop()
+        text = " ".join(words)
+    return text.rstrip(" ,.;:—-")
+
+
+_TAIL_WORDS = {"и", "а", "в", "во", "на", "с", "со", "за", "без", "для", "по", "от", "к", "о", "об", "из", "до", "или", "не"}
+
+
+def default_name(label: str, n: int, source_name: str, today=None) -> str:
+    """Название копии по гипотезе и дате: «Вариант скорости · 28.10»."""
+    day = (today or today_msk()).strftime("%d.%m")
+    base = label or f"{source_name} — вариант {n}"
+    return f"{base[: 255 - 8]} · {day}"
+
+
+def group_name(source_name: str, label: str) -> str:
+    """Название изменённой группы копии: «{группа оригинала} — {гипотеза}»."""
+    suffix = f" — {label}"
+    if source_name.endswith(suffix):
+        return source_name[:255]
+    return f"{source_name[: 255 - len(suffix)]}{suffix}"
+
+
 def _variant(item: dict, n: int, source_name: str) -> dict:
     who = f"Вариант {n}"
-    name = _text(item.get("name"), 255) or f"{source_name} — вариант {n}"[:255]
-    v: dict = {"n": n, "name": name, "idea": _text(item.get("idea"), 300)}
+    idea = _text(item.get("idea"), 300)
+    label = short_label(item.get("label") or "") or short_label(idea)
+    name = _text(item.get("name"), 255) or default_name(label, n, source_name)
+    v: dict = {"n": n, "name": name, "idea": idea}
+    if label:
+        v["label"] = label
     if item.get("plan_step") not in (None, ""):
         v["plan_step"] = int(experiments._number(item.get("plan_step"), "plan_step"))
     if item.get("region_ids") not in (None, "", []):
@@ -372,26 +436,68 @@ def _ads_in(user_id: int, groups: list[dict], ads: list[dict], spec: dict, fallb
             except YandexError as exc:
                 errors.append(f"«{ad['title'] or ad['ad_id']}»: {exc.message or exc.code}")
     else:
+        per_title = bool(spec.get("per_title"))
+        removed = 0
         for group in groups:
             href = spec["href"] or _first_href(ads, int(group["id"])) or _first_href(ads) or fallback_href
             if not href:
                 errors.append(f"группа «{group['name']}»: нет ссылки — передай ads.href")
                 continue
-            try:
-                create_text_ad(
-                    user_id,
-                    adgroup_row_id=int(group["id"]),
-                    href=href,
-                    title2=spec["title2"],
-                    titles=spec["titles"],
-                    texts=spec["texts"],
-                )
-                done += 1
-            except YandexError as exc:
-                errors.append(f"группа «{group['name']}»: {exc.message or exc.code}")
+            mine = [a for a in ads if int(a["adgroup_row_id"]) == int(group["id"]) and a["type"] in TEXT_AD_TYPES]
+            # Расширения — как у объявлений группы, в новой группе — как у объявлений копии.
+            extras = _group_extras(user_id, group, mine or [a for a in ads if a["type"] in TEXT_AD_TYPES])
+            failed = False
+            for titles in [[t] for t in spec["titles"]] if per_title else [spec["titles"]]:
+                try:
+                    create_text_ad(
+                        user_id,
+                        adgroup_row_id=int(group["id"]),
+                        href=href,
+                        title2=spec["title2"],
+                        titles=titles,
+                        texts=spec["texts"],
+                        extras=extras,
+                    )
+                    done += 1
+                except YandexError as exc:
+                    failed = True
+                    errors.append(f"группа «{group['name']}», «{titles[0]}»: {exc.message or exc.code}")
+            # Старые объявления убираем, только когда встали все заголовки: иначе тест неполный.
+            if per_title and not spec.get("keep_old") and mine and not failed:
+                removed += _drop_ads(user_id, mine)
+        if errors:
+            raise YandexError("ads", f"готово {done}, ошибки: " + "; ".join(errors[:3]))
+        return {"ads": done, "removed_ads": removed} if per_title else {"ads": done}
     if errors:
         raise YandexError("ads", f"готово {done}, ошибки: " + "; ".join(errors[:3]))
     return {"ads": done}
+
+
+def _group_extras(user_id: int, group: dict, ads: list[dict]) -> dict | None:
+    """Быстрые ссылки, уточнения и картинки первого объявления группы — для новых объявлений теста."""
+    from app import ad_extras
+    from app.ads import _adgroup_row, get_connection_access_token
+
+    if not ads:
+        return None
+    first = min(ads, key=lambda a: int(a["id"]))
+    row = _adgroup_row(user_id, int(group["id"]))
+    try:
+        token = get_connection_access_token(row["connection_id"], user_id)
+        refs = ad_extras._ad_refs(token, row["client_login"], int(first["ad_id"]))
+    except YandexError as exc:
+        log.warning("Расширения объявления %s не прочитаны: %s", first["ad_id"], exc.code)
+        return None
+    extras = {k: refs[k] for k in ("sitelink_set_id", "callout_ids", "image_hashes") if refs.get(k)}
+    return extras or None
+
+
+def _drop_ads(user_id: int, ads: list[dict]) -> int:
+    """Скопированные объявления-черновики копии, которые заменил тест заголовков."""
+    from app.ads import bulk_ad_action
+
+    result = bulk_ad_action(user_id, ad_row_ids=[int(a["id"]) for a in ads], action="delete")
+    return int(result.get("applied") or 0)
 
 
 def _apply_ads(user_id: int, cid: int, spec: dict) -> dict:
@@ -449,7 +555,16 @@ def _copied_group(copy: dict, groups: list[dict], g: dict) -> dict:
     return row
 
 
-def _change_group(user_id: int, cid: int, row: dict, g: dict) -> dict:
+def _rename_group(user_id: int, row: dict, name: str) -> str:
+    from app.adgroups import update_adgroup
+
+    if not name or name == row["name"]:
+        return row["name"]
+    update_adgroup(user_id, int(row["id"]), name=name)
+    return name
+
+
+def _change_group(user_id: int, cid: int, row: dict, g: dict, label: str = "") -> dict:
     from app.keywords import list_keywords
 
     out: dict = {"group": row["name"]}
@@ -459,6 +574,9 @@ def _change_group(user_id: int, cid: int, row: dict, g: dict) -> dict:
     if "keywords" in g:
         mine = [k for k in list_keywords(user_id, campaign_row_id=cid) if int(k["adgroup_row_id"]) == int(row["id"])]
         out["keywords"] = _keywords_in(user_id, row, g["keywords"], mine)
+    # Изменённая группа копии — по гипотезе, чтобы в кабинете было видно, что в ней тестируем.
+    name = g.get("rename") or (group_name(g.get("source_name") or row["name"], label) if label else "")
+    out["group"] = _rename_group(user_id, row, name)
     return out
 
 
@@ -467,7 +585,7 @@ def _new_group(user_id: int, cid: int, g: dict, region_ids: list[int], href: str
 
     row = create_adgroup(user_id, campaign_row_id=cid, name=g["name"], region_ids=region_ids or None)
     keywords = _keywords_in(user_id, row, g["keywords"], [])
-    ads = _ads_in(user_id, [row], [], g["ads"], href)
+    ads = _ads_in(user_id, [row], _live_ads(user_id, cid), g["ads"], href)
     return {"group": row["name"], "keywords": keywords, **ads}
 
 
@@ -481,7 +599,7 @@ def _apply_groups(out: dict, user_id: int, source_row_id: int, cid: int, copy: d
         if g.get("new"):
             continue
         label = f"группа «{g['source_name']}»"
-        _step(out, label, lambda g=g: _change_group(user_id, cid, _copied_group(copy, groups, g), g))
+        _step(out, label, lambda g=g: _change_group(user_id, cid, _copied_group(copy, groups, g), g, v.get("label", "")))
     new = [g for g in items if g.get("new")]
     if not new:
         return
@@ -490,6 +608,15 @@ def _apply_groups(out: dict, user_id: int, source_row_id: int, cid: int, copy: d
     href = _first_href(_live_ads(user_id, cid)) or _first_href(_live_ads(user_id, source_row_id))
     for g in new:
         _step(out, f"новая группа «{g['name']}»", lambda g=g: _new_group(user_id, cid, g, regions, href))
+
+
+def _rename_touched(user_id: int, cid: int, v: dict) -> dict:
+    """Объявления на всю кампанию меняют все группы копии, фразы — первую: их и называем по гипотезе."""
+    from app.adgroups import list_adgroups
+
+    groups = list_adgroups(user_id, cid)
+    touched = groups if "ads" in v else [first_group(groups)] if groups else []
+    return {"groups": [_rename_group(user_id, g, group_name(g["name"], v.get("label", ""))) for g in touched]}
 
 
 def _step(out: dict, label: str, fn):
@@ -539,6 +666,8 @@ def create_variant(user_id: int, source_row_id: int, v: dict, *, workspace_id: i
         _step(out, "объявления", lambda: _apply_ads(user_id, cid, v["ads"]))
     if "keywords" in v:
         out["keywords_result"] = _step(out, "ключевые фразы", lambda: _apply_keywords(user_id, cid, v["keywords"]))
+    if v.get("label") and ("ads" in v or "keywords" in v):
+        _step(out, "названия групп", lambda: _rename_touched(user_id, cid, v))
     if "groups" in v:
         _apply_groups(out, user_id, source_row_id, cid, copy, v)
     if out["errors"]:
@@ -554,7 +683,7 @@ def create_variant(user_id: int, source_row_id: int, v: dict, *, workspace_id: i
 
 
 def create_variants(
-    user_id: int, source_row_id: int, variants: list[dict], *, workspace_id: int | None, moderate: bool = True, tick=None
+    user_id: int, source_row_id: int, variants: list[dict], *, workspace_id: int | None, moderate: bool = False, tick=None
 ) -> list[dict]:
     """Варианты по очереди; сбой одного не останавливает остальные. tick — после каждого варианта."""
     out: list[dict] = []

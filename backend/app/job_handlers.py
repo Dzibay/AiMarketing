@@ -278,6 +278,13 @@ def _ads_ab(user_id: int, payload: dict, progress: Progress) -> dict:
         return create_ab_ads(user_id, payload, progress)
 
 
+def _fix_links(user_id: int, payload: dict, progress: Progress) -> dict:
+    from app.links import fix_links
+
+    with acting_as(str(payload.get("source") or "user")):
+        return fix_links(user_id, [int(i) for i in payload.get("campaign_ids") or []], progress)
+
+
 HANDLERS: dict[str, Handler] = {
     "sync_connection": _sync_connection,
     "sync_account_campaigns": _sync_account_campaigns,
@@ -307,6 +314,7 @@ HANDLERS: dict[str, Handler] = {
     "ad_report": _ad_report,
     "ads_ai": _ads_ai,
     "ads_ab": _ads_ab,
+    "fix_links": _fix_links,
 }
 
 

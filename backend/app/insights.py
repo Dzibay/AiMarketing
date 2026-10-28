@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import logging
 import math
 import re
 from collections import Counter, defaultdict
@@ -19,6 +20,8 @@ from app.overview import days_on_balance, rub
 from app.strategy_info import goal_label, is_metrika_goal, strategy_brief
 from app.workspaces import SCHEME_FACT, normalize_ai_facts
 from app.yandex import YandexError
+
+log = logging.getLogger(__name__)
 
 PERIOD_DAYS = 30
 WEEK = 7
@@ -788,6 +791,37 @@ def get_signals(user_id: int, ws_id: int, today: date | None = None) -> dict:
     return build_signals(_load(user_id, ws_id, date_from, date_to), date_from=date_from, date_to=date_to)
 
 
+def _links_card(user_id: int, ws_id: int) -> dict | None:
+    """Ссылки не по шаблону сайта — косяк, который стоит исправить до новых тестов."""
+    from app.links import workspace_link_issues
+
+    try:
+        issues = workspace_link_issues(user_id, ws_id)
+    except Exception:
+        log.warning("link issues failed for workspace %s", ws_id, exc_info=True)
+        return None
+    bad = issues["campaigns"]
+    if not bad:
+        return None
+    ads = sum(c["ads_total"] for c in bad)
+    tracking = sum(1 for c in bad if c["campaign_problems"])
+    parts = []
+    if tracking:
+        parts.append(f"метки не по шаблону в {_plural(tracking, 'кампании', 'кампаниях', 'кампаниях')}")
+    if ads:
+        parts.append(f"{_plural(ads, 'объявление', 'объявления', 'объявлений')} с неверной ссылкой")
+    return {
+        "kind": "links",
+        "title": f"Ссылки не по шаблону: {_plural(len(bad), 'кампания', 'кампании', 'кампаний')}",
+        "detail": (", ".join(parts) or "ссылки отличаются от шаблона").capitalize()
+        + ". ИИ покажет, что не так, и предложит исправить",
+        "prompt": "Проверь ссылки кампаний по шаблону сайта и предложи исправить косяки",
+        "campaign_row_ids": [c["campaign_row_id"] for c in bad],
+        "campaigns": [{"id": c["campaign_row_id"], "name": c["name"]} for c in bad[:5]],
+        "campaigns_total": len(bad),
+    }
+
+
 def signals_overview(user_id: int, ws_id: int, today: date | None = None) -> dict:
     """Для чата: карточки «чем помочь» с названиями кампаний и заметки о данных.
 
@@ -798,6 +832,9 @@ def signals_overview(user_id: int, ws_id: int, today: date | None = None) -> dic
     signals = get_signals(user_id, ws_id, today)
     campaigns = signals["campaigns"]
     cards = [{**c, "campaigns": [], "campaigns_total": 0} for c in chat_cards(user_id, ws_id, today)]
+    links = _links_card(user_id, ws_id)
+    if links:
+        cards.append(links)
     for s in signals["suggestions"]:
         ids = s.get("campaign_row_ids") or []
         cards.append({**s, "campaigns": [{"id": i, "name": campaigns[i]["name"]} for i in ids[:5]], "campaigns_total": len(ids)})

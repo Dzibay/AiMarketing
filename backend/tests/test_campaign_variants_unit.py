@@ -16,7 +16,8 @@ TODAY = date(2026, 10, 28)
 # --- Разбор вариантов ---------------------------------------------------------------------------
 
 
-def test_normalize_defaults_and_cleanup():
+def test_normalize_defaults_and_cleanup(monkeypatch):
+    monkeypatch.setattr(variants, "today_msk", lambda: TODAY)
     out = variants.normalize_variants(
         [
             {"idea": "  Казань  ", "region_ids": "43, -11", "schedule": "WORKHOURS"},
@@ -30,8 +31,8 @@ def test_normalize_defaults_and_cleanup():
         ],
         "Окна Москва",
     )
-    assert out[0] == {"n": 1, "name": "Окна Москва — вариант 1", "idea": "Казань", "region_ids": [43, -11],
-                      "schedule": "workhours"}
+    assert out[0] == {"n": 1, "name": "Казань · 28.10", "idea": "Казань", "label": "Казань",
+                      "region_ids": [43, -11], "schedule": "workhours"}
     assert out[1] == {
         "n": 2,
         "name": "Окна — выгода",
@@ -102,7 +103,8 @@ def test_merge_goals_keeps_the_rest_of_the_list():
 @pytest.fixture
 def direct(monkeypatch):
     """Директ без сети: копия кампании 7 — кампания 70 с двумя объявлениями в одной группе."""
-    fake = SimpleNamespace(calls=[], fail=set(), groups=[{"id": 700, "name": "Группа"}], status="ok", group_map={})
+    fake = SimpleNamespace(calls=[], fail=set(), groups=[{"id": 700, "name": "Группа"}], status="ok", group_map={},
+                           extras=None)
 
     def call(name, result=None):
         def fn(*args, **kwargs):
@@ -143,6 +145,9 @@ def direct(monkeypatch):
     ])
     monkeypatch.setattr(keywords, "bulk_keyword_action", call("delete_keywords", lambda: {"applied": 1}))
     monkeypatch.setattr(keywords, "create_keywords", call("create_keywords", lambda: {"created": 1, "errors": 0}))
+    monkeypatch.setattr(adgroups, "update_adgroup", call("rename_group", {}))
+    monkeypatch.setattr(variants, "_group_extras", lambda *a: fake.extras)
+    monkeypatch.setattr(variants, "_drop_ads", lambda user_id, ads: fake.calls.append(("drop_ads", tuple(a["id"] for a in ads), {})) or len(ads))
     return fake
 
 
@@ -263,9 +268,9 @@ def test_normalize_groups():
 @pytest.mark.parametrize(
     "raw, text",
     [
-        ({"groups": [{"group_id": 700}]}, "Вариант 1, группа 1: группа 700 ничего не меняет — задай keywords, ads или remove: true"),
+        ({"groups": [{"group_id": 700}]}, "Вариант 1, группа 1: группа 700 ничего не меняет — задай keywords, ads, rename или remove: true"),
         ({"groups": [{"group_id": 700, "remove": True, "keywords": ["a"]}]},
-         "Вариант 1, группа 1: группу 700 убираем (remove) — keywords и ads ей не нужны"),
+         "Вариант 1, группа 1: группу 700 убираем (remove) — keywords, ads и rename ей не нужны"),
         ({"groups": [{"name": "Новая", "keywords": ["a"]}]},
          "Вариант 1, группа 1: новой группе «Новая» нужны keywords и ads (titles и texts)"),
         ({"groups": [{"name": "Новая", "keywords": ["a"], "ads": {"titles": ["Т"]}}]},
@@ -466,7 +471,7 @@ def tool(direct, monkeypatch):
 
 def test_plan_always_asks(tool):
     plan = ai_agent._p_create_variants(FakeContext(), ARGS)
-    assert plan.summary.startswith("Варианты кампании: 2 варианта «Окна»: «Окна — выгода», «Окна — Казань» → на модерацию → ")
+    assert plan.summary.startswith("Варианты кампании: 2 варианта «Окна»: «Окна — выгода», «Окна — Казань» → черновиками → ")
     assert "эксперимент «Тексты», лимит 2 000 ₽/нед. на вариант, 14 дней" in plan.summary
     assert (plan.categories, plan.change_pct) == (["campaigns", "ads", "budget"], math.inf)
     generous = normalize_ai_access({"categories": {"campaigns": True, "ads": True, "budget": True}, "max_change_pct": 500})
@@ -511,6 +516,55 @@ def test_diff_rows(tool):
     assert rows[2]["before"].startswith("регионы: 213; бюджет: ")
     assert rows[2]["after"].startswith(f"регионы: 43; бюджет: {experiments._rub(1000)}/нед.")
     assert rows[3]["after"] == "без изменений"
+
+
+# --- Тест заголовков: по объявлению на заголовок, названия по гипотезе ---------------------------
+
+
+def test_labels_and_names():
+    assert variants.short_label("Скорость подключения за 5 минут и без звонков в поддержку") == \
+        "Скорость подключения за 5 минут"
+    assert variants.short_label("  Выгода.  ") == "Выгода"
+    assert variants.default_name("Скорость", 1, "Окна", today=TODAY) == "Скорость · 28.10"
+    assert variants.default_name("", 2, "Окна", today=TODAY) == "Окна — вариант 2 · 28.10"
+    assert variants.group_name("Окна", "выгода") == "Окна — выгода"
+    assert variants.group_name("Окна — выгода", "выгода") == "Окна — выгода"
+
+
+def test_normalize_per_title():
+    v = variants.normalize_variants(
+        [{"label": "Скорость", "ads": {"per_title": "yes", "titles": ["А", "Б", "В"], "texts": ["Т"]}}], "Окна"
+    )[0]
+    assert v["label"] == "Скорость"
+    assert v["ads"] == {"mode": "add", "titles": ["А", "Б", "В"], "texts": ["Т"], "title2": "", "href": "",
+                        "per_title": True, "keep_old": False}
+    with pytest.raises(YandexError) as exc:
+        variants.normalize_variants([{"ads": {"per_title": True, "mode": "replace", "titles": ["А"]}}], "Окна")
+    assert exc.value.message == "Вариант 1: per_title создаёт новые объявления — только с mode=add"
+    group = variants.normalize_variants([{"groups": [{"group_id": 700, "rename": "Окна — тест"}]}], "Окна")[0]
+    assert group["groups"][0]["rename"] == "Окна — тест"  # одно переименование — тоже изменение
+
+
+def test_create_variant_per_title_replaces_copied_ads(direct):
+    direct.extras = {"sitelink_set_id": 5, "callout_ids": [1, 2]}
+    v = variants.normalize_variants(
+        [{"label": "Скорость", "ads": {"per_title": True, "titles": ["А", "Б"], "texts": ["Т"]}}], "Окна"
+    )[0]
+    out = variants.create_variant(1, 7, v, workspace_id=2, moderate=False)
+    created = [c[2] for c in direct.calls if c[0] == "create_ad"]
+    assert [(c["titles"], c["extras"]) for c in created] == [(["А"], direct.extras), (["Б"], direct.extras)]
+    assert ("drop_ads", (1,), {}) in direct.calls  # только текстовое объявление копии, оригинал не трогаем
+    assert ("rename_group", (700,), {"name": "Группа — Скорость"}) in direct.calls
+    assert out["done"] == ["объявления", "названия групп"]
+    assert "moderate" not in _names(direct)
+
+
+def test_create_variant_per_title_keeps_old_ads_when_a_title_fails(direct):
+    direct.fail = {"create_ad"}
+    v = variants.normalize_variants([{"ads": {"per_title": True, "titles": ["А"], "texts": ["Т"]}}], "Окна")[0]
+    out = variants.create_variant(1, 7, v, workspace_id=2, moderate=False)
+    assert "drop_ads" not in _names(direct)
+    assert out["ready"] is False
 
 
 def test_tool_is_registered():

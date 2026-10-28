@@ -12,7 +12,7 @@ import logging
 
 from psycopg.types.json import Jsonb
 
-from app import ad_extras, direct_api
+from app import ad_extras, direct_api, links
 from app.adgroups import _adgroup_row
 from app.db import pool
 from app.journal import campaigns_of, log_action
@@ -279,9 +279,13 @@ def create_text_ad(
     texts_n = clean_variants(texts or [text], MAX_TEXTS, TEXT_LEN)
     href_n = _href(href)
     title2_n = (title2 or "").strip()[:TITLE2_LEN]
+    group = _adgroup_row(user_id, adgroup_row_id)
+    # Шаблон ссылки сайта: тот же путь, ref и прочее из шаблона; utm — в параметрах кампании.
+    template = links.campaign_template(user_id, int(group["campaign_row_id"]))
+    if template:
+        href_n = links.normalize_href(href_n, template)
     if not titles_n or not texts_n or not href_n:
         raise YandexError("empty")
-    group = _adgroup_row(user_id, adgroup_row_id)
     ad_type = "RESPONSIVE_AD" if _is_unified(group) else "TEXT_AD"
     extras_n = ad_extras.clean_extras(extras, ad_type)
     token = get_connection_access_token(group["connection_id"], user_id)

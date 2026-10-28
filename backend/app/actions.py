@@ -12,7 +12,7 @@ from urllib.parse import urlsplit
 import httpx
 from psycopg.types.json import Jsonb
 
-from app import direct_api
+from app import direct_api, links
 from app.clock import today_msk
 from app.db import pool
 from app.direct_sync import (
@@ -582,6 +582,10 @@ def create_campaign(user_id: int, *, account_id: int, spec: dict, workspace_id: 
     if attribution:
         block["AttributionModel"] = attribution
     tracking = str(spec.get("tracking_params") or "").strip().lstrip("?")
+    template = _ws_link_template(ws)
+    if template:
+        # Метки сайта — сразу в кампанию: в объявлениях остаётся адрес и ref.
+        tracking = links.merge_tracking(tracking, template)
     if tracking:
         block["TrackingParams"] = tracking[:1024]
     body[_TYPE_BLOCK[ctype]] = block
@@ -611,6 +615,7 @@ def create_campaign(user_id: int, *, account_id: int, spec: dict, workspace_id: 
     )
     if ws:
         attach_campaign(user_id, int(ws["id"]), row["id"])
+    _update_local(row["id"], {"tracking_params": block.get("TrackingParams") or ""})
 
     group_out = None
     if spec.get("group"):
@@ -634,6 +639,15 @@ def create_campaign(user_id: int, *, account_id: int, spec: dict, workspace_id: 
         undo=_delete_undo(row["id"], "Удалить созданную кампанию"),
     )
     return out
+
+
+def _ws_link_template(ws: dict | None) -> dict | None:
+    if not ws:
+        return None
+    try:
+        return links.parse_template(ws.get("url_template"))
+    except YandexError:
+        return None
 
 
 def _delete_undo(campaign_row_id: int, label: str) -> dict:
@@ -671,7 +685,10 @@ def _create_first_group(user_id: int, campaign_row_id: int, group: dict, *, manu
             warnings.extend(str(e.get("message") or e.get("error") or e) for e in res.get("errors") or [])
         except YandexError as exc:
             warnings.append(f"Фразы не добавлены: {exc.message or exc.code}")
-    ad = group.get("ad") or {}
+    ad = dict(group.get("ad") or {})
+    template = links.campaign_template(user_id, campaign_row_id)
+    if not ad.get("href") and template:
+        ad["href"] = links.template_href(template)
     if ad.get("title") and ad.get("text") and ad.get("href"):
         fields = dict(
             adgroup_row_id=adgroup["id"],
@@ -919,6 +936,7 @@ def update_campaign_settings(user_id: int, campaign_row_id: int, changes: dict) 
     if "tracking_params" in changes:
         tracking = str(changes["tracking_params"] or "").strip().lstrip("?")
         block["TrackingParams"] = tracking[:1024] if tracking else None
+        local["tracking_params"] = tracking[:1024]
         changed.append("параметры ссылок")
     if "client_info" in changes:
         patch["ClientInfo"] = str(changes["client_info"] or "").strip()[:255] or None
@@ -1996,6 +2014,10 @@ def duplicate_campaign(
     )
     if not same and ((item.get(block_name) or {}).get("NegativeKeywordSharedSetIds") or {}).get("Items"):
         warnings.append("Наборы минус-фраз живут в исходном кабинете — подключите их к копии вручную")
+    template = _ws_link_template(ws)
+    if template:
+        # Копия — сразу по шаблону ссылки сайта: метки в кампании, адреса объявлений с ref.
+        body[block_name]["TrackingParams"] = links.merge_tracking(body[block_name].get("TrackingParams"), template)
 
     step(1, "Создаю кампанию")
     new_campaign_id = _add_copy(dst_token, dst["client_login"], body, block_name, warnings)
@@ -2020,6 +2042,7 @@ def duplicate_campaign(
     )
     if ws:
         attach_campaign(user_id, int(ws["id"]), row["id"])
+    _update_local(row["id"], {"tracking_params": body[block_name].get("TrackingParams") or ""})
     out = {"campaign": row, "groups": 0, "group_map": {}, "keywords": 0, "ads": 0, "warnings": warnings, "status": "ok"}
 
     try:
@@ -2222,6 +2245,10 @@ def duplicate_campaign(
         shopping_skipped = 0
         for a in ads:
             entry = _ad_for_add(a, unified=unified, same=same, sitelinks=sitelinks, callouts=callouts, images=images)
+            if entry and template:
+                for kind in ("TextAd", "ResponsiveAd", "TextImageAd"):
+                    if (entry.get(kind) or {}).get("Href"):
+                        entry[kind]["Href"] = links.normalize_href(entry[kind]["Href"], template)
             if entry is None:
                 if _is_shopping(a):
                     shopping_skipped += 1

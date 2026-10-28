@@ -317,6 +317,7 @@ def test_duplicate_campaign_reads_ads_of_the_source_campaign(monkeypatch):
     monkeypatch.setattr(actions, "_fetch_campaign", lambda *a: {"TextCampaign": {"BiddingStrategy": manual}})
     monkeypatch.setattr(actions, "_add_copy", lambda *a: 222)
     monkeypatch.setattr(actions, "insert_campaign_local", lambda *a, **kw: {"id": 20})
+    monkeypatch.setattr(actions, "_update_local", lambda *a, **kw: None)
     monkeypatch.setattr(actions, "_get_all", get_all)
     monkeypatch.setattr(actions, "_add_batches", add_batches)
     monkeypatch.setattr(actions.direct_api, "call", lambda *a, **kw: {})
