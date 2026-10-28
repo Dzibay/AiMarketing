@@ -3,7 +3,7 @@
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
-from app import ai, ai_agent, experiments, insights, workspaces
+from app import ai, ai_agent, experiments, insights, wordstat, workspaces
 from app.api.web import _http
 from app.web_auth import require_web_user
 from app.yandex import YandexError
@@ -110,6 +110,27 @@ def ai_settings_put(body: AiSettingsBody, user_id: int = Depends(require_web_use
 @router.post("/ai/settings/test")
 def ai_settings_test(user_id: int = Depends(require_web_user)) -> dict:
     return _call(ai.check_connection, user_id)
+
+
+class WordstatSettingsBody(BaseModel):
+    folder_id: str = ""
+    # None — оставить сохранённый ключ, "" — удалить.
+    api_key: str | None = None
+
+
+@router.get("/ai/wordstat")
+def wordstat_settings_get(user_id: int = Depends(require_web_user)) -> dict:
+    return wordstat.get_settings(user_id)
+
+
+@router.put("/ai/wordstat")
+def wordstat_settings_put(body: WordstatSettingsBody, user_id: int = Depends(require_web_user)) -> dict:
+    return _call(wordstat.save_settings, user_id, folder_id=body.folder_id, api_key=body.api_key)
+
+
+@router.post("/ai/wordstat/test")
+def wordstat_settings_test(user_id: int = Depends(require_web_user)) -> dict:
+    return _call(wordstat.check_connection, user_id)
 
 
 @router.get("/ai/usage")

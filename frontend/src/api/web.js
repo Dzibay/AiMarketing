@@ -142,6 +142,10 @@ export const aiApi = {
   settings: () => request('/api/web/ai/settings'),
   saveSettings: (payload) => put('/api/web/ai/settings', payload),
   test: () => post('/api/web/ai/settings/test'),
+  /** Вордстат для ассистента: свой API-ключ Search API Yandex Cloud и каталог. */
+  wordstat: () => request('/api/web/ai/wordstat'),
+  saveWordstat: (payload) => put('/api/web/ai/wordstat', payload),
+  testWordstat: () => post('/api/web/ai/wordstat/test'),
   /** Расход за месяц (ГГГГ-ММ, по умолчанию текущий): итог, лимит, по задачам, пространствам и моделям. */
   usage: (month = '') => request(`/api/web/ai/usage${query({ month })}`),
   chats: (workspaceId) => request(`${WS(workspaceId)}/chats`),

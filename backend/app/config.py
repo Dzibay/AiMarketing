@@ -54,6 +54,11 @@ class Settings(BaseSettings):
     # Секрет для setWebhook (заголовок X-Telegram-Bot-Api-Secret-Token).
     telegram_webhook_secret: str = ""
 
+    # Вордстат (Search API Yandex Cloud): API-ключ сервисного аккаунта с ролью search-api.webSearch.user
+    # и id каталога. Ключ сервиса для тех, кто не подключил свой в настройках; пусто — только свои ключи.
+    wordstat_api_key: str = ""
+    wordstat_folder_id: str = ""
+
     # Фоновые циклы внутри процесса API (для локального запуска).
     # В Docker API ставит false, отдельный сервис worker запускает циклы сам.
     run_embedded_workers: bool = True

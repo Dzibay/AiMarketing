@@ -516,6 +516,54 @@ def _t_regions(ctx: Context, args: dict) -> dict:
     return geo.search_regions(ctx.user_id, str(args.get("query") or ""))
 
 
+WORDSTAT_MAX_PHRASES = 5
+WORDSTAT_LIMIT, WORDSTAT_LIMIT_MAX = 20, 100
+
+
+def _t_wordstat(ctx: Context, args: dict) -> dict:
+    from app import wordstat
+
+    raw = args.get("phrases")
+    if isinstance(raw, str):
+        raw = [raw]
+    phrases = list(dict.fromkeys(" ".join(str(p).split()) for p in raw or [] if str(p).strip()))
+    if not phrases:
+        raise YandexError("args", "Укажите phrases — исходные фразы для Вордстата")
+    # Квота Вордстата — 100 запросов в час на каталог, один запрос на фразу.
+    if len(phrases) > WORDSTAT_MAX_PHRASES:
+        raise YandexError("args", f"Не больше {WORDSTAT_MAX_PHRASES} фраз за вызов: квота Вордстата — 100 запросов в час")
+    try:
+        regions = [int(r) for r in args.get("region_ids") or []]
+    except (TypeError, ValueError) as exc:
+        raise YandexError("args", "region_ids: id регионов должны быть числами") from exc
+    note = "Вордстат считает только регионы, откуда искали: исключения (минус) пропущены." if any(r < 0 for r in regions) else ""
+    regions = [r for r in dict.fromkeys(regions) if r > 0]
+    device = str(args.get("device") or "all")
+    try:
+        limit = max(1, min(int(args.get("limit") or WORDSTAT_LIMIT), WORDSTAT_LIMIT_MAX))
+    except (TypeError, ValueError):
+        limit = WORDSTAT_LIMIT
+    api_key, folder_id = wordstat.credentials(ctx.user_id)
+    items, errors = [], []
+    for phrase in phrases:
+        try:
+            found = wordstat.top_requests(api_key, folder_id, phrase, regions=regions, device=device, num_phrases=limit)
+        except YandexError as exc:
+            # Доступ и квота одинаковы для всех фраз — дальше спрашивать бессмысленно.
+            if exc.code != "args":
+                raise
+            errors.append({"phrase": phrase, "error": exc.message or exc.code})
+            continue
+        found["associations"] = found["associations"][:limit]
+        items.append(found)
+    out: dict = {"period": "последние 30 дней", "regions": regions or "все", "device": device, "items": items}
+    if errors:
+        out["errors"] = errors
+    if note:
+        out["note"] = note
+    return out
+
+
 def _t_experiments(ctx: Context, args: dict) -> dict:
     items = experiments.experiments_overview(ctx.user_id, ctx.ws_id)["items"]
     full = None
@@ -542,6 +590,7 @@ READ_TOOLS = {
     "get_campaign_history": _t_history,
     "remember_fact": _t_remember,
     "find_regions": _t_regions,
+    "get_wordstat": _t_wordstat,
     "get_experiments": _t_experiments,
 }
 
@@ -2191,6 +2240,7 @@ TOOL_LABELS = {
     "get_campaign_history": "Кампания по дням",
     "remember_fact": "Запоминаю ответ",
     "find_regions": "Поиск регионов",
+    "get_wordstat": "Вордстат",
     "get_experiments": "Эксперименты",
     "ask_questions": "Вопросы перед работой",
     "propose_plan": "План работ",
@@ -2319,6 +2369,19 @@ TOOLS = [
         "минус перед id исключает регион.",
         {"query": {"type": "string", "description": "название, напр. «Казань» или «Татарстан»"}},
         ["query"],
+    ),
+    _fn(
+        "get_wordstat",
+        "Вордстат за 30 дней: по каждой исходной фразе — запросы с ней и похожие запросы с числом показов в месяц. "
+        "Для подбора и расширения ключевых фраз. Платный запрос на каждую фразу, квота 100 в час — бери 1–5 "
+        "главных фраз, не перебирай всё подряд.",
+        {
+            "phrases": {**_PHRASES, "description": "исходные фразы, до 5"},
+            "region_ids": {**_IDS, "description": "регионы (find_regions), пусто — все"},
+            "device": {"type": "string", "enum": ["all", "desktop", "phone", "tablet"]},
+            "limit": {"type": "integer", "description": "фраз в ответе на каждую исходную, до 100, по умолчанию 20"},
+        },
+        ["phrases"],
     ),
     _fn(
         "get_experiments",
@@ -2732,12 +2795,15 @@ def _system_prompt(ctx: Context) -> str:
         "(тексты, ключи, гео, расписание, ценность целей, бюджет), сколько вариантов, согласовывать все варианты "
         "одной карточкой или каждый отдельно, нужен ли эксперимент (лимит ₽/нед., срок, критерий); 2) данные — "
         "get_campaign (тексты всех объявлений), get_search_queries с with_conversions (конвертящие запросы — "
-        "основа новых текстов и фраз), бриф; 3) propose_plan — шаг на каждый вариант: что меняется и какую "
+        "основа новых текстов и фраз), бриф, для новых ключей — get_wordstat; 3) propose_plan — шаг на каждый вариант: что меняется и какую "
         "гипотезу проверяет; варианты отличаются друг от друга одним-двумя параметрами, иначе не понять, что "
         "сработало; 4) create_campaign_variants только с одобренными вариантами — одним вызовом или по вызову на "
         "вариант, как решил маркетолог. Тексты пиши в пределах Директа (заголовок до 56 знаков, текст до 81), "
-        "без выдуманных цен и обещаний, которых нет в объявлениях оригинала или брифе. Wordstat сервису пока "
-        "недоступен — так и говори, ключи расширяй из запросов и брифа.",
+        "без выдуманных цен и обещаний, которых нет в объявлениях оригинала или брифе. Ключи расширяй "
+        "get_wordstat: 1–5 главных фраз (конвертящие запросы, ключи оригинала) с регионами варианта; бери "
+        "запросы по теме бизнеса с заметной частотой, частоты называй из ответа, нецелевые слова оттуда — "
+        "кандидаты в минус-фразы. Если Вордстат не подключён или упёрся в квоту, так и скажи и расширяй ключи "
+        "из запросов и брифа.",
         "- Провальную кампанию сначала разбери: get_signals, get_campaign_history, get_campaign_settings, "
         "get_search_queries. Затем предложи, что лучше: исправить на месте (минус-фразы, ставки, настройки, тексты "
         "— если ошибка одна и понятная, а история кампании ценна) или исправленные копии через "
