@@ -12,25 +12,19 @@
       </div>
     </div>
 
+    <OnboardingChecklist @advanced="load" />
+
     <div v-if="loading" class="panel"><p class="empty">Собираем обзор…</p></div>
 
     <template v-else>
-      <section v-if="checklist.some((s) => !s.done)" class="panel">
-        <h2>Старт</h2>
-        <p class="hint">Несколько шагов — и кабинет начнёт экономить время.</p>
-        <ul class="checklist">
-          <li v-for="step in checklist" :key="step.id" :class="{ done: step.done }">
-            <span class="checklist__mark">{{ step.done ? '✓' : '○' }}</span>
-            <div>
-              <strong>{{ step.title }}</strong>
-              <small>{{ step.hint }}</small>
-            </div>
-            <RouterLink v-if="!step.done && step.to" class="btn btn--ghost" :to="step.to">Открыть</RouterLink>
-          </li>
-        </ul>
+      <section v-if="!rows.length" class="panel">
+        <p class="empty">
+          Здесь появятся все сайты клиентов: расход, KPI, бюджет и что горит. Начните с подключения Метрики и Директа в
+          <RouterLink to="/cabinet/accounts">аккаунтах</RouterLink>.
+        </p>
       </section>
 
-      <template v-if="rows.length">
+      <template v-else>
         <p class="sync-status overview-updated">
           <template v-if="refreshing">{{ refreshText }}</template>
           <template v-else-if="data.today_updated_at">
@@ -285,8 +279,9 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { RouterLink, useRouter } from 'vue-router'
 import { CalendarClock, Coins, Crosshair, Target, TriangleAlert, Wallet } from '@lucide/vue'
 import AppShell from '../components/AppShell.vue'
+import OnboardingChecklist from '../components/OnboardingChecklist.vue'
 import Sparkline from '../components/Sparkline.vue'
-import { aiApi, errorDetail, errorText, jobProgressText, webApi } from '../api/web'
+import { errorDetail, errorText, jobProgressText, webApi } from '../api/web'
 import { pushToast } from '../composables/useToasts'
 import { useWorkspaces } from '../composables/useWorkspaces'
 import { useHead } from '../utils/useHead'
@@ -312,12 +307,11 @@ const PROBLEMS_LIMIT = 30
 const SEVERITY_RANK = { critical: 0, warning: 1, info: 2, '': 3 }
 
 const router = useRouter()
-const { workspaces, loadWorkspaces } = useWorkspaces()
+const { loadWorkspaces } = useWorkspaces()
 const loading = ref(true)
 const refreshing = ref(false)
 const refreshText = ref('')
 const data = ref({ workspaces: [], folders: [], problems: [], totals: {} })
-const aiConfigured = ref(true)
 const search = ref('')
 const onlyProblems = ref(false)
 const severityFilter = ref('all')
@@ -350,40 +344,6 @@ const weekChange = computed(() => {
     cost: change(cost, prevCost),
     cpa: conv && prevConv ? change(cost / conv, prevCost / prevConv) : null,
   }
-})
-
-const checklist = computed(() => {
-  const list = workspaces.value
-  return [
-    {
-      id: 'yandex',
-      title: 'Подключить Метрику и Директ',
-      hint: 'Каждый счётчик Метрики станет рабочим пространством',
-      done: list.length > 0,
-      to: '/cabinet/accounts',
-    },
-    {
-      id: 'campaigns',
-      title: 'Добавить кампании в пространства',
-      hint: 'Пространство → Настройки → кабинеты и кампании',
-      done: list.some((w) => w.campaigns_count > 0),
-      to: list[0] ? `/w/${list[0].id}/settings` : '/cabinet/accounts',
-    },
-    {
-      id: 'stats',
-      title: 'Загрузить статистику',
-      hint: 'Пространство → Аналитика → «Загрузить 30 дней»',
-      done: rows.value.some((r) => r.stats_synced_at),
-      to: list[0] ? `/w/${list[0].id}/analytics` : '',
-    },
-    {
-      id: 'ai',
-      title: 'Подключить ИИ-ассистента',
-      hint: 'Свой ключ OpenAI-совместимого API или YandexGPT',
-      done: aiConfigured.value,
-      to: '/cabinet/settings',
-    },
-  ]
 })
 
 function wsKey(id) {
@@ -455,13 +415,8 @@ function focusWorkspace(id) {
 
 async function load() {
   try {
-    const [overview, ai] = await Promise.all([
-      webApi.overview(),
-      aiApi.settings().catch(() => ({ configured: true })),
-      loadWorkspaces(true),
-    ])
+    const [overview] = await Promise.all([webApi.overview(), loadWorkspaces(true)])
     data.value = overview
-    aiConfigured.value = Boolean(ai.configured)
   } catch (err) {
     pushToast(errorText(err), 'error')
   } finally {

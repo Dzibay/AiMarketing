@@ -1,10 +1,11 @@
-"""Сводка по клиентам и настройки утреннего дайджеста (/api/web/overview, /api/web/digest)."""
+"""Сводка по клиентам, чек-лист первых шагов и утренний дайджест (/api/web/overview, /onboarding, /digest)."""
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from app.api.web import _http, _start_job
 from app.digest import build_digest, get_digest_settings, update_digest_settings
+from app.onboarding import get_onboarding, set_onboarding_dismissed
 from app.overview import build_overview
 from app.telegram_notify import notify_user
 from app.web_auth import require_web_user
@@ -27,6 +28,22 @@ def web_overview(user_id: int = Depends(require_web_user)) -> dict:
 def web_overview_refresh(user_id: int = Depends(require_web_user)) -> dict:
     """Расход за сегодня и балансы — задачей; фронт ждёт её и перечитывает сводку."""
     return _start_job("stats_today", user_id, {})
+
+
+@router.get("/onboarding")
+def web_onboarding(user_id: int = Depends(require_web_user)) -> dict:
+    return get_onboarding(user_id)
+
+
+@router.post("/onboarding/dismiss")
+def web_onboarding_dismiss(user_id: int = Depends(require_web_user)) -> dict:
+    """Скрыть чек-лист насовсем — запоминаем у пользователя, а не в браузере."""
+    return set_onboarding_dismissed(user_id)
+
+
+@router.delete("/onboarding/dismiss")
+def web_onboarding_restore(user_id: int = Depends(require_web_user)) -> dict:
+    return set_onboarding_dismissed(user_id, False)
 
 
 @router.get("/digest")
