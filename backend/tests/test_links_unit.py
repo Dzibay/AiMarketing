@@ -88,6 +88,59 @@ def test_check_campaign(t):
     assert good["ok"] and good["fixed_tracking"] == TRACKING
 
 
+
+def test_check_campaign_groups_and_sitelinks(t):
+    groups = [
+        {"id": 7, "adgroup_id": 70, "name": "Своя метка", "tracking_params": "utm_source=vk&from=g"},
+        {"id": 8, "adgroup_id": 80, "name": "Без меток", "tracking_params": ""},
+        {"id": 9, "adgroup_id": 90, "name": "Не загружена", "tracking_params": None},
+    ]
+    ads = [
+        {"id": 1, "ad_id": 11, "type": "TEXT_AD", "state": "ON", "title": "Окна",
+         "href": "https://happ-connection.ru/?ref=Yandex",
+         "sitelink_hrefs": ["https://happ-connection.ru/tarify?ref=Yandex", "https://happ-connection.ru/faq"]},
+        {"id": 2, "ad_id": 12, "type": "TEXT_AD", "state": "ON", "title": "Ок",
+         "href": "https://happ-connection.ru/?ref=Yandex", "sitelink_hrefs": None},
+    ]
+    out = links.check_campaign(t, TRACKING, ads, groups)
+    assert not out["ok"] and out["campaign_problems"] == []
+    assert [g["adgroup_row_id"] for g in out["groups"]] == [7]
+    assert out["groups"][0]["fixed_tracking"] == TRACKING + "&from=g"
+    assert "utm_source=vk вместо yandex" in out["groups"][0]["problems"]
+    [ad] = out["ads"]
+    assert (ad["ad_row_id"], ad["problems"], ad["sitelink_problems"]) == (1, [], ["нет ref=Yandex"])
+    assert ad["fixed_href"] == ad["href"]
+    assert links.check_campaign(t, TRACKING, ads[1:], groups[1:])["ok"]
+
+
+def test_parse_ads_and_groups_read_link_fields():
+    from app.adgroups import parse_adgroups
+    from app.ads import parse_ads
+
+    [g] = parse_adgroups([{"Id": 5, "CampaignId": 1, "TrackingParams": "utm_source=yandex"}])
+    assert g["tracking_params"] == "utm_source=yandex"
+    ads = parse_ads([
+        {"Id": 1, "AdGroupId": 5, "TextAd": {"Title": "a", "Text": "b", "Href": "h", "SitelinkSetId": 77}},
+        {"Id": 2, "AdGroupId": 5, "ResponsiveAd": {"Titles": [{"Title": "a"}], "Texts": [{"Text": "b"}], "Href": "h"}},
+    ])
+    assert [a["sitelink_set_id"] for a in ads] == [77, None]
+
+
+def test_attach_sitelink_hrefs(monkeypatch):
+    from app import ad_extras
+
+    monkeypatch.setattr(
+        ad_extras, "sitelink_sets", lambda token, login, ids: {77: [{"title": "Цены", "href": "https://s.ru/p", "description": ""}]}
+    )
+    ads = ad_extras.attach_sitelink_hrefs("t", "l", [{"sitelink_set_id": 77}, {"sitelink_set_id": None}, {"sitelink_set_id": 99}])
+    assert [a.get("sitelink_hrefs") for a in ads] == [["https://s.ru/p"], [], None]
+
+    def fail(*a):
+        raise YandexError("direct")
+
+    monkeypatch.setattr(ad_extras, "sitelink_sets", fail)
+    assert "sitelink_hrefs" not in ad_extras.attach_sitelink_hrefs("t", "l", [{"sitelink_set_id": 77}])[0]
+
 def test_ai_tools_are_registered():
     from app import ai_agent
 

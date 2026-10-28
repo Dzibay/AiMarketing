@@ -130,11 +130,15 @@
         </div>
         <p class="hint">
           Ассистент берёт из Вордстата похожие запросы с частотой, когда подбирает ключевые фразы для вариантов кампаний.
+          Необязательно.
+        </p>
+        <button v-if="!wordstatOpen" class="btn btn--ghost" type="button" @click="wsExpanded = true">Подключить</button>
+        <p v-if="wordstatOpen" class="hint">
           Подключение — через Search API Yandex Cloud на ваш ключ: {{ wordstat.price_rub_per_1000 }} ₽ за 1000 запросов
           (один запрос — одна исходная фраза), до {{ wordstat.hourly_quota }} запросов в час. Ключ хранится в
           зашифрованном виде.
         </p>
-        <form class="form-grid" @submit.prevent="saveWordstat">
+        <form v-if="wordstatOpen" class="form-grid" @submit.prevent="saveWordstat">
           <div v-field class="field field--wide">
             <label>Каталог Yandex Cloud (folder_id)</label>
             <input v-model.trim="wsForm.folder_id" type="text" placeholder="b1g…" autocomplete="off" />
@@ -529,6 +533,11 @@ async function testAi() {
   }
 }
 
+// Пока Вордстат не настроен, форма ключа свёрнута: большинству он не нужен.
+const wsExpanded = ref(false)
+const wordstatOpen = computed(
+  () => wsExpanded.value || wordstat.value.configured || wordstat.value.has_key || !!wordstat.value.folder_id,
+)
 const wordstatChip = computed(() => {
   const w = wordstat.value
   if (!w.configured) return 'не подключён'

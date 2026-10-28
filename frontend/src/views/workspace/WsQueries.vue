@@ -70,11 +70,25 @@
     </div>
   </div>
 
-  <nav class="seg seg--tabs" aria-label="Очередь запросов">
-    <button v-for="t in TABS" :key="t.key" type="button" :class="{ active: tab === t.key }" @click="setTab(t.key)">
-      {{ t.label }}<template v-if="t.key !== 'memory' && data"> · {{ num(counts[t.key]) }}</template>
-    </button>
-  </nav>
+  <div class="queries-tabs">
+    <nav class="seg seg--tabs" aria-label="Очередь запросов">
+      <button v-for="t in MAIN_TABS" :key="t.key" type="button" :class="{ active: tab === t.key }" @click="setTab(t.key)">
+        {{ t.label }}<template v-if="data"> · {{ num(counts[t.key]) }}</template>
+      </button>
+    </nav>
+    <nav class="queries-tabs__extra" aria-label="Разобранные запросы">
+      <button
+        v-for="t in EXTRA_TABS"
+        :key="t.key"
+        type="button"
+        :class="{ active: tab === t.key }"
+        :aria-current="tab === t.key ? 'page' : undefined"
+        @click="setTab(t.key)"
+      >
+        {{ t.label }}
+      </button>
+    </nav>
+  </div>
 
   <div v-if="result" class="notice queries-result" :class="{ 'notice--warn': result.status !== 'ok' }">
     <div class="queries-result__head">
@@ -506,6 +520,9 @@ const TABS = [
   { key: 'all', label: 'Все' },
   { key: 'memory', label: 'Память' },
 ]
+// Каждый день нужны первые три; разобранное и память — второстепенные ссылки справа.
+const MAIN_TABS = TABS.slice(0, 3)
+const EXTRA_TABS = TABS.slice(3)
 const SOURCES = { ai: 'ИИ', memory: 'по памяти', brief: 'по брифу', direct: 'уже в Директе', user: 'вы' }
 const SOURCE_CHIPS = { ai: 'chip--src-ai', memory: 'chip--src-rule', brief: 'chip--src-rule', direct: 'chip--src-rule' }
 const LEVELS = { adgroup: 'на группу', campaign: 'на кампанию' }

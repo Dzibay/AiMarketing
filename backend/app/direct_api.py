@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import logging
+import threading
 import time
 
 import httpx
@@ -16,7 +17,9 @@ log = logging.getLogger("app.direct_api")
 # Шлюз Директа (особенно песочница) часто отвечает так на живой запрос. Повтор уместен
 # только для чтения: add при 504 мог уже создать объект.
 TRANSIENT_STATUS = frozenset({502, 503, 504})
-BUSY_CODE, BUSY_ATTEMPTS, BUSY_DELAY = "1000", 3, 2.0
+# «Сервер авторизации временно недоступен» (52), «сервис временно недоступен» (1000) и «слишком много
+# одновременных запросов» (506): запрос не выполнен, повтор безопасен и для add/update.
+BUSY_CODES, BUSY_ATTEMPTS, BUSY_DELAY = frozenset({"52", "1000", "506"}), 3, 2.0
 
 V5 = "https://api.direct.yandex.com/json/v5/"
 V5_SANDBOX = "https://api-sandbox.direct.yandex.com/json/v5/"
@@ -70,6 +73,20 @@ def headers(token, client_login: str | None = None) -> dict:
     return out
 
 
+_local = threading.local()
+
+
+def _client() -> httpx.Client:
+    """Клиент на поток: соединение с Директом живёт между запросами, без нового TLS на каждый.
+    Пересоздаём, если клиент закрыт или httpx.Client подменён (тесты)."""
+    cls = httpx.Client
+    client = getattr(_local, "client", None)
+    if client is None or _local.cls is not cls or getattr(client, "is_closed", False):
+        client = cls()
+        _local.client, _local.cls = client, cls
+    return client
+
+
 def post_json(
     url: str,
     *,
@@ -84,8 +101,7 @@ def post_json(
     attempts = max(1, attempts)
     for attempt in range(attempts):
         try:
-            with httpx.Client(timeout=timeout) as client:
-                response = client.post(url, headers=headers, json=body)
+            response = _client().post(url, headers=headers, json=body, timeout=timeout)
         except httpx.HTTPError as exc:
             last_error = exc
             response = None
@@ -155,8 +171,7 @@ def call(
             payload = response.json() if response.content else {}
         except ValueError:
             payload = {}
-        # «Сервис временно недоступен» (1000): запрос не выполнен, повтор безопасен и для add/update.
-        if str((payload.get("error") or {}).get("error_code") or "") != BUSY_CODE or attempt + 1 == BUSY_ATTEMPTS:
+        if str((payload.get("error") or {}).get("error_code") or "") not in BUSY_CODES or attempt + 1 == BUSY_ATTEMPTS:
             break
         log.warning("%s.%s: Директ временно недоступен (попытка %s/%s)", service, method, attempt + 1, BUSY_ATTEMPTS)
         time.sleep(BUSY_DELAY * (attempt + 1))

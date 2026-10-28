@@ -3,11 +3,14 @@
     <div class="panel__head">
       <div>
         <h2>Шаблон ссылки</h2>
-        <p class="hint">
-          Эталонная ссылка сайта. Адрес и параметры без меток (например, ref=Yandex) идут в ссылку объявления,
-          utm-метки и параметры с подстановками {…} — в параметры кампании: так Директ добавит их ко всем ссылкам,
-          а правка меток не отправит объявления на модерацию. Новые кампании, копии и объявления создаются по шаблону.
-        </p>
+        <p class="hint">Эталонная ссылка сайта: по ней проверяем кампании и создаём новые объявления.</p>
+        <details class="hint link-howto">
+          <summary>Как это работает</summary>
+          Адрес и параметры без меток (например, ref=Yandex) идут в ссылку объявления и быстрые ссылки, utm-метки и
+          параметры с подстановками {…} — в параметры кампании: так Директ добавит их ко всем ссылкам, а правка меток
+          не отправит объявления на модерацию. Если у группы свои метки, Директ берёт их вместо меток кампании —
+          поэтому проверяем и их. Новые кампании, копии и объявления создаются по шаблону.
+        </details>
       </div>
     </div>
 
@@ -69,19 +72,28 @@
             Параметры кампании: {{ c.campaign_problems.join('; ') }}
             <small class="hint">→ <code>{{ c.fixed_tracking }}</code></small>
           </li>
+          <li v-for="g in (c.groups || []).slice(0, 5)" :key="'g' + g.adgroup_row_id">
+            Метки группы «{{ g.name || g.adgroup_id }}»: {{ g.problems.join('; ') }}
+            <small class="hint">→ <code>{{ g.fixed_tracking }}</code></small>
+          </li>
+          <li v-if="c.groups_total > 5" class="hint">
+            и ещё {{ c.groups_total - 5 }} {{ plural(c.groups_total - 5, 'группа', 'группы', 'групп') }}
+          </li>
           <li v-for="ad in c.ads.slice(0, 5)" :key="ad.ad_row_id">
-            Объявление «{{ ad.title || ad.ad_id }}»: {{ ad.problems.join('; ') }}
+            Объявление «{{ ad.title || ad.ad_id }}»:
+            {{ [...ad.problems, ...(ad.sitelink_problems || []).map((p) => `быстрые ссылки — ${p}`)].join('; ') }}
             <small class="hint">
-              <template v-if="ad.fixable">→ <code>{{ ad.fixed_href }}</code></template>
-              <template v-else>— такой тип объявления правьте в Директе</template>
+              <template v-if="!ad.fixable">— такой тип объявления правьте в Директе</template>
+              <template v-else-if="ad.problems.length">→ <code>{{ ad.fixed_href }}</code></template>
+              <template v-else>→ новый набор быстрых ссылок по шаблону</template>
             </small>
           </li>
           <li v-if="c.ads_total > 5" class="hint">и ещё {{ c.ads_total - 5 }} {{ plural(c.ads_total - 5, 'объявление', 'объявления', 'объявлений') }}</li>
         </ul>
       </div>
       <p v-if="issues?.campaigns.length" class="hint">
-        Исправленные объявления Директ заново отправит на модерацию; метки кампании модерацию не требуют. Откат — в
-        журнале действий.
+        Исправленные объявления и быстрые ссылки Директ заново отправит на модерацию; метки кампаний и групп модерацию
+        не требуют. Откат — в журнале действий.
       </p>
     </template>
   </section>
@@ -124,7 +136,9 @@ const split = computed(() => {
   return { ad: base + (ad.length ? `?${ad.join('&')}` : ''), tracking: tracking.join('&') }
 })
 
-const fixable = computed(() => (issues.value?.campaigns || []).filter((c) => c.campaign_problems.length || c.ads.some((a) => a.fixable)))
+const fixable = computed(() =>
+  (issues.value?.campaigns || []).filter((c) => c.campaign_problems.length || c.groups_total || c.ads.some((a) => a.fixable)),
+)
 
 async function save() {
   saveError.value = ''
@@ -159,8 +173,8 @@ async function fix(ids) {
     .filter((c) => ids.includes(c.campaign_row_id))
     .reduce((n, c) => n + c.ads.filter((a) => a.fixable).length, 0)
   const ok = await askConfirm(
-    `Кампаний: ${ids.length}. Метки кампаний обновятся без модерации.` +
-      (ads ? ` Объявлений с новым адресом: ${ads} — Директ отправит их на модерацию заново.` : ''),
+    `Кампаний: ${ids.length}. Метки кампаний и групп обновятся без модерации.` +
+      (ads ? ` Объявлений с новой ссылкой или быстрыми ссылками: ${ads} — Директ отправит их на модерацию заново.` : ''),
     { title: 'Исправить ссылки по шаблону?', confirmText: 'Исправить' },
   )
   if (!ok) return
@@ -168,8 +182,12 @@ async function fix(ids) {
   try {
     const res = await wsApi.fixLinks(ws.value.id, ids, (job) => (fixing.value = jobProgressText(job)))
     const errors = (res.items || []).flatMap((i) => i.errors || [])
+    const parts = [`метки кампаний: ${res.tracking_fixed}`]
+    if (res.groups_fixed) parts.push(`группы: ${res.groups_fixed}`)
+    parts.push(`объявления: ${res.ads_fixed}`)
+    if (res.sitelinks_fixed) parts.push(`быстрые ссылки: ${res.sitelinks_fixed}`)
     pushToast(
-      `Метки: ${res.tracking_fixed}, объявления: ${res.ads_fixed}` + (errors.length ? `. Не вышло: ${errors[0]}` : ''),
+      `Исправлено — ${parts.join(', ')}` + (errors.length ? `. Не вышло: ${errors[0]}` : ''),
       errors.length ? 'error' : 'ok',
     )
     await load()
@@ -184,6 +202,13 @@ onMounted(load)
 </script>
 
 <style scoped>
+.link-howto {
+  margin-top: 4px;
+}
+.link-howto summary {
+  cursor: pointer;
+  width: fit-content;
+}
 .link-form {
   display: flex;
   gap: 8px;

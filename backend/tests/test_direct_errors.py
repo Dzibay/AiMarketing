@@ -4,8 +4,8 @@ from app.yandex import YandexError, direct_api_error, direct_sync_error
 
 def test_direct_api_error_with_detail():
     exc = direct_api_error(
-        {"error": {"error_code": 52, "error_string": "Invalid", "error_detail": "Нет прав"}},
-        403,
+        {"error": {"error_code": 54, "error_string": "Invalid", "error_detail": "Нет прав"}},
+        400,
     )
     assert isinstance(exc, YandexError)
     assert exc.code == "direct-denied"
@@ -29,6 +29,25 @@ def test_direct_api_error_fallback():
     exc = direct_api_error({}, 500)
     assert exc.code == "direct"
     assert exc.message is None
+
+
+def test_direct_api_error_by_code_not_http_status():
+    def code(number, status=400):
+        return direct_api_error({"error": {"error_code": number, "error_string": "x"}}, status).code
+
+    assert code(8000) == "direct"  # ошибка в запросе — не «нет доступа»
+    assert code(53) == "token-expired"
+    assert code(152) == "units"
+    assert code(58) == "direct-denied"
+    assert code(52, 200) == "direct"  # сервер авторизации временно недоступен
+    assert direct_api_error({}, 403).code == "direct-denied"
+
+
+def test_call_retries_busy_codes(monkeypatch):
+    answers = [_Resp(200, {"error": {"error_code": 506, "error_string": "Лимит"}}), _Resp(200, {"result": {"Ids": [1]}})]
+    monkeypatch.setattr(direct_api, "post_json", lambda *a, **kw: answers.pop(0))
+    monkeypatch.setattr(direct_api.time, "sleep", lambda s: None)
+    assert direct_api.call("t", None, "campaigns", "add", {}) == {"Ids": [1]}
 
 
 class _Resp:
@@ -55,7 +74,7 @@ def _fake_httpx(monkeypatch, responses):
         def __exit__(self, *a):
             return False
 
-        def post(self, url, headers=None, json=None):
+        def post(self, url, headers=None, json=None, timeout=None):
             service = url.rsplit("/", 1)[-1]
             calls.append((service, json["params"]))
             return responses[service]
@@ -170,7 +189,7 @@ def _sequence_client(monkeypatch, responses):
         def __exit__(self, *a):
             return False
 
-        def post(self, url, headers=None, json=None):
+        def post(self, url, headers=None, json=None, timeout=None):
             calls.append(url.rsplit("/", 1)[-1])
             return pending.pop(0)
 
@@ -222,3 +241,41 @@ def test_call_retries_get_but_not_add(monkeypatch):
     else:
         raise AssertionError("add при HTTP 504 должен упасть")
     assert one == ["campaigns"]
+
+
+def test_refresh_network_failure_is_not_expired_token(monkeypatch):
+    import httpx
+
+    monkeypatch.setattr(yandex, "yandex_configured", lambda: True)
+
+    def client(answer):
+        class Client:
+            def __init__(self, *a, **kw):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def post(self, url, data=None):
+                if isinstance(answer, Exception):
+                    raise answer
+                return answer
+
+        return Client
+
+    cases = [
+        (httpx.ConnectError("нет сети"), "oauth-unavailable"),
+        (_Resp(503, {}), "oauth-unavailable"),
+        (_Resp(400, {"error": "invalid_grant"}), "token-expired"),
+    ]
+    for answer, code in cases:
+        monkeypatch.setattr(yandex.httpx, "Client", client(answer))
+        try:
+            yandex.refresh_access_token("refresh")
+        except YandexError as exc:
+            assert exc.code == code
+        else:
+            raise AssertionError("ожидали ошибку")

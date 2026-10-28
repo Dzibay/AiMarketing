@@ -2,7 +2,7 @@
   <AppShell>
     <div class="cabinet__head">
       <div>
-        <h1>Правила</h1>
+        <h1>Общие правила</h1>
         <p>
           Автоматизация по всем пространствам: кампании, ключевые фразы и поисковые запросы. Правила конкретного сайта
           удобнее вести в его пространстве → «Действия».
@@ -18,5 +18,5 @@ import AppShell from '../components/AppShell.vue'
 import RulesManager from '../components/RulesManager.vue'
 import { useHead } from '../utils/useHead'
 
-useHead('Правила — AiMarketing', true)
+useHead('Общие правила — AiMarketing', true)
 </script>

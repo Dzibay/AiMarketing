@@ -55,9 +55,15 @@
 
     <div v-if="selected.size" class="bulk-bar">
       <span>Выбрано: {{ selected.size }}</span>
-      <button class="btn btn--ghost" type="button" :disabled="busy" @click="bulk('resume')">Запустить</button>
-      <button class="btn btn--ghost" type="button" :disabled="busy" @click="bulk('pause')">Остановить</button>
-      <button class="btn btn--ghost" type="button" :disabled="busy" @click="openBudget">Бюджет и стратегия…</button>
+      <button v-if="picked.canResume" class="btn btn--ghost" type="button" :disabled="busy" @click="bulk('resume')">
+        Запустить
+      </button>
+      <button v-if="picked.canPause" class="btn btn--ghost" type="button" :disabled="busy" @click="bulk('pause')">
+        Остановить
+      </button>
+      <button v-if="picked.active" class="btn btn--ghost" type="button" :disabled="busy" @click="openBudget">
+        Бюджет и стратегия…
+      </button>
       <button
         v-if="selected.size === 1"
         class="btn btn--ghost"
@@ -67,9 +73,20 @@
       >
         Копировать
       </button>
-      <button class="btn btn--ghost" type="button" :disabled="busy" @click="bulk('archive')">В архив</button>
-      <button class="btn btn--ghost" type="button" :disabled="busy" @click="bulk('unarchive')">Из архива</button>
-      <button class="btn btn--ghost btn--danger" type="button" :disabled="busy" @click="bulk('delete')">Удалить</button>
+      <details ref="moreMenu" class="bulk-more">
+        <summary class="btn btn--ghost">Ещё…</summary>
+        <div class="bulk-more__menu" role="menu">
+          <button v-if="picked.active" class="menu-item" type="button" role="menuitem" :disabled="busy" @click="bulk('archive')">
+            В архив
+          </button>
+          <button v-if="picked.archived" class="menu-item" type="button" role="menuitem" :disabled="busy" @click="bulk('unarchive')">
+            Из архива
+          </button>
+          <button class="menu-item is-danger" type="button" role="menuitem" :disabled="busy" @click="bulk('delete')">
+            Удалить
+          </button>
+        </div>
+      </details>
       <button class="btn btn--ghost" type="button" @click="selected = new Set()">Снять выбор</button>
     </div>
 
@@ -321,6 +338,19 @@ const budgetDone = ref([])
 const budgetProgress = ref('')
 
 const accounts = computed(() => data.value?.accounts || [])
+// Какие действия имеют смысл для выбранных: запустить нечего, если всё уже идёт, и т. п.
+const picked = computed(() => {
+  const states = (data.value?.items || []).filter((c) => selected.value.has(c.campaign_row_id)).map((c) => c.state)
+  const archived = states.filter((s) => s === 'ARCHIVED').length
+  return {
+    active: states.length - archived,
+    archived,
+    canPause: states.includes('ON'),
+    canResume: states.some((s) => s !== 'ON' && s !== 'ARCHIVED'),
+  }
+})
+const moreMenu = ref(null)
+
 const rows = computed(() => {
   const q = filters.search.toLowerCase()
   const list = (data.value?.items || []).filter((c) => {
@@ -454,6 +484,7 @@ async function runBulk(action, extra = {}) {
 }
 
 async function bulk(action) {
+  if (moreMenu.value) moreMenu.value.open = false
   const n = selected.value.size
   if (action === 'delete' && !await askConfirm(`Удалить в Директе кампаний: ${n}? Удалить можно только черновики и кампании без показов.`))
     return

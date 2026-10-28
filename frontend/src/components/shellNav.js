@@ -24,7 +24,7 @@ export const CABINET_NAV = [
     icon: Wrench,
     pages: [
       { label: 'Минус-фразы', to: '/cabinet/negative-lists' },
-      { label: 'Правила', to: '/cabinet/rules' },
+      { label: 'Общие правила', to: '/cabinet/rules' },
     ],
   },
 ]
@@ -46,6 +46,8 @@ export function workspaceNav(wsId, campaignsCount = 0) {
       pages: [
         { label: 'Сводка', to: `${base}/summary` },
         { label: 'Аналитика', to: `${base}/analytics` },
+        { label: 'Площадки', to: `${base}/slices` },
+        { label: 'Объявления', to: `${base}/ad-stats` },
       ],
     },
     {
@@ -55,8 +57,6 @@ export function workspaceNav(wsId, campaignsCount = 0) {
       pages: [
         { label: 'Кампании', to: `${base}/campaigns`, count: campaignsCount || '' },
         { label: 'Поисковые запросы', to: `${base}/queries` },
-        { label: 'Площадки и срезы', to: `${base}/slices` },
-        { label: 'Объявления: CTR', to: `${base}/ad-stats` },
       ],
     },
     {

@@ -15,6 +15,7 @@ from app.actions import (
     create_text_campaign,
     update_campaign,
 )
+from app.clock import yesterday_msk
 from app.journal import list_action_logs
 from app.clients import (
     assign_direct_account,
@@ -1066,10 +1067,10 @@ def web_analytics_sync(
             d_to = date.fromisoformat(date_to_s)
         elif days_n is not None:
             n = max(1, min(int(days_n), 30))
-            d_to = date.today() - timedelta(days=1)
+            d_to = yesterday_msk()
             d_from = d_to - timedelta(days=n - 1)
         else:
-            d = date.fromisoformat(day_q) if day_q else date.today() - timedelta(days=1)
+            d = date.fromisoformat(day_q) if day_q else yesterday_msk()
             return _start_job("stats_day", user_id, {"day": d.isoformat()})
     except ValueError as exc:
         raise HTTPException(status_code=400, detail="date") from exc

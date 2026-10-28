@@ -9,6 +9,7 @@ from decimal import Decimal
 
 import httpx
 
+from app.clock import yesterday_msk
 from app.db import pool
 from app.sync_runs import finish_run, start_run
 from app.yandex import YandexError, get_connection_access_token
@@ -279,7 +280,7 @@ def canonical_counters(user_id: int | None = None) -> list[dict]:
 
 
 def sync_metrika_stats_for_user(user_id: int, day: date | None = None) -> dict:
-    day = day or (date.today() - timedelta(days=1))
+    day = day or (yesterday_msk())
     with pool.connection() as conn:
         # Один номер счётчика может быть виден из нескольких подключений — читаем его один раз,
         # через строку, к которой привязано пространство.

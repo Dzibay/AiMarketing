@@ -176,7 +176,9 @@ def _ad_update(user_id: int, args: dict) -> dict:
 def _adgroup_update(user_id: int, args: dict) -> dict:
     from app.adgroups import update_adgroup
 
-    return update_adgroup(user_id, int(args["adgroup_row_id"]), name=args.get("name"))
+    return update_adgroup(
+        user_id, int(args["adgroup_row_id"]), name=args.get("name"), tracking_params=args.get("tracking_params")
+    )
 
 
 def _adgroups_delete(user_id: int, args: dict) -> dict:

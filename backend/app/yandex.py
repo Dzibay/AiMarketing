@@ -28,6 +28,9 @@ OAUTH_MODES = ("", "metrika", "direct", "sandbox")
 
 # Коды API Директа, которые повтор не исправит: заявка на доступ, права, логин без Директа.
 DIRECT_DENIED_CODES = frozenset({54, 58, 513, 3000, 3001})
+# Токен отозван или недействителен — нужен повторный вход.
+DIRECT_AUTH_CODES = frozenset({53})
+UNITS_CODE = 152
 
 
 class YandexError(Exception):
@@ -53,10 +56,20 @@ def direct_api_error(payload: dict | None, status_code: int) -> YandexError:
                     break
             if detail:
                 break
-    code = "direct-denied" if status_code in (400, 403) else "direct"
-    if str(err.get("error_code") or "") == "152":
+    try:
+        number = int(err.get("error_code"))
+    except (TypeError, ValueError):
+        number = None
+    # Решаем по коду ошибки Директа: HTTP 400 приходит и на обычную ошибку в запросе.
+    if number == UNITS_CODE:
         # Кончились баллы: восстанавливаются в течение суток, повтор позже пройдёт.
         code = "units"
+    elif number in DIRECT_AUTH_CODES:
+        code = "token-expired"
+    elif number in DIRECT_DENIED_CODES or (number is None and status_code == 403):
+        code = "direct-denied"
+    else:
+        code = "direct"
     return YandexError(code, detail or None)
 
 
@@ -202,9 +215,16 @@ def refresh_access_token(refresh_token: str) -> dict:
         with httpx.Client(timeout=30.0) as client:
             response = client.post(YANDEX_TOKEN, data=data)
     except httpx.HTTPError as exc:
+        # Сбой сети — не повод переподключать аккаунт: задача повторится позже.
         log.warning("refresh Яндекса: %s", exc)
-        raise YandexError("token-expired") from exc
-    payload = response.json() if response.content else {}
+        raise YandexError("oauth-unavailable") from exc
+    try:
+        payload = response.json() if response.content else {}
+    except ValueError:
+        payload = {}
+    if response.status_code >= 500 or response.status_code == 429:
+        log.warning("refresh Яндекса HTTP %s", response.status_code)
+        raise YandexError("oauth-unavailable")
     if response.status_code >= 400 or "access_token" not in payload:
         log.warning("refresh Яндекса отказ: %s %s", response.status_code, payload)
         raise YandexError("token-expired")

@@ -17,6 +17,7 @@ from datetime import date, datetime, timedelta, timezone
 from psycopg.types.json import Jsonb
 
 from app import direct_api
+from app.ad_extras import attach_sitelink_hrefs
 from app.adgroups import ADGROUP_FIELDS, parse_adgroups, upsert_adgroups
 from app.ads import AD_GET_FIELDS, parse_ads, upsert_ads
 from app.clock import today_msk, yesterday_msk
@@ -65,7 +66,9 @@ GOALS_EVERY = timedelta(hours=24)
 # Меньше баллов — структуру при актуализации не читаем: пусть останутся на правки пользователя.
 UNITS_RESERVE = 1000
 # Такие ошибки повтор по одной кампании не исправит — этап останавливается.
-FATAL_CODES = frozenset({"units", "token-expired", "unauthorized", "disabled", "not-found", "direct-denied"})
+FATAL_CODES = frozenset(
+    {"units", "token-expired", "unauthorized", "oauth-unavailable", "disabled", "not-found", "direct-denied"}
+)
 # Шкала прогресса задачи: каждый этап — 100 делений.
 STAGE_SCALE = 100
 
@@ -313,14 +316,10 @@ class _AccountLoad:
                 self.token, self.login, "adgroups", {**selection, "FieldNames": ADGROUP_FIELDS}, "AdGroups"
             )
         )
-        ads = parse_ads(
-            direct_api.get_all(
-                self.token,
-                self.login,
-                "ads",
-                {**selection, **AD_GET_FIELDS},
-                "Ads",
-            )
+        ads = attach_sitelink_hrefs(
+            self.token,
+            self.login,
+            parse_ads(direct_api.get_all(self.token, self.login, "ads", {**selection, **AD_GET_FIELDS}, "Ads")),
         )
         keywords = parse_keywords(
             direct_api.get_all(
@@ -444,7 +443,7 @@ class _AccountLoad:
                     goals=chunk,
                 )
             except YandexError as exc:
-                if exc.code in ("units", "token-expired", "unauthorized"):
+                if exc.code in ("units", "token-expired", "unauthorized", "oauth-unavailable"):
                     raise
                 log.warning("отчёт по целям %s %s: %s %s", self.login, chunk, exc.code, exc.message)
                 error = exc.message or exc.code

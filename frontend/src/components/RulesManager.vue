@@ -166,6 +166,7 @@
         Совпало {{ lastRun.matched }}, применено {{ lastRun.applied }} · {{ TARGETS[lastRun.target] || 'Кампании' }} →
         {{ lowerFirst(ACTIONS[lastRun.action] || lastRun.action || '') }}
       </p>
+      <p v-if="lastRun.error" class="form-error">Применилось не всё: {{ lastRun.error }}</p>
       <div v-if="lastRun.items?.length" class="list">
         <div v-for="item in lastRun.items" :key="`${item.entity}-${item.row_id}`" class="list-row">
           <div>
@@ -191,6 +192,7 @@
               совпало {{ item.matched }}, применено {{ item.applied }} · {{ item.dry_run ? 'проверка' : 'авто' }} ·
               {{ formatDateTime(item.created_at) }}
             </small>
+            <small v-if="item.error" class="form-error">Применилось не всё: {{ item.error }}</small>
           </div>
         </div>
       </div>
@@ -361,7 +363,10 @@ async function run(rule, dry) {
   busy.value = true
   try {
     lastRun.value = await webApi.runRule(rule.id, dry)
-    pushToast(`Совпало: ${lastRun.value.matched}`)
+    pushToast(
+      lastRun.value.error ? `Применилось не всё: ${lastRun.value.error}` : `Совпало: ${lastRun.value.matched}`,
+      lastRun.value.error ? 'error' : undefined,
+    )
     await load()
   } catch (err) {
     pushToast(errorText(err), 'error')

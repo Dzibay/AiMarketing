@@ -29,8 +29,8 @@ def _call(access_token: str, client_login: str, method: str, params: dict) -> di
 
 
 AD_FIELDS = ["Id", "AdGroupId", "Type", "State", "Status"]
-TEXT_AD_FIELDS = ["Title", "Title2", "Text", "Href", "AdImageHash"]
-RESPONSIVE_AD_FIELDS = ["Titles", "Texts", "Href", "AdImages"]
+TEXT_AD_FIELDS = ["Title", "Title2", "Text", "Href", "AdImageHash", "SitelinkSetId"]
+RESPONSIVE_AD_FIELDS = ["Titles", "Texts", "Href", "AdImages", "SitelinkSetId"]
 TEXT_IMAGE_AD_FIELDS = ["Href", "AdImageHash"]
 # Поля ads.get для списков: без ResponsiveAdFieldNames комбинаторные теряют варианты.
 AD_GET_FIELDS = {
@@ -90,7 +90,7 @@ def fetch_ads(access_token: str, client_login: str, adgroup_ids: list[int]) -> l
                 access_token, client_login, "ads", {"SelectionCriteria": {"AdGroupIds": part}, **AD_GET_FIELDS}, "Ads"
             )
         )
-    return parse_ads(items)
+    return ad_extras.attach_sitelink_hrefs(access_token, client_login, parse_ads(items))
 
 
 def fetch_ad(access_token: str, client_login: str, ad_id: int) -> dict | None:
@@ -122,16 +122,19 @@ def parse_ads(raw: list[dict]) -> list[dict]:
                 if i.get("ImageHash")
             ]
             href = responsive.get("Href")
+            sitelink_set = responsive.get("SitelinkSetId")
         elif text_ad:
             titles = [str(text_ad["Title"])] if text_ad.get("Title") else []
             texts = [str(text_ad["Text"])] if text_ad.get("Text") else []
             images = [str(text_ad["AdImageHash"])] if text_ad.get("AdImageHash") else []
             title2 = str(text_ad.get("Title2") or "")
             href = text_ad.get("Href")
+            sitelink_set = text_ad.get("SitelinkSetId")
         else:
             titles, texts = [], []
             images = [str(image_ad["AdImageHash"])] if image_ad.get("AdImageHash") else []
             href = image_ad.get("Href")
+            sitelink_set = None
         items.append(
             {
                 "ad_id": int(aid),
@@ -146,6 +149,7 @@ def parse_ads(raw: list[dict]) -> list[dict]:
                 "titles": titles,
                 "texts": texts,
                 "image_hashes": images,
+                "sitelink_set_id": int(sitelink_set or 0) or None,
             }
         )
     return items
@@ -163,9 +167,9 @@ def upsert_ads(user_id: int, account_id: int, adgroup_row_by_direct_id: dict[int
                 INSERT INTO direct_ads (
                     user_id, account_id, adgroup_row_id, ad_id,
                     type, state, status, title, title2, text, href,
-                    titles, texts, image_hashes, synced_at
+                    titles, texts, image_hashes, sitelink_set_id, sitelink_hrefs, synced_at
                 )
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
                 ON CONFLICT (account_id, ad_id) DO UPDATE SET
                     adgroup_row_id = EXCLUDED.adgroup_row_id,
                     type = EXCLUDED.type,
@@ -178,6 +182,13 @@ def upsert_ads(user_id: int, account_id: int, adgroup_row_by_direct_id: dict[int
                     titles = EXCLUDED.titles,
                     texts = EXCLUDED.texts,
                     image_hashes = EXCLUDED.image_hashes,
+                    sitelink_set_id = EXCLUDED.sitelink_set_id,
+                    -- Адреса набора не прочитались — прежние годятся, только если набор тот же.
+                    sitelink_hrefs = CASE
+                        WHEN EXCLUDED.sitelink_hrefs IS NOT NULL THEN EXCLUDED.sitelink_hrefs
+                        WHEN direct_ads.sitelink_set_id IS NOT DISTINCT FROM EXCLUDED.sitelink_set_id
+                            THEN direct_ads.sitelink_hrefs
+                    END,
                     synced_at = NOW()
                 """,
                 (
@@ -195,6 +206,8 @@ def upsert_ads(user_id: int, account_id: int, adgroup_row_by_direct_id: dict[int
                     Jsonb(list(item.get("titles") or [])),
                     Jsonb(list(item.get("texts") or [])),
                     Jsonb(list(item.get("image_hashes") or [])),
+                    item.get("sitelink_set_id"),
+                    Jsonb(item["sitelink_hrefs"]) if item.get("sitelink_hrefs") is not None else None,
                 ),
             )
             count += 1
@@ -464,6 +477,16 @@ def update_text_ad(
     final_titles = new_titles if new_titles is not None else cur_titles
     final_texts = new_texts if new_texts is not None else cur_texts
     final_images = resolved["image_hashes"] if "image_hashes" in resolved else list(current.get("image_hashes") or [])
+    if "sitelink_set_id" in resolved:
+        # Откат приходит готовым id набора — его адресов не знаем до следующей синхронизации.
+        set_id = resolved["sitelink_set_id"]
+        hrefs = [link["href"] for link in extras_n["sitelinks"]] if "sitelinks" in extras_n else None
+        hrefs = [] if not set_id else hrefs
+        with pool.connection() as conn:
+            conn.execute(
+                "UPDATE direct_ads SET sitelink_set_id = %s, sitelink_hrefs = %s WHERE id = %s AND user_id = %s",
+                (set_id, Jsonb(hrefs) if hrefs is not None else None, ad_row_id, user_id),
+            )
     with pool.connection() as conn:
         updated = conn.execute(
             """

@@ -804,7 +804,7 @@ def _links_card(user_id: int, ws_id: int) -> dict | None:
     if not bad:
         return None
     ads = sum(c["ads_total"] for c in bad)
-    tracking = sum(1 for c in bad if c["campaign_problems"])
+    tracking = sum(1 for c in bad if c["campaign_problems"] or c.get("groups_total"))
     parts = []
     if tracking:
         parts.append(f"метки не по шаблону в {_plural(tracking, 'кампании', 'кампаниях', 'кампаниях')}")

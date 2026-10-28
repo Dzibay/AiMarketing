@@ -79,7 +79,7 @@ def _parse_phrases(value) -> list[str]:
     return cleaned
 
 
-ADGROUP_FIELDS = ["Id", "Name", "CampaignId", "Status", "Type", "RegionIds", "NegativeKeywords"]
+ADGROUP_FIELDS = ["Id", "Name", "CampaignId", "Status", "Type", "RegionIds", "NegativeKeywords", "TrackingParams"]
 
 
 def parse_adgroups(raw: list[dict]) -> list[dict]:
@@ -100,6 +100,7 @@ def parse_adgroups(raw: list[dict]) -> list[dict]:
                 "type": str(item.get("Type") or ""),
                 "region_ids": json.dumps(regions, ensure_ascii=False),
                 "negative_keywords": json.dumps(negatives, ensure_ascii=False),
+                "tracking_params": str(item.get("TrackingParams") or ""),
             }
         )
     return items
@@ -124,9 +125,9 @@ def upsert_adgroups(user_id: int, account_id: int, campaign_row_id: int, items: 
                 """
                 INSERT INTO direct_adgroups (
                     user_id, account_id, campaign_row_id, adgroup_id,
-                    name, status, type, region_ids, negative_keywords, synced_at
+                    name, status, type, region_ids, negative_keywords, tracking_params, synced_at
                 )
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
                 ON CONFLICT (account_id, adgroup_id) DO UPDATE SET
                     campaign_row_id = EXCLUDED.campaign_row_id,
                     name = EXCLUDED.name,
@@ -134,6 +135,7 @@ def upsert_adgroups(user_id: int, account_id: int, campaign_row_id: int, items: 
                     type = EXCLUDED.type,
                     region_ids = EXCLUDED.region_ids,
                     negative_keywords = EXCLUDED.negative_keywords,
+                    tracking_params = COALESCE(EXCLUDED.tracking_params, direct_adgroups.tracking_params),
                     synced_at = NOW()
                 """,
                 (
@@ -146,6 +148,7 @@ def upsert_adgroups(user_id: int, account_id: int, campaign_row_id: int, items: 
                     item.get("type") or "",
                     item.get("region_ids") or "[]",
                     item.get("negative_keywords") or "[]",
+                    item.get("tracking_params"),
                 ),
             )
             count += 1
@@ -255,6 +258,7 @@ def update_adgroup(
     *,
     name: str | None = None,
     negative_keywords: list[str] | str | None = None,
+    tracking_params: str | None = None,
 ) -> dict:
     row = _adgroup_row(user_id, adgroup_row_id)
     patch: dict = {"Id": int(row["adgroup_id"])}
@@ -270,6 +274,10 @@ def update_adgroup(
         if len(negatives) > 300:
             raise YandexError("limit")
         patch["NegativeKeywords"] = {"Items": negatives}
+    tracking_n = None
+    if tracking_params is not None:
+        tracking_n = tracking_params.strip().lstrip("?")[:1024]
+        patch["TrackingParams"] = tracking_n
     if len(patch) == 1:
         raise YandexError("empty")
     token = get_connection_access_token(row["connection_id"], user_id)
@@ -282,6 +290,9 @@ def update_adgroup(
     if negatives is not None:
         sets.append("negative_keywords = %s")
         params.append(json.dumps(negatives, ensure_ascii=False))
+    if tracking_n is not None:
+        sets.append("tracking_params = %s")
+        params.append(tracking_n)
     sets.append("synced_at = NOW()")
     params.extend([adgroup_row_id, user_id])
     with pool.connection() as conn:
@@ -299,6 +310,12 @@ def update_adgroup(
         what.append(f"название «{name_n}»")
         if name_n != row["name"]:
             steps.append({"op": "adgroup_update", "args": {"adgroup_row_id": adgroup_row_id, "name": row["name"]}})
+    if tracking_n is not None:
+        what.append("метки группы")
+        if tracking_n != (row.get("tracking_params") or ""):
+            steps.append(
+                {"op": "adgroup_update", "args": {"adgroup_row_id": adgroup_row_id, "tracking_params": row.get("tracking_params") or ""}}
+            )
     if negatives is not None:
         from app.negative_lists import phrase_key
 

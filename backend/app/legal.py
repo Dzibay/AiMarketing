@@ -1,5 +1,6 @@
 from datetime import date
 
+from app.clock import today_msk
 from app.settings_store import get_setting, public_base_url
 
 
@@ -10,7 +11,7 @@ def _legal_email() -> str:
 def _legal_date_display() -> str:
     raw = get_setting("legal_date").strip()
     if not raw:
-        return date.today().strftime("%d.%m.%Y")
+        return today_msk().strftime("%d.%m.%Y")
     try:
         return date.fromisoformat(raw).strftime("%d.%m.%Y")
     except ValueError:

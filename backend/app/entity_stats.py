@@ -12,6 +12,7 @@ import httpx
 
 from app import direct_api
 from app.adgroups import _campaign_row
+from app.clock import yesterday_msk
 from app.db import pool
 from app.stats import _count, _rub_to_kopecks
 from app.sync_runs import finish_run, start_run
@@ -126,7 +127,7 @@ def sync_campaign_entity_stats(
 ) -> dict:
     days = max(1, min(int(days or 14), 90))
     camp = _campaign_row(user_id, campaign_row_id)
-    date_to = date.today() - timedelta(days=1)
+    date_to = yesterday_msk()
     date_from = date_to - timedelta(days=days - 1)
     run_id = start_run(user_id=user_id, kind="direct_entity_stats", target_id=campaign_row_id)
     try:

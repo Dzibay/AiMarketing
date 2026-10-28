@@ -7,13 +7,16 @@ https://site.ru/?ref=Yandex&utm_source=yandex&utm_medium={source_type}&utm_campa
 utm-метки и параметры с подстановками {…} — в TrackingParams кампании: Директ сам добавит их
 ко всем ссылкам, а правка меток не отправляет объявления на модерацию.
 Проверка строгая: домен, ref и каждая метка; путь страницы (/tarify) может отличаться.
-Метки групп (TrackingParams группы) пока не проверяем.
+Свои метки группы Директ ставит вместо меток кампании — их проверяем так же. Быстрые ссылки
+проверяем как ссылку объявления; набор в Директе не правится, поэтому создаём новый.
 """
 
 from __future__ import annotations
 
 import logging
 from urllib.parse import unquote, urlsplit
+
+from psycopg.types.json import Jsonb
 
 from app.db import pool
 from app.journal import journal_quiet, log_action
@@ -173,23 +176,52 @@ def tracking_problems(tracking: str | None, t: dict) -> list[str]:
     return out
 
 
-def check_campaign(t: dict, tracking: str | None, ads: list[dict]) -> dict:
-    """ads — [{id, ad_id, type, state, href, title}]. tracking None — метки ещё не загружены."""
+def sitelink_problems(hrefs: list[str] | None, t: dict) -> list[str]:
+    out: list[str] = []
+    for href in hrefs or []:
+        for problem in href_problems(href, t):
+            if problem not in out:
+                out.append(problem)
+    return out
+
+
+def check_campaign(t: dict, tracking: str | None, ads: list[dict], groups: list[dict] | None = None) -> dict:
+    """
+    ads — [{id, ad_id, type, state, href, title, sitelink_hrefs}], groups — [{id, adgroup_id, name,
+    tracking_params}]. None вместо меток или адресов быстрых ссылок — ещё не загружены.
+    """
     campaign = tracking_problems(tracking, t) if tracking is not None else []
+    bad_groups = []
+    for g in groups or []:
+        own = (g.get("tracking_params") or "").strip()
+        problems = tracking_problems(own, t) if own else []
+        if problems:
+            bad_groups.append(
+                {
+                    "adgroup_row_id": g["id"],
+                    "adgroup_id": g.get("adgroup_id"),
+                    "name": g.get("name") or "",
+                    "tracking": own,
+                    "fixed_tracking": merge_tracking(own, t),
+                    "problems": problems,
+                }
+            )
     bad_ads = []
     for ad in ads:
         if (ad.get("state") or "") == "ARCHIVED":
             continue
         problems = href_problems(ad.get("href"), t)
-        if problems:
+        links = sitelink_problems(ad.get("sitelink_hrefs"), t)
+        if problems or links:
             bad_ads.append(
                 {
                     "ad_row_id": ad["id"],
                     "ad_id": ad.get("ad_id"),
                     "title": ad.get("title") or "",
                     "href": ad.get("href") or "",
-                    "fixed_href": normalize_href(ad.get("href"), t),
+                    "fixed_href": normalize_href(ad.get("href"), t) if problems else ad.get("href") or "",
                     "problems": problems,
+                    "sitelink_problems": links,
                     "fixable": (ad.get("type") or "") in FIXABLE_TYPES,
                 }
             )
@@ -198,8 +230,9 @@ def check_campaign(t: dict, tracking: str | None, ads: list[dict]) -> dict:
         "tracking": tracking or "",
         "fixed_tracking": merge_tracking(tracking, t),
         "campaign_problems": campaign,
+        "groups": bad_groups,
         "ads": bad_ads,
-        "ok": not campaign and not bad_ads,
+        "ok": not campaign and not bad_groups and not bad_ads,
     }
 
 
@@ -268,11 +301,31 @@ def _campaign_ads(user_id: int, campaign_row_ids: list[int]) -> dict[int, list[d
     with pool.connection() as conn:
         rows = conn.execute(
             """
-            SELECT ad.id, ad.ad_id, ad.type, ad.state, ad.href, ad.title, g.campaign_row_id
+            SELECT ad.id, ad.ad_id, ad.type, ad.state, ad.href, ad.title, ad.sitelink_set_id, ad.sitelink_hrefs,
+                g.campaign_row_id
             FROM direct_ads ad
             JOIN direct_adgroups g ON g.id = ad.adgroup_row_id
             WHERE ad.user_id = %s AND g.campaign_row_id = ANY(%s)
             ORDER BY ad.id
+            """,
+            (user_id, campaign_row_ids),
+        ).fetchall()
+    out: dict[int, list[dict]] = {}
+    for r in rows:
+        out.setdefault(int(r["campaign_row_id"]), []).append(r)
+    return out
+
+
+def _campaign_groups(user_id: int, campaign_row_ids: list[int]) -> dict[int, list[dict]]:
+    if not campaign_row_ids:
+        return {}
+    with pool.connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT id, adgroup_id, name, tracking_params, campaign_row_id
+            FROM direct_adgroups
+            WHERE user_id = %s AND campaign_row_id = ANY(%s)
+            ORDER BY id
             """,
             (user_id, campaign_row_ids),
         ).fetchall()
@@ -288,10 +341,12 @@ def workspace_link_issues(user_id: int, workspace_id: int, campaign_row_ids: lis
     if t is None:
         return {"configured": False, "template": "", "campaigns": [], "bad": 0, "unknown": 0}
     campaigns = _campaign_rows(user_id, workspace_id, campaign_row_ids)
-    ads = _campaign_ads(user_id, [int(c["id"]) for c in campaigns])
+    row_ids = [int(c["id"]) for c in campaigns]
+    ads = _campaign_ads(user_id, row_ids)
+    groups = _campaign_groups(user_id, row_ids)
     items, unknown = [], 0
     for c in campaigns:
-        res = check_campaign(t, c.get("tracking_params"), ads.get(int(c["id"]), []))
+        res = check_campaign(t, c.get("tracking_params"), ads.get(int(c["id"]), []), groups.get(int(c["id"]), []))
         unknown += int(res["tracking_unknown"])
         if res["ok"]:
             continue
@@ -305,6 +360,8 @@ def workspace_link_issues(user_id: int, workspace_id: int, campaign_row_ids: lis
                 **res,
                 "ads_total": len(res["ads"]),
                 "ads": res["ads"][:30],
+                "groups_total": len(res["groups"]),
+                "groups": res["groups"][:30],
             }
         )
     return {
@@ -323,11 +380,15 @@ def workspace_link_issues(user_id: int, workspace_id: int, campaign_row_ids: lis
 
 def fix_campaign_links(user_id: int, campaign_row_id: int, *, journal: bool = True) -> dict:
     """
-    Метки кампании и адреса объявлений — по шаблону сайта. Метки правятся без модерации,
-    исправленное объявление Директ отправит на модерацию заново. Откат — прежние метки и адреса.
+    Метки кампании и групп, адреса объявлений и быстрых ссылок — по шаблону сайта. Метки правятся
+    без модерации, исправленное объявление Директ отправит на модерацию заново.
+    Откат — прежние метки, адреса и наборы быстрых ссылок.
     """
+    from app import ad_extras
     from app.actions import get_campaign_rows, get_campaign_settings, update_campaign_settings
+    from app.adgroups import fetch_adgroups, update_adgroup
     from app.ads import update_text_ad
+    from app.yandex import get_connection_access_token
 
     t = campaign_template(user_id, campaign_row_id)
     if t is None:
@@ -336,14 +397,48 @@ def fix_campaign_links(user_id: int, campaign_row_id: int, *, journal: bool = Tr
     if not rows:
         raise YandexError("not-found")
     name = rows[0]["name"]
-    out: dict = {"campaign_row_id": campaign_row_id, "name": name, "tracking_fixed": False, "ads_fixed": 0, "errors": []}
+    out: dict = {
+        "campaign_row_id": campaign_row_id,
+        "name": name,
+        "tracking_fixed": False,
+        "groups_fixed": 0,
+        "ads_fixed": 0,
+        "sitelinks_fixed": 0,
+        "errors": [],
+    }
     undo_steps: list[dict] = []
 
+    # Метки и быстрые ссылки читаем из Директа: правка поверх устаревших данных затёрла бы чужие изменения.
     current = get_campaign_settings(user_id, campaign_row_id).get("tracking_params") or ""
     with pool.connection() as conn:
         conn.execute("UPDATE direct_campaigns SET tracking_params = %s WHERE id = %s", (current, campaign_row_id))
+        acc = conn.execute(
+            """
+            SELECT c.campaign_id, a.connection_id, a.client_login FROM direct_campaigns c
+            JOIN direct_accounts a ON a.id = c.account_id WHERE c.id = %s AND c.user_id = %s
+            """,
+            (campaign_row_id, user_id),
+        ).fetchone()
+    token = get_connection_access_token(acc["connection_id"], user_id)
+    login = acc["client_login"]
+    live_groups = {g["adgroup_id"]: g["tracking_params"] for g in fetch_adgroups(token, login, int(acc["campaign_id"]))}
+    groups = []
+    with pool.connection() as conn:
+        for g in _campaign_groups(user_id, [campaign_row_id]).get(campaign_row_id, []):
+            if int(g["adgroup_id"]) in live_groups:
+                g = {**g, "tracking_params": live_groups[int(g["adgroup_id"])]}
+                conn.execute("UPDATE direct_adgroups SET tracking_params = %s WHERE id = %s", (g["tracking_params"], g["id"]))
+                groups.append(g)
     ads = _campaign_ads(user_id, [campaign_row_id]).get(campaign_row_id, [])
-    res = check_campaign(t, current, ads)
+    sets = ad_extras.sitelink_sets(token, login, [a["sitelink_set_id"] for a in ads if a.get("sitelink_set_id")])
+    ads = [
+        {**a, "sitelink_hrefs": [s["href"] for s in sets[a["sitelink_set_id"]]]} if a.get("sitelink_set_id") in sets else a
+        for a in ads
+    ]
+    set_of = {int(a["id"]): a.get("sitelink_set_id") for a in ads}
+    res = check_campaign(t, current, ads, groups)
+    # Один исправленный набор на прежний: объявления с общим набором получают общий новый.
+    new_sets: dict[int, tuple[int, list[str]]] = {}
 
     with journal_quiet():
         if res["campaign_problems"] and res["fixed_tracking"] != current:
@@ -355,25 +450,58 @@ def fix_campaign_links(user_id: int, campaign_row_id: int, *, journal: bool = Tr
                 )
             except YandexError as exc:
                 out["errors"].append(f"Метки кампании: {exc.message or exc.code}")
+        for g in res["groups"]:
+            try:
+                update_adgroup(user_id, g["adgroup_row_id"], tracking_params=g["fixed_tracking"])
+                out["groups_fixed"] += 1
+                undo_steps.append(
+                    {"op": "adgroup_update", "args": {"adgroup_row_id": g["adgroup_row_id"], "tracking_params": g["tracking"]}}
+                )
+            except YandexError as exc:
+                out["errors"].append(f"Метки группы «{g['name']}»: {exc.message or exc.code}")
         for ad in res["ads"]:
             if not ad["fixable"]:
                 out["errors"].append(f"Объявление {ad['ad_id']}: такой тип правьте в кабинете Директа")
                 continue
-            if ad["fixed_href"] == ad["href"]:
-                continue
+            old_set = set_of.get(int(ad["ad_row_id"]))
+            fields: dict = {}
+            back: dict = {"ad_row_id": ad["ad_row_id"]}
+            if ad["fixed_href"] != ad["href"]:
+                fields["href"], back["href"] = ad["fixed_href"], ad["href"]
             try:
-                update_text_ad(user_id, ad["ad_row_id"], href=ad["fixed_href"])
-                out["ads_fixed"] += 1
-                undo_steps.append({"op": "ad_update", "args": {"ad_row_id": ad["ad_row_id"], "href": ad["href"]}})
+                if ad["sitelink_problems"] and old_set in sets:
+                    if old_set not in new_sets:
+                        fixed = [{**s, "href": normalize_href(s["href"], t)} for s in sets[old_set]]
+                        new_sets[old_set] = (ad_extras.create_sitelink_set(token, login, fixed), [s["href"] for s in fixed])
+                    fields["extras"] = {"sitelink_set_id": new_sets[old_set][0]}
+                    back["extras"] = {"sitelink_set_id": old_set}
+                if not fields:
+                    continue
+                update_text_ad(user_id, ad["ad_row_id"], **fields)
             except YandexError as exc:
                 out["errors"].append(f"Объявление {ad['ad_id']}: {exc.message or exc.code}")
+                continue
+            if "href" in fields:
+                out["ads_fixed"] += 1
+            if "extras" in fields:
+                out["sitelinks_fixed"] += 1
+                with pool.connection() as conn:
+                    conn.execute(
+                        "UPDATE direct_ads SET sitelink_hrefs = %s WHERE id = %s", (Jsonb(new_sets[old_set][1]), ad["ad_row_id"])
+                    )
+            undo_steps.append({"op": "ad_update", "args": back})
 
     out["status"] = "ok" if not out["errors"] else ("partial" if undo_steps else "error")
     if journal and undo_steps:
         log_action(
             user_id,
             "links",
-            {"campaign_row_id": campaign_row_id, "tracking": res["fixed_tracking"], "ads": len(res["ads"])},
+            {
+                "campaign_row_id": campaign_row_id,
+                "tracking": res["fixed_tracking"],
+                "groups": len(res["groups"]),
+                "ads": len(res["ads"]),
+            },
             out,
             "ok" if not out["errors"] else "partial",
             title=f"Ссылки «{name}» по шаблону сайта",
@@ -397,6 +525,8 @@ def fix_links(user_id: int, campaign_row_ids: list[int], progress=None) -> dict:
     return {
         "items": items,
         "tracking_fixed": sum(1 for i in items if i.get("tracking_fixed")),
+        "groups_fixed": sum(int(i.get("groups_fixed") or 0) for i in items),
         "ads_fixed": sum(int(i.get("ads_fixed") or 0) for i in items),
-        "note": "Исправленные объявления Директ заново отправит на модерацию; метки кампании модерацию не требуют.",
+        "sitelinks_fixed": sum(int(i.get("sitelinks_fixed") or 0) for i in items),
+        "note": "Исправленные объявления и быстрые ссылки Директ заново отправит на модерацию; метки модерацию не требуют.",
     }

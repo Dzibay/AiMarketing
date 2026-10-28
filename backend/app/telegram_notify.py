@@ -205,12 +205,15 @@ def format_rule_alert(
     dry_run: bool,
     matched: list[dict],
     applied: int,
+    error: str = "",
 ) -> str:
     mode = "dry-run" if dry_run else "auto"
     lines = [
         f"AiMarketing · правило «{rule_name}»",
         f"Режим: {mode} · действие: {action} · совпало: {len(matched)} · применено: {applied}",
     ]
+    if error:
+        lines.append(f"⚠ Не всё применилось: {error}")
     for item in matched[:15]:
         lines.append(f"• {item.get('name') or item.get('campaign_id')}: {item.get('reason') or ''}")
     if len(matched) > 15:

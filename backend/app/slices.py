@@ -303,7 +303,7 @@ def _direct_slice(ws: dict, campaigns: list[dict], dimension: str, date_from, da
                 goals=[goal] if goal else None,
             )
         except YandexError as exc:
-            if exc.code in ("token-expired", "unauthorized") or len(by_account) == 1:
+            if exc.code in ("token-expired", "unauthorized", "oauth-unavailable") or len(by_account) == 1:
                 raise
             errors.append({"client_login": login, "error": exc.code, "message": exc.message or ""})
             continue

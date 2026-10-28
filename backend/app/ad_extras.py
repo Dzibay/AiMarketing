@@ -240,6 +240,41 @@ def _ad_refs(token, client_login: str, ad_id: int) -> dict:
     }
 
 
+def sitelink_sets(token, client_login: str, set_ids) -> dict[int, list[dict]]:
+    """Наборы быстрых ссылок по id: {id: [{title, href, description}]}."""
+    out: dict[int, list[dict]] = {}
+    ids = sorted({int(i) for i in set_ids if i})
+    for part in direct_api.chunks(ids, 1000):
+        result = direct_api.call(
+            token, client_login, "sitelinks", "get", {"SelectionCriteria": {"Ids": part}, "FieldNames": ["Id", "Sitelinks"]}
+        )
+        for item in result.get("SitelinksSets") or []:
+            out[int(item["Id"])] = [
+                {"title": link.get("Title") or "", "href": link.get("Href") or "", "description": link.get("Description") or ""}
+                for link in item.get("Sitelinks") or []
+            ]
+    return out
+
+
+def attach_sitelink_hrefs(token, client_login: str, ads: list[dict]) -> list[dict]:
+    """Адреса быстрых ссылок к объявлениям из parse_ads — для проверки ссылок по шаблону.
+    Не прочитались — sitelink_hrefs нет, и в базе остаются прежние адреса того же набора."""
+    try:
+        sets = sitelink_sets(token, client_login, [ad.get("sitelink_set_id") for ad in ads])
+    except YandexError as exc:
+        if exc.code in ("units", "token-expired", "unauthorized", "direct-denied", "oauth-unavailable"):
+            raise
+        log.warning("sitelinks.get: %s", exc.code)
+        return ads
+    for ad in ads:
+        set_id = ad.get("sitelink_set_id")
+        if not set_id:
+            ad["sitelink_hrefs"] = []
+        elif set_id in sets:
+            ad["sitelink_hrefs"] = [link["href"] for link in sets[set_id] if link["href"]]
+    return ads
+
+
 def image_previews(token, client_login: str, hashes: list[str]) -> dict[str, str]:
     if not hashes:
         return {}
@@ -258,17 +293,7 @@ def read_extras(token, client_login: str, ad_id: int) -> dict:
     refs = _ad_refs(token, client_login, ad_id)
     sitelinks: list[dict] = []
     if refs["sitelink_set_id"]:
-        sets = direct_api.call(
-            token,
-            client_login,
-            "sitelinks",
-            "get",
-            {"SelectionCriteria": {"Ids": [refs["sitelink_set_id"]]}, "FieldNames": ["Id", "Sitelinks"]},
-        ).get("SitelinksSets") or []
-        for link in (sets[0].get("Sitelinks") if sets else None) or []:
-            sitelinks.append(
-                {"title": link.get("Title") or "", "href": link.get("Href") or "", "description": link.get("Description") or ""}
-            )
+        sitelinks = sitelink_sets(token, client_login, [refs["sitelink_set_id"]]).get(refs["sitelink_set_id"], [])
     callouts: list[str] = []
     if refs["callout_ids"]:
         exts = direct_api.call(

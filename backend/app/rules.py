@@ -4,13 +4,13 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import date, datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 from app.actions import bulk_campaign_action
 from app.budgets import BULK_LIMIT as BUDGET_BULK_LIMIT
 from app.budgets import bulk_budget
-from app.clock import today_msk
+from app.clock import today_msk, yesterday_msk
 from app.db import pool
 from app.journal import acting_as
 from app.keywords import bulk_keyword_action
@@ -262,7 +262,7 @@ def list_rule_runs(user_id: int, limit: int = 30) -> list[dict]:
     with pool.connection() as conn:
         rows = conn.execute(
             """
-            SELECT id, rule_id, dry_run, matched, applied, details, created_at
+            SELECT id, rule_id, dry_run, matched, applied, details, error, created_at
             FROM rule_runs
             WHERE user_id = %s
             ORDER BY created_at DESC
@@ -278,6 +278,7 @@ def list_rule_runs(user_id: int, limit: int = 30) -> list[dict]:
             "matched": r["matched"],
             "applied": r["applied"],
             "details": r["details"],
+            "error": r.get("error") or "",
             "created_at": r["created_at"].isoformat() if r.get("created_at") else None,
         }
         for r in rows
@@ -389,8 +390,8 @@ def _goal_meta(user_id: int, goal_row_id: int | None) -> dict | None:
 
 def _matching_campaigns(user_id: int, rule: dict) -> list[dict]:
     lookback = int(rule["lookback_days"])
-    date_from = date.today() - timedelta(days=lookback)
-    date_to = date.today() - timedelta(days=1)
+    date_from = today_msk() - timedelta(days=lookback)
+    date_to = yesterday_msk()
     threshold = Decimal(str(rule["threshold_value"]))
     account_id = rule.get("scope_account_id")
     workspace_id = rule.get("scope_workspace_id")
@@ -742,6 +743,87 @@ def _matching_queries(user_id: int, rule: dict) -> list[dict]:
     return matched
 
 
+# После таких ошибок остальные пачки тоже не пройдут.
+_STOP_CODES = frozenset({"units", "token-expired", "unauthorized", "direct-denied", "oauth-unavailable"})
+
+
+def _result_error(result: dict) -> str:
+    """Первая ошибка частично применённой пачки: bulk-функции не бросают, если что-то прошло."""
+    errors = result.get("errors")
+    if isinstance(errors, int):  # поисковые запросы отдают только число неудач
+        return f"не применено: {errors}" if errors else ""
+    for item in errors or []:
+        if isinstance(item, dict):
+            text = item.get("message") or item.get("error") or ""
+            name = item.get("name") or item.get("query") or ""
+            return f"«{name}»: {text}" if name and text else text
+        if item:
+            return str(item)
+    return str(result.get("error") or "")
+
+
+def _in_chunks(ids: list[int], size: int, run) -> tuple[int, str]:
+    """Пачки по size: применённое по успешным пачкам суммируется, первая ошибка сохраняется."""
+    applied, error = 0, ""
+    for i in range(0, len(ids), size):
+        try:
+            result = run(ids[i : i + size])
+        except YandexError as exc:
+            error = error or exc.message or exc.code
+            if exc.code in _STOP_CODES:
+                break
+            continue
+        applied += int(result.get("applied") or 0)
+        error = error or _result_error(result)
+    return applied, error
+
+
+def _apply(user_id: int, rule: dict, target: str, action: str, matched: list[dict]) -> tuple[int, str]:
+    """Действие правила в Директе → (применено, ошибка_или_пусто)."""
+    ids = [m["row_id"] for m in matched]
+    if action == "notify":
+        return len(ids), ""
+    if target == "query" and action in ("negative_adgroup", "negative_campaign"):
+        if action == "negative_adgroup":
+            ids = [m["row_id"] for m in matched if m.get("adgroup_row_id")]
+        return _in_chunks(ids, 100, lambda chunk: bulk_search_query_action(user_id, query_ids=chunk, action=action))
+    if target == "keyword" and action in ("pause", "resume", "set_bid"):
+        kw_action = "suspend" if action == "pause" else action
+        bid = None
+        if action == "set_bid":
+            bid = float(rule.get("action_bid_rub") or 0)
+            if bid <= 0:
+                raise YandexError("budget")
+        return _in_chunks(
+            ids, 100,
+            lambda chunk: bulk_keyword_action(user_id, keyword_row_ids=chunk, action=kw_action, bid_rub=bid),
+        )
+    if target == "campaign" and action in ("set_weekly_budget", "change_budget_pct"):
+        pct = float(rule["action_pct"]) if rule.get("action_pct") is not None else None
+        cap = float(rule["action_budget_rub"]) if rule.get("action_budget_rub") is not None else None
+        return _in_chunks(
+            ids[:BUDGET_BULK_LIMIT], BUDGET_BULK_LIMIT,
+            lambda chunk: bulk_budget(
+                user_id,
+                campaign_ids=chunk,
+                weekly_budget_rub=cap if action == "set_weekly_budget" else None,
+                budget_change_pct=pct if action == "change_budget_pct" else None,
+                cap_weekly_rub=cap if action == "change_budget_pct" else None,
+            ),
+        )
+    if target == "campaign" and action in ("pause", "resume", "set_budget"):
+        budget = None
+        if action == "set_budget":
+            budget = float(rule["action_budget_rub"] or 0)
+            if budget <= 0:
+                raise YandexError("budget")
+        return _in_chunks(
+            ids, max(1, len(ids)),
+            lambda chunk: bulk_campaign_action(user_id, campaign_ids=chunk, action=action, daily_budget_rub=budget),
+        )
+    return 0, ""
+
+
 def run_rule(user_id: int, rule_id: int, *, force_dry_run: bool | None = None) -> dict:
     # Действия правила попадают в журнал с источником «правило».
     with acting_as("rule"):
@@ -765,79 +847,10 @@ def _run_rule(user_id: int, rule_id: int, *, force_dry_run: bool | None = None) 
         matched = _matching_queries(user_id, rule)
     else:
         matched = _matching_campaigns(user_id, rule)
-    applied = 0
     action = rule["action"] or "pause"
+    applied, error = 0, ""
     if matched and not dry:
-        ids = [m["row_id"] for m in matched]
-        if action == "notify":
-            applied = len(ids)
-        elif target == "query" and action in ("negative_adgroup", "negative_campaign"):
-            # negative_adgroup: только запросы с группой
-            if action == "negative_adgroup":
-                ids = [m["row_id"] for m in matched if m.get("adgroup_row_id")]
-            try:
-                applied = 0
-                for i in range(0, len(ids), 100):
-                    chunk = ids[i : i + 100]
-                    result = bulk_search_query_action(
-                        user_id,
-                        query_ids=chunk,
-                        action=action,
-                    )
-                    applied += int(result.get("applied") or 0)
-            except YandexError:
-                applied = 0
-        elif target == "keyword" and action in ("pause", "resume", "set_bid"):
-            kw_action = "suspend" if action == "pause" else action
-            bid = None
-            if action == "set_bid":
-                bid = float(rule.get("action_bid_rub") or 0)
-                if bid <= 0:
-                    raise YandexError("budget")
-            try:
-                # Direct API лимит пачками по 100
-                applied = 0
-                for i in range(0, len(ids), 100):
-                    chunk = ids[i : i + 100]
-                    result = bulk_keyword_action(
-                        user_id,
-                        keyword_row_ids=chunk,
-                        action=kw_action,
-                        bid_rub=bid,
-                    )
-                    applied += int(result.get("applied") or 0)
-            except YandexError:
-                applied = 0
-        elif target == "campaign" and action in ("set_weekly_budget", "change_budget_pct"):
-            pct = float(rule["action_pct"]) if rule.get("action_pct") is not None else None
-            cap = float(rule["action_budget_rub"]) if rule.get("action_budget_rub") is not None else None
-            try:
-                result = bulk_budget(
-                    user_id,
-                    campaign_ids=ids[:BUDGET_BULK_LIMIT],
-                    weekly_budget_rub=cap if action == "set_weekly_budget" else None,
-                    budget_change_pct=pct if action == "change_budget_pct" else None,
-                    cap_weekly_rub=cap if action == "change_budget_pct" else None,
-                )
-                applied = int(result.get("applied") or 0)
-            except YandexError:
-                applied = 0
-        elif target == "campaign" and action in ("pause", "resume", "set_budget"):
-            budget = None
-            if action == "set_budget":
-                budget = float(rule["action_budget_rub"] or 0)
-                if budget <= 0:
-                    raise YandexError("budget")
-            try:
-                result = bulk_campaign_action(
-                    user_id,
-                    campaign_ids=ids,
-                    action=action,
-                    daily_budget_rub=budget,
-                )
-                applied = int(result.get("applied") or 0)
-            except YandexError:
-                applied = 0
+        applied, error = _apply(user_id, rule, target, action, matched)
 
     details = json.dumps(
         {"matched": matched, "action": action, "target": target},
@@ -846,10 +859,10 @@ def _run_rule(user_id: int, rule_id: int, *, force_dry_run: bool | None = None) 
     with pool.connection() as conn:
         conn.execute(
             """
-            INSERT INTO rule_runs (user_id, rule_id, dry_run, matched, applied, details)
-            VALUES (%s, %s, %s, %s, %s, %s)
+            INSERT INTO rule_runs (user_id, rule_id, dry_run, matched, applied, details, error)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
             """,
-            (user_id, rule_id, dry, len(matched), applied, details),
+            (user_id, rule_id, dry, len(matched), applied, details, error[:500]),
         )
         conn.execute(
             "UPDATE automation_rules SET last_run_at = NOW(), updated_at = NOW() WHERE id = %s",
@@ -867,6 +880,7 @@ def _run_rule(user_id: int, rule_id: int, *, force_dry_run: bool | None = None) 
                     dry_run=dry,
                     matched=matched,
                     applied=applied,
+                    error=error,
                 ),
             )
         except Exception:
@@ -879,6 +893,7 @@ def _run_rule(user_id: int, rule_id: int, *, force_dry_run: bool | None = None) 
         "target": target,
         "matched": len(matched),
         "applied": applied,
+        "error": error,
         "items": matched,
     }
 
