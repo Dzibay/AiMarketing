@@ -46,8 +46,12 @@ def is_sandbox(token) -> bool:
     return bool(getattr(token, "sandbox", False))
 
 
-def v5_url(token, service: str) -> str:
-    return (V5_SANDBOX if is_sandbox(token) else V5) + service
+def v5_url(token, service: str, version: str = "v5") -> str:
+    """Адрес сервиса. Товарные объявления живут на v501, остальное — на v5."""
+    base = V5_SANDBOX if is_sandbox(token) else V5
+    if version != "v5":
+        base = base.replace("/json/v5/", f"/json/{version}/")
+    return base + service
 
 
 def live4_url(token) -> str:
@@ -118,7 +122,16 @@ def last_units(client_login: str | None) -> dict | None:
     return {"spent": found[0], "left": found[1], "limit": found[2]}
 
 
-def call(token, client_login: str | None, service: str, method: str, params: dict, *, timeout: float = 60.0) -> dict:
+def call(
+    token,
+    client_login: str | None,
+    service: str,
+    method: str,
+    params: dict,
+    *,
+    timeout: float = 60.0,
+    version: str = "v5",
+) -> dict:
     """POST в сервис API v5; ошибка запроса целиком — YandexError, результат — payload["result"]."""
     from app.yandex import YandexError, direct_api_error
 
@@ -127,7 +140,7 @@ def call(token, client_login: str | None, service: str, method: str, params: dic
     # get идемпотентен. add/update при 504 могли уже пройти на стороне Директа — не повторяем.
     try:
         response = post_json(
-            v5_url(token, service),
+            v5_url(token, service, version),
             headers=headers(token, client_login),
             body={"method": method, "params": params},
             timeout=timeout,

@@ -75,12 +75,14 @@ def _campaign_full(user_id: int, campaign_row_id: int) -> dict:
     return row
 
 
-def _get_all(token, client_login: str, service: str, params: dict, key: str) -> list[dict]:
+def _get_all(token, client_login: str, service: str, params: dict, key: str, *, version: str = "v5") -> list[dict]:
     """get с постраничной выборкой (LimitedBy)."""
     out: list[dict] = []
     offset = 0
     while True:
-        result = direct_api.call(token, client_login, service, "get", {**params, "Page": {"Limit": 10_000, "Offset": offset}})
+        result = direct_api.call(
+            token, client_login, service, "get", {**params, "Page": {"Limit": 10_000, "Offset": offset}}, version=version
+        )
         out.extend(result.get(key) or [])
         if result.get("LimitedBy") is None:
             return out
@@ -1495,12 +1497,14 @@ def _add_copy(token, client_login: str, body: dict, block_name: str, warnings: l
         return _added_id(_call_campaigns(token, client_login, "add", {"Campaigns": [body]}))
 
 
-def _add_batches(token, client_login: str, service: str, key: str, objects: list[dict]) -> tuple[list[int | None], list[str]]:
+def _add_batches(
+    token, client_login: str, service: str, key: str, objects: list[dict], *, version: str = "v5"
+) -> tuple[list[int | None], list[str]]:
     """Добавляет пачками; возвращает новые id по порядку (None — не создан) и ошибки."""
     ids: list[int | None] = []
     errors: list[str] = []
     for chunk in direct_api.chunks(objects, ADD_BATCH):
-        result = direct_api.call(token, client_login, service, "add", {key: chunk})
+        result = direct_api.call(token, client_login, service, "add", {key: chunk}, version=version)
         item_errs = dict(direct_api.item_errors(result, "AddResults"))
         for index, res in enumerate(result.get("AddResults") or []):
             if index in item_errs or not res.get("Id"):
@@ -1588,6 +1592,21 @@ _AD_COPY_FIELDS = {
         "ErirAdDescription",
     ],
     "TextImageAdFieldNames": ["Href", "AdImageHash", "TurboPageId"],
+    # Товарные объявления ЕПК читаются только с v501. Без этих полей Директ отдаёт тип без тела.
+    "ShoppingAdFieldNames": [
+        "FeedId",
+        "GenerationScopes",
+        "FeedFilterConditions",
+        "TitleSources",
+        "TextSources",
+        "DefaultTexts",
+        "ListingFeedFilterConditions",
+        "ListingTitleSources",
+        "ListingTextSources",
+        "SitelinkSetId",
+        "AdExtensions",
+        "BusinessId",
+    ],
 }
 _KEYWORD_COPY_FIELDS = {
     "FieldNames": [
@@ -1656,8 +1675,66 @@ def _keyword_for_add(keyword: dict, group_id: int, *, manual: bool, unified: boo
     return _clean(entry)
 
 
+_SHOPPING_KEYS = (
+    "FeedId",
+    "GenerationScopes",
+    "FeedFilterConditions",
+    "TitleSources",
+    "TextSources",
+    "DefaultTexts",
+    "ListingFeedFilterConditions",
+    "ListingTitleSources",
+    "ListingTextSources",
+)
+
+
+def _is_shopping(ad: dict) -> bool:
+    return bool(ad.get("ShoppingAd") or ad.get("ListingAd")) or str(ad.get("Type") or "") in ("SHOPPING_AD", "LISTING_AD")
+
+
+def _copied_bid(keyword: dict, keyword_id: int, *, search_manual: bool, network_manual: bool) -> dict | None:
+    """Ставка для keywordbids.set. keywords.add её для автотаргетинга не применяет.
+
+    Группа создаётся уже с автотаргетингом и минимальной ставкой 0,30 ₽. Видимую ставку
+    оригинала фиксируем: в новой кампании автоматическая ставка ещё ничего не посчитала.
+    """
+    item: dict = {"KeywordId": int(keyword_id)}
+    bid = keyword.get("Bid")
+    if bid and (search_manual or _is_autotargeting(keyword)):
+        item["SearchBid"] = int(bid)
+    if _is_autotargeting(keyword) and "SearchBid" in item:
+        item["AutotargetingSearchBidIsAuto"] = "NO"
+    context = keyword.get("ContextBid")
+    if context and network_manual:
+        item["NetworkBid"] = int(context)
+    return item if "SearchBid" in item or "NetworkBid" in item else None
+
+
+def _apply_copied_bids(token, client_login: str, items: list[dict], warnings: list[str]) -> None:
+    if not items:
+        return
+    failed = False
+    for chunk in direct_api.chunks(items, 10_000):
+        try:
+            result = direct_api.call(token, client_login, "keywordbids", "set", {"KeywordBids": chunk})
+        except YandexError as exc:
+            warnings.append(f"Ставки не перенесены: {exc.message or exc.code}")
+            return
+        errors = [text for _i, text in direct_api.item_errors(result, "SetResults")]
+        if errors and not failed:
+            failed = True
+            warnings.append(f"Ставки: {errors[0]}")
+
+
 def _ad_body(ad: dict) -> dict:
-    return ad.get("ResponsiveAd") or ad.get("TextAd") or ad.get("TextImageAd") or {}
+    return (
+        ad.get("ResponsiveAd")
+        or ad.get("TextAd")
+        or ad.get("TextImageAd")
+        or ad.get("ShoppingAd")
+        or ad.get("ListingAd")
+        or {}
+    )
 
 
 def _ad_image_hashes(ad: dict) -> list[str]:
@@ -1771,6 +1848,21 @@ def _ad_for_add(
         if not entry["Href"] and not entry.get("TurboPageId"):
             return None
         return {"TextImageAd": _clean(entry)}
+    shopping = ad.get("ShoppingAd") or ad.get("ListingAd")
+    if shopping or _is_shopping(ad):
+        # Фид принадлежит кабинету. В другой кабинет товарное объявление не перенести.
+        if not same or not (shopping or {}).get("FeedId"):
+            return None
+        entry = {key: shopping.get(key) for key in _SHOPPING_KEYS}
+        if ad.get("ListingAd") and not shopping.get("GenerationScopes"):
+            entry["GenerationScopes"] = ["LISTING"]
+        entry["SitelinkSetId"] = sitelink(shopping)
+        entry["AdExtensionIds"] = extensions(shopping)
+        entry["BusinessId"] = shopping.get("BusinessId") or None
+        cleaned = _clean(entry)
+        if not cleaned.get("FeedId"):
+            return None
+        return {"ShoppingAd": cleaned}
     return None
 
 
@@ -1845,10 +1937,12 @@ def duplicate_campaign(
     progress=None,
 ) -> dict:
     """
-    Копия кампании со структурой: настройки, группы, фразы и автотаргетинг (со ставками при ручной
-    стратегии), объявления — комбинаторные со всеми заголовками, текстами и картинками, текстовые
-    и графические. В другой кабинет быстрые ссылки, уточнения и картинки пересоздаются; визитки,
-    турбо-страницы, видео, организации и наборы минус-фраз — нет (они живут в кабинете-источнике).
+    Копия кампании со структурой: настройки, группы, фразы и автотаргетинг.
+    Объявления — комбинаторные, текстовые, графические и товарные. Товарные читаются и создаются
+    через API v501, фид остаётся в том же кабинете. Ставки фраз и автотаргетинга задаются через
+    keywordbids.set: группа создаётся со ставкой автотаргетинга 0,30 ₽, и add её не меняет.
+    В другой кабинет быстрые ссылки, уточнения и картинки пересоздаются; визитки, турбо-страницы,
+    видео, организации и наборы минус-фраз — нет (они живут в кабинете-источнике).
     """
     from app.adgroups import sync_campaign_adgroups
     from app.ads import sync_campaign_ads
@@ -1951,16 +2045,81 @@ def duplicate_campaign(
             [_keyword_for_add(k, group_map[int(k["AdGroupId"])], manual=manual, unified=unified) for k in phrases],
         )
         warnings.extend(f"Фраза: {e}" for e in errors[:5])
-        auto_ids, errors = _add_batches(
-            dst_token,
-            dst["client_login"],
-            "keywords",
-            "Keywords",
-            [_keyword_for_add(k, group_map[int(k["AdGroupId"])], manual=manual, unified=unified) for k in autos],
-        )
-        warnings.extend(f"Автотаргетинг: {e}" for e in errors[:3])
+        # AdGroups.add уже создаёт ---autotargeting со ставкой 0,30 ₽. Повторный add не проходит,
+        # поэтому настройки и ставку пишем в существующую фразу.
+        existing_auto: dict[int, int] = {}
+        if autos:
+            created = _get_all(
+                dst_token,
+                dst["client_login"],
+                "keywords",
+                {"SelectionCriteria": {"CampaignIds": [new_campaign_id]}, "FieldNames": ["Id", "AdGroupId", "Keyword"]},
+                "Keywords",
+            )
+            existing_auto = {
+                int(k["AdGroupId"]): int(k["Id"])
+                for k in created
+                if k.get("Id") and k.get("AdGroupId") and _is_autotargeting(k)
+            }
+        auto_ids: list[int | None] = []
+        pending: list[tuple[int, dict]] = []
+        updates: list[dict] = []
+        for src in autos:
+            new_group = group_map[int(src["AdGroupId"])]
+            found = existing_auto.get(new_group)
+            if found:
+                auto_ids.append(found)
+                patch: dict = {
+                    "Id": found,
+                    "UserParam1": src.get("UserParam1") or None,
+                    "UserParam2": src.get("UserParam2") or None,
+                    "AutotargetingSettings": src.get("AutotargetingSettings") or None,
+                }
+                patch = _clean(patch)
+                if len(patch) > 1:
+                    updates.append(patch)
+            else:
+                pending.append((len(auto_ids), src))
+                auto_ids.append(None)
+        for chunk in direct_api.chunks(updates, 1000):
+            try:
+                result = direct_api.call(dst_token, dst["client_login"], "keywords", "update", {"Keywords": chunk})
+            except YandexError as exc:
+                warnings.append(f"Автотаргетинг: {exc.message or exc.code}")
+                break
+            errors = [text for _i, text in direct_api.item_errors(result, "UpdateResults")]
+            warnings.extend(f"Автотаргетинг: {e}" for e in errors[:3])
+        if pending:
+            added, errors = _add_batches(
+                dst_token,
+                dst["client_login"],
+                "keywords",
+                "Keywords",
+                [_keyword_for_add(src, group_map[int(src["AdGroupId"])], manual=manual, unified=unified) for _i, src in pending],
+            )
+            warnings.extend(f"Автотаргетинг: {e}" for e in errors[:3])
+            for (index, _src), new_id in zip(pending, added):
+                auto_ids[index] = new_id
         out["keywords"] = sum(1 for x in new_kw_ids if x)
         out["autotargeting"] = sum(1 for x in auto_ids if x)
+        search_manual = flat["search"] == "HIGHEST_POSITION"
+        network_manual = (not unified) and flat["network"] == "MAXIMUM_COVERAGE"
+        bid_items = []
+        fixed_auto_bid = False
+        for src, new_id in list(zip(phrases, new_kw_ids)) + list(zip(autos, auto_ids)):
+            if not new_id:
+                continue
+            item = _copied_bid(src, new_id, search_manual=search_manual, network_manual=network_manual)
+            if not item:
+                continue
+            bid_items.append(item)
+            if _is_autotargeting(src) and src.get("AutotargetingSearchBidIsAuto") == "YES":
+                fixed_auto_bid = True
+        _apply_copied_bids(dst_token, dst["client_login"], bid_items, warnings)
+        if fixed_auto_bid:
+            warnings.append(
+                "Автотаргетинг в копии зафиксирован на текущей ставке оригинала: в новой кампании автоматическая ставка ещё не считается"
+            )
         suspended = [
             new for k, new in zip(phrases + autos, new_kw_ids + auto_ids) if new and k.get("State") == "SUSPENDED"
         ]
@@ -1973,13 +2132,25 @@ def duplicate_campaign(
         step(4, "Копирую объявления")
         ads = []
         if group_map:
-            ads = _get_all(
-                src_token,
-                src["client_login"],
-                "ads",
-                {"SelectionCriteria": {"CampaignIds": [int(src["campaign_id"])]}, **_AD_COPY_FIELDS},
-                "Ads",
-            )
+            try:
+                ads = _get_all(
+                    src_token,
+                    src["client_login"],
+                    "ads",
+                    {"SelectionCriteria": {"CampaignIds": [int(src["campaign_id"])]}, **_AD_COPY_FIELDS},
+                    "Ads",
+                    version="v501",
+                )
+            except YandexError as exc:
+                warnings.append(f"Товарные объявления не прочитаны ({exc.message or exc.code})")
+                plain = {k: v for k, v in _AD_COPY_FIELDS.items() if k != "ShoppingAdFieldNames"}
+                ads = _get_all(
+                    src_token,
+                    src["client_login"],
+                    "ads",
+                    {"SelectionCriteria": {"CampaignIds": [int(src["campaign_id"])]}, **plain},
+                    "Ads",
+                )
         ads = [a for a in ads if int(a.get("AdGroupId") or 0) in group_map and a.get("State") != "ARCHIVED"]
         sitelinks: dict[int, int] = {}
         callouts: dict[int, int] = {}
@@ -2019,18 +2190,36 @@ def duplicate_campaign(
             if any(_source_only(b) for b in bodies):
                 warnings.append("Визитки, турбо-страницы, видео и организации живут в исходном кабинете — добавьте их в копии вручную")
         payload = []
+        shopping_payload = []
         other = 0
+        shopping_skipped = 0
         for a in ads:
             entry = _ad_for_add(a, unified=unified, same=same, sitelinks=sitelinks, callouts=callouts, images=images)
             if entry is None:
-                other += 1
+                if _is_shopping(a):
+                    shopping_skipped += 1
+                else:
+                    other += 1
                 continue
-            payload.append({"AdGroupId": group_map[int(a["AdGroupId"])], **entry})
+            ready = {"AdGroupId": group_map[int(a["AdGroupId"])], **entry}
+            if "ShoppingAd" in entry:
+                shopping_payload.append(ready)
+            else:
+                payload.append(ready)
+        if shopping_skipped and not same:
+            warnings.append(
+                f"Товарные объявления не скопированы ({shopping_skipped}): фид остаётся в исходном кабинете"
+            )
+        elif shopping_skipped:
+            warnings.append(f"Не скопировано товарных объявлений: {shopping_skipped}")
         if other:
             warnings.append(f"Не скопировано объявлений других видов: {other}")
         new_ad_ids, errors = _add_batches(dst_token, dst["client_login"], "ads", "Ads", payload)
-        warnings.extend(f"Объявление: {e}" for e in errors[:5])
-        out["ads"] = sum(1 for x in new_ad_ids if x)
+        shop_ids, shop_errors = _add_batches(
+            dst_token, dst["client_login"], "ads", "Ads", shopping_payload, version="v501"
+        )
+        warnings.extend(f"Объявление: {e}" for e in (errors + shop_errors)[:5])
+        out["ads"] = sum(1 for x in new_ad_ids + shop_ids if x)
         warnings.append("Корректировки ставок не копируются — проверьте их в копии")
     except YandexError as exc:
         warnings.append(f"Структура скопирована не полностью: {exc.message or exc.code}")

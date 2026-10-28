@@ -148,17 +148,48 @@ def test_image_ad_without_copied_image_is_skipped():
 def test_keyword_copy_autotargeting_and_bids():
     auto = {
         "Keyword": "---autotargeting",
-        "Bid": 10_000_000,
+        "Bid": 3_000_000,
         "ContextBid": 3_000_000,
         "AutotargetingSearchBidIsAuto": "YES",
         "AutotargetingSettings": {"Categories": {"Exact": "YES", "Broader": "NO"}},
     }
     out = _keyword_for_add(auto, 7, manual=True, unified=True)
-    assert out["Keyword"] == "---autotargeting" and out["Bid"] == 10_000_000
+    assert out["Keyword"] == "---autotargeting" and out["Bid"] == 3_000_000
     assert "ContextBid" not in out
     assert out["AutotargetingSettings"]["Categories"]["Broader"] == "NO"
+    # Группа уже создана со ставкой 0,30 ₽. Видимые 3 ₽ фиксируем отдельно, автоставку выключаем.
+    bid = actions._copied_bid(auto, 99, search_manual=False, network_manual=False)
+    assert bid == {"KeywordId": 99, "SearchBid": 3_000_000, "AutotargetingSearchBidIsAuto": "NO"}
     phrase = _keyword_for_add({"Keyword": "диван", "Bid": 1, "StrategyPriority": "HIGH"}, 7, manual=False, unified=False)
     assert phrase == {"AdGroupId": 7, "Keyword": "диван", "StrategyPriority": "HIGH"}
+    assert actions._copied_bid({"Keyword": "диван", "Bid": 1}, 8, search_manual=False, network_manual=False) is None
+    assert actions._copied_bid({"Keyword": "диван", "Bid": 3_000_000}, 8, search_manual=True, network_manual=False) == {
+        "KeywordId": 8,
+        "SearchBid": 3_000_000,
+    }
+
+
+def test_shopping_ad_copies_feed_on_v501_only_inside_account():
+    ad = {
+        "Type": "SHOPPING_AD",
+        "ShoppingAd": {
+            "FeedId": 55,
+            "GenerationScopes": ["OFFER"],
+            "FeedFilterConditions": [{"Operand": "price", "Operator": "GREATER_THAN", "Arguments": ["100"]}],
+            "TitleSources": ["name"],
+            "SitelinkSetId": 7,
+            "AdExtensions": [{"AdExtensionId": 3, "Type": "CALLOUT"}],
+            "BusinessId": 9,
+        },
+    }
+    out = _ad_for_add(ad, unified=True, same=True, sitelinks={}, callouts={}, images={})
+    assert out["ShoppingAd"]["FeedId"] == 55
+    assert out["ShoppingAd"]["FeedFilterConditions"][0]["Operand"] == "price"
+    assert out["ShoppingAd"]["SitelinkSetId"] == 7
+    assert out["ShoppingAd"]["AdExtensionIds"] == [3]
+    assert _ad_for_add(ad, unified=True, same=False, sitelinks={}, callouts={}, images={}) is None
+    assert direct_api.v5_url("token", "ads", "v501") == "https://api.direct.yandex.com/json/v501/ads"
+    assert direct_api.v5_url("token", "ads") == "https://api.direct.yandex.com/json/v5/ads"
 
 
 def test_unified_group_gets_offer_retargeting():
