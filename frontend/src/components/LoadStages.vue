@@ -12,7 +12,7 @@
 </template>
 
 <script setup>
-import { errorDetail } from '../api/web'
+import { stageErrorText } from '../composables/useLoads'
 import { num, timeAgo } from '../utils/format'
 
 /** Этапы загрузки кабинета или счётчика: что уже есть, что грузится, что ждёт. */
@@ -52,8 +52,11 @@ function detail(s) {
 
 function hint(s) {
   const parts = []
-  if (s.status === 'error' || s.status === 'stopped') parts.push(errorDetail(s.error))
+  if (s.status === 'error' || s.status === 'stopped') parts.push(stageErrorText(s))
   if (s.skipped === 'units') parts.push('Баллов API Директа мало — проверку изменений отложили до следующего часа.')
+  if (s.goals_skipped?.length) {
+    parts.push(`Метрика не приняла цели ${s.goals_skipped.join(', ')} — похоже, их удалили из счётчика.`)
+  }
   if (s.failed) parts.push(`Не прочитались кампании: ${s.failed} — повторим при следующей загрузке.`)
   if (s.count) parts.push(`Записей: ${num(s.count)}`)
   return parts.filter(Boolean).join(' ')

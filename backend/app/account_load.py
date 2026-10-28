@@ -185,7 +185,7 @@ class _AccountLoad:
     def begin(self, name: str, total: int = 0) -> dict:
         self.current = name
         stage = self.stage(name)
-        stage.update(status="running", started_at=_now_iso(), done=0, total=total, error="")
+        stage.update(status="running", started_at=_now_iso(), done=0, total=total, error="", message="")
         self.report(name, 0, total)
         self.save()
         return stage
@@ -204,11 +204,11 @@ class _AccountLoad:
         self.current = ""
         self.save()
 
-    def fail(self, code: str) -> None:
+    def fail(self, code: str, message: str | None = None) -> None:
         if not self.current:
             return
         stage = self.stage(self.current)
-        stage.update(status="stopped" if code == "stopped" else "error", error=code)
+        stage.update(status="stopped" if code == "stopped" else "error", error=code, message=message or "")
         self.save()
 
     def check_enabled(self) -> None:
@@ -621,7 +621,7 @@ def run_account(user_id: int, account_id: int, progress: Progress) -> dict:
         load.fail("stopped")
         return {"status": "stopped"}
     except YandexError as exc:
-        load.fail(exc.code)
+        load.fail(exc.code, exc.message)
         if exc.code == "disabled":
             return {"status": "stopped"}
         if exc.code == "units":
@@ -700,7 +700,7 @@ def run_counter(user_id: int, counter_row_id: int, progress: Progress) -> dict:
         for index, name in enumerate(plan):
             current = name
             stage = state.setdefault(name, {})
-            stage.update(status="running", started_at=_now_iso(), error="")
+            stage.update(status="running", started_at=_now_iso(), error="", message="")
             save()
             if name == "goals":
                 progress(index, len(plan), f"{title} · Цели")
@@ -718,10 +718,12 @@ def run_counter(user_id: int, counter_row_id: int, progress: Progress) -> dict:
                     count=_int(result.get("days")),
                     date_from=date_from.isoformat(),
                     date_to=date_to.isoformat(),
+                    goals_skipped=result.get("skipped_goals") or [],
                 )
             save()
     except YandexError as exc:
-        state.setdefault(current, {}).update(status="error", error=exc.code)
+        # Ответ API (exc.message) — в этапе: по нему видно, что именно не так, а не только «ошибка Метрики».
+        state.setdefault(current, {}).update(status="error", error=exc.code, message=exc.message or "")
         save()
         raise
     except Exception:
@@ -750,6 +752,8 @@ def _stage_out(state: dict, names: tuple[str, ...]) -> list[dict]:
                 "total": _int(stage.get("total")),
                 "count": _int(stage.get("count")),
                 "error": stage.get("error") or "",
+                "message": stage.get("message") or "",
+                "goals_skipped": stage.get("goals_skipped") or [],
                 "failed": len(stage.get("failed") or []),
                 "skipped": stage.get("skipped") or "",
             }

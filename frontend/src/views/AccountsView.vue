@@ -159,6 +159,7 @@
                   <LoadStages :stages="counterLoad(m).stages" :active="Boolean(counterLoad(m).job)" />
                   <div class="sync-status">
                     <template v-if="counterLoad(m).job">{{ jobText(counterLoad(m).job) }}</template>
+                    <span v-else-if="stageFailure(counterLoad(m))" class="is-warn">{{ failureLine(counterLoad(m)) }}</span>
                     <template v-else-if="counterLoad(m).loaded_at">
                       загружен {{ formatDateTime(counterLoad(m).loaded_at) }}, визиты — каждые 6 часов
                     </template>
@@ -222,6 +223,7 @@
                 <LoadStages :stages="accountLoad(a).stages" :active="Boolean(accountLoad(a).job)" />
                 <div class="sync-status">
                   <template v-if="accountLoad(a).job">{{ jobText(accountLoad(a).job) }}</template>
+                  <span v-else-if="stageFailure(accountLoad(a))" class="is-warn">{{ failureLine(accountLoad(a)) }}</span>
                   <template v-else-if="accountLoad(a).loaded_at">
                     загружен {{ formatDateTime(accountLoad(a).loaded_at) }}, дальше актуализируем каждый час
                   </template>
@@ -305,7 +307,7 @@ import AppShell from '../components/AppShell.vue'
 import LoadStages from '../components/LoadStages.vue'
 import YandexConnectButton from '../components/YandexConnectButton.vue'
 import { errorDetail, errorText, JOB_LABELS, jobProgressText, webApi } from '../api/web'
-import { jobText, refreshLoads, useLoads } from '../composables/useLoads'
+import { jobText, refreshLoads, stageErrorText, stageFailure, useLoads } from '../composables/useLoads'
 import { pushToast } from '../composables/useToasts'
 import { loadWorkspaces } from '../composables/useWorkspaces'
 import { useHead } from '../utils/useHead'
@@ -360,6 +362,12 @@ function accountLoad(a) {
 
 function counterLoad(m) {
   return counterLoads.value.get(m.id) || { ...(m.load || {}), job: null }
+}
+
+/** Почему загрузка встала: этап и ответ API — видно сразу, без наведения на этап. */
+function failureLine(load) {
+  const failure = stageFailure(load)
+  return `${failure.title}: ${stageErrorText(failure)}`
 }
 
 function isSandbox(account) {

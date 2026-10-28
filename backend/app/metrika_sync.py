@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from datetime import date, timedelta
 from decimal import Decimal
 
@@ -14,18 +15,55 @@ from app.yandex import YandexError, get_connection_access_token
 
 log = logging.getLogger("app.metrika_sync")
 
+STAT_URL = "https://api-metrika.yandex.net/stat/v1/data"
+STAT_PAGE = 100000
+DAILY_METRICS = "ym:s:visits,ym:s:users,ym:s:bounceRate,ym:s:anyGoalReaches"
+# Метрика принимает до 20 метрик в запросе; по 10 целей — с запасом.
+GOALS_PER_REQUEST = 10
+# Отчёт с целью, которой в счётчике нет (удалили), Метрика отклоняет целиком:
+# «Incorrectly specified metric, value: ym:s:goal123reaches, error code: 4002».
+_BAD_GOAL_RE = re.compile(r"ym:s:goal(\d+)reaches")
+# Номер кампании в группировке …DirectClickOrder: в id — число, в direct_id — с буквенным префиксом.
+_CAMPAIGN_RE = re.compile(r"(?:[A-Za-z]+-?)?(\d+)")
+
+
+def _error_message(response: httpx.Response) -> str:
+    """Текст ошибки из ответа Метрики — по нему видно, что именно она не приняла; нет текста — код HTTP."""
+    try:
+        data = response.json()
+    except ValueError:
+        data = None
+    if isinstance(data, dict):
+        message = str(data.get("message") or "").strip()
+        if not message:
+            errors = [e for e in data.get("errors") or [] if isinstance(e, dict)]
+            message = "; ".join(str(e.get("message") or "").strip() for e in errors).strip("; ")
+        if message:
+            return message[:300]
+    return f"HTTP {response.status_code}"
+
+
+def _get(url: str, access_token: str, params: dict | None = None, *, timeout: float = 60.0) -> dict:
+    """GET к API Метрики. Ошибка — YandexError("metrika") с текстом Метрики в message."""
+    try:
+        with httpx.Client(timeout=timeout) as client:
+            response = client.get(url, params=params, headers={"Authorization": f"OAuth {access_token}"})
+    except httpx.HTTPError as exc:
+        log.warning("metrika %s: %r", url, exc)
+        raise YandexError("metrika", f"Метрика не ответила ({type(exc).__name__})") from exc
+    if response.status_code >= 400:
+        log.warning("metrika %s %s %s", url, response.status_code, response.text[:300])
+        raise YandexError("metrika", _error_message(response))
+    try:
+        data = response.json()
+    except ValueError as exc:
+        raise YandexError("metrika", "Метрика ответила не JSON") from exc
+    return data if isinstance(data, dict) else {}
+
 
 def fetch_goals(access_token: str, counter_id: int) -> list[dict]:
     url = f"https://api-metrika.yandex.net/management/v1/counter/{counter_id}/goals"
-    try:
-        with httpx.Client(timeout=30.0) as client:
-            response = client.get(url, headers={"Authorization": f"OAuth {access_token}"})
-    except httpx.HTTPError as exc:
-        raise YandexError("metrika") from exc
-    if response.status_code >= 400:
-        log.warning("goals HTTP %s %s", response.status_code, response.text[:300])
-        raise YandexError("metrika")
-    goals = (response.json() or {}).get("goals") or []
+    goals = _get(url, access_token, timeout=30.0).get("goals") or []
     result = []
     for item in goals:
         gid = item.get("id")
@@ -126,42 +164,19 @@ def list_goals(user_id: int, counter_row_id: int | None = None) -> list[dict]:
 
 def fetch_metrika_daily(access_token: str, counter_id: int, day: date) -> dict:
     """Визиты/пользователи/отказы за день."""
-    url = "https://api-metrika.yandex.net/stat/v1/data"
     params = {
         "ids": counter_id,
-        "metrics": "ym:s:visits,ym:s:users,ym:s:bounceRate,ym:s:goalReachesAny",
+        "metrics": DAILY_METRICS,
         "date1": day.isoformat(),
         "date2": day.isoformat(),
         "accuracy": "full",
     }
-    try:
-        with httpx.Client(timeout=60.0) as client:
-            response = client.get(
-                url,
-                params=params,
-                headers={"Authorization": f"OAuth {access_token}"},
-            )
-    except httpx.HTTPError as exc:
-        raise YandexError("metrika") from exc
-    if response.status_code >= 400:
-        log.warning("metrika stat %s %s", response.status_code, response.text[:300])
-        raise YandexError("metrika")
-    data = response.json() or {}
-    totals = data.get("totals") or [0, 0, 0, 0]
-    while len(totals) < 4:
-        totals.append(0)
-
-    def _num(v) -> Decimal:
-        try:
-            return Decimal(str(v or 0))
-        except Exception:
-            return Decimal(0)
-
+    totals = _get(STAT_URL, access_token, params).get("totals") or []
     return {
-        "visits": int(_num(totals[0])),
-        "users_count": int(_num(totals[1])),
-        "bounce_rate": _num(totals[2]),
-        "goal_reaches": int(_num(totals[3])),
+        "visits": int(_metric(totals, 0)),
+        "users_count": int(_metric(totals, 1)),
+        "bounce_rate": _metric(totals, 2),
+        "goal_reaches": int(_metric(totals, 3)),
     }
 
 
@@ -172,7 +187,6 @@ def fetch_metrika_goal_by_campaign(
     day: date,
 ) -> list[dict]:
     """Достижения цели в разрезе кампаний Директа (если Метрика их отдаёт)."""
-    url = "https://api-metrika.yandex.net/stat/v1/data"
     params = {
         "ids": counter_id,
         "metrics": f"ym:s:goal{goal_id}reaches",
@@ -182,42 +196,17 @@ def fetch_metrika_goal_by_campaign(
         "accuracy": "full",
         "limit": 10000,
     }
-    try:
-        with httpx.Client(timeout=60.0) as client:
-            response = client.get(
-                url,
-                params=params,
-                headers={"Authorization": f"OAuth {access_token}"},
-            )
-    except httpx.HTTPError as exc:
-        raise YandexError("metrika") from exc
-    if response.status_code >= 400:
-        log.warning("metrika goal-by-campaign %s %s", response.status_code, response.text[:300])
-        raise YandexError("metrika")
-    data = response.json() or {}
     rows = []
-    for item in data.get("data") or []:
+    for item in _get(STAT_URL, access_token, params).get("data") or []:
         dims = item.get("dimensions") or []
-        metrics = item.get("metrics") or [0]
-        if not dims:
+        campaign_id = _dim_campaign(dims[0]) if dims else None
+        if campaign_id is None:
             continue
-        raw_id = dims[0].get("name") if isinstance(dims[0], dict) else dims[0]
-        try:
-            campaign_id = int(str(raw_id).strip())
-        except (TypeError, ValueError):
-            continue
-        if campaign_id <= 0:
-            continue
-        try:
-            reaches = int(Decimal(str(metrics[0] or 0)))
-        except Exception:
-            reaches = 0
-        rows.append({"campaign_id": campaign_id, "goal_reaches": reaches})
+        rows.append({"campaign_id": campaign_id, "goal_reaches": int(_metric(item.get("metrics") or [], 0))})
     return rows
 
 
 def fetch_metrika_goal_total(access_token: str, counter_id: int, goal_id: int, day: date) -> int:
-    url = "https://api-metrika.yandex.net/stat/v1/data"
     params = {
         "ids": counter_id,
         "metrics": f"ym:s:goal{goal_id}reaches",
@@ -225,51 +214,41 @@ def fetch_metrika_goal_total(access_token: str, counter_id: int, goal_id: int, d
         "date2": day.isoformat(),
         "accuracy": "full",
     }
-    try:
-        with httpx.Client(timeout=60.0) as client:
-            response = client.get(
-                url,
-                params=params,
-                headers={"Authorization": f"OAuth {access_token}"},
-            )
-    except httpx.HTTPError as exc:
-        raise YandexError("metrika") from exc
-    if response.status_code >= 400:
-        log.warning("metrika goal-total %s %s", response.status_code, response.text[:300])
-        raise YandexError("metrika")
-    totals = (response.json() or {}).get("totals") or [0]
-    try:
-        return int(Decimal(str(totals[0] or 0)))
-    except Exception:
-        return 0
+    return int(_metric(_get(STAT_URL, access_token, params).get("totals") or [], 0))
 
 
 def _goals_to_sync(user_id: int, counter_row_id: int) -> list[dict]:
     """Основная цель пространства, цели из правил пользователя + до 20 целей счётчика."""
     with pool.connection() as conn:
+        # Цели пишутся одной транзакцией — у всех, что есть в счётчике сейчас, один synced_at.
+        # Цели со старым synced_at из Метрики удалены: отчёт с ними она отклоняет целиком.
+        latest = conn.execute(
+            "SELECT MAX(synced_at) AS at FROM metrika_goals WHERE counter_row_id = %s",
+            (counter_row_id,),
+        ).fetchone()["at"]
         from_rules = conn.execute(
             """
             SELECT g.id, g.goal_id, g.counter_row_id
             FROM metrika_goals g
             JOIN workspaces w ON w.counter_row_id = g.counter_row_id AND w.goal_id = g.goal_id
-            WHERE w.user_id = %s AND g.counter_row_id = %s
+            WHERE w.user_id = %s AND g.counter_row_id = %s AND g.synced_at = %s
             UNION
             SELECT g.id, g.goal_id, g.counter_row_id
             FROM automation_rules r
             JOIN metrika_goals g ON g.id = r.goal_row_id
-            WHERE r.user_id = %s AND g.counter_row_id = %s AND r.goal_row_id IS NOT NULL
+            WHERE r.user_id = %s AND g.counter_row_id = %s AND r.goal_row_id IS NOT NULL AND g.synced_at = %s
             """,
-            (user_id, counter_row_id, user_id, counter_row_id),
+            (user_id, counter_row_id, latest, user_id, counter_row_id, latest),
         ).fetchall()
         all_goals = conn.execute(
             """
             SELECT id, goal_id, counter_row_id
             FROM metrika_goals
-            WHERE user_id = %s AND counter_row_id = %s
+            WHERE user_id = %s AND counter_row_id = %s AND synced_at = %s
             ORDER BY id ASC
             LIMIT 20
             """,
-            (user_id, counter_row_id),
+            (user_id, counter_row_id, latest),
         ).fetchall()
     seen = {int(r["id"]) for r in from_rules}
     merged = list(from_rules)
@@ -409,13 +388,6 @@ def sync_metrika_stats_for_user(user_id: int, day: date | None = None) -> dict:
     }
 
 
-STAT_URL = "https://api-metrika.yandex.net/stat/v1/data"
-STAT_PAGE = 100000
-DAILY_METRICS = "ym:s:visits,ym:s:users,ym:s:bounceRate,ym:s:goalReachesAny"
-# Метрика принимает до 20 метрик в запросе; по 10 целей — с запасом.
-GOALS_PER_REQUEST = 10
-
-
 def _stat_rows(access_token: str, counter_id: int, *, metrics: str, dimensions: str, date1: date, date2: date) -> list[dict]:
     """Все строки отчёта Метрики за период, постранично."""
     out: list[dict] = []
@@ -431,15 +403,7 @@ def _stat_rows(access_token: str, counter_id: int, *, metrics: str, dimensions: 
             "limit": STAT_PAGE,
             "offset": offset,
         }
-        try:
-            with httpx.Client(timeout=120.0) as client:
-                response = client.get(STAT_URL, params=params, headers={"Authorization": f"OAuth {access_token}"})
-        except httpx.HTTPError as exc:
-            raise YandexError("metrika") from exc
-        if response.status_code >= 400:
-            log.warning("metrika stat range %s %s", response.status_code, response.text[:300])
-            raise YandexError("metrika")
-        data = response.json() or {}
+        data = _get(STAT_URL, access_token, params, timeout=120.0)
         rows = data.get("data") or []
         out.extend(rows)
         offset += len(rows)
@@ -459,11 +423,15 @@ def _dim_day(dim) -> date | None:
 
 
 def _dim_campaign(dim) -> int | None:
-    try:
-        campaign_id = int(str(_dim_value(dim)).strip())
-    except (TypeError, ValueError):
-        return None
-    return campaign_id if campaign_id > 0 else None
+    """Номер кампании Директа из {"id": номер, "name": название, "direct_id": номер с префиксом}.
+    У визитов не из Директа поля пустые — такие строки пропускаем."""
+    if not isinstance(dim, dict):
+        dim = {"id": dim}
+    for value in (dim.get("id"), dim.get("direct_id")):
+        match = _CAMPAIGN_RE.fullmatch(str(value).strip()) if value is not None else None
+        if match and int(match.group(1)) > 0:
+            return int(match.group(1))
+    return None
 
 
 def _metric(values: list, index: int) -> Decimal:
@@ -515,6 +483,37 @@ def parse_goal_rows(rows: list[dict], goal_ids: list[int]) -> dict[tuple, int]:
     return out
 
 
+def _rejected_goal(exc: YandexError, goal_ids: list[int]) -> int | None:
+    match = _BAD_GOAL_RE.search(exc.message or "")
+    goal_id = int(match.group(1)) if match else None
+    return goal_id if goal_id in goal_ids else None
+
+
+def goal_report(
+    token: str, counter_id: int, goal_ids: list[int], skipped: set[int], *, dimensions: str, date1: date, date2: date
+) -> dict[tuple, int]:
+    """Достижения целей пачками по GOALS_PER_REQUEST (разбор — parse_goal_rows). Цель, которую Метрика
+    не принимает, кладём в skipped и повторяем пачку без неё: из-за одной цели не теряем остальные."""
+    out: dict[tuple, int] = {}
+    for start in range(0, len(goal_ids), GOALS_PER_REQUEST):
+        chunk = [goal_id for goal_id in goal_ids[start : start + GOALS_PER_REQUEST] if goal_id not in skipped]
+        while chunk:
+            metrics = ",".join(f"ym:s:goal{goal_id}reaches" for goal_id in chunk)
+            try:
+                rows = _stat_rows(token, counter_id, metrics=metrics, dimensions=dimensions, date1=date1, date2=date2)
+            except YandexError as exc:
+                rejected = _rejected_goal(exc, chunk)
+                if rejected is None:
+                    raise
+                log.warning("metrika %s: цель %s не принята, пропускаем: %s", counter_id, rejected, exc.message)
+                skipped.add(rejected)
+                chunk.remove(rejected)
+                continue
+            out.update(parse_goal_rows(rows, chunk))
+            break
+    return out
+
+
 def sync_counter_stats_range(user_id: int, counter_row_id: int, date_from: date, date_to: date) -> dict:
     """Визиты и цели счётчика за период — запросами за весь период, а не по дню."""
     with pool.connection() as conn:
@@ -530,30 +529,18 @@ def sync_counter_stats_range(user_id: int, counter_row_id: int, date_from: date,
         _stat_rows(token, counter_id, metrics=DAILY_METRICS, dimensions="ym:s:date", date1=date_from, date2=date_to)
     )
     goal_ids = [int(g["goal_id"]) for g in _goals_to_sync(user_id, counter_row_id)]
-    totals: dict[tuple, int] = {}
-    by_campaign: dict[tuple, int] = {}
-    for start in range(0, len(goal_ids), GOALS_PER_REQUEST):
-        chunk = goal_ids[start : start + GOALS_PER_REQUEST]
-        metrics = ",".join(f"ym:s:goal{goal_id}reaches" for goal_id in chunk)
-        totals.update(
-            parse_goal_rows(
-                _stat_rows(token, counter_id, metrics=metrics, dimensions="ym:s:date", date1=date_from, date2=date_to),
-                chunk,
-            )
-        )
-        by_campaign.update(
-            parse_goal_rows(
-                _stat_rows(
-                    token,
-                    counter_id,
-                    metrics=metrics,
-                    dimensions="ym:s:date,ym:s:lastSignDirectClickOrder",
-                    date1=date_from,
-                    date2=date_to,
-                ),
-                chunk,
-            )
-        )
+    skipped: set[int] = set()
+    totals = goal_report(token, counter_id, goal_ids, skipped, dimensions="ym:s:date", date1=date_from, date2=date_to)
+    by_campaign = goal_report(
+        token,
+        counter_id,
+        goal_ids,
+        skipped,
+        dimensions="ym:s:date,ym:s:lastSignDirectClickOrder",
+        date1=date_from,
+        date2=date_to,
+    )
+    goal_ids = [goal_id for goal_id in goal_ids if goal_id not in skipped]
     days = [date_from + timedelta(days=n) for n in range((date_to - date_from).days + 1)]
     empty = {"visits": 0, "users_count": 0, "bounce_rate": Decimal(0), "goal_reaches": 0}
     with pool.connection() as conn:
@@ -608,4 +595,4 @@ def sync_counter_stats_range(user_id: int, counter_row_id: int, date_from: date,
                 """,
                 goal_rows,
             )
-    return {"days": len(days), "goals": len(goal_ids)}
+    return {"days": len(days), "goals": len(goal_ids), "skipped_goals": sorted(skipped)}

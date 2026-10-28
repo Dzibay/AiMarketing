@@ -6,7 +6,7 @@ from datetime import date, datetime, timedelta, timezone
 import httpx
 import pytest
 
-from app import account_load, direct_api, direct_reports
+from app import account_load, direct_api, direct_reports, metrika_sync
 from app.account_load import (
     HISTORY_DAYS,
     REFRESH_STATS_DAYS,
@@ -269,14 +269,98 @@ def test_metrika_daily_and_goal_rows():
     by_day = parse_goal_rows([{"dimensions": [{"name": "2026-10-25"}], "metrics": [3, 0]}], [10, 20])
     assert by_day == {(date(2026, 10, 25), 10): 3, (date(2026, 10, 25), 20): 0}
 
+    # Кампания Директа в группировке: номер в id и direct_id, в name — название.
     by_campaign = parse_goal_rows(
         [
-            {"dimensions": [{"name": "2026-10-25"}, {"name": "555"}], "metrics": [2, 0]},
-            {"dimensions": [{"name": "2026-10-25"}, {"name": "не кампания"}], "metrics": [9, 9]},
+            {"dimensions": [{"name": "2026-10-25"}, {"id": "555", "name": "Бренд 2026", "direct_id": "N-555"}],
+             "metrics": [2, 0]},
+            {"dimensions": [{"name": "2026-10-25"}, {"id": None, "name": "Поиск", "direct_id": "N-777"}],
+             "metrics": [1, 4]},
+            {"dimensions": [{"name": "2026-10-25"}, {"id": None, "name": None, "direct_id": None}], "metrics": [9, 9]},
         ],
         [10, 20],
     )
-    assert by_campaign == {(date(2026, 10, 25), 10, 555): 2}
+    assert by_campaign == {
+        (date(2026, 10, 25), 10, 555): 2,
+        (date(2026, 10, 25), 10, 777): 1,
+        (date(2026, 10, 25), 20, 777): 4,
+    }
+
+
+def test_daily_metrics_are_known_to_metrika():
+    # «ym:s:goalReachesAny» Метрика отклоняла (400, код 4002) — статистика счётчиков не загружалась вовсе.
+    assert metrika_sync.DAILY_METRICS.split(",") == [
+        "ym:s:visits", "ym:s:users", "ym:s:bounceRate", "ym:s:anyGoalReaches",
+    ]
+
+
+def test_metrika_error_keeps_api_message(respond):
+    message = "Incorrectly specified metric, value: ym:s:goal5reaches, error code: 4002"
+    respond(lambda request: httpx.Response(
+        400, json={"errors": [{"error_type": "invalid_parameter", "message": message}], "code": 400, "message": message}
+    ))
+    with pytest.raises(YandexError) as err:
+        metrika_sync._get(metrika_sync.STAT_URL, "token", {"ids": 1})
+    assert (err.value.code, err.value.message) == ("metrika", message)
+
+    respond(lambda request: httpx.Response(403, json={"errors": [{"message": "Access is denied"}]}))
+    with pytest.raises(YandexError) as err:
+        metrika_sync._get(metrika_sync.STAT_URL, "token")
+    assert err.value.message == "Access is denied"
+
+    respond(lambda request: httpx.Response(502, text="<html>Bad Gateway</html>"))
+    with pytest.raises(YandexError) as err:
+        metrika_sync._get(metrika_sync.STAT_URL, "token")
+    assert err.value.message == "HTTP 502"
+
+
+def _goal_report_reply(deleted: set[int]):
+    """Отчёт Метрики по целям: цель из deleted — ошибка 4002 на весь отчёт, иначе достижений столько, каков номер цели."""
+
+    def handler(request):
+        goals = [int(m.removeprefix("ym:s:goal").removesuffix("reaches")) for m in request.url.params["metrics"].split(",")]
+        bad = [goal_id for goal_id in goals if goal_id in deleted]
+        if bad:
+            message = f"Incorrectly specified metric, value: ym:s:goal{bad[0]}reaches, error code: 4002"
+            return httpx.Response(400, json={"code": 400, "message": message})
+        return httpx.Response(200, json={"data": [{"dimensions": [{"name": "2026-10-25"}], "metrics": goals}], "total_rows": 1})
+
+    return handler
+
+
+def test_goal_report_skips_goal_deleted_in_metrika(respond):
+    requests = respond(_goal_report_reply({20}))
+    day = date(2026, 10, 25)
+    skipped: set[int] = set()
+    out = metrika_sync.goal_report("token", 1, [10, 20, 30], skipped, dimensions="ym:s:date", date1=day, date2=day)
+    assert skipped == {20}
+    assert out == {(day, 10): 10, (day, 30): 30}
+    assert [r.url.params["metrics"] for r in requests] == [
+        "ym:s:goal10reaches,ym:s:goal20reaches,ym:s:goal30reaches",
+        "ym:s:goal10reaches,ym:s:goal30reaches",
+    ]
+
+    # Следующий отчёт (по кампаниям) уже не спрашивает отклонённую цель.
+    requests.clear()
+    metrika_sync.goal_report("token", 1, [10, 20, 30], skipped, dimensions="ym:s:date", date1=day, date2=day)
+    assert [r.url.params["metrics"] for r in requests] == ["ym:s:goal10reaches,ym:s:goal30reaches"]
+
+
+def test_goal_report_raises_other_metrika_errors(respond):
+    day = date(2026, 10, 25)
+    respond(lambda request: httpx.Response(403, json={"code": 403, "message": "Access is denied"}))
+    with pytest.raises(YandexError) as err:
+        metrika_sync.goal_report("token", 1, [10], set(), dimensions="ym:s:date", date1=day, date2=day)
+    assert err.value.message == "Access is denied"
+
+    # Ошибка про цель не из этого запроса — не повод выкидывать цели запроса.
+    respond(lambda request: httpx.Response(
+        400, json={"message": "Incorrectly specified metric, value: ym:s:goal99reaches, error code: 4002"}
+    ))
+    skipped: set[int] = set()
+    with pytest.raises(YandexError):
+        metrika_sync.goal_report("token", 1, [10], skipped, dimensions="ym:s:date", date1=day, date2=day)
+    assert skipped == set()
 
 
 # --- обзор для интерфейса ---
@@ -302,9 +386,23 @@ def test_account_load_out_lists_every_stage():
     assert campaigns["status"] == "ok" and campaigns["count"] == 12
     assert structure == {
         "key": "structure", "title": account_load.STAGE_TITLES["structure"], "status": "error", "at": None,
-        "done": 4, "total": 12, "count": 0, "error": "units", "failed": 2, "skipped": "",
+        "done": 4, "total": 12, "count": 0, "error": "units", "message": "", "goals_skipped": [], "failed": 2,
+        "skipped": "",
     }
     assert stats["status"] == "pending" and queries["status"] == "pending"
     assert out["units"] == {"left": 120, "limit": 20000, "at": at.isoformat()}
 
     assert account_load_out({"loaded_at": at, "load_state": None})["units"] is None
+
+
+def test_stage_error_keeps_api_message_until_restart(monkeypatch):
+    load, _ = _loader(monkeypatch)
+    load.begin("structure", 3)
+    load.fail("direct-denied", "Нет прав на кампании клиента")
+    structure = account_load_out({"loaded_at": None, "load_state": load.state})["stages"][1]
+    assert (structure["status"], structure["error"], structure["message"]) == (
+        "error", "direct-denied", "Нет прав на кампании клиента",
+    )
+
+    load.begin("structure", 3)
+    assert (load.state["structure"]["error"], load.state["structure"]["message"]) == ("", "")

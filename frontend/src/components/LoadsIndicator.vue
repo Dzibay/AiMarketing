@@ -38,7 +38,7 @@
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { RouterLink } from 'vue-router'
 import { errorDetail } from '../api/web'
-import { jobPercent, jobText, stageProblem, useLoads } from '../composables/useLoads'
+import { jobPercent, jobText, stageErrorText, stageProblem, useLoads } from '../composables/useLoads'
 import { plural, timeAgo } from '../utils/format'
 
 const MAX_ITEMS = 8
@@ -101,7 +101,7 @@ function statusLine(item) {
   const problem = stageProblem(item)
   if (problem) {
     if (problem.error === 'units' || problem.skipped === 'units') return `${problem.title}: ждём баллы API Директа`
-    return `${problem.title}: ${errorDetail(problem.error)}`
+    return `${problem.title}: ${stageErrorText(problem)}`
   }
   if (!item.loaded_at) return 'ещё не загружен — начнём в ближайший час'
   return `обновлено ${timeAgo(lastAt(item))}`

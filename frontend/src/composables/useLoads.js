@@ -1,5 +1,5 @@
 import { computed, ref } from 'vue'
-import { webApi } from '../api/web'
+import { errorDetail, webApi } from '../api/web'
 
 /**
  * Загрузка данных кабинетов Директа и счётчиков Метрики: один опрос /api/web/loads на всё приложение —
@@ -57,6 +57,17 @@ export function jobText(job) {
 /** Первый этап с ошибкой или пропуском (кончились баллы) — для подсветки. */
 export function stageProblem(item) {
   return (item.stages || []).find((s) => s.status === 'error' || s.skipped) || null
+}
+
+/** Этап, на ошибке которого загрузка встала (не баллы — те восстановятся сами): ждёт повтора по расписанию. */
+export function stageFailure(item) {
+  return (item.stages || []).find((s) => s.status === 'error' && s.error !== 'units') || null
+}
+
+/** Текст ошибки этапа: наш текст по коду и ответ API, если он есть, — в нём точная причина. */
+export function stageErrorText(stage) {
+  const text = errorDetail(stage.error)
+  return stage.message ? `${text.replace(/\.$/, '')}: ${stage.message}` : text
 }
 
 /** Ключи «кто грузится» — чтобы понять, что какая-то загрузка завершилась. */

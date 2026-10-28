@@ -48,14 +48,18 @@
         Пространство в архиве. Вернуть его можно в <RouterLink :to="`/w/${ws.id}/settings`">настройках</RouterLink>.
       </p>
 
-      <div v-if="pendingItems.length" class="notice ws-loading" role="status">
+      <div v-if="pendingItems.length" class="notice ws-loading" :class="{ 'notice--warn': loadStalled }" role="status">
         <div class="ws-loading__head">
           <span v-if="pendingItems.some((i) => i.job)" class="spinner" aria-hidden="true"></span>
-          <strong>Данные ещё загружаются</strong>
+          <strong>{{ loadStalled ? 'Загрузка остановилась на ошибке' : 'Данные ещё загружаются' }}</strong>
           <span v-if="loadPercent != null" class="ws-loading__pct">{{ loadPercent }}%</span>
         </div>
         <div class="load-bar"><span :style="{ width: `${loadPercent || 0}%` }"></span></div>
-        <p>
+        <p v-if="loadStalled">
+          Часть данных не загрузилась, поэтому кампании и цифры неполные. Загрузку повторим автоматически в течение часа,
+          запустить сразу можно кнопкой «Обновить» в <RouterLink to="/cabinet/accounts">Аккаунтах</RouterLink>.
+        </p>
+        <p v-else>
           Пока загрузка не закончится, кампании и цифры неполные — разделы обновятся сами. Подробнее — в
           <RouterLink to="/cabinet/accounts">Аккаунтах</RouterLink>.
         </p>
@@ -88,8 +92,8 @@
 import { computed, onBeforeUnmount, provide, ref, watch } from 'vue'
 import { RouterLink, RouterView, useRoute } from 'vue-router'
 import AppShell from '../../components/AppShell.vue'
-import { errorDetail, errorText, wsApi } from '../../api/web'
-import { jobPercent, jobText, stageProblem } from '../../composables/useLoads'
+import { errorText, wsApi } from '../../api/web'
+import { jobPercent, jobText, stageErrorText, stageFailure, stageProblem } from '../../composables/useLoads'
 import { patchWorkspaceInList, rememberWorkspace } from '../../composables/useWorkspaces'
 import { useHead } from '../../utils/useHead'
 import { plural, rubles } from '../../utils/format'
@@ -181,6 +185,10 @@ const loadItems = computed(() => {
 const pendingItems = computed(() => loadItems.value.filter((i) => !i.loaded_at))
 /** Всё загружено, идёт плановая актуализация — только тихая отметка в шапке. */
 const refreshing = computed(() => !pendingItems.value.length && loadItems.value.some((i) => i.job))
+/** Ничего не грузится, а незагруженное упало с ошибкой — не «ещё загружаются», а ждёт повтора. */
+const loadStalled = computed(
+  () => !pendingItems.value.some((i) => i.job) && pendingItems.value.some((i) => stageFailure(i)),
+)
 
 function stagesDone(item) {
   return (item.stages || []).filter((s) => s.status === 'ok').length
@@ -204,7 +212,7 @@ function loadLine(item) {
   if (problem?.error === 'units' || problem?.skipped === 'units') {
     return 'закончились баллы API Директа — продолжим автоматически'
   }
-  if (problem) return `${problem.title}: ${errorDetail(problem.error)}`
+  if (problem) return `${problem.title}: ${stageErrorText(problem)}`
   return 'в очереди на загрузку'
 }
 

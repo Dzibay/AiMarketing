@@ -653,6 +653,10 @@ input {
   color: var(--ok);
 }
 
+.sync-status .is-warn {
+  color: var(--warn);
+}
+
 .cabinet {
   padding: 2.5rem 0 4rem;
 }
