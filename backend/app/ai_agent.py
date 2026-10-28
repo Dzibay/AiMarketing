@@ -336,6 +336,7 @@ def _t_summary(ctx: Context, args: dict) -> dict:
 
     out = workspace_summary(ctx.user_id, ctx.ws_id)
     out.pop("recent_actions", None)
+    out["week"].pop("prev_by_day", None)
     return out
 
 
@@ -343,6 +344,7 @@ def _t_analytics(ctx: Context, args: dict) -> dict:
     from app.analytics import workspace_analytics
 
     out = workspace_analytics(ctx.user_id, ctx.ws_id, **_range_args(args), with_tops=False)
+    out.pop("prev_by_day", None)
     if not args.get("include_days"):
         out.pop("by_day", None)
     return out
@@ -385,7 +387,9 @@ def _t_campaign(ctx: Context, args: dict) -> dict:
         "campaign": get_campaign(ctx.user_id, cid),
         "adgroups": list_adgroups(ctx.user_id, cid)[:100],
         "ads": [
-            {k: a.get(k) for k in ("id", "adgroup_row_id", "type", "state", "status", "title", "title2", "text", "href")}
+            {k: a.get(k) for k in (
+                "id", "adgroup_row_id", "type", "state", "status", "title", "title2", "text", "titles", "texts", "href",
+            )}
             for a in ads[:100]
         ],
         "keywords_total": len(keywords),
@@ -428,6 +432,7 @@ def _t_queries(ctx: Context, args: dict) -> dict:
         min_clicks=args.get("min_clicks"),
         min_cost_rub=args.get("min_cost_rub"),
         no_conversions=bool(args.get("no_conversions")),
+        with_conversions=bool(args.get("with_conversions")),
     )
     if not out["total"] and not out["synced_at"]:
         out["hint"] = "Запросы ещё не загружены — вызови refresh_search_queries"
@@ -513,6 +518,54 @@ def _t_regions(ctx: Context, args: dict) -> dict:
     return geo.search_regions(ctx.user_id, str(args.get("query") or ""))
 
 
+WORDSTAT_MAX_PHRASES = 5
+WORDSTAT_LIMIT, WORDSTAT_LIMIT_MAX = 20, 100
+
+
+def _t_wordstat(ctx: Context, args: dict) -> dict:
+    from app import wordstat
+
+    raw = args.get("phrases")
+    if isinstance(raw, str):
+        raw = [raw]
+    phrases = list(dict.fromkeys(" ".join(str(p).split()) for p in raw or [] if str(p).strip()))
+    if not phrases:
+        raise YandexError("args", "Укажите phrases — исходные фразы для Вордстата")
+    # Квота Вордстата — 100 запросов в час на каталог, один запрос на фразу.
+    if len(phrases) > WORDSTAT_MAX_PHRASES:
+        raise YandexError("args", f"Не больше {WORDSTAT_MAX_PHRASES} фраз за вызов: квота Вордстата — 100 запросов в час")
+    try:
+        regions = [int(r) for r in args.get("region_ids") or []]
+    except (TypeError, ValueError) as exc:
+        raise YandexError("args", "region_ids: id регионов должны быть числами") from exc
+    note = "Вордстат считает только регионы, откуда искали: исключения (минус) пропущены." if any(r < 0 for r in regions) else ""
+    regions = [r for r in dict.fromkeys(regions) if r > 0]
+    device = str(args.get("device") or "all")
+    try:
+        limit = max(1, min(int(args.get("limit") or WORDSTAT_LIMIT), WORDSTAT_LIMIT_MAX))
+    except (TypeError, ValueError):
+        limit = WORDSTAT_LIMIT
+    api_key, folder_id = wordstat.credentials(ctx.user_id)
+    items, errors = [], []
+    for phrase in phrases:
+        try:
+            found = wordstat.top_requests(api_key, folder_id, phrase, regions=regions, device=device, num_phrases=limit)
+        except YandexError as exc:
+            # Доступ и квота одинаковы для всех фраз — дальше спрашивать бессмысленно.
+            if exc.code != "args":
+                raise
+            errors.append({"phrase": phrase, "error": exc.message or exc.code})
+            continue
+        found["associations"] = found["associations"][:limit]
+        items.append(found)
+    out: dict = {"period": "последние 30 дней", "regions": regions or "все", "device": device, "items": items}
+    if errors:
+        out["errors"] = errors
+    if note:
+        out["note"] = note
+    return out
+
+
 def _t_experiments(ctx: Context, args: dict) -> dict:
     items = experiments.experiments_overview(ctx.user_id, ctx.ws_id)["items"]
     full = None
@@ -539,6 +592,7 @@ READ_TOOLS = {
     "get_campaign_history": _t_history,
     "remember_fact": _t_remember,
     "find_regions": _t_regions,
+    "get_wordstat": _t_wordstat,
     "get_experiments": _t_experiments,
 }
 
@@ -961,6 +1015,99 @@ def _x_start_experiment(ctx: Context, args: dict) -> dict:
     }
 
 
+def _variants_args(ctx: Context, args: dict) -> tuple[dict, list[dict], dict | None]:
+    """Кампания-источник, варианты и эксперимент (None — без него) для create_campaign_variants."""
+    from app import variants
+
+    row = ctx.campaign(_int(args, "campaign_row_id"))
+    items = variants.normalize_variants(args.get("variants"), row["name"])
+    exp = None
+    raw = args.get("experiment")
+    if raw not in (None, "", {}):
+        if not isinstance(raw, dict):
+            raise YandexError("args", "experiment — объект {title, hypothesis, weekly_budget_rub, days, criterion}")
+        # Тестовых кампаний ещё нет: id источника — заглушка для проверки, настоящие id встанут после копий.
+        exp = experiments.normalize_definition(
+            {**raw, "kind": raw.get("kind") or "variants", "campaign_row_ids": [row["id"]], "source_campaign_row_id": row["id"]}
+        )
+        for v in items:
+            if v.get("weekly_budget_rub", 0) > exp["weekly_budget_rub"]:
+                raise YandexError(
+                    "args",
+                    f"Вариант {v['n']}: бюджет {_money(v['weekly_budget_rub'])}/нед. больше лимита эксперимента "
+                    f"{_money(exp['weekly_budget_rub'])}/нед.",
+                )
+    variants.check_source(ctx.user_id, row, items)
+    return row, items, exp
+
+
+def _p_create_variants(ctx: Context, args: dict) -> Plan:
+    row, items, exp = _variants_args(ctx, args)
+    names = ", ".join(f"«{v['name']}»" for v in items)
+    steps = [f"{_count(len(items), 'вариант', 'варианта', 'вариантов')} «{row['name']}»: {names}"]
+    steps.append("на модерацию" if _bool(args, "moderate", True) else "черновиками")
+    if exp:
+        steps.append(
+            f"эксперимент «{exp['title']}», лимит {_money(exp['weekly_budget_rub'])}/нед. на вариант, "
+            f"{_count(exp['days'], 'день', 'дня', 'дней')}, успех — {experiments.criterion_text(exp)}"
+        )
+    summary = "Варианты кампании: " + " → ".join(steps) + "; оригинал работает"
+    categories = ["campaigns"]
+    if any("ads" in v for v in items):
+        categories.append("ads")
+    if any("keywords" in v for v in items):
+        categories.append("keywords")
+    if exp or any("weekly_budget_rub" in v for v in items):
+        # Новые кампании с расходом — всегда на согласование, кроме полного доступа.
+        return Plan(summary, [*categories, "budget"], math.inf)
+    return Plan(summary, categories)
+
+
+def _x_create_variants(ctx: Context, args: dict) -> dict:
+    """Варианты по очереди → лимиты → эксперимент по собранным целиком вариантам. Оригинал не трогаем."""
+    from app import variants
+
+    row, items, exp = _variants_args(ctx, args)
+    action = getattr(ctx, "action", None) or {}
+    chat_id = action.get("chat_id")
+    made = variants.create_variants(
+        ctx.user_id,
+        row["id"],
+        items,
+        workspace_id=ctx.ws_id,
+        moderate=_bool(args, "moderate", True),
+        tick=(lambda: _touch(chat_id)) if chat_id else None,
+    )
+    out: dict = {"source": {"campaign_row_id": row["id"], "name": row["name"]}, "variants": made}
+    ready = [v for v in made if v.get("ready")]
+    if exp is None:
+        return out
+    if not ready:
+        out["experiment"] = {"status": "skipped", "note": "Ни один вариант не собран целиком — эксперимент не начат"}
+        return out
+    rows = [{"id": v["campaign_row_id"], "name": v["name"]} for v in ready]
+    try:
+        limits = experiments.apply_limits(ctx.user_id, rows, exp["weekly_budget_rub"])
+    except YandexError as exc:
+        out["experiment"] = {"status": "error", "error": exc.message or exc.code}
+        return out
+    d = {**exp, "campaign_row_ids": [r["id"] for r in rows]}
+    created = experiments.create_experiment(ctx.user_id, ctx.ws_id, d, chat_id=chat_id, action_id=action.get("id"))
+    started = created["started_on"]
+    out["experiment"] = {
+        "id": created["id"],
+        "title": created["title"],
+        "campaigns": len(rows),
+        "started_on": _iso(started),
+        "ends_on": _iso(started + timedelta(days=int(created["days"]) - 1)),
+        "limits": limits,
+        "note": _EXPERIMENT_NOTE,
+    }
+    if len(ready) < len(made):
+        out["experiment"]["note"] += " Варианты с ошибками в эксперимент не вошли."
+    return out
+
+
 def _finish_args(ctx: Context, args: dict) -> tuple[dict, str, str, bool]:
     exp = experiments.get_experiment(ctx.user_id, _int(args, "experiment_id"), workspace_id=ctx.ws_id)
     if exp["status"] != "running":
@@ -1195,6 +1342,7 @@ WRITE_TOOLS = {
     "restart_campaign_copy": (_p_restart, _x_restart),
     "copy_campaign_geo": (_p_copy_geo, _x_copy_geo),
     "start_experiment": (_p_start_experiment, _x_start_experiment),
+    "create_campaign_variants": (_p_create_variants, _x_create_variants),
     "finish_experiment": (_p_finish_experiment, _x_finish_experiment),
     "create_adgroup": (_p_create_adgroup, _x_create_adgroup),
     "keywords_action": (_p_keywords_action, _x_keywords_action),
@@ -1710,6 +1858,84 @@ def _d_start_experiment(ctx: Context, args: dict) -> list[dict]:
     return out
 
 
+def _variant_texts(spec: dict) -> str:
+    where = "во всех объявлениях копии" if spec["mode"] == "replace" else "новое объявление в каждой группе"
+    parts = []
+    if spec["titles"]:
+        parts.append("заголовки: " + " | ".join(spec["titles"]))
+    if spec["texts"]:
+        parts.append("тексты: " + " | ".join(spec["texts"]))
+    return f"{where} — " + "; ".join(parts)
+
+
+def _variant_phrases(spec: dict) -> str:
+    phrases = spec["phrases"]
+    head = ", ".join(phrases[:5]) + (f" и ещё {len(phrases) - 5}" if len(phrases) > 5 else "")
+    if spec["mode"] == "replace":
+        return f"только {_count(len(phrases), 'фраза', 'фразы', 'фраз')}: {head}"
+    return f"+{_count(len(phrases), 'фраза', 'фразы', 'фраз')}: {head}"
+
+
+def _d_create_variants(ctx: Context, args: dict) -> list[dict]:
+    from app import geo, variants
+    from app.actions import SCHEDULE_PRESETS
+
+    row, items, exp = _variants_args(ctx, args)
+    names = _goal_names(ctx)
+    with_regions = any("region_ids" in v for v in items)
+    regions = geo.load_regions(ctx.user_id) if with_regions else {}
+    source_regions = geo.campaign_regions(ctx.user_id, row["id"]) if with_regions else []
+    cur = (
+        _current_settings(ctx, row["id"])
+        if any(k in v for v in items for k in ("schedule", "priority_goals", "weekly_budget_rub"))
+        else {}
+    )
+    state = "на модерацию" if _bool(args, "moderate", True) else "черновиками"
+    out = [_ch("Новые кампании", "нет", f"{_count(len(items), 'копия', 'копии', 'копий')} «{row['name']}» — {state}")]
+    for v in items:
+        before, after = [], []
+        if "region_ids" in v:
+            before.append("регионы: " + geo.region_label(source_regions, regions))
+            after.append("регионы: " + geo.region_label(v["region_ids"], regions))
+        if "schedule" in v:
+            before.append("показы: " + _schedule_text(cur.get("schedule")))
+            after.append("показы: " + SCHEDULE_PRESETS[v["schedule"]])
+        if "priority_goals" in v:
+            before.append("ценность целей: " + _goals_text(cur.get("priority_goals") or [], names))
+            merged = variants.merge_goals(cur.get("priority_goals") or [], v["priority_goals"])
+            after.append("ценность целей: " + _goals_text(merged, names))
+        if "weekly_budget_rub" in v:
+            try:
+                plan = experiments.limit_plan({**cur, "name": row["name"]}, v["weekly_budget_rub"], force=True)
+                before.append("бюджет: " + plan["before"])
+                after.append("бюджет: " + plan["after"])
+            except YandexError as exc:
+                after.append("бюджет: " + _fail(exc))
+        title = f"«{v['name']}»"
+        if after:
+            out.append(_ch(f"{title}: настройки", "; ".join(before), "; ".join(after)))
+        content = []
+        if "ads" in v:
+            content.append(_variant_texts(v["ads"]))
+        if "keywords" in v:
+            content.append("фразы " + _variant_phrases(v["keywords"]))
+        if content:
+            out.append(_ch(f"{title}: объявления и фразы", "как у оригинала", "; ".join(content)))
+    out.append(_ch(f"Оригинал «{row['name']}»", _state_label(row["state"], row["status"]), "без изменений"))
+    if exp:
+        ends = today_msk() + timedelta(days=exp["days"] - 1)
+        out += [
+            _ch("Лимит вариантов", "—", f"не больше {_money(exp['weekly_budget_rub'])}/нед. на каждый вариант"),
+            _ch(
+                "Эксперимент",
+                "—",
+                f"«{exp['title']}»: {_count(exp['days'], 'день', 'дня', 'дней')} с первого дня показов, примерно до "
+                f"{ends:%d.%m}; успех — {experiments.criterion_text(exp)}; сравнение с оригиналом",
+            ),
+        ]
+    return out
+
+
 def _d_finish_experiment(ctx: Context, args: dict) -> list[dict]:
     exp, verdict, conclusion, cancel = _finish_args(ctx, args)
     status = experiments.STATUS_LABELS["cancelled" if cancel else "finished"]
@@ -1870,6 +2096,7 @@ _DIFFS = {
     "restart_campaign_copy": _d_restart,
     "copy_campaign_geo": _d_copy_geo,
     "start_experiment": _d_start_experiment,
+    "create_campaign_variants": _d_create_variants,
     "finish_experiment": _d_finish_experiment,
     "create_adgroup": _d_create_adgroup,
     "keywords_action": _d_keywords_action,
@@ -2015,6 +2242,7 @@ TOOL_LABELS = {
     "get_campaign_history": "Кампания по дням",
     "remember_fact": "Запоминаю ответ",
     "find_regions": "Поиск регионов",
+    "get_wordstat": "Вордстат",
     "get_experiments": "Эксперименты",
     "ask_questions": "Вопросы перед работой",
     "propose_plan": "План работ",
@@ -2027,6 +2255,7 @@ TOOL_LABELS = {
     "restart_campaign_copy": "Перезапуск копией",
     "copy_campaign_geo": "Копия на новое гео",
     "start_experiment": "Запуск эксперимента",
+    "create_campaign_variants": "Варианты кампании",
     "finish_experiment": "Итоги эксперимента",
     "create_adgroup": "Новая группа",
     "keywords_action": "Ключевые фразы",
@@ -2092,6 +2321,10 @@ TOOLS = [
             "min_clicks": {"type": "integer"},
             "min_cost_rub": {"type": "number"},
             "no_conversions": {"type": "boolean", "description": "только без конверсий"},
+            "with_conversions": {
+                "type": "boolean",
+                "description": "только с конверсиями, лучшие первыми — источник текстов и фраз для вариантов",
+            },
             "search": {"type": "string"},
             "limit": {"type": "integer", "description": "до 200"},
         },
@@ -2138,6 +2371,19 @@ TOOLS = [
         "минус перед id исключает регион.",
         {"query": {"type": "string", "description": "название, напр. «Казань» или «Татарстан»"}},
         ["query"],
+    ),
+    _fn(
+        "get_wordstat",
+        "Вордстат за 30 дней: по каждой исходной фразе — запросы с ней и похожие запросы с числом показов в месяц. "
+        "Для подбора и расширения ключевых фраз. Платный запрос на каждую фразу, квота 100 в час — бери 1–5 "
+        "главных фраз, не перебирай всё подряд.",
+        {
+            "phrases": {**_PHRASES, "description": "исходные фразы, до 5"},
+            "region_ids": {**_IDS, "description": "регионы (find_regions), пусто — все"},
+            "device": {"type": "string", "enum": ["all", "desktop", "phone", "tablet"]},
+            "limit": {"type": "integer", "description": "фраз в ответе на каждую исходную, до 100, по умолчанию 20"},
+        },
+        ["phrases"],
     ),
     _fn(
         "get_experiments",
@@ -2274,7 +2520,7 @@ TOOLS = [
         "Запустить эксперимент: записать гипотезу, тестовые кампании, срок и критерий успеха и поставить кампаниям "
         "лимит ₽ в неделю в Директе (недельный бюджет стратегии; у ручных ставок ТГО — дневной не больше лимита/7). "
         "Сервис ничего не останавливает сам — расход держит только этот бюджет. Тестовые кампании создай заранее "
-        "(copy_campaign_geo, restart_campaign_copy, create_campaign). Срок считается с первого дня показов.",
+        "(copy_campaign_geo, restart_campaign_copy, create_campaign; для вариантов одной кампании — create_campaign_variants с experiment). Срок считается с первого дня показов.",
         {
             "title": {"type": "string", "description": "коротко, напр. «Казань: копия Поиска Москва»"},
             "hypothesis": {"type": "string", "description": "что проверяем и на каких данных это основано"},
@@ -2301,6 +2547,94 @@ TOOLS = [
             **_REASON,
         },
         ["title", "hypothesis", "campaign_row_ids", "weekly_budget_rub", "criterion"],
+    ),
+    _fn(
+        "create_campaign_variants",
+        "Масштабирование и тест: 1–5 копий кампании-источника с её структурой, целями и оплатой, но своими "
+        "параметрами — регионы, расписание, ценность ключевых целей, недельный бюджет, тексты объявлений, ключевые "
+        "фразы. В каждом варианте задай только то, что меняется; остальное — как у оригинала. Оригинал не трогает. "
+        "Вариант с ошибкой на любом шаге остаётся черновиком. С experiment — сразу эксперимент по вариантам с "
+        "лимитом ₽/нед. и сравнением с оригиналом. Вызывай после того, как маркетолог одобрил варианты в propose_plan.",
+        {
+            "campaign_row_id": {**_ID, "description": "кампания-источник (успешная или исправляемая)"},
+            "variants": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 5,
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "name": {"type": "string", "description": "название копии, у вариантов разные"},
+                        "idea": {"type": "string", "description": "гипотеза варианта одной фразой"},
+                        "plan_step": {"type": "integer", "description": "номер одобренного шага propose_plan"},
+                        "region_ids": {**_IDS, "description": "регионы показа (find_regions); минус — исключить"},
+                        "schedule": {"type": "string", "enum": ["always", "workdays", "workhours", "daytime"]},
+                        "priority_goals": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {"goal_id": {"type": "integer"}, "value_rub": {"type": "number"}},
+                                "required": ["goal_id"],
+                            },
+                            "description": "новая ценность целей, ₽ (от 0,3); новые id добавятся, прочие цели оригинала останутся",
+                        },
+                        "weekly_budget_rub": {
+                            "type": "number",
+                            "description": "свой недельный бюджет варианта, от 300 (не больше лимита эксперимента)",
+                        },
+                        "ads": {
+                            "type": "object",
+                            "properties": {
+                                "mode": {
+                                    "type": "string",
+                                    "enum": ["replace", "add"],
+                                    "description": "replace — новые тексты во всех объявлениях копии (быстрые ссылки "
+                                    "и картинки остаются); add — новое объявление в каждой группе рядом со старыми",
+                                },
+                                "titles": {"type": "array", "items": {"type": "string"}, "description": "до 7, ≤56 знаков"},
+                                "texts": {"type": "array", "items": {"type": "string"}, "description": "до 3, ≤81 знака"},
+                                "title2": {"type": "string", "description": "≤30 знаков"},
+                                "href": {"type": "string", "description": "другая ссылка; по умолчанию — как у оригинала"},
+                            },
+                        },
+                        "keywords": {
+                            "type": "object",
+                            "properties": {
+                                "mode": {
+                                    "type": "string",
+                                    "enum": ["add", "replace"],
+                                    "description": "add — добавить к фразам оригинала (в первую группу); replace — "
+                                    "оставить только эти (кампания с одной группой)",
+                                },
+                                "phrases": {"type": "array", "items": {"type": "string"}, "description": "до 200"},
+                                "bid_rub": {"type": "number"},
+                            },
+                            "required": ["phrases"],
+                        },
+                    },
+                },
+            },
+            "moderate": {
+                "type": "boolean",
+                "description": "отправить собранные варианты на модерацию (по умолчанию да); false — черновики",
+            },
+            "experiment": {
+                "type": "object",
+                "description": "эксперимент по вариантам; не передавай, если маркетолог не просил",
+                "properties": {
+                    "title": {"type": "string"},
+                    "hypothesis": {"type": "string"},
+                    "weekly_budget_rub": {"type": "number", "description": "лимит ₽/нед. на каждый вариант, от 300"},
+                    "days": {"type": "integer", "description": "3–90, по умолчанию 14"},
+                    "criterion": {"type": "string", "enum": list(experiments.CRITERIA)},
+                    "target": {"type": "number"},
+                    "criterion_text": {"type": "string"},
+                },
+                "required": ["title", "hypothesis", "weekly_budget_rub", "criterion"],
+            },
+            **_REASON,
+        },
+        ["campaign_row_id", "variants"],
     ),
     _fn(
         "finish_experiment",
@@ -2458,13 +2792,34 @@ def _system_prompt(ctx: Context) -> str:
         "предлагай перезапустить копией — restart_campaign_copy.",
         "- Копию кампании на другой регион делай через copy_campaign_geo; id регионов бери из find_regions, "
         "не по памяти.",
+        "- Масштабировать успешную кампанию или проверить несколько гипотез разом — create_campaign_variants: 1–5 "
+        "копий с целями и оплатой оригинала, но своими параметрами. Порядок: 1) ask_questions — что менять "
+        "(тексты, ключи, гео, расписание, ценность целей, бюджет), сколько вариантов, согласовывать все варианты "
+        "одной карточкой или каждый отдельно, нужен ли эксперимент (лимит ₽/нед., срок, критерий); 2) данные — "
+        "get_campaign (тексты всех объявлений), get_search_queries с with_conversions (конвертящие запросы — "
+        "основа новых текстов и фраз), бриф, для новых ключей — get_wordstat; 3) propose_plan — шаг на каждый вариант: что меняется и какую "
+        "гипотезу проверяет; варианты отличаются друг от друга одним-двумя параметрами, иначе не понять, что "
+        "сработало; 4) create_campaign_variants только с одобренными вариантами — одним вызовом или по вызову на "
+        "вариант, как решил маркетолог. Тексты пиши в пределах Директа (заголовок до 56 знаков, текст до 81), "
+        "без выдуманных цен и обещаний, которых нет в объявлениях оригинала или брифе. Ключи расширяй "
+        "get_wordstat: 1–5 главных фраз (конвертящие запросы, ключи оригинала) с регионами варианта; бери "
+        "запросы по теме бизнеса с заметной частотой, частоты называй из ответа, нецелевые слова оттуда — "
+        "кандидаты в минус-фразы. Если Вордстат не подключён или упёрся в квоту, так и скажи и расширяй ключи "
+        "из запросов и брифа.",
+        "- Провальную кампанию сначала разбери: get_signals, get_campaign_history, get_campaign_settings, "
+        "get_search_queries. Затем предложи, что лучше: исправить на месте (минус-фразы, ставки, настройки, тексты "
+        "— если ошибка одна и понятная, а история кампании ценна) или исправленные копии через "
+        "create_campaign_variants (каждая копия — своё исправление; когда кампания затухла или причин несколько). "
+        "Объясни выбор.",
         "- Гипотезы проверяй экспериментом: 1) ask_questions — лимит ₽ в неделю на кампанию, срок в днях и критерий "
         "успеха (общий критерий клиента запоминай с key success_criteria); 2) propose_plan; 3) тестовые кампании — "
         "инструментами копий; 4) start_experiment. Деньги ограничивает только недельный бюджет в Директе: сервис "
         "сам ничего не останавливает. Кампанию идущего эксперимента в новый не бери.",
-        "- Итоги эксперимента разбирай по get_experiments, если выжимки ещё нет в чате. Подтвердилось — предложи "
-        "масштабировать (копия на новое гео, другие ключи или тип); нет — остановить тестовые кампании "
-        "(campaigns_action). Итог записывай finish_experiment, когда маркетолог согласен с выводом.",
+        "- Итоги эксперимента разбирай по get_experiments, если выжимки ещё нет в чате; у вариантов там рейтинг "
+        "по критерию. Предложи план через propose_plan: проигравшие — остановить (campaigns_action), победителя — "
+        "масштабировать (create_campaign_variants от победителя, копия на новое гео, другие ключи или тип); "
+        "не подтвердилось — остановить тестовые кампании. Итог записывай finish_experiment, когда маркетолог "
+        "согласен с выводом.",
         "- Если действие отклонено, не повторяй его без новой просьбы. Если ошибка — объясни её пользователю.",
         "- Работай только с кампаниями и кабинетами этого пространства.",
     ]

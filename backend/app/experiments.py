@@ -31,6 +31,7 @@ KINDS = {
     "keywords": "новые ключи",
     "type": "другой тип кампании",
     "strategy": "другая стратегия",
+    "variants": "варианты кампании",
     "other": "другое",
 }
 CRITERIA = {
@@ -223,12 +224,13 @@ def _goal_short(exp: dict) -> str:
 # --- Лимит расхода в Директе -----------------------------------------------------------------
 
 
-def limit_plan(settings: dict, weekly_rub: float) -> dict:
+def limit_plan(settings: dict, weekly_rub: float, *, force: bool = False) -> dict:
     """Как удержать расход кампании в лимите ₽/нед.: {kind, before, after, changes, note}.
 
     settings — get_campaign_settings. Автостратегии и ручные ставки ЕПК — недельным бюджетом стратегии;
     у ручных ставок ТГО недельного бюджета нет — там дневной не больше лимита/7. Меньший прежний бюджет
-    не поднимаем: лимит — потолок, а не цель расхода.
+    не поднимаем: лимит — потолок, а не цель расхода. force — ставим ровно weekly_rub и тогда: это бюджет
+    варианта кампании, а не потолок эксперимента.
     """
     name = settings.get("name") or ""
     who = f"«{name}»: " if name else ""
@@ -247,12 +249,12 @@ def limit_plan(settings: dict, weekly_rub: float) -> dict:
     if search in auto or (search == "SERVING_OFF" and network in auto) or unified_manual:
         if weekly:
             before = f"{_rub(weekly)}/нед."
-            if weekly <= weekly_rub:
+            if weekly <= weekly_rub and not force:
                 return {"kind": "weekly", "before": before, "after": f"{before} — не больше лимита, не меняем",
                         "changes": {}, "note": ""}
         elif unified_manual and daily:
             before = f"{_rub(daily)}/день"
-            if daily * 7 <= weekly_rub:
+            if daily * 7 <= weekly_rub and not force:
                 return {"kind": "daily", "before": before, "after": f"{before} — за неделю не больше лимита, не меняем",
                         "changes": {}, "note": ""}
         else:
@@ -266,7 +268,7 @@ def limit_plan(settings: dict, weekly_rub: float) -> dict:
     if ctype == "TEXT_CAMPAIGN" and (search == "HIGHEST_POSITION" or (search == "SERVING_OFF" and network == "MAXIMUM_COVERAGE")):
         cap = math.floor(weekly_rub / 7)
         before = f"{_rub(daily)}/день" if daily else "без дневного бюджета"
-        if daily and daily <= cap:
+        if daily and daily <= cap and not force:
             return {"kind": "daily", "before": before, "after": f"{before} — за неделю не больше лимита, не меняем",
                     "changes": {}, "note": ""}
         if cap < MIN_DAILY_RUB:
@@ -578,6 +580,28 @@ def _fact(exp: dict, t: dict) -> str:
     )
 
 
+def _rank_key(exp: dict, item: dict) -> tuple:
+    """Чем меньше ключ, тем выше кампания в рейтинге. Кампании без вывода по критерию — ниже прочих."""
+    conv, cost = item["conversions"], item["cost_kopecks"]
+    cpa = item["cpa_kopecks"] if item["cpa_kopecks"] is not None else math.inf
+    criterion = exp.get("criterion")
+    if criterion == "zero_cost":
+        return (not item.get("met"), -conv, cost)
+    if criterion == "cr":
+        enough = item["clicks"] >= CR_MIN_CLICKS
+        return (not enough, -(item["cr_pct"] or 0) if enough else -conv, cpa)
+    if criterion == "conversions":
+        return (-conv, cost)
+    return (-conv, cpa)
+
+
+def ranking(exp: dict, items: list[dict]) -> list[dict]:
+    """Рейтинг тестовых кампаний по критерию эксперимента — для выбора победителя и проигравших."""
+    alive = [i for i in items if not i.get("missing")]
+    ordered = sorted(alive, key=lambda i: _rank_key(exp, i))
+    return [{"place": n, "id": i["id"], "name": i["name"], "met": i.get("met")} for n, i in enumerate(ordered, 1)]
+
+
 def progress(exp: dict, data: dict, today: date) -> dict:
     """Прогресс эксперимента по статистике (см. prepare_data) — только расчёты, без базы и API.
 
@@ -632,6 +656,7 @@ def progress(exp: dict, data: dict, today: date) -> dict:
                 "status": c.get("status"),
                 "missing": False,
                 **_metrics(sums),
+                "met": _met(exp, sums),
                 "paid_conversions": paid,
                 "week_cost_kopecks": week_cost,
                 "week_share_pct": round(100 * week_cost / limit) if week_cost is not None else None,
@@ -703,6 +728,7 @@ def progress(exp: dict, data: dict, today: date) -> dict:
         "days_left": max((end - today).days + 1, 0),
         "totals": {**_metrics(totals), "paid_conversions": paid_total},
         "campaigns": items,
+        "ranking": ranking(exp, items) if len(items) > 1 else [],
         "week_from": week_from.isoformat(),
         "limit_hit": any(i["limit_hit"] for i in items),
         "source": source,
@@ -831,7 +857,13 @@ def _full_lines(e: dict) -> list[str]:
                     f"; за эту неделю {rub(c['week_cost_kopecks'])} из {_rub(e['weekly_limit_rub'])}"
                     f" ({c['week_share_pct']}%)"
                 )
+            if c.get("met") is not None and len(p["campaigns"]) > 1:
+                line += "; критерий выполнен" if c["met"] else "; критерий пока не выполнен"
             lines.append(line)
+        if p.get("ranking"):
+            lines.append(
+                "Рейтинг по критерию: " + ", ".join(f"{r['place']}. [{r['id']}] «{r['name']}»" for r in p["ranking"]) + "."
+            )
         src = p.get("source")
         if src and src.get("missing"):
             lines.append(f"Образец [{src['id']}] — нет в базе.")

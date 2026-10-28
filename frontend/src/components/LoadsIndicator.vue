@@ -1,8 +1,11 @@
 <template>
   <div v-if="ready && items.length" ref="root" class="loads-ind" :class="[`is-${tone}`, { 'is-open': open }]">
-    <button class="loads-ind__toggle" type="button" :aria-expanded="open" title="Загрузка данных из Яндекса" @click="open = !open">
+    <button class="loads-ind__toggle" type="button" :aria-expanded="open" :title="label" @click="open = !open">
       <span v-if="busy" class="spinner" aria-hidden="true"></span>
-      <span v-else class="loads-ind__dot" aria-hidden="true"></span>
+      <template v-else>
+        <CloudDownload aria-hidden="true" />
+        <span class="loads-ind__dot" aria-hidden="true"></span>
+      </template>
       <span class="loads-ind__label">{{ label }}</span>
     </button>
 
@@ -37,6 +40,7 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { RouterLink } from 'vue-router'
+import { CloudDownload } from '@lucide/vue'
 import { errorDetail } from '../api/web'
 import { jobPercent, jobText, stageErrorText, stageProblem, useLoads } from '../composables/useLoads'
 import { plural, timeAgo } from '../utils/format'

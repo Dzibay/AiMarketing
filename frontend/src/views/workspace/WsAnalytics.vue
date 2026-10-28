@@ -82,6 +82,7 @@
       </p>
       <TrendChart
         :points="data.by_day"
+        :prev-points="data.prev_by_day"
         :value-key="chartKey"
         :label="METRIC_BY_KEY[chartKey].label"
         :format-value="METRIC_BY_KEY[chartKey].fmt"

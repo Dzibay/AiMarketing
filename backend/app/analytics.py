@@ -159,9 +159,10 @@ def workspace_analytics(
         target = cur if r["day"] >= date_from else prev
         for key in _DIRECT_KEYS:
             target[key] += int(r[key] or 0)
+        for key in _DIRECT_KEYS:
+            day_sums[r["day"]][key] += int(r[key] or 0)
         if r["day"] >= date_from:
             for key in _DIRECT_KEYS:
-                day_sums[r["day"]][key] += int(r[key] or 0)
                 camp_sums[int(r["campaign_row_id"])][key] += int(r[key] or 0)
 
     bounce_num = 0.0
@@ -169,8 +170,8 @@ def workspace_analytics(
         target = cur if r["day"] >= date_from else prev
         target["visits"] += int(r["visits"] or 0)
         target["users_count"] += int(r["users_count"] or 0)
+        day_sums[r["day"]]["visits"] += int(r["visits"] or 0)
         if r["day"] >= date_from:
-            day_sums[r["day"]]["visits"] += int(r["visits"] or 0)
             if r["bounce_rate"] is not None:
                 bounce_num += float(r["bounce_rate"]) * int(r["visits"] or 0)
 
@@ -188,8 +189,8 @@ def workspace_analytics(
             continue  # переходы из кампаний вне пространства
         target = cur if r["day"] >= date_from else prev
         target["goal_reaches"] += reaches
+        day_sums[r["day"]]["goal_reaches"] += reaches
         if r["day"] >= date_from:
-            day_sums[r["day"]]["goal_reaches"] += reaches
             camp_sums[row_id]["goal_reaches"] += reaches
     use_goal = bool(ws["goal_id"]) and goal_rows > 0
 
@@ -214,24 +215,29 @@ def workspace_analytics(
         )
     }
 
-    by_day = []
-    d = date_from
-    while d <= date_to:
-        s = day_sums.get(d, {})
-        m = _metrics(s, use_goal=use_goal)
-        by_day.append(
-            {
-                "day": d.isoformat(),
-                "cost_kopecks": m["cost_kopecks"],
-                "clicks": m["clicks"],
-                "impressions": m["impressions"],
-                "conversions": m["conversions"],
-                "cpa_kopecks": m["cpa_kopecks"],
-                "revenue_kopecks": m["revenue_kopecks"],
-                "visits": m["visits"],
-            }
-        )
-        d += timedelta(days=1)
+    def days_series(start: date, end: date) -> list[dict]:
+        out = []
+        d = start
+        while d <= end:
+            m = _metrics(day_sums.get(d, {}), use_goal=use_goal)
+            out.append(
+                {
+                    "day": d.isoformat(),
+                    "cost_kopecks": m["cost_kopecks"],
+                    "clicks": m["clicks"],
+                    "impressions": m["impressions"],
+                    "conversions": m["conversions"],
+                    "cpa_kopecks": m["cpa_kopecks"],
+                    "revenue_kopecks": m["revenue_kopecks"],
+                    "visits": m["visits"],
+                }
+            )
+            d += timedelta(days=1)
+        return out
+
+    by_day = days_series(date_from, date_to)
+    # Тот же ряд за предыдущий период той же длины — пунктир «было» на графиках.
+    prev_by_day = days_series(prev_from, prev_to)
 
     by_campaign = []
     accounts: dict[int, dict] = {}
@@ -297,6 +303,7 @@ def workspace_analytics(
         "compare": compare,
         "kpi": kpi,
         "by_day": by_day,
+        "prev_by_day": prev_by_day,
         "by_campaign": by_campaign,
         "by_account": by_account,
         "direct_updated_at": fresh["direct_at"].isoformat() if fresh.get("direct_at") else None,
@@ -341,6 +348,7 @@ def workspace_summary(user_id: int, workspace_id: int) -> dict:
             "compare": week["compare"],
             "kpi": week["kpi"],
             "by_day": week["by_day"],
+            "prev_by_day": week["prev_by_day"],
             "conversions_source": week["conversions_source"],
             "goal_name": week["goal_name"],
         },

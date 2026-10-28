@@ -1,5 +1,5 @@
 import { createApp } from 'vue'
-import '@fontsource-variable/space-grotesk'
+import '@fontsource-variable/onest'
 import App from './App.vue'
 import router from './router'
 import './styles/site.css'

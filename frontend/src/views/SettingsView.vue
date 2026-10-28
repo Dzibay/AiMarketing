@@ -121,6 +121,69 @@
         </p>
       </section>
 
+      <section class="panel" id="wordstat">
+        <div class="panel__head">
+          <h2>Вордстат</h2>
+          <span class="chip" :class="wordstat.configured ? '' : 'chip--warning'">
+            {{ wordstatChip }}
+          </span>
+        </div>
+        <p class="hint">
+          Ассистент берёт из Вордстата похожие запросы с частотой, когда подбирает ключевые фразы для вариантов кампаний.
+          Подключение — через Search API Yandex Cloud на ваш ключ: {{ wordstat.price_rub_per_1000 }} ₽ за 1000 запросов
+          (один запрос — одна исходная фраза), до {{ wordstat.hourly_quota }} запросов в час. Ключ хранится в
+          зашифрованном виде.
+        </p>
+        <form class="form-grid" @submit.prevent="saveWordstat">
+          <div class="field field--wide">
+            <label>Каталог Yandex Cloud (folder_id)</label>
+            <input v-model.trim="wsForm.folder_id" type="text" placeholder="b1g…" autocomplete="off" />
+          </div>
+          <div class="field field--wide">
+            <label>API-ключ</label>
+            <input
+              v-model="wsForm.api_key"
+              type="password"
+              autocomplete="new-password"
+              :placeholder="wordstat.has_key ? `Сохранён ${wordstat.key_hint} — оставьте пустым, чтобы не менять` : 'Вставьте ключ'"
+            />
+            <small class="field-hint">
+              В AI Studio: сервисный аккаунт с ролью search-api.webSearch.user, API-ключ с областью
+              yc.search-api.execute. У облака должен быть активный платёжный аккаунт.
+            </small>
+          </div>
+          <p v-if="wordstat.source === 'service'" class="field-hint">
+            Сейчас работает ключ сервиса. Свой ключ заменит его.
+          </p>
+          <div class="form-actions">
+            <button class="btn btn--accent" type="submit" :disabled="wsBusy">Сохранить</button>
+            <button class="btn btn--ghost" type="button" :disabled="wsBusy || !wordstat.configured" @click="testWordstat">
+              Проверить
+            </button>
+            <button
+              v-if="wordstat.has_key"
+              class="btn btn--ghost btn--danger"
+              type="button"
+              :disabled="wsBusy"
+              @click="deleteWordstatKey"
+            >
+              Удалить ключ
+            </button>
+          </div>
+        </form>
+        <p v-if="wsTest" class="sync-status" :class="wsTest.ok ? 'is-ok' : 'is-error'">
+          <template v-if="wsTest.ok">
+            Работает · «{{ wsTest.phrase }}» — {{ num(wsTest.total) }} запросов за 30 дней<template v-if="wsTest.sample">,
+              например: {{ wsTest.sample }}</template>
+          </template>
+          <template v-else>{{ wsTest.error }}</template>
+        </p>
+        <p v-else-if="wordstat.checked_at" class="sync-status" :class="wordstat.check_error ? 'is-error' : 'is-ok'">
+          Проверено {{ formatDateTime(wordstat.checked_at) }} ·
+          {{ wordstat.check_error || 'работает' }}
+        </p>
+      </section>
+
       <section v-if="usage && (ai.configured || usage.months.length > 1 || usage.total.calls)" class="panel" id="ai-usage">
         <div class="panel__head">
           <h2>Расход ИИ</h2>
@@ -294,7 +357,7 @@ import AppShell from '../components/AppShell.vue'
 import { aiApi, errorText, webApi } from '../api/web'
 import { pushToast } from '../composables/useToasts'
 import { useHead } from '../utils/useHead'
-import { formatDate, num, plural, rubAi } from '../utils/format'
+import { formatDate, formatDateTime, num, plural, rubAi } from '../utils/format'
 
 useHead('Настройки — AiMarketing', true)
 
@@ -314,6 +377,10 @@ const aiForm = reactive({
 })
 const aiBusy = ref(false)
 const aiTest = ref(null)
+const wordstat = ref({ configured: false, source: '', has_key: false, key_hint: '', price_rub_per_1000: 20, hourly_quota: 100 })
+const wsForm = reactive({ folder_id: '', api_key: '' })
+const wsBusy = ref(false)
+const wsTest = ref(null)
 const usage = ref(null)
 const usageBusy = ref(false)
 const telegram = ref({ configured: false, linked: false })
@@ -462,6 +529,63 @@ async function testAi() {
   }
 }
 
+const wordstatChip = computed(() => {
+  const w = wordstat.value
+  if (!w.configured) return 'не подключён'
+  if (w.source === 'service') return 'ключ сервиса'
+  return w.check_error ? 'ошибка проверки' : 'подключён'
+})
+
+function fillWordstat(data) {
+  wordstat.value = data
+  wsForm.folder_id = data.folder_id || ''
+  wsForm.api_key = ''
+}
+
+async function saveWordstat() {
+  wsBusy.value = true
+  wsTest.value = null
+  try {
+    const apiKey = wsForm.api_key.trim()
+    fillWordstat(await aiApi.saveWordstat({ folder_id: wsForm.folder_id, api_key: apiKey || null }))
+    pushToast(wordstat.value.source === 'own' ? 'Вордстат сохранён' : 'Сохранено — осталось указать ключ и каталог')
+    if (wordstat.value.source === 'own' && apiKey) await testWordstat()
+  } catch (err) {
+    pushToast(errorText(err), 'error')
+  } finally {
+    wsBusy.value = false
+  }
+}
+
+async function deleteWordstatKey() {
+  if (!await askConfirm('Удалить ключ Вордстата? Ассистент перестанет подбирать фразы по частоте.')) return
+  wsBusy.value = true
+  try {
+    fillWordstat(await aiApi.saveWordstat({ folder_id: wordstat.value.folder_id, api_key: '' }))
+    wsTest.value = null
+    pushToast('Ключ Вордстата удалён')
+  } catch (err) {
+    pushToast(errorText(err), 'error')
+  } finally {
+    wsBusy.value = false
+  }
+}
+
+async function testWordstat() {
+  wsBusy.value = true
+  try {
+    const res = await aiApi.testWordstat()
+    const sample = (res.sample || []).map((s) => `«${s.phrase}» ${num(s.count)}`).join(', ')
+    wsTest.value = { ok: true, phrase: res.phrase, total: res.total, sample }
+  } catch (err) {
+    wsTest.value = { ok: false, error: errorText(err) }
+  } finally {
+    wsBusy.value = false
+    // Итог проверки сохраняется у ключа — подтягиваем, чтобы чип не врал.
+    aiApi.wordstat().then((data) => { wordstat.value = data }).catch(() => {})
+  }
+}
+
 async function loadTelegram() {
   try {
     telegram.value = await webApi.telegramStatus()
@@ -567,9 +691,16 @@ async function changePassword() {
 
 onMounted(async () => {
   try {
-    const [me, aiSettings] = await Promise.all([webApi.me(), aiApi.settings(), loadTelegram(), loadUsage()])
+    const [me, aiSettings, wordstatSettings] = await Promise.all([
+      webApi.me(),
+      aiApi.settings(),
+      aiApi.wordstat(),
+      loadTelegram(),
+      loadUsage(),
+    ])
     user.value = me.user
     fillAiForm(aiSettings)
+    fillWordstat(wordstatSettings)
   } catch (err) {
     pushToast(errorText(err), 'error')
   } finally {

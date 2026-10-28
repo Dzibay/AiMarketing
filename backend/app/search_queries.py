@@ -263,6 +263,7 @@ def list_search_queries(
     min_clicks: int | None = None,
     min_cost_rub: float | None = None,
     no_conversions: bool = False,
+    with_conversions: bool = False,
 ) -> dict:
     limit = max(1, min(limit, 500))
     offset = max(0, offset)
@@ -279,6 +280,10 @@ def list_search_queries(
         params.append(int(float(min_cost_rub) * 100))
     if no_conversions:
         clauses.append("COALESCE(q.conversions, 0) = 0")
+    order = "q.clicks DESC, q.impressions DESC, q.id DESC"
+    if with_conversions:
+        clauses.append("COALESCE(q.conversions, 0) > 0")
+        order = "q.conversions DESC, q.cost_kopecks ASC, q.id DESC"
     where = " AND ".join(clauses)
     with pool.connection() as conn:
         total_row = conn.execute(
@@ -291,7 +296,7 @@ def list_search_queries(
             FROM direct_search_queries q
             LEFT JOIN direct_adgroups g ON g.id = q.adgroup_row_id
             WHERE {where}
-            ORDER BY q.clicks DESC, q.impressions DESC, q.id DESC
+            ORDER BY {order}
             LIMIT %s OFFSET %s
             """,
             [*params, limit, offset],

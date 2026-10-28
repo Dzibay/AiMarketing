@@ -41,28 +41,63 @@
 
         <div class="stats-grid">
           <div class="stat-card">
-            <small>Сегодня</small>
+            <div class="stat-card__head">
+              <span class="stat-card__icon"><CalendarClock aria-hidden="true" /></span>
+              <small>Сегодня</small>
+            </div>
             <strong>{{ rub(totals.spend_today) }}</strong>
           </div>
           <div class="stat-card">
-            <small>Вчера</small>
+            <div class="stat-card__head">
+              <span class="stat-card__icon is-teal"><Wallet aria-hidden="true" /></span>
+              <small>Вчера</small>
+            </div>
             <strong>{{ rub(totals.spend_yesterday) }}</strong>
           </div>
           <div class="stat-card">
-            <small>Конверсии вчера</small>
+            <div class="stat-card__head">
+              <span class="stat-card__icon"><Target aria-hidden="true" /></span>
+              <small>Конверсии вчера</small>
+            </div>
             <strong>{{ num(totals.conversions_yesterday || 0) }}</strong>
+            <span class="cell-note">по дням за неделю</span>
+            <Sparkline :points="lastWeek" :prev-points="prevWeek" value-key="conversions" />
           </div>
           <div class="stat-card">
-            <small>7 дней</small>
-            <strong>{{ rub(totals.spend_7d) }}</strong>
+            <div class="stat-card__head">
+              <span class="stat-card__icon is-blue"><Coins aria-hidden="true" /></span>
+              <small>7 дней</small>
+            </div>
+            <div class="stat-card__value">
+              <strong>{{ rub(totals.spend_7d) }}</strong>
+              <span v-if="weekChange.cost != null" class="delta" :class="deltaTone(weekChange.cost, true)">
+                {{ delta(weekChange.cost) }}
+              </span>
+            </div>
+            <span class="cell-note">к прошлой неделе</span>
+            <Sparkline :points="lastWeek" :prev-points="prevWeek" value-key="cost_kopecks" color="var(--c-blue)" />
           </div>
           <div class="stat-card">
-            <small>CPA 7 дней</small>
-            <strong>{{ totals.conversions_7d ? rub(totals.spend_7d / totals.conversions_7d) : '—' }}</strong>
+            <div class="stat-card__head">
+              <span class="stat-card__icon is-amber"><Crosshair aria-hidden="true" /></span>
+              <small>CPA 7 дней</small>
+            </div>
+            <div class="stat-card__value">
+              <strong>{{ totals.conversions_7d ? rub(totals.spend_7d / totals.conversions_7d) : '—' }}</strong>
+              <span v-if="weekChange.cpa != null" class="delta" :class="deltaTone(weekChange.cpa, true)">
+                {{ delta(weekChange.cpa) }}
+              </span>
+            </div>
+            <span class="cell-note">к прошлой неделе</span>
+            <Sparkline :points="lastWeek" :prev-points="prevWeek" value-key="cpa_kopecks" color="var(--c-amber)" />
           </div>
           <div class="stat-card">
-            <small>Горит</small>
+            <div class="stat-card__head">
+              <span class="stat-card__icon" :class="fireCount ? 'is-danger' : ''"><TriangleAlert aria-hidden="true" /></span>
+              <small>Горит</small>
+            </div>
             <strong :class="fireCount ? 'tone-bad' : 'tone-ok'">{{ fireCount }}</strong>
+            <span class="cell-note">{{ fireCount ? 'проблем требуют внимания' : 'всё спокойно' }}</span>
           </div>
         </div>
 
@@ -246,7 +281,9 @@
 <script setup>
 import { computed, onMounted, ref, watch } from 'vue'
 import { RouterLink, useRouter } from 'vue-router'
+import { CalendarClock, Coins, Crosshair, Target, TriangleAlert, Wallet } from '@lucide/vue'
 import AppShell from '../components/AppShell.vue'
+import Sparkline from '../components/Sparkline.vue'
 import { aiApi, errorDetail, errorText, jobProgressText, webApi } from '../api/web'
 import { pushToast } from '../composables/useToasts'
 import { useWorkspaces } from '../composables/useWorkspaces'
@@ -254,6 +291,8 @@ import { useHead } from '../utils/useHead'
 import {
   balanceTone,
   BUDGET_TONES,
+  delta,
+  deltaTone,
   formatDateTime,
   KPI_TONES,
   kpiTarget,
@@ -291,6 +330,25 @@ watch([severityFilter, wsFilter], () => {
 const rows = computed(() => data.value.workspaces || [])
 const totals = computed(() => data.value.totals || {})
 const fireCount = computed(() => data.value.problems.filter((p) => p.severity !== 'info').length)
+
+// by_day — две недели до вчера: последние 7 дней — эта неделя, первые 7 — прошлая (пунктир и изменение).
+const byDay = computed(() =>
+  (data.value.by_day || []).map((r) => ({ ...r, cpa_kopecks: r.conversions ? r.cost_kopecks / r.conversions : null })),
+)
+const lastWeek = computed(() => byDay.value.slice(-7))
+const prevWeek = computed(() => byDay.value.slice(-14, -7))
+const weekChange = computed(() => {
+  const sum = (rows, key) => rows.reduce((acc, r) => acc + Number(r[key] || 0), 0)
+  const change = (cur, prev) => (prev ? ((cur - prev) / prev) * 100 : null)
+  const cost = sum(lastWeek.value, 'cost_kopecks')
+  const prevCost = sum(prevWeek.value, 'cost_kopecks')
+  const conv = sum(lastWeek.value, 'conversions')
+  const prevConv = sum(prevWeek.value, 'conversions')
+  return {
+    cost: change(cost, prevCost),
+    cpa: conv && prevConv ? change(cost / conv, prevCost / prevConv) : null,
+  }
+})
 
 const checklist = computed(() => {
   const list = workspaces.value

@@ -6,7 +6,7 @@
         <div class="wrap hero__grid">
           <div>
             <div class="hero__brand">
-              <img class="hero__logo" src="/logo.png" alt="AiMarketing" width="148" height="148" />
+              <BrandMark class="hero__logo" :size="148" alt="AiMarketing" />
               <h1 class="hero__title">Ai<span>Marketing</span></h1>
             </div>
             <p class="hero__lead">
@@ -56,6 +56,7 @@
 <script setup>
 import { onMounted } from 'vue'
 import { RouterLink, useRouter } from 'vue-router'
+import BrandMark from '../components/BrandMark.vue'
 import SiteFooter from '../components/SiteFooter.vue'
 import SiteHeader from '../components/SiteHeader.vue'
 import { getSession } from '../composables/useSession'
