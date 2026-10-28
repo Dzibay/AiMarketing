@@ -9,15 +9,15 @@
       и минус-фразы — остальное меняется в интерфейсе Директа.
     </p>
     <form class="form-grid" @submit.prevent="saveBasic">
-      <div class="field field--wide">
+      <div v-field class="field field--wide">
         <label>Название</label>
         <input v-model.trim="basic.name" type="text" maxlength="255" />
       </div>
-      <div class="field">
+      <div v-field class="field">
         <label>Дневной бюджет, ₽ (0 — без ограничения)</label>
         <input v-model="basic.daily_budget_rub" type="number" min="0" step="1" />
       </div>
-      <div class="field field--wide">
+      <div v-field class="field field--wide">
         <label>Минус-фразы — по одной на строку</label>
         <textarea v-model="basic.negative_text" rows="6" />
       </div>
@@ -36,15 +36,15 @@
     <section class="panel">
       <h2>Основное</h2>
       <div class="form-grid">
-        <div class="field field--wide">
+        <div v-field class="field field--wide">
           <label>Название</label>
           <input v-model.trim="form.name" type="text" maxlength="255" required />
         </div>
-        <div class="field">
+        <div v-field class="field">
           <label>Начало</label>
           <input v-model="form.start_date" type="date" />
         </div>
-        <div class="field">
+        <div v-field class="field">
           <label>Окончание (пусто — без даты)</label>
           <input v-model="form.end_date" type="date" :min="form.start_date" />
         </div>
@@ -64,18 +64,18 @@
         :default-goal-id="workspace.goal_id"
       />
       <div class="form-grid">
-        <div v-if="dailyBudget" class="field">
+        <div v-if="dailyBudget" v-field class="field">
           <label>Дневной бюджет, ₽ (0 — без ограничения)</label>
           <input v-model="form.daily_budget_rub" type="number" min="0" step="1" />
         </div>
-        <div class="field">
+        <div v-field class="field">
           <label>Модель атрибуции</label>
           <select v-model="form.attribution_model">
             <option value="" disabled>Не задана</option>
             <option v-for="m in options?.attribution_models || []" :key="m.id" :value="m.id">{{ m.label }}</option>
           </select>
         </div>
-        <div class="field field--wide">
+        <div v-field class="field field--wide">
           <label>Ключевые цели</label>
           <div v-for="(g, i) in form.priority_goals" :key="i" class="filters filters--inline">
             <select v-model.number="g.goal_id">
@@ -92,7 +92,7 @@
             Добавить цель
           </button>
         </div>
-        <div class="field field--wide">
+        <div v-field class="field field--wide">
           <label>Счётчики Метрики — номера через запятую</label>
           <input v-model.trim="form.counter_ids" type="text" />
           <p v-if="!counterIds().includes(workspace.counter_id)" class="field-hint tone-warn">
@@ -105,7 +105,7 @@
     <section class="panel">
       <h2>Показы</h2>
       <div class="form-grid">
-        <div class="field field--wide">
+        <div v-field class="field field--wide">
           <label>Расписание</label>
           <ScheduleGrid v-model="form.schedule" />
           <label class="check-row">
@@ -113,19 +113,19 @@
             Учитывать перенос рабочих дней в праздники
           </label>
         </div>
-        <div class="field field--wide">
+        <div v-field class="field field--wide">
           <label>Минус-фразы кампании — по одной на строку ({{ lines(form.negative_keywords).length }})</label>
           <textarea v-model="form.negative_keywords" rows="8" />
         </div>
-        <div class="field field--wide">
+        <div v-field class="field field--wide">
           <label>Запрещённые площадки — по одной на строку</label>
           <textarea v-model="form.excluded_sites" rows="3" />
         </div>
-        <div class="field field--wide">
+        <div v-field class="field field--wide">
           <label>Параметры ссылок (UTM)</label>
           <input v-model.trim="form.tracking_params" type="text" placeholder="utm_source=yandex&utm_medium=cpc" />
         </div>
-        <div class="field field--wide">
+        <div v-field class="field field--wide">
           <label>Опции</label>
           <label v-for="o in options?.settings || []" :key="o.id" class="check-row">
             <input v-model="form.settings[o.id]" type="checkbox" />

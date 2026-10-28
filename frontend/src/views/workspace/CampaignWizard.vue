@@ -13,7 +13,7 @@
       <form id="campaign-wizard" @submit.prevent="next">
         <!-- 1. Кабинет -->
         <div v-show="step === 0" class="form-grid">
-          <div class="field field--wide">
+          <div v-field class="field field--wide">
             <label>Кабинет Директа, где создать кампанию</label>
             <select v-model.number="form.account_id" required>
               <option :value="null" disabled>Выберите кабинет</option>
@@ -38,21 +38,21 @@
               </template>
             </p>
           </div>
-          <div class="field">
+          <div v-field class="field">
             <label>Тип</label>
             <select v-model="form.type">
               <option v-for="t in options.types" :key="t.id" :value="t.id">{{ t.label }}</option>
             </select>
           </div>
-          <div class="field">
+          <div v-field class="field">
             <label>Название</label>
             <input v-model.trim="form.name" type="text" maxlength="255" required />
           </div>
-          <div class="field">
+          <div v-field class="field">
             <label>Начало показов</label>
             <input v-model="form.start_date" type="date" :min="today" />
           </div>
-          <div class="field">
+          <div v-field class="field">
             <label>Окончание (необязательно)</label>
             <input v-model="form.end_date" type="date" :min="form.start_date || today" />
           </div>
@@ -73,7 +73,7 @@
             :default-goal-id="options.goal_id"
           />
           <div class="form-grid">
-            <div v-if="dailyBudget" class="field">
+            <div v-if="dailyBudget" v-field class="field">
               <label>Дневной бюджет, ₽ (необязательно)</label>
               <input
                 v-model="form.daily_budget_rub"
@@ -83,14 +83,14 @@
                 :placeholder="`от ${options.min_daily_budget_rub}`"
               />
             </div>
-            <div class="field">
+            <div v-field class="field">
               <label>Модель атрибуции</label>
               <select v-model="form.attribution_model">
                 <option value="">По умолчанию Директа</option>
                 <option v-for="m in options.attribution_models" :key="m.id" :value="m.id">{{ m.label }}</option>
               </select>
             </div>
-            <div class="field field--wide">
+            <div v-field class="field field--wide">
               <label>Ключевые цели (для оптимизации и отчётов)</label>
               <div v-for="(g, i) in form.priority_goals" :key="i" class="filters filters--inline">
                 <select v-model.number="g.goal_id">
@@ -115,7 +115,7 @@
 
         <!-- 3. Показы -->
         <div v-show="step === 2" class="form-grid">
-          <div class="field field--wide">
+          <div v-field class="field field--wide">
             <label>Расписание показов</label>
             <ScheduleGrid v-model="form.schedule" />
             <label class="check-row">
@@ -123,15 +123,15 @@
               Учитывать перенос рабочих дней в праздники
             </label>
           </div>
-          <div class="field field--wide">
+          <div v-field class="field field--wide">
             <label>Минус-фразы кампании — по одной на строку</label>
             <textarea v-model="form.negative_keywords" rows="4" placeholder="бесплатно&#10;своими руками&#10;вакансии" />
           </div>
-          <div class="field field--wide">
+          <div v-field class="field field--wide">
             <label>Запрещённые площадки РСЯ — домены через запятую или с новой строки</label>
             <textarea v-model="form.excluded_sites" rows="2" placeholder="games.example.ru" />
           </div>
-          <div class="field field--wide">
+          <div v-field class="field field--wide">
             <label>Параметры ссылок (UTM)</label>
             <input
               v-model.trim="form.tracking_params"
@@ -139,7 +139,7 @@
               placeholder="utm_source=yandex&utm_medium=cpc&utm_campaign={campaign_id}"
             />
           </div>
-          <div class="field field--wide">
+          <div v-field class="field field--wide">
             <label>Опции</label>
             <label v-for="o in options.settings" :key="o.id" class="check-row">
               <input v-model="form.settings[o.id]" type="checkbox" />
@@ -155,51 +155,51 @@
             Сразу создать первую группу с фразами и объявлением
           </label>
           <template v-if="form.with_group">
-            <div class="field">
+            <div v-field class="field">
               <label>Название группы</label>
               <input v-model.trim="form.group.name" type="text" maxlength="255" />
             </div>
-            <div class="field">
+            <div v-field class="field">
               <label>Регион показа</label>
               <select v-model="form.group.region">
                 <option v-for="r in REGIONS" :key="r.id" :value="r.id">{{ r.label }}</option>
                 <option value="custom">Свой список ID регионов</option>
               </select>
             </div>
-            <div v-if="form.group.region === 'custom'" class="field field--wide">
+            <div v-if="form.group.region === 'custom'" v-field class="field field--wide">
               <label>ID регионов Директа через запятую (минус — исключить)</label>
               <input v-model.trim="form.group.region_ids" type="text" placeholder="213, 2, -10174" />
             </div>
-            <div class="field field--wide">
+            <div v-field class="field field--wide">
               <label>Ключевые фразы — по одной на строку</label>
               <textarea v-model="form.group.keywords" rows="5" placeholder="купить диван&#10;диван недорого -бу" />
             </div>
-            <div v-if="manual" class="field">
+            <div v-if="manual" v-field class="field">
               <label>Ставка, ₽</label>
               <input v-model="form.group.bid_rub" type="number" min="0.3" step="0.1" placeholder="например, 15" />
             </div>
-            <div class="field field--wide">
+            <div v-field class="field field--wide">
               <label>Заголовок 1 <span class="field-hint">{{ form.group.ad.title.length }}/56</span></label>
               <input v-model="form.group.ad.title" type="text" maxlength="56" />
             </div>
-            <div v-if="!unified" class="field">
+            <div v-if="!unified" v-field class="field">
               <label>Заголовок 2 <span class="field-hint">{{ form.group.ad.title2.length }}/30</span></label>
               <input v-model="form.group.ad.title2" type="text" maxlength="30" />
             </div>
-            <div class="field">
+            <div v-field class="field">
               <label>Ссылка</label>
               <input v-model.trim="form.group.ad.href" type="url" placeholder="https://…" />
             </div>
-            <div class="field field--wide">
+            <div v-field class="field field--wide">
               <label>Текст <span class="field-hint">{{ form.group.ad.text.length }}/81</span></label>
               <textarea v-model="form.group.ad.text" rows="2" maxlength="81" />
             </div>
             <template v-if="unified">
-              <div class="field field--wide">
+              <div v-field class="field field--wide">
                 <label>Ещё заголовки — по одному на строку, до 6 <span class="field-hint">до 56 символов</span></label>
                 <textarea v-model="form.group.ad.more_titles" rows="3" />
               </div>
-              <div class="field field--wide">
+              <div v-field class="field field--wide">
                 <label>Ещё тексты — по одному на строку, до 2 <span class="field-hint">до 81 символа</span></label>
                 <textarea v-model="form.group.ad.more_texts" rows="2" />
               </div>

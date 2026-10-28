@@ -68,7 +68,7 @@
     <section v-if="selectedGroupRow" class="panel">
       <h2>Минус-фразы группы «{{ selectedGroupRow.name }}»</h2>
       <p class="hint">По одной фразе на строку. Пустой список очищает минус-фразы группы в Директе.</p>
-      <div class="field">
+      <div v-field class="field">
         <textarea v-model="negForm.text" rows="5" placeholder="бесплатно&#10;скачать" />
       </div>
       <div class="form-actions">
@@ -124,18 +124,18 @@
         </div>
       </div>
       <form class="form-grid" @submit.prevent="createKeywords">
-        <div class="field">
+        <div v-field class="field">
           <label>Группа</label>
           <select v-model="kwForm.adgroup_row_id" required>
             <option value="">Выберите</option>
             <option v-for="g in adgroups" :key="g.id" :value="String(g.id)">{{ g.name }}</option>
           </select>
         </div>
-        <div class="field">
+        <div v-field class="field">
           <label>Ставка, ₽ (для ручной стратегии)</label>
           <input v-model="kwForm.bid_rub" type="number" min="0" step="0.01" placeholder="по умолчанию" />
         </div>
-        <div class="field field--wide">
+        <div v-field class="field field--wide">
           <label>Новые фразы — по одной на строку</label>
           <textarea v-model="kwForm.text" rows="3" placeholder="купить слона&#10;слоны москва -бесплатно" />
         </div>
@@ -223,19 +223,19 @@
         </button>
       </div>
       <form class="filters" @submit.prevent="loadSearchQueries">
-        <div class="field">
+        <div v-field class="field">
           <label>Дней в отчёте</label>
           <input v-model.number="searchForm.days" type="number" min="1" max="90" />
         </div>
-        <div class="field field--wide">
+        <div v-field class="field field--wide">
           <label>Поиск</label>
           <input v-model="searchForm.search" type="search" placeholder="часть запроса" />
         </div>
-        <div class="field">
+        <div v-field class="field">
           <label>Мин. кликов</label>
           <input v-model="searchForm.min_clicks" type="number" min="0" placeholder="0" />
         </div>
-        <div class="field">
+        <div v-field class="field">
           <label>Мин. расход, ₽</label>
           <input v-model="searchForm.min_cost_rub" type="number" min="0" step="1" placeholder="0" />
         </div>
@@ -315,37 +315,37 @@
 
     <Modal :open="adModal.open" :title="adModal.item ? 'Изменить объявление' : 'Новое объявление'" :locked="busy" @close="adModal.open = false">
       <form id="ad-form" class="form-grid" @submit.prevent="saveAd">
-        <div v-if="!adModal.item" class="field field--wide">
+        <div v-if="!adModal.item" v-field class="field field--wide">
           <label>Группа</label>
           <select v-model="adForm.adgroup_row_id" required>
             <option value="">Выберите</option>
             <option v-for="g in adgroups" :key="g.id" :value="String(g.id)">{{ g.name }}</option>
           </select>
         </div>
-        <div class="field field--wide">
+        <div v-field class="field field--wide">
           <label>Заголовок 1 <span class="field-hint">{{ adForm.title.length }}/56</span></label>
           <input v-model="adForm.title" type="text" maxlength="56" required />
         </div>
-        <div v-if="!adResponsive" class="field field--wide">
+        <div v-if="!adResponsive" v-field class="field field--wide">
           <label>Заголовок 2 <span class="field-hint">{{ adForm.title2.length }}/30</span></label>
           <input v-model="adForm.title2" type="text" maxlength="30" />
         </div>
-        <div v-else class="field field--wide">
+        <div v-else v-field class="field field--wide">
           <label>Ещё заголовки — по одному на строку, до 6 <span class="field-hint">до 56 символов</span></label>
           <textarea v-model="adForm.more_titles" rows="3"></textarea>
         </div>
-        <div class="field field--wide">
+        <div v-field class="field field--wide">
           <label>Текст <span class="field-hint">{{ adForm.text.length }}/81</span></label>
           <textarea v-model="adForm.text" rows="2" maxlength="81" required></textarea>
         </div>
-        <div v-if="adResponsive" class="field field--wide">
+        <div v-if="adResponsive" v-field class="field field--wide">
           <label>Ещё тексты — по одному на строку, до 2 <span class="field-hint">до 81 символа</span></label>
           <textarea v-model="adForm.more_texts" rows="2"></textarea>
         </div>
         <p v-if="adResponsive" class="field-hint field--wide">
           Комбинаторное объявление ЕПК: Директ сам собирает показы из заголовков и текстов.
         </p>
-        <div class="field field--wide">
+        <div v-field class="field field--wide">
           <label>Ссылка</label>
           <input v-model="adForm.href" type="url" placeholder="https://…" required />
         </div>

@@ -131,7 +131,16 @@
         :format-value="METRIC_BY_KEY[chartKey].fmt"
       />
       <div class="metric-grid">
-        <div v-for="m in METRICS" :key="m.key" class="metric-grid__item">
+        <button
+          v-for="m in METRICS"
+          :key="m.key"
+          type="button"
+          class="metric-grid__item"
+          :class="{ active: chartKey === m.key, 'is-static': !CHART_METRICS.includes(m.key) }"
+          :disabled="!CHART_METRICS.includes(m.key)"
+          :aria-pressed="chartKey === m.key"
+          @click="chartKey = m.key"
+        >
           <small>{{ m.label }}</small>
           <strong>{{ m.fmt(week.totals[m.key]) }}</strong>
           <span :class="deltaTone(week.compare[m.key], m.inverse)">
@@ -140,7 +149,7 @@
               <small>было {{ m.fmt(week.previous[m.key]) }}</small>
             </template>
           </span>
-        </div>
+        </button>
       </div>
     </section>
 

@@ -26,17 +26,17 @@
           каждого пространства.
         </p>
         <form class="form-grid" @submit.prevent="saveAi">
-          <div class="field">
+          <div v-field class="field">
             <label>Провайдер</label>
             <select v-model="aiForm.provider">
               <option v-for="p in ai.providers" :key="p.id" :value="p.id">{{ p.label }}</option>
             </select>
           </div>
-          <div class="field">
+          <div v-field class="field">
             <label>Модель</label>
             <input v-model.trim="aiForm.model" type="text" :placeholder="defaultModel" autocomplete="off" />
           </div>
-          <div v-if="aiForm.provider === 'openai'" class="field field--wide">
+          <div v-if="aiForm.provider === 'openai'" v-field class="field field--wide">
             <label>Адрес API</label>
             <input v-model.trim="aiForm.base_url" type="url" :placeholder="ai.default_base_url" autocomplete="off" />
             <small class="field-hint">
@@ -44,12 +44,12 @@
               {{ ai.default_base_url }}.
             </small>
           </div>
-          <div v-else class="field field--wide">
+          <div v-else v-field class="field field--wide">
             <label>Каталог Yandex Cloud (folder_id)</label>
             <input v-model.trim="aiForm.folder_id" type="text" placeholder="b1g…" autocomplete="off" required />
             <small class="field-hint">Ключ — API-ключ сервисного аккаунта с ролью ai.languageModels.user.</small>
           </div>
-          <div class="field field--wide">
+          <div v-field class="field field--wide">
             <label>API-ключ</label>
             <input
               v-model="aiForm.api_key"
@@ -58,12 +58,12 @@
               :placeholder="ai.has_key ? `Сохранён ${ai.key_hint} — оставьте пустым, чтобы не менять` : 'Вставьте ключ'"
             />
           </div>
-          <div class="field">
+          <div v-field class="field">
             <label>Быстрая модель</label>
             <input v-model.trim="aiForm.model_fast" type="text" placeholder="как основная" autocomplete="off" />
             <small class="field-hint">Дешевле и быстрее — для массовой работы. Пусто — всё делает основная.</small>
           </div>
-          <div class="field">
+          <div v-field class="field">
             <label>Температура: {{ Number(aiForm.temperature).toFixed(1) }}</label>
             <input v-model.number="aiForm.temperature" type="range" min="0" max="1" step="0.1" />
             <small class="field-hint">Ниже — точнее и стабильнее, выше — разнообразнее тексты.</small>
@@ -71,25 +71,25 @@
           <p v-if="taskModels" class="field-hint">{{ taskModels }}</p>
 
           <h3>Цены и месячный лимит</h3>
-          <div class="field">
+          <div v-field class="field">
             <label>Основная: вход, ₽ за 1 млн токенов</label>
             <input v-model="aiForm.price_in" type="number" min="0" step="any" inputmode="decimal" placeholder="не задано" />
           </div>
-          <div class="field">
+          <div v-field class="field">
             <label>Основная: выход, ₽ за 1 млн токенов</label>
             <input v-model="aiForm.price_out" type="number" min="0" step="any" inputmode="decimal" placeholder="не задано" />
           </div>
           <template v-if="aiForm.model_fast">
-            <div class="field">
+            <div v-field class="field">
               <label>Быстрая: вход, ₽ за 1 млн токенов</label>
               <input v-model="aiForm.fast_price_in" type="number" min="0" step="any" inputmode="decimal" placeholder="как у основной" />
             </div>
-            <div class="field">
+            <div v-field class="field">
               <label>Быстрая: выход, ₽ за 1 млн токенов</label>
               <input v-model="aiForm.fast_price_out" type="number" min="0" step="any" inputmode="decimal" placeholder="как у основной" />
             </div>
           </template>
-          <div class="field">
+          <div v-field class="field">
             <label>Месячный лимит, ₽</label>
             <input v-model="aiForm.monthly_limit_rub" type="number" min="0" step="any" inputmode="decimal" placeholder="без лимита" />
             <small class="field-hint">
@@ -135,11 +135,11 @@
           зашифрованном виде.
         </p>
         <form class="form-grid" @submit.prevent="saveWordstat">
-          <div class="field field--wide">
+          <div v-field class="field field--wide">
             <label>Каталог Yandex Cloud (folder_id)</label>
             <input v-model.trim="wsForm.folder_id" type="text" placeholder="b1g…" autocomplete="off" />
           </div>
-          <div class="field field--wide">
+          <div v-field class="field field--wide">
             <label>API-ключ</label>
             <input
               v-model="wsForm.api_key"
@@ -297,7 +297,7 @@
                 />
                 Присылать каждое утро
               </label>
-              <div class="field">
+              <div v-field class="field">
                 <label>Время, МСК</label>
                 <select
                   :value="digest.hour"
@@ -334,11 +334,11 @@
       <section class="panel">
         <h2>Смена пароля</h2>
         <form class="filters" @submit.prevent="changePassword">
-          <div class="field">
+          <div v-field class="field">
             <label>Текущий</label>
             <input v-model="pwd.current" type="password" autocomplete="current-password" required />
           </div>
-          <div class="field">
+          <div v-field class="field">
             <label>Новый</label>
             <input v-model="pwd.next" type="password" autocomplete="new-password" required minlength="8" />
           </div>

@@ -22,11 +22,11 @@
 
   <section class="panel">
     <div class="filters">
-      <div class="field field--wide">
+      <div v-field class="field field--wide">
         <label>Поиск</label>
         <input v-model.trim="filters.search" type="search" placeholder="название или ID кампании" />
       </div>
-      <div v-if="accounts.length > 1" class="field">
+      <div v-if="accounts.length > 1" v-field class="field">
         <label>Кабинет</label>
         <select v-model="filters.account">
           <option value="">Все кабинеты</option>
@@ -35,7 +35,7 @@
           </option>
         </select>
       </div>
-      <div class="field">
+      <div v-field class="field">
         <label>Состояние</label>
         <select v-model="filters.state">
           <option value="">Все, кроме архива</option>
@@ -126,6 +126,7 @@
               <input
                 type="checkbox"
                 :checked="selected.has(c.campaign_row_id)"
+                :aria-label="`Выбрать «${c.name}»`"
                 @change="toggle(c.campaign_row_id, $event.target.checked)"
               />
             </td>
@@ -205,15 +206,15 @@
           {{ m.label }}
         </button>
       </div>
-      <div v-if="budgetModal.mode === 'weekly'" class="field field--wide">
+      <div v-if="budgetModal.mode === 'weekly'" v-field class="field field--wide">
         <label>Недельный бюджет, ₽</label>
         <input v-model.number="budgetModal.weekly" type="number" min="300" step="100" required />
       </div>
-      <div v-else-if="budgetModal.mode === 'daily'" class="field field--wide">
+      <div v-else-if="budgetModal.mode === 'daily'" v-field class="field field--wide">
         <label>Дневной бюджет, ₽</label>
         <input v-model.number="budgetModal.daily" type="number" min="300" step="50" required />
       </div>
-      <div v-else-if="budgetModal.mode === 'pct'" class="field field--wide">
+      <div v-else-if="budgetModal.mode === 'pct'" v-field class="field field--wide">
         <label>Изменить бюджет на, % (минус — уменьшить)</label>
         <input v-model.number="budgetModal.pct" type="number" min="-90" max="500" step="1" required />
       </div>
@@ -221,7 +222,7 @@
         <input v-model="budgetModal.target" type="checkbox" />
         Изменить цену цели стратегии (CPA или CPC)
       </label>
-      <div v-if="budgetModal.target" class="field field--wide">
+      <div v-if="budgetModal.target" v-field class="field field--wide">
         <label>Цена цели, % (минус — снизить)</label>
         <input v-model.number="budgetModal.targetPct" type="number" min="-90" max="500" step="1" required />
       </div>

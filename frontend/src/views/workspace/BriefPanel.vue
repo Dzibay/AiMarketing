@@ -18,7 +18,7 @@
       Черновик составлен по {{ drafted }}. Проверьте, поправьте и сохраните — без сохранения он не применится.
     </p>
     <form class="form-grid" @submit.prevent="save">
-      <div class="field field--wide">
+      <div v-field class="field field--wide">
         <label>Что продаём</label>
         <textarea
           v-model="form.product"
@@ -27,11 +27,11 @@
           placeholder="Товары или услуги, для кого, чем отличаемся: «Кухни на заказ из массива, средний чек от 300 тыс.»"
         />
       </div>
-      <div class="field">
+      <div v-field class="field">
         <label>География</label>
         <input v-model="form.geo" type="text" maxlength="300" placeholder="Москва и область" />
       </div>
-      <div class="field">
+      <div v-field class="field">
         <label>Точно не наше</label>
         <textarea
           v-model="form.not_ours"
@@ -40,7 +40,7 @@
         />
         <small class="field-hint">Слова и темы, запросы с которыми всегда нецелевые. До 100 строк.</small>
       </div>
-      <div class="field field--wide">
+      <div v-field class="field field--wide">
         <label>Заметки</label>
         <textarea
           v-model="form.notes"

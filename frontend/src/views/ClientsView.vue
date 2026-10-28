@@ -13,11 +13,11 @@
     <section class="panel">
       <h2>Новый клиент</h2>
       <form class="filters" @submit.prevent="create">
-        <div class="field field--wide">
+        <div v-field class="field field--wide">
           <label>Название</label>
           <input v-model.trim="draft.name" type="text" required maxlength="200" placeholder="ООО «Ромашка»" />
         </div>
-        <div class="field">
+        <div v-field class="field">
           <label>Общий бюджет в месяц, ₽</label>
           <input v-model="draft.monthly_budget_rub" type="number" min="0" step="1000" placeholder="не задан" />
         </div>
@@ -46,15 +46,15 @@
         </div>
 
         <form v-if="editId === client.id" class="form-grid" @submit.prevent="saveEdit(client)">
-          <div class="field">
+          <div v-field class="field">
             <label>Название</label>
             <input v-model.trim="edit.name" type="text" required maxlength="200" />
           </div>
-          <div class="field">
+          <div v-field class="field">
             <label>Общий бюджет в месяц, ₽</label>
             <input v-model="edit.monthly_budget_rub" type="number" min="0" step="1000" placeholder="не задан" />
           </div>
-          <div class="field field--wide">
+          <div v-field class="field field--wide">
             <label>Заметки</label>
             <textarea v-model="edit.notes" rows="3" maxlength="5000" placeholder="Контакты, договорённости, особенности"></textarea>
           </div>
@@ -84,7 +84,7 @@
         <p v-else class="empty">В папке пока нет сайтов.</p>
 
         <div v-if="unassigned.length" class="filters folder__add">
-          <div class="field field--wide">
+          <div v-field class="field field--wide">
             <label>Добавить сайт</label>
             <select @change="assignFromSelect($event, client.id)">
               <option value="">Выберите пространство без клиента</option>

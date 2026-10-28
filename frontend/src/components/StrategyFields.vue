@@ -1,18 +1,18 @@
 <template>
   <div class="form-grid">
-    <div class="field">
+    <div v-field class="field">
       <label>Стратегия на поиске</label>
       <select :value="model.search" @change="setSearch($event.target.value)">
         <option v-for="s in opts.search_strategies" :key="s.id" :value="s.id">{{ s.label }}</option>
       </select>
     </div>
-    <div class="field">
+    <div v-field class="field">
       <label>В сетях (РСЯ)</label>
       <select :value="model.network" @change="setNetwork($event.target.value)">
         <option v-for="n in networkChoices" :key="n.id" :value="n.id">{{ n.label }}</option>
       </select>
     </div>
-    <div v-for="p in params" :key="p.key" class="field">
+    <div v-for="p in params" :key="p.key" v-field class="field">
       <label>
         {{ p.label }}<span v-if="p.required" aria-hidden="true"> *</span>
       </label>

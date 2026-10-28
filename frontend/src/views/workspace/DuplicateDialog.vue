@@ -5,11 +5,11 @@
         Копируются настройки, группы, ключевые фразы (со ставками при ручной стратегии) и текстовые объявления. Копия
         создаётся остановленной; объявления — черновиками.
       </p>
-      <div class="field field--wide">
+      <div v-field class="field field--wide">
         <label>Название копии</label>
         <input v-model.trim="form.name" type="text" maxlength="255" required />
       </div>
-      <div class="field field--wide">
+      <div v-field class="field field--wide">
         <label>Пространство для копии</label>
         <select v-model.number="form.target_workspace_id">
           <option v-for="w in workspaceChoices" :key="w.id" :value="w.id">
@@ -20,7 +20,7 @@
           Копия получит счётчик выбранного пространства вместо № {{ workspace.counter_id }}.
         </p>
       </div>
-      <div class="field field--wide">
+      <div v-field class="field field--wide">
         <label>Кабинет Директа</label>
         <select v-model.number="form.target_account_id" required>
           <optgroup v-if="accounts.length" label="Кабинеты пространства">

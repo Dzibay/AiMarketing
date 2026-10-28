@@ -18,11 +18,11 @@
         <small class="hint">— загрузить CSV или XLSX с колонками «Заголовок», «Клики», «Конверсии»…</small>
       </summary>
       <form class="hl-upload__form" @submit.prevent="upload">
-        <select v-model="uploadCampaign">
+        <select v-model="uploadCampaign" aria-label="Кампания отчёта">
           <option :value="null">Кампании — из колонки «№ кампании» или все</option>
           <option v-for="c in campaigns" :key="c.campaign_row_id" :value="c.campaign_row_id">{{ c.name }}</option>
         </select>
-        <input ref="fileInput" type="file" accept=".csv,.xlsx,.txt" @change="file = $event.target.files[0] || null" />
+        <input ref="fileInput" type="file" accept=".csv,.xlsx,.txt" aria-label="Файл отчёта" @change="file = $event.target.files[0] || null" />
         <button class="btn btn--ghost" type="submit" :disabled="!file || uploading">
           {{ uploading ? 'Загружаем…' : 'Загрузить' }}
         </button>
@@ -222,6 +222,12 @@ onMounted(loadReports)
   gap: 8px;
   align-items: center;
   margin: 8px 0;
+}
+/* Длинные названия кампаний не должны раздвигать форму шире экрана телефона. */
+.hl-upload__form select,
+.hl-upload__form input {
+  min-width: 0;
+  max-width: 100%;
 }
 .hl-reports {
   margin: 8px 0;

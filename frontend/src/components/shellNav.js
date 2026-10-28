@@ -20,6 +20,7 @@ export const CABINET_NAV = [
   {
     key: 'tools',
     label: 'Инструменты',
+    short: 'Сервисы',
     icon: Wrench,
     pages: [
       { label: 'Минус-фразы', to: '/cabinet/negative-lists' },

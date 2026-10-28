@@ -102,18 +102,18 @@
 
   <section v-if="tab !== 'memory'" class="panel">
     <div class="filters">
-      <div class="field field--wide">
+      <div v-field class="field field--wide">
         <label>Поиск</label>
         <input v-model.trim="filters.search" type="search" placeholder="слово из запроса" />
       </div>
-      <div v-if="campaigns.length > 1" class="field">
+      <div v-if="campaigns.length > 1" v-field class="field">
         <label>Кампания</label>
         <select v-model="filters.campaign">
           <option value="">Все кампании</option>
           <option v-for="c in campaigns" :key="c.id" :value="String(c.id)">{{ c.name }}</option>
         </select>
       </div>
-      <div class="field">
+      <div v-field class="field">
         <label>Расход от, ₽</label>
         <input v-model="filters.minCost" type="number" min="0" step="10" placeholder="0" />
       </div>
@@ -300,11 +300,11 @@
       </div>
     </div>
     <div class="filters">
-      <div class="field field--wide">
+      <div v-field class="field field--wide">
         <label>Поиск</label>
         <input v-model.trim="mem.search" type="search" placeholder="запрос или минус-фраза" />
       </div>
-      <div class="field">
+      <div v-field class="field">
         <label>Решение</label>
         <select v-model="mem.verdict">
           <option value="">Все</option>
@@ -402,7 +402,7 @@
       {{ plan.conflicts }} {{ plural(plan.conflicts, 'минус-фраза пересекается', 'минус-фразы пересекаются', 'минус-фраз пересекаются') }}
       с вашими ключевыми фразами — такие пропустим, добавить их можно будет отдельно.
     </p>
-    <div v-if="plan.keywords" class="field">
+    <div v-if="plan.keywords" v-field class="field">
       <label>Ставка для новых ключевых фраз, ₽</label>
       <input v-model="applyModal.bid" type="number" min="0.3" step="0.1" placeholder="по умолчанию Директа" />
       <small class="field-hint">Пусто — подойдёт для автостратегий: ставку назначит Директ.</small>

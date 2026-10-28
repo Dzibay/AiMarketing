@@ -97,7 +97,9 @@
               <small>Горит</small>
             </div>
             <strong :class="fireCount ? 'tone-bad' : 'tone-ok'">{{ fireCount }}</strong>
-            <span class="cell-note">{{ fireCount ? 'проблем требуют внимания' : 'всё спокойно' }}</span>
+            <span class="cell-note">
+              {{ fireCount ? `${plural(fireCount, 'проблема требует', 'проблемы требуют', 'проблем требуют')} внимания` : 'всё спокойно' }}
+            </span>
           </div>
         </div>
 
@@ -105,7 +107,7 @@
           <div class="panel__head">
             <h2>Пространства</h2>
             <div class="filters filters--inline">
-              <input v-model="search" type="search" placeholder="Сайт или клиент" />
+              <input v-model="search" type="search" placeholder="Сайт или клиент" aria-label="Поиск по пространствам" />
               <label class="check-row">
                 <input v-model="onlyProblems" type="checkbox" />
                 Только с проблемами
@@ -231,12 +233,12 @@
           <div class="panel__head">
             <h2>Где горит</h2>
             <div class="filters filters--inline">
-              <select v-model="severityFilter">
+              <select v-model="severityFilter" aria-label="Серьёзность проблем">
                 <option value="all">Все</option>
                 <option value="fire">Критично и внимание</option>
                 <option value="critical">Только критично</option>
               </select>
-              <select v-model="wsFilter">
+              <select v-model="wsFilter" aria-label="Пространство">
                 <option value="">Все пространства</option>
                 <option v-for="w in rows" :key="w.id ?? 'none'" :value="wsKey(w.id)">{{ w.name }}</option>
               </select>

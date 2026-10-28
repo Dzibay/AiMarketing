@@ -17,6 +17,7 @@
         type="text"
         inputmode="url"
         maxlength="1024"
+        aria-label="Шаблон ссылки"
         placeholder="https://site.ru/?ref=Yandex&utm_source=yandex&utm_medium={source_type}&utm_campaign={campaign_id}"
       />
       <button class="btn btn--accent" type="submit" :disabled="saving || template === (ws.url_template || '')">

@@ -198,6 +198,7 @@
           v-model="draft"
           rows="2"
           maxlength="8000"
+          aria-label="Сообщение ИИ"
           :disabled="status === 'running' || !aiConfigured"
           :placeholder="placeholder"
           @keydown.enter.exact.prevent="send()"

@@ -7,11 +7,11 @@
         меняет Директ и пишет в журнал действий.
       </p>
       <div class="filters">
-        <div class="field">
+        <div v-field class="field">
           <label>Название</label>
           <input v-model="form.name" type="text" placeholder="CPA высокий" />
         </div>
-        <div class="field">
+        <div v-field class="field">
           <label>Объект</label>
           <select v-model="form.target">
             <option value="campaign">Кампании</option>
@@ -19,7 +19,7 @@
             <option value="query">Поисковые запросы</option>
           </select>
         </div>
-        <div class="field">
+        <div v-field class="field">
           <label>Условие</label>
           <select v-model="form.rule_type">
             <option value="cpa_above">CPA выше порога, ₽</option>
@@ -32,29 +32,29 @@
             </option>
           </select>
         </div>
-        <div class="field">
+        <div v-field class="field">
           <label>Порог</label>
           <input v-model.number="form.threshold_value" type="number" min="0" step="1" />
         </div>
-        <div v-if="form.target === 'campaign'" class="field">
+        <div v-if="form.target === 'campaign'" v-field class="field">
           <label>За сколько дней</label>
           <input v-model.number="form.lookback_days" type="number" min="1" max="30" />
         </div>
-        <div v-if="!workspace" class="field">
+        <div v-if="!workspace" v-field class="field">
           <label>Пространство</label>
           <select v-model="form.scope_workspace_id">
             <option value="">Все</option>
             <option v-for="w in workspaces" :key="w.id" :value="String(w.id)">{{ w.name }}</option>
           </select>
         </div>
-        <div class="field">
+        <div v-field class="field">
           <label>Кабинет</label>
           <select v-model="form.scope_account_id">
             <option value="">Все</option>
             <option v-for="a in accounts" :key="a.id" :value="String(a.id)">{{ a.name || a.client_login }}</option>
           </select>
         </div>
-        <div v-if="form.target === 'campaign'" class="field">
+        <div v-if="form.target === 'campaign'" v-field class="field">
           <label>Конверсии</label>
           <select v-model="form.goal_row_id">
             <option value="">Конверсии Директа</option>
@@ -63,7 +63,7 @@
             </option>
           </select>
         </div>
-        <div class="field">
+        <div v-field class="field">
           <label>Действие</label>
           <select v-model="form.action">
             <option v-if="form.target !== 'query'" value="pause">Остановить</option>
@@ -77,23 +77,23 @@
             <option value="notify">Только уведомить</option>
           </select>
         </div>
-        <div v-if="form.action === 'set_weekly_budget'" class="field">
+        <div v-if="form.action === 'set_weekly_budget'" v-field class="field">
           <label>Недельный бюджет, ₽</label>
           <input v-model.number="form.action_budget_rub" type="number" min="300" step="100" />
         </div>
-        <div v-if="form.action === 'change_budget_pct'" class="field">
+        <div v-if="form.action === 'change_budget_pct'" v-field class="field">
           <label>Изменить на, % (минус — уменьшить)</label>
           <input v-model.number="form.action_pct" type="number" min="-90" max="500" step="1" />
         </div>
-        <div v-if="form.action === 'change_budget_pct'" class="field">
+        <div v-if="form.action === 'change_budget_pct'" v-field class="field">
           <label>{{ form.action_pct < 0 ? 'Не ниже' : 'Не выше' }}, ₽/нед. (необязательно)</label>
           <input v-model.number="form.action_cap_rub" type="number" min="300" step="100" />
         </div>
-        <div v-if="form.action === 'set_budget'" class="field">
+        <div v-if="form.action === 'set_budget'" v-field class="field">
           <label>Бюджет, ₽</label>
           <input v-model.number="form.action_budget_rub" type="number" min="300" step="1" />
         </div>
-        <div v-if="form.action === 'set_bid'" class="field">
+        <div v-if="form.action === 'set_bid'" v-field class="field">
           <label>Ставка, ₽</label>
           <input v-model.number="form.action_bid_rub" type="number" min="0.3" step="0.1" />
         </div>

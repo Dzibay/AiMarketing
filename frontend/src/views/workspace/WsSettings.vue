@@ -15,15 +15,15 @@
       <RouterLink to="/cabinet/accounts">аккаунтах</RouterLink>.
     </p>
     <form class="form-grid" @submit.prevent="saveGeneral">
-      <div class="field">
+      <div v-field class="field">
         <label>Название</label>
         <input v-model.trim="general.name" type="text" maxlength="120" required />
       </div>
-      <div class="field">
+      <div v-field class="field">
         <label>Сайт</label>
         <input v-model.trim="general.site" type="text" maxlength="300" placeholder="example.ru" />
       </div>
-      <div class="field">
+      <div v-field class="field">
         <label>Папка клиента</label>
         <select v-model="general.client_id">
           <option :value="null">Без клиента</option>
@@ -31,12 +31,12 @@
         </select>
         <small class="field-hint"><RouterLink to="/cabinet/clients">Папки клиентов</RouterLink></small>
       </div>
-      <div class="field">
+      <div v-field class="field">
         <label>Бюджет на месяц, ₽</label>
         <input v-model="general.monthly_budget_rub" type="number" min="0" step="100" placeholder="не задан" />
         <small class="field-hint">Сводка покажет темп расхода относительно плана.</small>
       </div>
-      <div class="field">
+      <div v-field class="field">
         <label>KPI</label>
         <select v-model="general.kpi_type">
           <option value="">Не задан</option>
@@ -44,8 +44,8 @@
           <option value="drr">ДРР — доля рекламных расходов, %</option>
         </select>
       </div>
-      <div class="field">
-        <label>Целевое значение {{ general.kpi_type === 'drr' ? ', %' : general.kpi_type === 'cpa' ? ', ₽' : '' }}</label>
+      <div v-field class="field">
+        <label>Целевое значение{{ general.kpi_type === 'drr' ? ', %' : general.kpi_type === 'cpa' ? ', ₽' : '' }}</label>
         <input
           v-model="general.kpi_target"
           type="number"
@@ -55,7 +55,7 @@
           :placeholder="general.kpi_type ? '' : 'сначала выберите KPI'"
         />
       </div>
-      <div class="field field--wide">
+      <div v-field class="field field--wide">
         <label>Основная цель Метрики</label>
         <div class="filters--inline">
           <select v-model="general.goal_id">
@@ -119,14 +119,14 @@
     <div v-if="available.length" class="add-account">
       <h3>Подключить кабинет</h3>
       <form class="filters filters--inline" @submit.prevent="addAccount">
-        <select v-model="addForm.account_id" required>
+        <select v-model="addForm.account_id" required aria-label="Кабинет">
           <option :value="null" disabled>Кабинет…</option>
           <option v-for="a in available" :key="a.id" :value="a.id" :disabled="!a.enabled">
             {{ a.name || a.client_login }}{{ a.sandbox ? ' (песочница)' : '' }} · кампаний {{ a.campaigns_total
             }}{{ a.campaigns_matching ? `, со счётчиком ${a.campaigns_matching}` : '' }}
           </option>
         </select>
-        <select v-model="addForm.campaigns">
+        <select v-model="addForm.campaigns" aria-label="Какие кампании забрать">
           <option value="matching">Забрать кампании с этим счётчиком</option>
           <option value="all">Забрать все свободные кампании</option>
           <option value="none">Без кампаний</option>
@@ -155,7 +155,7 @@
     </div>
 
     <div class="filters filters--inline">
-      <input v-model.trim="campaignSearch" class="search-input" type="search" placeholder="Название или № кампании" />
+      <input v-model.trim="campaignSearch" class="search-input" type="search" placeholder="Название или № кампании" aria-label="Поиск кампании" />
       <label class="check-row">
         <input v-model="onlyMatching" type="checkbox" />
         <span>Только со счётчиком № {{ ws.counter_id }}</span>
@@ -246,14 +246,14 @@
           <span>{{ c.label }}</span>
         </label>
       </fieldset>
-      <div class="field">
+      <div v-field class="field">
         <label>Предел разового изменения бюджета или ставки: {{ ai.max_change_pct }}%</label>
         <input v-model.number="ai.max_change_pct" type="range" min="0" max="200" step="5" :disabled="ai.full_access" />
         <small class="field-hint">
           Изменение больше предела ИИ всё равно отправит на согласование, даже если категория разрешена.
         </small>
       </div>
-      <div class="field field--wide">
+      <div v-field class="field field--wide">
         <label>Заметки для ИИ</label>
         <textarea
           v-model="ai.notes"

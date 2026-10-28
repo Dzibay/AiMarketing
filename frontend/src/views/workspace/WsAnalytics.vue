@@ -28,11 +28,11 @@
           {{ n }} дн.
         </button>
       </div>
-      <div class="field">
+      <div v-field class="field">
         <label>С</label>
         <input v-model="range.date_from" type="date" :max="range.date_to" @change="customRange" />
       </div>
-      <div class="field">
+      <div v-field class="field">
         <label>По</label>
         <input v-model="range.date_to" type="date" :min="range.date_from" @change="customRange" />
       </div>
@@ -66,6 +66,7 @@
           class="metric-grid__item"
           :class="{ active: chartKey === m.key, 'is-static': !CHART_METRICS.includes(m.key) }"
           :disabled="!CHART_METRICS.includes(m.key)"
+          :aria-pressed="chartKey === m.key"
           @click="chartKey = m.key"
         >
           <small>{{ m.label }}</small>
@@ -92,7 +93,7 @@
     <section class="panel">
       <div class="panel__head">
         <h2>Кампании</h2>
-        <input v-model.trim="campaignSearch" type="search" class="search-input" placeholder="Найти кампанию" />
+        <input v-model.trim="campaignSearch" type="search" class="search-input" placeholder="Найти кампанию" aria-label="Поиск кампании" />
       </div>
       <p v-if="!data.by_campaign.length" class="empty">
         В пространстве нет кампаний —
