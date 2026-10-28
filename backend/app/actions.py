@@ -1934,9 +1934,12 @@ def duplicate_campaign(
     name: str | None = None,
     workspace_id: int | None = None,
     progress=None,
+    exclude_adgroup_ids: set[int] | None = None,
 ) -> dict:
     """
     Копия кампании со структурой: настройки, группы, фразы и автотаргетинг.
+    exclude_adgroup_ids — id групп Директа, которые не копируем (вместе с их фразами и объявлениями).
+    В ответе group_map: id группы оригинала → id её копии в Директе.
     Объявления — комбинаторные, текстовые, графические и товарные. Товарные читаются и создаются
     через API v501, фид остаётся в том же кабинете. Ставки фраз и автотаргетинга задаются через
     keywordbids.set: группа создаётся со ставкой автотаргетинга 0,30 ₽, и add её не меняет.
@@ -1998,7 +2001,7 @@ def duplicate_campaign(
     )
     if ws:
         attach_campaign(user_id, int(ws["id"]), row["id"])
-    out = {"campaign": row, "groups": 0, "keywords": 0, "ads": 0, "warnings": warnings, "status": "ok"}
+    out = {"campaign": row, "groups": 0, "group_map": {}, "keywords": 0, "ads": 0, "warnings": warnings, "status": "ok"}
 
     try:
         step(2, "Копирую группы")
@@ -2017,6 +2020,8 @@ def duplicate_campaign(
         if skipped:
             warnings.append(f"Пропущено групп особых типов: {len(skipped)}")
         groups = [g for g in groups if g.get("Type") in _GROUP_TYPES]
+        if exclude_adgroup_ids:
+            groups = [g for g in groups if int(g["Id"]) not in exclude_adgroup_ids]
         payload = [_group_for_add(g, new_campaign_id, unified=unified) for g in groups]
         new_group_ids, errors = _add_batches(
             dst_token, dst["client_login"], "adgroups", "AdGroups", payload, version="v501" if unified else "v5"
@@ -2024,6 +2029,7 @@ def duplicate_campaign(
         warnings.extend(f"Группа: {e}" for e in errors[:5])
         group_map = {int(g["Id"]): new for g, new in zip(groups, new_group_ids) if new}
         out["groups"] = len(group_map)
+        out["group_map"] = group_map
 
         step(3, "Копирую ключевые фразы и автотаргетинг")
         keywords = []

@@ -337,3 +337,13 @@ def test_duplicate_campaign_reads_ads_of_the_source_campaign(monkeypatch):
     ]
     assert [a for a in added if a[0] == "ads"] == [("ads", "v5", ["TextAd"]), ("ads", "v501", ["ResponsiveAd"])]
     assert journal[0]["title"] == "Копия «Поиск» → «Поиск (копия)» (client-dst)"
+    assert out["group_map"] == {1: 2}
+
+    # Убранная группа не копируется вместе с её фразами и объявлениями.
+    found[("adgroups", 111)].append({"Id": 3, "Name": "Плохая", "Type": "TEXT_AD_GROUP"})
+    found[("keywords", 111)].append({"Id": 33, "AdGroupId": 3, "Keyword": "слон даром", "Bid": 5_000_000})
+    found[("ads", 111)].append({"Id": 53, "AdGroupId": 3, "TextAd": text_ad})
+    added.clear()
+    out = actions.duplicate_campaign(7, 10, target_account_id=2, exclude_adgroup_ids={3})
+    assert (out["groups"], out["keywords"], out["ads"], out["group_map"]) == (1, 1, 2, {1: 2})
+    assert [len(a[2]) for a in added] == [1, 1, 1, 1]  # группа, фраза, текстовое и комбинаторное объявления

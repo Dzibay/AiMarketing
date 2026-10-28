@@ -1053,9 +1053,10 @@ def _p_create_variants(ctx: Context, args: dict) -> Plan:
         )
     summary = "Варианты кампании: " + " → ".join(steps) + "; оригинал работает"
     categories = ["campaigns"]
-    if any("ads" in v for v in items):
+    parts = [*items, *(g for v in items for g in v.get("groups") or [])]
+    if any("ads" in p for p in parts):
         categories.append("ads")
-    if any("keywords" in v for v in items):
+    if any("keywords" in p for p in parts):
         categories.append("keywords")
     if exp or any("weekly_budget_rub" in v for v in items):
         # Новые кампании с расходом — всегда на согласование, кроме полного доступа.
@@ -1858,8 +1859,11 @@ def _d_start_experiment(ctx: Context, args: dict) -> list[dict]:
     return out
 
 
-def _variant_texts(spec: dict) -> str:
-    where = "во всех объявлениях копии" if spec["mode"] == "replace" else "новое объявление в каждой группе"
+def _variant_texts(spec: dict, group: bool = False) -> str:
+    if group:
+        where = "тексты объявлений группы" if spec["mode"] == "replace" else "новое объявление"
+    else:
+        where = "во всех объявлениях копии" if spec["mode"] == "replace" else "новое объявление в каждой группе"
     parts = []
     if spec["titles"]:
         parts.append("заголовки: " + " | ".join(spec["titles"]))
@@ -1876,9 +1880,28 @@ def _variant_phrases(spec: dict) -> str:
     return f"+{_count(len(phrases), 'фраза', 'фразы', 'фраз')}: {head}"
 
 
+def _variant_groups(v: dict, source: list[dict]) -> tuple[str, str]:
+    """Строка «до / после» для изменений по группам варианта."""
+    before = ", ".join(f"«{g['name']}»" for g in sorted(source, key=lambda g: int(g["id"])))
+    after = []
+    for g in v["groups"]:
+        if g.get("remove"):
+            after.append(f"без «{g['source_name']}»")
+            continue
+        content = []
+        if "keywords" in g:
+            content.append("фразы " + _variant_phrases(g["keywords"]))
+        if "ads" in g:
+            content.append(_variant_texts(g["ads"], group=True))
+        head = f"новая группа «{g['name']}»" if g.get("new") else f"«{g['source_name']}»"
+        after.append(f"{head}: " + "; ".join(content))
+    return before, " / ".join(after)
+
+
 def _d_create_variants(ctx: Context, args: dict) -> list[dict]:
     from app import geo, variants
     from app.actions import SCHEDULE_PRESETS
+    from app.adgroups import list_adgroups
 
     row, items, exp = _variants_args(ctx, args)
     names = _goal_names(ctx)
@@ -1891,6 +1914,7 @@ def _d_create_variants(ctx: Context, args: dict) -> list[dict]:
         else {}
     )
     state = "на модерацию" if _bool(args, "moderate", True) else "черновиками"
+    source_groups = None
     out = [_ch("Новые кампании", "нет", f"{_count(len(items), 'копия', 'копии', 'копий')} «{row['name']}» — {state}")]
     for v in items:
         before, after = [], []
@@ -1921,6 +1945,10 @@ def _d_create_variants(ctx: Context, args: dict) -> list[dict]:
             content.append("фразы " + _variant_phrases(v["keywords"]))
         if content:
             out.append(_ch(f"{title}: объявления и фразы", "как у оригинала", "; ".join(content)))
+        if "groups" in v:
+            if source_groups is None:
+                source_groups = list_adgroups(ctx.user_id, row["id"])
+            out.append(_ch(f"{title}: группы", *_variant_groups(v, source_groups)))
     out.append(_ch(f"Оригинал «{row['name']}»", _state_label(row["state"], row["status"]), "без изменений"))
     if exp:
         ends = today_msk() + timedelta(days=exp["days"] - 1)
@@ -2553,6 +2581,8 @@ TOOLS = [
         "Масштабирование и тест: 1–5 копий кампании-источника с её структурой, целями и оплатой, но своими "
         "параметрами — регионы, расписание, ценность ключевых целей, недельный бюджет, тексты объявлений, ключевые "
         "фразы. В каждом варианте задай только то, что меняется; остальное — как у оригинала. Оригинал не трогает. "
+        "В кампании с несколькими группами фразы и тексты задавай по группам (groups): правки групп оригинала, "
+        "remove — не копировать слабую группу, name — новая группа для теста. "
         "Вариант с ошибкой на любом шаге остаётся черновиком. С experiment — сразу эксперимент по вариантам с "
         "лимитом ₽/нед. и сравнением с оригиналом. Вызывай после того, как маркетолог одобрил варианты в propose_plan.",
         {
@@ -2604,12 +2634,54 @@ TOOLS = [
                                     "type": "string",
                                     "enum": ["add", "replace"],
                                     "description": "add — добавить к фразам оригинала (в первую группу); replace — "
-                                    "оставить только эти (кампания с одной группой)",
+                                    "оставить только эти (только при одной группе, иначе — groups)",
                                 },
                                 "phrases": {"type": "array", "items": {"type": "string"}, "description": "до 200"},
                                 "bid_rub": {"type": "number"},
                             },
                             "required": ["phrases"],
+                        },
+                        "groups": {
+                            "type": "array",
+                            "maxItems": 20,
+                            "description": "изменения по группам вместо ads и keywords на всю кампанию; группы "
+                            "без записи копируются как есть",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "group_id": {**_ID, "description": "группа оригинала (id из get_campaign)"},
+                                    "remove": {"type": "boolean", "description": "не копировать эту группу"},
+                                    "name": {"type": "string", "description": "новая группа (без group_id): нужны keywords и ads"},
+                                    "keywords": {
+                                        "type": "object",
+                                        "properties": {
+                                            "mode": {
+                                                "type": "string",
+                                                "enum": ["add", "replace"],
+                                                "description": "add — к фразам группы; replace — у группы только эти",
+                                            },
+                                            "phrases": {"type": "array", "items": {"type": "string"}},
+                                            "bid_rub": {"type": "number"},
+                                        },
+                                        "required": ["phrases"],
+                                    },
+                                    "ads": {
+                                        "type": "object",
+                                        "properties": {
+                                            "mode": {
+                                                "type": "string",
+                                                "enum": ["replace", "add"],
+                                                "description": "replace — новые тексты в объявлениях группы; add — "
+                                                "новое объявление в группе (у новой группы — всегда)",
+                                            },
+                                            "titles": {"type": "array", "items": {"type": "string"}},
+                                            "texts": {"type": "array", "items": {"type": "string"}},
+                                            "title2": {"type": "string"},
+                                            "href": {"type": "string"},
+                                        },
+                                    },
+                                },
+                            },
                         },
                     },
                 },
@@ -2805,7 +2877,13 @@ def _system_prompt(ctx: Context) -> str:
         "get_wordstat: 1–5 главных фраз (конвертящие запросы, ключи оригинала) с регионами варианта; бери "
         "запросы по теме бизнеса с заметной частотой, частоты называй из ответа, нецелевые слова оттуда — "
         "кандидаты в минус-фразы. Если Вордстат не подключён или упёрся в квоту, так и скажи и расширяй ключи "
-        "из запросов и брифа.",
+        "из запросов и брифа. В кампании с несколькими группами смотри группы в get_campaign (статистика, фразы "
+        "и объявления каждой) и задавай изменения по группам (groups): каждой группе — свои фразы и тексты под её "
+        "тему; слабую группу (расход без конверсий) предлагай не копировать (remove), для теста — новую группу "
+        "(name, фразы и объявление). Группы без записи копируются как есть. В propose_plan покажи по каждому "
+        "варианту, что меняется в какой группе. Если create_campaign_variants не создался или варианты собрались "
+        "с ошибками, не переделывай план сам: объясни ошибку простыми словами и спроси через ask_questions, как "
+        "поступить.",
         "- Провальную кампанию сначала разбери: get_signals, get_campaign_history, get_campaign_settings, "
         "get_search_queries. Затем предложи, что лучше: исправить на месте (минус-фразы, ставки, настройки, тексты "
         "— если ошибка одна и понятная, а история кампании ценна) или исправленные копии через "

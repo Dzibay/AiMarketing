@@ -49,7 +49,8 @@ def test_normalize_defaults_and_cleanup():
         ([], "variants — список вариантов, от 1 до 5"),
         ([{"schedule": "always"}] * 6, "Не больше 5 вариантов за раз — оставь самые сильные гипотезы"),
         ([{"idea": "просто копия"}], "Вариант 1 ничего не меняет — задай хотя бы одно: region_ids, schedule, "
-                                     "priority_goals, weekly_budget_rub, ads, keywords; просто копия — duplicate_campaign"),
+                                     "priority_goals, weekly_budget_rub, ads, keywords, groups; просто копия — "
+                                     "duplicate_campaign"),
         ([{"name": "А", "schedule": "always"}, {"name": "а", "schedule": "daytime"}],
          "Вариант 2: название «а» уже занято — у вариантов разные названия"),
         ([{"schedule": "nights"}], "Вариант 1: schedule — одно из ['always', 'workdays', 'workhours', 'daytime']"),
@@ -101,7 +102,7 @@ def test_merge_goals_keeps_the_rest_of_the_list():
 @pytest.fixture
 def direct(monkeypatch):
     """Директ без сети: копия кампании 7 — кампания 70 с двумя объявлениями в одной группе."""
-    fake = SimpleNamespace(calls=[], fail=set(), groups=[{"id": 700, "name": "Группа"}], status="ok")
+    fake = SimpleNamespace(calls=[], fail=set(), groups=[{"id": 700, "name": "Группа"}], status="ok", group_map={})
 
     def call(name, result=None):
         def fn(*args, **kwargs):
@@ -111,10 +112,10 @@ def direct(monkeypatch):
             return result() if callable(result) else result
         return fn
 
-    def duplicate(user_id, cid, *, name=None, workspace_id=None, **kw):
-        fake.calls.append(("duplicate", (cid,), {"name": name}))
-        return {"campaign": {"id": 70, "name": name}, "groups": 1, "keywords": 2, "ads": 2, "warnings": [],
-                "status": fake.status}
+    def duplicate(user_id, cid, *, name=None, workspace_id=None, exclude_adgroup_ids=None, **kw):
+        fake.calls.append(("duplicate", (cid,), {"name": name, "exclude": exclude_adgroup_ids}))
+        return {"campaign": {"id": 70, "name": name}, "groups": 1, "group_map": fake.group_map, "keywords": 2,
+                "ads": 2, "warnings": [], "status": fake.status}
 
     monkeypatch.setattr(actions, "duplicate_campaign", duplicate)
     monkeypatch.setattr(actions, "get_campaign_settings", call("settings", lambda: {
@@ -231,7 +232,161 @@ def test_check_source(direct, monkeypatch):
     direct.groups = [{"id": 700, "name": "Группа"}, {"id": 701, "name": "Вторая"}]
     with pytest.raises(YandexError) as exc:
         variants.check_source(1, source, variants.normalize_variants([FULL], "Окна"))
-    assert exc.value.message.startswith("Вариант 1: в «Окна» 2 групп — заменить фразы можно только")
+    assert exc.value.message == (
+        "Вариант 1: в «Окна» групп: 2 — заменить фразы сразу во всей кампании нельзя. Задай фразы каждой группе "
+        "в groups (group_id: 700 «Группа», 701 «Вторая») или keywords.mode=add"
+    )
+
+
+# --- Изменения по группам ------------------------------------------------------------------------
+
+GROUPS = {
+    "groups": [
+        {"group_id": 700, "keywords": {"mode": "replace", "phrases": ["окна пвх", "окна на заказ"]},
+         "ads": {"titles": ["Окна под ключ"]}},
+        {"group_id": "701", "ads": {"mode": "add", "titles": ["Двери"], "texts": ["Монтаж за день"]}},
+        {"group_id": 702, "remove": True},
+        {"name": "Балконы", "keywords": ["остекление балконов"], "ads": {"titles": ["Балконы"], "texts": ["Под ключ"]}},
+    ]
+}
+
+
+def test_normalize_groups():
+    v = variants.normalize_variants([GROUPS], "Окна")[0]
+    assert v["groups"][1] == {"group_id": 701, "ads": {"mode": "add", "titles": ["Двери"], "texts": ["Монтаж за день"],
+                                                       "title2": "", "href": ""}}
+    assert v["groups"][2] == {"group_id": 702, "remove": True}
+    assert v["groups"][3]["new"] is True
+    assert v["groups"][3]["keywords"]["mode"] == "add" and v["groups"][3]["ads"]["mode"] == "add"
+
+
+@pytest.mark.parametrize(
+    "raw, text",
+    [
+        ({"groups": [{"group_id": 700}]}, "Вариант 1, группа 1: группа 700 ничего не меняет — задай keywords, ads или remove: true"),
+        ({"groups": [{"group_id": 700, "remove": True, "keywords": ["a"]}]},
+         "Вариант 1, группа 1: группу 700 убираем (remove) — keywords и ads ей не нужны"),
+        ({"groups": [{"name": "Новая", "keywords": ["a"]}]},
+         "Вариант 1, группа 1: новой группе «Новая» нужны keywords и ads (titles и texts)"),
+        ({"groups": [{"name": "Новая", "keywords": ["a"], "ads": {"titles": ["Т"]}}]},
+         "Вариант 1, группа 1: для нового объявления (mode=add) нужны titles и texts"),
+        ({"groups": [{"remove": True}]},
+         "Вариант 1, группа 1: group_id группы оригинала (из get_campaign) или name новой группы"),
+        ({"groups": [{"group_id": 700, "remove": True}, {"group_id": 700, "keywords": ["a"]}]},
+         "Вариант 1: группа 700 указана дважды — объедини изменения"),
+        ({"keywords": ["a"], "groups": [{"group_id": 700, "remove": True}]},
+         "Вариант 1: фразы и объявления задай либо на всю кампанию (ads, keywords), либо по группам (groups)"),
+        ({"groups": {"group_id": 700}}, "Вариант 1: groups — список изменений по группам"),
+    ],
+)
+def test_normalize_group_errors(raw, text):
+    with pytest.raises(YandexError) as exc:
+        variants.normalize_variants([raw], "Окна")
+    assert exc.value.message == text
+
+
+@pytest.fixture
+def grouped(direct, monkeypatch):
+    """Оригинал 7: группы «Окна», «Двери», «Слабая»; копия 70 — без «Слабой»."""
+    source = [{"id": 700, "adgroup_id": 9700, "name": "Окна", "region_ids": [213]},
+              {"id": 701, "adgroup_id": 9701, "name": "Двери", "region_ids": [213]},
+              {"id": 702, "adgroup_id": 9702, "name": "Слабая", "region_ids": [213]}]
+    copy = [{"id": 800, "adgroup_id": 9800, "name": "Окна", "region_ids": [2]},
+            {"id": 801, "adgroup_id": 9801, "name": "Двери", "region_ids": [2]}]
+    direct.group_map = {9700: 9800, 9701: 9801}
+    monkeypatch.setattr(adgroups, "list_adgroups", lambda user_id, cid: source if cid == 7 else copy)
+    ads_by = {
+        7: [{"id": 1, "ad_id": 11, "type": "RESPONSIVE_AD", "state": "ON", "title": "Окна", "href": "https://a.ru",
+             "adgroup_row_id": 700}],
+        70: [{"id": 22, "ad_id": 122, "type": "TEXT_AD", "state": "ON", "title": "Двери", "href": "https://b.ru",
+              "adgroup_row_id": 801},
+             {"id": 21, "ad_id": 121, "type": "RESPONSIVE_AD", "state": "ON", "title": "Окна", "href": "https://a.ru",
+              "adgroup_row_id": 800}],
+    }
+    monkeypatch.setattr(ads, "list_ads", lambda user_id, campaign_row_id=None: ads_by[campaign_row_id])
+    monkeypatch.setattr(keywords, "list_keywords", lambda user_id, campaign_row_id=None: [
+        {"id": 31, "keyword": "окна пвх", "adgroup_row_id": 800},
+        {"id": 32, "keyword": "двери", "adgroup_row_id": 801},
+        {"id": 33, "keyword": "окна дешево", "adgroup_row_id": 800},
+        {"id": 34, "keyword": "---autotargeting", "adgroup_row_id": 800},
+    ])
+
+    def create_adgroup(user_id, *, campaign_row_id, name, region_ids=None):
+        direct.calls.append(("create_group", (campaign_row_id,), {"name": name, "region_ids": region_ids}))
+        return {"id": 802, "adgroup_id": 9802, "name": name, "region_ids": region_ids}
+
+    monkeypatch.setattr(adgroups, "create_adgroup", create_adgroup)
+    monkeypatch.setattr(geo, "unknown_regions", lambda user_id, ids: [])
+    return SimpleNamespace(source=source, copy=copy, ads=ads_by)
+
+
+def test_check_source_with_groups(grouped):
+    source = {"id": 7, "name": "Окна"}
+    v = variants.normalize_variants([GROUPS], "Окна")
+    variants.check_source(1, source, v)
+    assert [(g.get("adgroup_id"), g.get("source_name")) for g in v[0]["groups"]] == [
+        (9700, "Окна"), (9701, "Двери"), (9702, "Слабая"), (None, None)
+    ]
+    cases = [
+        ({"groups": [{"group_id": 799, "remove": True}]},
+         "Вариант 1: в «Окна» нет группы 799 — есть 700 «Окна», 701 «Двери», 702 «Слабая»"),
+        ({"groups": [{"group_id": 701, "ads": {"titles": ["Двери"]}}]},
+         "Вариант 1: в группе «Двери» нет текстовых и комбинаторных объявлений — нужен ads.mode=add"),
+        ({"groups": [{"group_id": i, "remove": True} for i in (700, 701, 702)]},
+         "Вариант 1: убраны все группы — оставь хотя бы одну или добавь новую"),
+        ({"groups": [{"name": "окна", "keywords": ["a"], "ads": {"titles": ["Т"], "texts": ["Т"]}}]},
+         "Вариант 1: группа «окна» уже есть в копии — дай новой другое название"),
+    ]
+    for raw, text in cases:
+        with pytest.raises(YandexError) as exc:
+            variants.check_source(1, source, variants.normalize_variants([raw], "Окна"))
+        assert exc.value.message == text
+    grouped.ads[7][0]["href"] = ""
+    with pytest.raises(YandexError) as exc:
+        variants.check_source(1, source, variants.normalize_variants([{"groups": GROUPS["groups"][3:]}], "Окна"))
+    assert exc.value.message == "Вариант 1: у объявлений оригинала нет ссылки — передай ads.href новой группе"
+
+
+def test_create_variant_by_groups(grouped, direct):
+    v = variants.normalize_variants([GROUPS], "Окна")
+    variants.check_source(1, {"id": 7, "name": "Окна"}, v)
+    out = variants.create_variant(1, 7, v[0], workspace_id=2, moderate=False)
+    assert direct.calls[0][2]["exclude"] == {9702}
+    calls = direct.calls[1:]
+    assert calls[0] == ("update_ad", (21,), {"titles": ["Окна под ключ"], "texts": None, "title2": None, "href": None})
+    assert calls[1][0] == "delete_keywords" and calls[1][2]["keyword_row_ids"] == [33]  # только своя группа
+    assert calls[2][0] == "create_keywords" and calls[2][2]["adgroup_row_id"] == 800
+    assert calls[2][2]["phrases"] == ["окна на заказ"]
+    assert calls[3][0] == "create_ad" and (calls[3][2]["adgroup_row_id"], calls[3][2]["href"]) == (801, "https://b.ru")
+    assert calls[4] == ("create_group", (70,), {"name": "Балконы", "region_ids": [2]})
+    assert calls[5][0] == "create_keywords" and calls[5][2]["adgroup_row_id"] == 802
+    assert calls[6][0] == "create_ad" and (calls[6][2]["adgroup_row_id"], calls[6][2]["href"]) == (802, "https://a.ru")
+    assert out["done"] == ["группа «Окна»", "группа «Двери»", "новая группа «Балконы»"]
+    assert (out["ready"], out["errors"]) == (True, [])
+
+
+def test_create_variant_group_not_copied_stays_a_draft(grouped, direct):
+    direct.group_map = {9700: 9800}
+    v = variants.normalize_variants([{"groups": GROUPS["groups"][:2]}], "Окна")
+    variants.check_source(1, {"id": 7, "name": "Окна"}, v)
+    out = variants.create_variant(1, 7, v[0], workspace_id=2, moderate=True)
+    assert out["errors"] == ["группа «Двери»: группа не скопировалась"]
+    assert out["ready"] is False and "moderate" not in _names(direct)
+
+
+def test_plan_and_diff_for_groups(grouped, tool):
+    args = {"campaign_row_id": 7, "variants": [{"name": "Окна — группы", **GROUPS}], "moderate": False}
+    plan = ai_agent._p_create_variants(FakeContext(), args)
+    assert plan.categories == ["campaigns", "ads", "keywords"]
+    rows = ai_agent._d_create_variants(FakeContext(), args)
+    row = next(r for r in rows if r["what"] == "«Окна — группы»: группы")
+    assert row["before"] == "«Окна», «Двери», «Слабая»"
+    assert row["after"] == (
+        "«Окна»: фразы только 2 фразы: окна пвх, окна на заказ; тексты объявлений группы — заголовки: Окна под ключ / "
+        "«Двери»: новое объявление — заголовки: Двери; тексты: Монтаж за день / без «Слабая» / "
+        "новая группа «Балконы»: фразы +1 фраза: остекление балконов; новое объявление — заголовки: Балконы; "
+        "тексты: Под ключ"
+    )
 
 
 # --- Рейтинг вариантов в эксперименте -----------------------------------------------------------
