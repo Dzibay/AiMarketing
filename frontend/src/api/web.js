@@ -107,6 +107,15 @@ export const wsApi = {
   campaignOptions: (id) => request(`${WS(id)}/campaign-options`),
   createCampaign: (id, accountId, spec) => post(`${WS(id)}/campaigns`, { account_id: accountId, spec }),
   bulk: (id, payload) => post(`${WS(id)}/campaigns/actions`, payload),
+  /** Недельный/дневной бюджет и цена цели — задачей: на кампанию несколько вызовов Директа. */
+  bulkBudget: (id, payload, onProgress) => runJob(`${WS(id)}/campaigns/budget`, payload, onProgress),
+  slice: (id, payload, onProgress) => runJob(`${WS(id)}/slices`, payload, onProgress),
+  sliceAdjust: (id, payload, onProgress) => runJob(`${WS(id)}/slices/adjust`, payload, onProgress),
+  placementsExclude: (id, payload, onProgress) => runJob(`${WS(id)}/placements/exclude`, payload, onProgress),
+  placementsAi: (id, payload, onProgress) => runJob(`${WS(id)}/placements/ai`, payload, onProgress),
+  adReport: (id, payload, onProgress) => runJob(`${WS(id)}/ads/report`, payload, onProgress),
+  adsAi: (id, payload, onProgress) => runJob(`${WS(id)}/ads/ai`, payload, onProgress),
+  adsAb: (id, payload, onProgress) => runJob(`${WS(id)}/ads/ab`, payload, onProgress),
   campaign: (id, cid) => request(`${WS(id)}/campaigns/${cid}`),
   campaignSettings: (id, cid) => request(`${WS(id)}/campaigns/${cid}/settings`),
   updateCampaignSettings: (id, cid, changes) => patch(`${WS(id)}/campaigns/${cid}/settings`, { changes }),
@@ -257,6 +266,9 @@ export const webApi = {
     request('/api/web/direct/ads', { method: 'POST', body: JSON.stringify(payload) }),
   patchAd: (id, payload) =>
     request(`/api/web/direct/ads/${id}`, { method: 'PATCH', body: JSON.stringify(payload) }),
+  adExtras: (id) => request(`/api/web/direct/ads/${id}/extras`),
+  uploadAdImage: (accountId, payload) =>
+    request(`/api/web/direct/accounts/${accountId}/ad-images`, { method: 'POST', body: JSON.stringify(payload) }),
   adActions: (payload) =>
     request('/api/web/direct/ads/actions', { method: 'POST', body: JSON.stringify(payload) }),
   createKeywords: (payload) =>
@@ -429,6 +441,14 @@ export const JOB_LABELS = {
   apply_query_decisions: 'Применение решений по запросам',
   brief_draft: 'Черновик брифа по сайту',
   undo_action: 'Откат действия',
+  bulk_budget: 'Бюджеты и цена цели',
+  slice_report: 'Отчёт по срезу',
+  slice_adjust: 'Корректировки ставок',
+  exclude_placements: 'Запрет площадок',
+  placements_ai: 'Разбор площадок ИИ',
+  ad_report: 'Статистика объявлений',
+  ads_ai: 'Тексты объявлений ИИ',
+  ads_ab: 'Новые варианты объявлений',
 }
 
 export function jobProgressText(job) {

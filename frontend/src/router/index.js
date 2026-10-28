@@ -56,6 +56,8 @@ const router = createRouter({
           name: 'ws-campaign',
           component: () => import('../views/workspace/WsCampaign.vue'),
         },
+        { path: 'slices', name: 'ws-slices', component: () => import('../views/workspace/WsSlices.vue') },
+        { path: 'ad-stats', name: 'ws-ad-stats', component: () => import('../views/workspace/WsAdStats.vue') },
         { path: 'queries', name: 'ws-queries', component: () => import('../views/workspace/WsQueries.vue') },
         { path: 'actions', name: 'ws-actions', component: () => import('../views/workspace/WsActions.vue') },
         {

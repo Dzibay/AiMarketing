@@ -54,6 +54,8 @@ export function workspaceNav(wsId, campaignsCount = 0) {
       pages: [
         { label: 'Кампании', to: `${base}/campaigns`, count: campaignsCount || '' },
         { label: 'Поисковые запросы', to: `${base}/queries` },
+        { label: 'Площадки и срезы', to: `${base}/slices` },
+        { label: 'Объявления: CTR', to: `${base}/ad-stats` },
       ],
     },
     {

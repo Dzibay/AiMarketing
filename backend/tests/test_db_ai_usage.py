@@ -90,7 +90,7 @@ def test_model_per_task_prices_and_keep(db):
     # Сохранение без новых полей (как «Удалить ключ») их не трогает.
     kept = ai.save_settings(user, provider="openai", model="gpt-smart", api_key=None)
     assert kept["model_fast"] == "gpt-fast" and kept["price_out"] == 400.0 and kept["fast_price_in"] == 10.5
-    assert [t["id"] for t in kept["tasks"]] == ["chat", "classify", "brief"]
+    assert [t["id"] for t in kept["tasks"]] == ["chat", "classify", "brief", "placements", "ads"]
 
     for bad in (
         {"price_in": 5, "price_out": None},

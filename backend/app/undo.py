@@ -169,7 +169,7 @@ def _ads_action(user_id: int, args: dict) -> dict:
 def _ad_update(user_id: int, args: dict) -> dict:
     from app.ads import update_text_ad
 
-    fields = {k: args[k] for k in ("title", "title2", "text", "href", "titles", "texts") if k in args}
+    fields = {k: args[k] for k in ("title", "title2", "text", "href", "titles", "texts", "extras") if k in args}
     return update_text_ad(user_id, int(args["ad_row_id"]), **fields)
 
 
@@ -197,6 +197,15 @@ def _query_labels_restore(user_id: int, args: dict) -> dict:
     return {"restored": restore_labels(user_id, workspace_id, args.get("labels") or [])}
 
 
+def _bid_modifiers(user_id: int, args: dict) -> dict:
+    from app.slices import set_bid_modifiers
+
+    res = set_bid_modifiers(user_id, int(args["campaign_row_id"]), str(args["dimension"]), args.get("values") or {})
+    if res["errors"]:
+        raise YandexError("direct", "; ".join(res["errors"])[:500])
+    return {"applied": len(res["previous"])}
+
+
 OPS: dict[str, Callable[[int, dict], dict]] = {
     "campaigns_action": _campaigns_action,
     "campaign_budgets": _campaign_budgets,
@@ -212,6 +221,7 @@ OPS: dict[str, Callable[[int, dict], dict]] = {
     "adgroup_update": _adgroup_update,
     "adgroups_delete": _adgroups_delete,
     "query_labels_restore": _query_labels_restore,
+    "bid_modifiers": _bid_modifiers,
 }
 
 
@@ -268,6 +278,8 @@ def describe_step(user_id: int, step: dict) -> str:
     if op == "campaign_settings":
         fields = ", ".join(sorted(a.get("changes") or {}))
         return f"Вернуть настройки {_names(user_id, 'direct_campaigns', 'name', [a.get('campaign_row_id')])}: {fields}"
+    if op == "bid_modifiers":
+        return f"Вернуть корректировки ставок {_names(user_id, 'direct_campaigns', 'name', [a.get('campaign_row_id')])}"
     if op == "negatives":
         remove = [p for part in ("campaigns", "adgroups") for c in (a.get(part) or {}).values() for p in c.get("remove") or []]
         add = [p for part in ("campaigns", "adgroups") for c in (a.get(part) or {}).values() for p in c.get("add") or []]

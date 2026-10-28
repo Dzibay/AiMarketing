@@ -344,14 +344,22 @@
         </div>
         <p v-if="adResponsive" class="field-hint field--wide">
           Комбинаторное объявление ЕПК: Директ сам собирает показы из заголовков и текстов.
-          <template v-if="adModal.item?.image_hashes?.length">
-            Картинки ({{ adModal.item.image_hashes.length }}) остаются как есть.
-          </template>
         </p>
         <div class="field field--wide">
           <label>Ссылка</label>
           <input v-model="adForm.href" type="url" placeholder="https://…" required />
         </div>
+        <p v-if="adExtrasState.loading" class="field-hint field--wide">Загружаем быстрые ссылки, уточнения и картинки…</p>
+        <p v-else-if="adExtrasState.error" class="field-hint field--wide">
+          Быстрые ссылки, уточнения и картинки не загрузились ({{ adExtrasState.error }}) — они останутся как есть.
+        </p>
+        <AdExtrasFields
+          v-else
+          :extras="adExtras"
+          :account-id="adModal.item?.account_id || campaign?.account_id || null"
+          :max-images="adExtrasState.maxImages"
+          :disabled="busy"
+        />
         <div class="ad-preview ad-preview--card field--wide">
           <strong>{{ adForm.title || 'Заголовок' }}<template v-if="adForm.title2"> — {{ adForm.title2 }}</template></strong>
           <small>{{ displayHost(adForm.href) || 'site.ru' }}</small>
@@ -372,6 +380,8 @@
 import { askConfirm } from '../composables/useConfirm'
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import Modal from './ui/Modal.vue'
+import AdExtrasFields from './AdExtrasFields.vue'
+import { emptyExtras, extrasDiff, extrasEmpty, extrasFromApi, extrasPayload, extrasProblem } from '../utils/adExtras'
 import { errorText, jobProgressText, webApi, wsApi } from '../api/web'
 import { pushToast } from '../composables/useToasts'
 import { CAMPAIGN_STATES, CAMPAIGN_STATUSES, formatDate, formatDateTime, num, rub, rubles } from '../utils/format'
@@ -410,6 +420,9 @@ const adForm = reactive({
   more_texts: '',
   href: '',
 })
+const adExtras = reactive(emptyExtras())
+// before — расширения как в Директе: при правке отправляем только изменившиеся части.
+const adExtrasState = reactive({ loading: false, error: '', before: emptyExtras(), maxImages: 1 })
 // Комбинаторное объявление: так Директ создаёт новые объявления в ЕПК.
 const adResponsive = computed(() =>
   adModal.item
@@ -641,10 +654,32 @@ function openAdForm(ad) {
   adForm.more_titles = (ad?.titles || []).slice(1).join('\n')
   adForm.more_texts = (ad?.texts || []).slice(1).join('\n')
   adForm.href = ad?.href || ''
+  Object.assign(adExtras, emptyExtras())
+  Object.assign(adExtrasState, { loading: !!ad, error: '', before: emptyExtras(), maxImages: adResponsive.value ? 5 : 1 })
   adModal.open = true
+  if (ad) loadAdExtras(ad)
+}
+
+async function loadAdExtras(ad) {
+  try {
+    const data = await webApi.adExtras(ad.id)
+    if (adModal.item !== ad) return
+    Object.assign(adExtras, extrasFromApi(data))
+    Object.assign(adExtrasState, { before: extrasFromApi(data), maxImages: data.max_images || 1 })
+  } catch (err) {
+    if (adModal.item === ad) adExtrasState.error = errorText(err)
+  } finally {
+    if (adModal.item === ad) adExtrasState.loading = false
+  }
 }
 
 function saveAd() {
+  const editable = !adExtrasState.loading && !adExtrasState.error
+  const problem = editable ? extrasProblem(adExtras, adExtrasState.maxImages) : ''
+  if (problem) {
+    pushToast(problem, 'error')
+    return
+  }
   return run(async () => {
     const fields = adResponsive.value
       ? {
@@ -653,6 +688,10 @@ function saveAd() {
           href: adForm.href,
         }
       : { title: adForm.title, title2: adForm.title2, text: adForm.text, href: adForm.href }
+    if (editable && adModal.item) {
+      const changed = extrasDiff(adExtrasState.before, adExtras)
+      if (changed) fields.extras = changed
+    } else if (editable && !extrasEmpty(adExtras)) fields.extras = extrasPayload(adExtras)
     if (adModal.item) await webApi.patchAd(adModal.item.id, fields)
     else await webApi.createAd({ adgroup_row_id: Number(adForm.adgroup_row_id), ...fields })
     pushToast(adModal.item ? 'Объявление обновлено — уйдёт на модерацию' : 'Объявление создано черновиком')

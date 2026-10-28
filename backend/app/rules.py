@@ -8,10 +8,14 @@ from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 
 from app.actions import bulk_campaign_action
+from app.budgets import BULK_LIMIT as BUDGET_BULK_LIMIT
+from app.budgets import bulk_budget
+from app.clock import today_msk
 from app.db import pool
 from app.journal import acting_as
 from app.keywords import bulk_keyword_action
 from app.search_queries import bulk_search_query_action
+from app.strategy_info import budget_brief
 from app.telegram_notify import format_rule_alert, notify_user
 from app.yandex import YandexError
 
@@ -27,19 +31,23 @@ _CONV_NOTE = {"цель": "по цели", "цель~": "по цели, оцен
 
 log = logging.getLogger("app.rules")
 
-RULE_TYPES = {"cpa_above", "spend_no_conv", "daily_budget_pct", "cpc_above"}
+RULE_TYPES = {"cpa_above", "cpa_below", "spend_no_conv", "daily_budget_pct", "weekly_budget_pct", "cpc_above"}
 RULE_ACTIONS = {
     "pause",
     "resume",
     "set_budget",
+    "set_weekly_budget",
+    "change_budget_pct",
     "set_bid",
     "notify",
     "negative_adgroup",
     "negative_campaign",
 }
 RULE_TARGETS = {"campaign", "keyword", "query"}
-CAMPAIGN_ONLY_TYPES = {"daily_budget_pct"}
-CAMPAIGN_ONLY_ACTIONS = {"set_budget"}
+CAMPAIGN_ONLY_TYPES = {"daily_budget_pct", "weekly_budget_pct"}
+CAMPAIGN_ONLY_ACTIONS = {"set_budget", "set_weekly_budget", "change_budget_pct"}
+# Сумма в action_budget_rub обязательна: дневной или недельный бюджет.
+BUDGET_ACTIONS = {"set_budget", "set_weekly_budget"}
 KEYWORD_ONLY_ACTIONS = {"set_bid"}
 QUERY_ONLY_ACTIONS = {"negative_adgroup", "negative_campaign"}
 QUERY_ALLOWED_ACTIONS = {"negative_adgroup", "negative_campaign", "notify"}
@@ -62,6 +70,7 @@ def create_rule(
     action_budget_rub: float | None = None,
     action_bid_rub: float | None = None,
     target: str = "campaign",
+    action_pct: float | None = None,
 ) -> dict:
     target_n = (target or "campaign").strip() or "campaign"
     if target_n not in RULE_TARGETS:
@@ -78,6 +87,7 @@ def create_rule(
         raise YandexError("action")
     budget = _validate_budget(action, action_budget_rub)
     bid = _validate_bid(action, action_bid_rub)
+    pct = _validate_pct(action, action_pct)
     scope_workspace_id = _validate_workspace(user_id, scope_workspace_id)
     with pool.connection() as conn:
         row = conn.execute(
@@ -85,9 +95,9 @@ def create_rule(
             INSERT INTO automation_rules (
                 user_id, name, enabled, dry_run, scope_account_id,
                 rule_type, threshold_value, lookback_days, action, cooldown_hours,
-                goal_row_id, action_budget_rub, target, action_bid_rub, scope_workspace_id
+                goal_row_id, action_budget_rub, target, action_bid_rub, scope_workspace_id, action_pct
             )
-            VALUES (%s, %s, TRUE, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            VALUES (%s, %s, TRUE, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             RETURNING *
             """,
             (
@@ -105,6 +115,7 @@ def create_rule(
                 target_n,
                 bid,
                 scope_workspace_id,
+                pct,
             ),
         ).fetchone()
     return _public_rule(row)
@@ -154,6 +165,7 @@ def update_rule(user_id: int, rule_id: int, **fields) -> dict:
         "goal_row_id",
         "action_budget_rub",
         "action_bid_rub",
+        "action_pct",
         "scope_account_id",
         "scope_workspace_id",
         "target",
@@ -196,7 +208,7 @@ def update_rule(user_id: int, rule_id: int, **fields) -> dict:
             action = current.get("action") or "pause"
         if "action_budget_rub" in updates:
             updates["action_budget_rub"] = _validate_budget(action, updates["action_budget_rub"])
-        elif action == "set_budget":
+        elif action in BUDGET_ACTIONS:
             with pool.connection() as conn:
                 cur = conn.execute(
                     "SELECT action_budget_rub FROM automation_rules WHERE id = %s AND user_id = %s",
@@ -210,6 +222,11 @@ def update_rule(user_id: int, rule_id: int, **fields) -> dict:
             updates["action_bid_rub"] = _validate_bid(action, updates["action_bid_rub"])
         elif action == "set_bid" and current.get("action_bid_rub") is None:
             raise YandexError("budget")
+    if "action" in updates or "action_pct" in updates:
+        action = updates.get("action") or current.get("action") or "pause"
+        updates["action_pct"] = _validate_pct(
+            action, updates["action_pct"] if "action_pct" in updates else current.get("action_pct")
+        )
     sets = []
     params: list = []
     for key, value in updates.items():
@@ -295,11 +312,26 @@ def _validate_target_combo(target: str, rule_type: str, action: str) -> None:
 
 
 def _validate_budget(action: str, action_budget_rub: float | None) -> Decimal | None:
-    if action != "set_budget":
+    if action not in BUDGET_ACTIONS:
         return None if action_budget_rub in (None, "") else Decimal(str(action_budget_rub))
     if action_budget_rub is None or float(action_budget_rub) <= 0:
         raise YandexError("budget")
+    if float(action_budget_rub) < 300:
+        raise YandexError("budget", "Бюджет меньше 300 ₽ Директ не примет")
     return Decimal(str(action_budget_rub))
+
+
+def _validate_pct(action: str, action_pct: float | None) -> Decimal | None:
+    """Изменение бюджета в %: от −90 до +500, не ноль. У других действий процента нет."""
+    if action != "change_budget_pct":
+        return None
+    try:
+        value = float(action_pct)
+    except (TypeError, ValueError) as exc:
+        raise YandexError("budget", "Укажите, на сколько процентов менять бюджет") from exc
+    if value == 0 or not -90 <= value <= 500:
+        raise YandexError("budget", "Изменение бюджета — от −90 % до +500 %, не ноль")
+    return Decimal(str(value))
 
 
 def _validate_bid(action: str, action_bid_rub: float | None) -> Decimal | None:
@@ -335,6 +367,7 @@ def _public_rule(row: dict) -> dict:
         "action_bid_rub": float(row["action_bid_rub"])
         if row.get("action_bid_rub") is not None
         else None,
+        "action_pct": float(row["action_pct"]) if row.get("action_pct") is not None else None,
         "last_run_at": row["last_run_at"].isoformat() if row.get("last_run_at") else None,
     }
 
@@ -367,7 +400,7 @@ def _matching_campaigns(user_id: int, rule: dict) -> list[dict]:
     with pool.connection() as conn:
         rows = conn.execute(
             """
-            SELECT c.id AS row_id, c.campaign_id, c.name, c.account_id, c.state,
+            SELECT c.id AS row_id, c.campaign_id, c.name, c.account_id, c.state, c.bidding_strategy,
                    COALESCE(SUM(s.cost_kopecks), 0) AS cost_kopecks,
                    COALESCE(SUM(s.conversions), 0) AS conversions,
                    COALESCE(SUM(s.clicks), 0) AS clicks
@@ -386,7 +419,7 @@ def _matching_campaigns(user_id: int, rule: dict) -> list[dict]:
                 (%s = 'resume' AND c.state = 'SUSPENDED')
                 OR (%s <> 'resume' AND c.state = 'ON')
               )
-            GROUP BY c.id, c.campaign_id, c.name, c.account_id, c.state
+            GROUP BY c.id, c.campaign_id, c.name, c.account_id, c.state, c.bidding_strategy
             """,
             (
                 date_from,
@@ -442,6 +475,8 @@ def _matching_campaigns(user_id: int, rule: dict) -> list[dict]:
             for a in a_rows:
                 goal_by_account[int(a["account_id"])] = int(a["goal_reaches"] or 0)
 
+    week_spend = _week_spend(user_id, [int(r["row_id"]) for r in rows]) if rule["rule_type"] == "weekly_budget_pct" else {}
+
     # Если по кампаниям цели нет — распределяем account total пропорционально расходу
     account_costs: dict[int, Decimal] = {}
     for row in rows:
@@ -477,10 +512,22 @@ def _matching_campaigns(user_id: int, rule: dict) -> list[dict]:
             if cpa is not None and cpa >= threshold * 100:
                 hit = True
                 reason = f"CPA {_rub(cpa)} — порог {_rub(threshold * 100)} ({_CONV_NOTE[conv_label]})"
+        elif rule_type == "cpa_below":
+            if cpa is not None and cpa <= threshold * 100:
+                hit = True
+                reason = f"CPA {_rub(cpa)} — не выше {_rub(threshold * 100)} ({_CONV_NOTE[conv_label]})"
         elif rule_type == "spend_no_conv":
             if conv == 0 and cost >= threshold * 100:
                 hit = True
                 reason = f"расход {_rub(cost)} без конверсий ({_CONV_NOTE[conv_label]})"
+        elif rule_type == "weekly_budget_pct":
+            weekly = budget_brief(row.get("bidding_strategy"))["weekly_budget_rub"]
+            spent = week_spend.get(int(row["row_id"]), Decimal(0))
+            # Копейки на рубли бюджета — это и есть проценты.
+            share = spent / Decimal(str(weekly)) if weekly else Decimal(0)
+            if weekly and share >= threshold:
+                hit = True
+                reason = f"с понедельника израсходовано {_rub(spent)} — {float(share):.0f}% недельного бюджета {_rub(weekly * 100)}"
         elif rule_type == "daily_budget_pct":
             with pool.connection() as conn:
                 camp = conn.execute(
@@ -522,6 +569,28 @@ def _matching_campaigns(user_id: int, rule: dict) -> list[dict]:
                 }
             )
     return matched
+
+
+def _week_spend(user_id: int, row_ids: list[int]) -> dict[int, Decimal]:
+    """Расход кампаний с понедельника текущей недели по вчера (МСК), копейки. В понедельник — пусто:
+    недельный бюджет Директа считается с понедельника, а сегодняшнего расхода в статистике нет."""
+    today = today_msk()
+    monday = today - timedelta(days=today.weekday())
+    if not row_ids or monday >= today:
+        return {}
+    with pool.connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT c.id, COALESCE(SUM(s.cost_kopecks), 0) AS cost
+            FROM direct_campaigns c
+            JOIN stats_daily s ON s.source = 'direct' AND s.user_id = c.user_id
+             AND s.account_id = c.account_id AND s.campaign_id = c.campaign_id
+            WHERE c.user_id = %s AND c.id = ANY(%s) AND s.day >= %s AND s.day < %s
+            GROUP BY c.id
+            """,
+            (user_id, row_ids, monday, today),
+        ).fetchall()
+    return {int(r["id"]): Decimal(r["cost"] or 0) for r in rows}
 
 
 def _matching_keywords(user_id: int, rule: dict) -> list[dict]:
@@ -572,6 +641,12 @@ def _matching_keywords(user_id: int, rule: dict) -> list[dict]:
                 if cpa >= threshold * 100:
                     hit = True
                     reason = f"CPA {_rub(cpa)} — порог {_rub(threshold * 100)}"
+        elif rule_type == "cpa_below":
+            if conv > 0:
+                cpa = cost / conv
+                if cpa <= threshold * 100:
+                    hit = True
+                    reason = f"CPA {_rub(cpa)} — не выше {_rub(threshold * 100)}"
         elif rule_type == "spend_no_conv":
             if conv == 0 and cost >= threshold * 100:
                 hit = True
@@ -731,6 +806,20 @@ def _run_rule(user_id: int, rule_id: int, *, force_dry_run: bool | None = None) 
                         bid_rub=bid,
                     )
                     applied += int(result.get("applied") or 0)
+            except YandexError:
+                applied = 0
+        elif target == "campaign" and action in ("set_weekly_budget", "change_budget_pct"):
+            pct = float(rule["action_pct"]) if rule.get("action_pct") is not None else None
+            cap = float(rule["action_budget_rub"]) if rule.get("action_budget_rub") is not None else None
+            try:
+                result = bulk_budget(
+                    user_id,
+                    campaign_ids=ids[:BUDGET_BULK_LIMIT],
+                    weekly_budget_rub=cap if action == "set_weekly_budget" else None,
+                    budget_change_pct=pct if action == "change_budget_pct" else None,
+                    cap_weekly_rub=cap if action == "change_budget_pct" else None,
+                )
+                applied = int(result.get("applied") or 0)
             except YandexError:
                 applied = 0
         elif target == "campaign" and action in ("pause", "resume", "set_budget"):

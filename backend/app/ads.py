@@ -12,7 +12,7 @@ import logging
 
 from psycopg.types.json import Jsonb
 
-from app import direct_api
+from app import ad_extras, direct_api
 from app.adgroups import _adgroup_row
 from app.db import pool
 from app.journal import campaigns_of, log_action
@@ -271,8 +271,10 @@ def create_text_ad(
     title2: str = "",
     titles: list[str] | None = None,
     texts: list[str] | None = None,
+    extras: dict | None = None,
 ) -> dict:
-    """Новое объявление: в ЕПК — комбинаторное со всеми вариантами, в остальных — TextAd."""
+    """Новое объявление: в ЕПК — комбинаторное со всеми вариантами, в остальных — TextAd.
+    extras — быстрые ссылки, уточнения и картинки: {sitelinks, callouts, image_hashes}."""
     titles_n = clean_variants(titles or [title], MAX_TITLES, TITLE_LEN)
     texts_n = clean_variants(texts or [text], MAX_TEXTS, TEXT_LEN)
     href_n = _href(href)
@@ -280,18 +282,20 @@ def create_text_ad(
     if not titles_n or not texts_n or not href_n:
         raise YandexError("empty")
     group = _adgroup_row(user_id, adgroup_row_id)
+    ad_type = "RESPONSIVE_AD" if _is_unified(group) else "TEXT_AD"
+    extras_n = ad_extras.clean_extras(extras, ad_type)
     token = get_connection_access_token(group["connection_id"], user_id)
-    if _is_unified(group):
-        ad_type = "RESPONSIVE_AD"
+    resolved = ad_extras.resolve(token, group["client_login"], extras_n) if extras_n else {}
+    if ad_type == "RESPONSIVE_AD":
         title2_n = ""  # в комбинаторном объявлении дополнительного заголовка нет
-        payload = {"ResponsiveAd": {"Titles": titles_n, "Texts": texts_n, "Href": href_n}}
+        payload = {"ResponsiveAd": {"Titles": titles_n, "Texts": texts_n, "Href": href_n, **ad_extras.add_fields(resolved, ad_type)}}
     else:
-        ad_type = "TEXT_AD"
         titles_n, texts_n = titles_n[:1], texts_n[:1]
         text_ad: dict = {"Title": titles_n[0], "Text": texts_n[0], "Href": href_n, "Mobile": "NO"}
         if title2_n:
             text_ad["Title2"] = title2_n
-        payload = {"TextAd": text_ad}
+        payload = {"TextAd": {**text_ad, **ad_extras.add_fields(resolved, ad_type)}}
+    images = list(resolved.get("image_hashes") or [])[: 1 if ad_type == "TEXT_AD" else None]
     result = _call(token, group["client_login"], "add", {"Ads": [{"AdGroupId": int(group["adgroup_id"]), **payload}]})
     error = _first_error(result, "AddResults")
     add = (result.get("AddResults") or [{}])[0]
@@ -305,13 +309,13 @@ def create_text_ad(
             INSERT INTO direct_ads (
                 user_id, account_id, adgroup_row_id, ad_id,
                 type, state, status, title, title2, text, href,
-                titles, texts, synced_at
+                titles, texts, image_hashes, synced_at
             )
-            VALUES (%s, %s, %s, %s, %s, 'OFF', '', %s, %s, %s, %s, %s, %s, NOW())
+            VALUES (%s, %s, %s, %s, %s, 'OFF', '', %s, %s, %s, %s, %s, %s, %s, NOW())
             ON CONFLICT (account_id, ad_id) DO UPDATE SET
                 type = EXCLUDED.type, title = EXCLUDED.title, title2 = EXCLUDED.title2,
-                text = EXCLUDED.text, href = EXCLUDED.href,
-                titles = EXCLUDED.titles, texts = EXCLUDED.texts, synced_at = NOW()
+                text = EXCLUDED.text, href = EXCLUDED.href, titles = EXCLUDED.titles,
+                texts = EXCLUDED.texts, image_hashes = EXCLUDED.image_hashes, synced_at = NOW()
             RETURNING *
             """,
             (
@@ -326,6 +330,7 @@ def create_text_ad(
                 href_n,
                 Jsonb(titles_n),
                 Jsonb(texts_n),
+                Jsonb(images),
             ),
         ).fetchone()
     log_action(
@@ -338,6 +343,7 @@ def create_text_ad(
             "titles": titles_n,
             "texts": texts_n,
             "href": href_n,
+            **({"extras": extras_n} if extras_n else {}),
         },
         {"ad_id": ad_id},
         "ok",
@@ -366,9 +372,11 @@ def update_text_ad(
     href: str | None = None,
     titles: list[str] | None = None,
     texts: list[str] | None = None,
+    extras: dict | None = None,
 ) -> dict:
     """Правка объявления. Комбинаторное правим через ResponsiveAd целиком — иначе Директ
-    оставит в нём по одному заголовку, тексту и картинке."""
+    оставит в нём по одному заголовку, тексту и картинке. extras: ключ есть — заменить,
+    пустой список — снять; для отката — готовые sitelink_set_id и callout_ids."""
     row = _ad_row(user_id, ad_row_id)
     token = get_connection_access_token(row["connection_id"], user_id)
     # Читаем объявление из Директа: тип в базе мог устареть (ТГО обновляются до комбинаторных),
@@ -409,8 +417,19 @@ def update_text_ad(
         changes["title2"] = title2_n
     if href_n is not None:
         changes["href"] = href_n
-    if not changes:
+    ad_type = "RESPONSIVE_AD" if responsive else "TEXT_AD"
+    extras_n = ad_extras.clean_extras(extras, ad_type)
+    if not changes and not extras_n:
         raise YandexError("empty")
+    refs: dict = {}
+    extra_fields: dict = {}
+    resolved: dict = {}
+    if extras_n:
+        refs = ad_extras._ad_refs(token, row["client_login"], int(row["ad_id"]))
+        resolved = ad_extras.resolve(token, row["client_login"], extras_n)
+        extra_fields = ad_extras.update_fields(resolved, refs, ad_type)
+    if not changes and not extra_fields:
+        return _public(row)
 
     if responsive:
         ad: dict = {}
@@ -420,9 +439,7 @@ def update_text_ad(
             ad["Texts"] = new_texts
         if href_n is not None:
             ad["Href"] = href_n
-        if not ad:
-            raise YandexError("empty")
-        payload = {"ResponsiveAd": ad}
+        payload = {"ResponsiveAd": {**ad, **extra_fields}}
     else:
         ad = {}
         if new_titles is not None:
@@ -433,7 +450,7 @@ def update_text_ad(
             ad["Text"] = new_texts[0]
         if href_n is not None:
             ad["Href"] = href_n
-        payload = {"TextAd": ad}
+        payload = {"TextAd": {**ad, **extra_fields}}
     result = _call(token, row["client_login"], "update", {"Ads": [{"Id": int(row["ad_id"]), **payload}]})
     error = _first_error(result, "UpdateResults")
     if error:
@@ -442,12 +459,13 @@ def update_text_ad(
 
     final_titles = new_titles if new_titles is not None else cur_titles
     final_texts = new_texts if new_texts is not None else cur_texts
+    final_images = resolved["image_hashes"] if "image_hashes" in resolved else list(current.get("image_hashes") or [])
     with pool.connection() as conn:
         updated = conn.execute(
             """
             UPDATE direct_ads SET
                 type = %s, title = %s, title2 = %s, text = %s, href = %s,
-                titles = %s, texts = %s, synced_at = NOW()
+                titles = %s, texts = %s, image_hashes = %s, synced_at = NOW()
             WHERE id = %s AND user_id = %s
             RETURNING *
             """,
@@ -459,6 +477,7 @@ def update_text_ad(
                 href_n if href_n is not None else current.get("href") or "",
                 Jsonb(final_titles),
                 Jsonb(final_texts),
+                Jsonb(final_images),
                 ad_row_id,
                 user_id,
             ),
@@ -470,6 +489,11 @@ def update_text_ad(
         "href": current.get("href") or "",
     }
     back = {key: previous[key] for key, value in changes.items() if value != previous[key]}
+    # Откат расширений — прежними id: набор ссылок и уточнения в кабинете остаются.
+    extras_back = {key: refs[key] for key in ("sitelink_set_id", "callout_ids", "image_hashes") if key in resolved}
+    if extra_fields:
+        back["extras"] = extras_back
+        changes["extras"] = extras_n
     log_action(
         user_id,
         "ads",

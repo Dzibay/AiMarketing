@@ -57,7 +57,7 @@
       <span>Выбрано: {{ selected.size }}</span>
       <button class="btn btn--ghost" type="button" :disabled="busy" @click="bulk('resume')">Запустить</button>
       <button class="btn btn--ghost" type="button" :disabled="busy" @click="bulk('pause')">Остановить</button>
-      <button class="btn btn--ghost" type="button" :disabled="busy" @click="budgetModal.open = true">Бюджет…</button>
+      <button class="btn btn--ghost" type="button" :disabled="busy" @click="openBudget">Бюджет и стратегия…</button>
       <button
         v-if="selected.size === 1"
         class="btn btn--ghost"
@@ -77,9 +77,20 @@
       <strong>Не выполнено для {{ bulkErrors.length }}:</strong>
       <ul>
         <li v-for="e in bulkErrors" :key="e.campaign_row_id">
-          {{ e.name || e.campaign_row_id }} ({{ e.client_login }}): {{ e.message || ERRORS[e.error] || e.error }}
+          {{ e.name || e.campaign_row_id }}<template v-if="e.client_login"> ({{ e.client_login }})</template>:
+          {{ e.message || ERRORS[e.error] || e.error }}
         </li>
       </ul>
+    </div>
+    <div v-if="budgetDone.length" class="notice">
+      <strong>Бюджеты и цена цели:</strong>
+      <ul>
+        <li v-for="i in budgetDone" :key="i.campaign_row_id">
+          {{ i.name }}: {{ i.before }} → {{ i.after }}<template v-if="!i.changed"> (без изменений)</template>
+          <template v-if="i.note"> · {{ i.note }}</template>
+        </li>
+      </ul>
+      <button class="btn btn--ghost" type="button" @click="budgetDone = []">Скрыть</button>
     </div>
 
     <p v-if="loading && !data" class="empty">Загружаем кампании…</p>
@@ -130,7 +141,15 @@
                 {{ CAMPAIGN_STATUSES[c.status] || c.status }}
               </small>
             </td>
-            <td class="num">{{ c.daily_budget_rub != null ? rubles(c.daily_budget_rub) : '—' }}</td>
+            <td class="num">
+              <template v-if="c.weekly_budget_rub">{{ rubles(c.weekly_budget_rub) }}/нед.</template>
+              <template v-else-if="c.daily_budget_rub">{{ rubles(c.daily_budget_rub) }}/день</template>
+              <template v-else>—</template>
+              <small v-if="c.strategy_label" class="cell-note">
+                {{ c.strategy_label }}<template v-if="c.target_cpa_rub"> · CPA {{ rubles(c.target_cpa_rub) }}</template
+                ><template v-else-if="c.target_cpc_rub"> · CPC {{ rubles(c.target_cpc_rub, 2) }}</template>
+              </small>
+            </td>
             <td class="num">{{ rub(c.cost_kopecks) }}</td>
             <td class="num">{{ num(c.clicks) }}</td>
             <td class="num">{{ c.ctr != null ? pct(c.ctr, 2) : '—' }}</td>
@@ -149,7 +168,9 @@
             <td></td>
             <td>Итого: {{ rows.length }}</td>
             <td></td>
-            <td class="num">{{ totals.budget ? rubles(totals.budget) : '—' }}</td>
+            <td class="num" title="Сумма бюджетов запущенных кампаний; дневной × 7">
+              {{ totals.budget ? `${rubles(totals.budget)}/нед.` : '—' }}
+            </td>
             <td class="num">{{ rub(totals.cost) }}</td>
             <td class="num">{{ num(totals.clicks) }}</td>
             <td class="num">{{ totals.impressions ? pct((totals.clicks / totals.impressions) * 100, 2) : '—' }}</td>
@@ -171,32 +192,52 @@
     @done="onDuplicated"
   />
 
-  <Modal :open="budgetModal.open" title="Дневной бюджет" :locked="busy" @close="budgetModal.open = false">
+  <Modal :open="budgetModal.open" title="Бюджет и стратегия" :locked="busy" @close="budgetModal.open = false">
     <form id="budget-form" class="form-grid" @submit.prevent="applyBudget">
       <div class="seg field--wide" role="group">
-        <button type="button" :class="{ active: budgetModal.mode === 'abs' }" @click="budgetModal.mode = 'abs'">
-          Задать сумму
-        </button>
-        <button type="button" :class="{ active: budgetModal.mode === 'pct' }" @click="budgetModal.mode = 'pct'">
-          Изменить на %
+        <button
+          v-for="m in BUDGET_MODES"
+          :key="m.id"
+          type="button"
+          :class="{ active: budgetModal.mode === m.id }"
+          @click="budgetModal.mode = m.id"
+        >
+          {{ m.label }}
         </button>
       </div>
-      <div v-if="budgetModal.mode === 'abs'" class="field field--wide">
+      <div v-if="budgetModal.mode === 'weekly'" class="field field--wide">
+        <label>Недельный бюджет, ₽</label>
+        <input v-model.number="budgetModal.weekly" type="number" min="300" step="100" required />
+      </div>
+      <div v-else-if="budgetModal.mode === 'daily'" class="field field--wide">
         <label>Дневной бюджет, ₽</label>
-        <input v-model.number="budgetModal.value" type="number" min="300" step="1" required />
+        <input v-model.number="budgetModal.daily" type="number" min="300" step="50" required />
       </div>
-      <div v-else class="field field--wide">
-        <label>Изменение, % (минус — уменьшить)</label>
+      <div v-else-if="budgetModal.mode === 'pct'" class="field field--wide">
+        <label>Изменить бюджет на, % (минус — уменьшить)</label>
         <input v-model.number="budgetModal.pct" type="number" min="-90" max="500" step="1" required />
       </div>
+      <label class="check-row field--wide">
+        <input v-model="budgetModal.target" type="checkbox" />
+        Изменить цену цели стратегии (CPA или CPC)
+      </label>
+      <div v-if="budgetModal.target" class="field field--wide">
+        <label>Цена цели, % (минус — снизить)</label>
+        <input v-model.number="budgetModal.targetPct" type="number" min="-90" max="500" step="1" required />
+      </div>
       <p class="field-hint field--wide">
-        Применится к {{ selected.size }} {{ plural(selected.size, 'кампании', 'кампаниям', 'кампаниям') }}. У кампаний с
-        автостратегией дневного бюджета нет — их Директ пропустит с ошибкой.
+        {{ selected.size }} {{ plural(selected.size, 'кампания', 'кампании', 'кампаний') }}<template v-if="selectedKinds.weekly">
+          · с недельным бюджетом: {{ selectedKinds.weekly }}</template
+        ><template v-if="selectedKinds.daily"> · с дневным: {{ selectedKinds.daily }}</template>.
+        Автостратегии и ручные ставки ЕПК получат недельный бюджет, ручные ставки ТГО — дневной: недельная сумма
+        поделится на 7, дневная умножится на 7. Цена цели меняется только у стратегий «Средняя цена конверсии»,
+        «Оплата за конверсии» и «Средняя цена клика». Всё можно откатить в журнале одной кнопкой.
       </p>
+      <p v-if="budgetProgress" class="field-hint field--wide">{{ budgetProgress }}</p>
     </form>
     <template #footer>
       <button class="btn btn--ghost" type="button" :disabled="busy" @click="budgetModal.open = false">Отмена</button>
-      <button class="btn btn--accent" type="submit" form="budget-form" :disabled="busy">Применить</button>
+      <button class="btn btn--accent" type="submit" form="budget-form" :disabled="busy || !budgetReady">Применить</button>
     </template>
   </Modal>
 </template>
@@ -227,7 +268,7 @@ import { useWs } from './context'
 const COLUMNS = [
   { key: 'name', label: 'Кампания' },
   { key: 'state', label: 'Состояние' },
-  { key: 'daily_budget_rub', label: 'Бюджет/день', num: true },
+  { key: 'budget_week_rub', label: 'Бюджет', num: true },
   { key: 'cost_kopecks', label: 'Расход', num: true },
   { key: 'clicks', label: 'Клики', num: true },
   { key: 'ctr', label: 'CTR', num: true },
@@ -260,7 +301,23 @@ const sort = reactive({ key: 'cost_kopecks', desc: true })
 const filters = reactive({ search: '', account: '', state: '', wasteOnly: false })
 const wizardOpen = ref(false)
 const duplicate = reactive({ open: false, campaign: null })
-const budgetModal = reactive({ open: false, mode: 'abs', value: null, pct: 10 })
+const BUDGET_MODES = [
+  { id: 'weekly', label: 'Недельный' },
+  { id: 'daily', label: 'Дневной' },
+  { id: 'pct', label: 'Изменить на %' },
+  { id: 'none', label: 'Не менять' },
+]
+const budgetModal = reactive({
+  open: false,
+  mode: 'weekly',
+  weekly: null,
+  daily: null,
+  pct: 10,
+  target: false,
+  targetPct: -10,
+})
+const budgetDone = ref([])
+const budgetProgress = ref('')
 
 const accounts = computed(() => data.value?.accounts || [])
 const rows = computed(() => {
@@ -274,7 +331,7 @@ const rows = computed(() => {
     return true
   })
   const dir = sort.desc ? -1 : 1
-  return [...list].sort((a, b) => {
+  return list.map(withWeek).sort((a, b) => {
     const x = a[sort.key]
     const y = b[sort.key]
     if (x == null && y == null) return 0
@@ -291,11 +348,28 @@ const totals = computed(() =>
       clicks: t.clicks + (c.clicks || 0),
       impressions: t.impressions + (c.impressions || 0),
       conversions: t.conversions + (c.conversions || 0),
-      budget: t.budget + (c.state === 'ON' ? c.daily_budget_rub || 0 : 0),
+      budget: t.budget + (c.state === 'ON' ? c.budget_week_rub || 0 : 0),
     }),
     { cost: 0, clicks: 0, impressions: 0, conversions: 0, budget: 0 },
   ),
 )
+
+// Бюджет к одной мере — за неделю: так их можно сортировать и складывать.
+function withWeek(c) {
+  const week = c.weekly_budget_rub || (c.daily_budget_rub ? c.daily_budget_rub * 7 : null)
+  return { ...c, budget_week_rub: week }
+}
+
+const selectedKinds = computed(() => {
+  const out = { weekly: 0, daily: 0 }
+  for (const c of data.value?.items || []) {
+    if (!selected.value.has(c.campaign_row_id)) continue
+    if (c.weekly_budget_rub) out.weekly += 1
+    else if (c.daily_budget_rub) out.daily += 1
+  }
+  return out
+})
+const budgetReady = computed(() => budgetModal.mode !== 'none' || budgetModal.target)
 
 function sortBy(key) {
   if (sort.key === key) sort.desc = !sort.desc
@@ -391,13 +465,41 @@ function quickToggle(c) {
   return runBulk(c.state === 'ON' ? 'pause' : 'resume')
 }
 
+function openBudget() {
+  budgetDone.value = []
+  budgetProgress.value = ''
+  budgetModal.open = true
+}
+
 async function applyBudget() {
-  const extra =
-    budgetModal.mode === 'abs'
-      ? { daily_budget_rub: Number(budgetModal.value) }
-      : { budget_change_pct: Number(budgetModal.pct) }
-  await runBulk('set_budget', extra)
-  budgetModal.open = false
+  const ids = [...selected.value]
+  if (!ids.length || !budgetReady.value) return
+  const payload = { campaign_ids: ids }
+  if (budgetModal.mode === 'weekly') payload.weekly_budget_rub = Number(budgetModal.weekly)
+  else if (budgetModal.mode === 'daily') payload.daily_budget_rub = Number(budgetModal.daily)
+  else if (budgetModal.mode === 'pct') payload.budget_change_pct = Number(budgetModal.pct)
+  if (budgetModal.target) payload.target_change_pct = Number(budgetModal.targetPct)
+  busy.value = true
+  bulkErrors.value = []
+  budgetProgress.value = 'Читаем стратегии кампаний в Директе…'
+  try {
+    const res = await wsApi.bulkBudget(ws.value.id, payload, (job) => {
+      budgetProgress.value = `Меняем: ${jobProgressText(job)}`
+    })
+    bulkErrors.value = res.errors || []
+    budgetDone.value = res.items || []
+    pushToast(
+      `Изменено: ${res.applied || 0}${bulkErrors.value.length ? `, ошибок: ${bulkErrors.value.length}` : ''}`,
+      bulkErrors.value.length ? 'error' : 'ok',
+    )
+    budgetModal.open = false
+    await load()
+  } catch (err) {
+    pushToast(errorText(err), 'error')
+  } finally {
+    busy.value = false
+    budgetProgress.value = ''
+  }
 }
 
 function openDuplicate(c) {

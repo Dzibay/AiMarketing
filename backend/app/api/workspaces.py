@@ -18,6 +18,7 @@ from app.analytics import parse_range, workspace_analytics, workspace_summary
 from app.api.web import _http, _start_job
 from app.db import pool
 from app.direct_sync import get_campaign
+from app.budgets import validate_args
 from app.job_handlers import submit
 from app.jobs import PRIORITY_USER, public_job
 from app.journal import list_action_logs
@@ -101,6 +102,74 @@ class WsBulkBody(BaseModel):
     action: str = ""
     daily_budget_rub: float | None = None
     budget_change_pct: float | None = None
+
+
+class WsBudgetBody(BaseModel):
+    campaign_ids: list[int] = Field(default_factory=list)
+    weekly_budget_rub: float | None = None
+    daily_budget_rub: float | None = None
+    budget_change_pct: float | None = None
+    target_change_pct: float | None = None
+
+
+class SliceBody(BaseModel):
+    dimension: str
+    days: int = 30
+    campaign_ids: list[int] = Field(default_factory=list)
+
+
+class SliceAdjustItem(BaseModel):
+    key: str
+    pct: int
+    label: str = ""
+
+
+class SliceAdjustBody(BaseModel):
+    dimension: str
+    items: list[SliceAdjustItem] = Field(default_factory=list, max_length=300)
+    campaign_ids: list[int] = Field(default_factory=list)
+
+
+class PlacementItem(BaseModel):
+    placement: str
+    campaign_ids: list[int] = Field(default_factory=list)
+
+
+class PlacementsExcludeBody(BaseModel):
+    items: list[PlacementItem] = Field(default_factory=list, max_length=1000)
+
+
+class PlacementsAiBody(BaseModel):
+    items: list[dict] = Field(default_factory=list, max_length=300)
+
+
+class AdReportBody(BaseModel):
+    days: int = 30
+    campaign_ids: list[int] = Field(default_factory=list)
+
+
+class AdsAiItem(BaseModel):
+    ad_row_id: int
+    net: str = ""
+    ctr: float | None = None
+    ref_ctr: float | None = None
+    best_ad_row_id: int | None = None
+
+
+class AdsAiBody(BaseModel):
+    items: list[AdsAiItem] = Field(default_factory=list, max_length=20)
+
+
+class AdsAbItem(BaseModel):
+    ad_row_id: int
+    titles: list[str] = Field(default_factory=list, max_length=7)
+    texts: list[str] = Field(default_factory=list, max_length=3)
+    title2: str = ""
+
+
+class AdsAbBody(BaseModel):
+    items: list[AdsAbItem] = Field(default_factory=list, max_length=50)
+    moderate: bool = False
 
 
 class StatsSyncBody(BaseModel):
@@ -326,6 +395,114 @@ def ws_bulk(workspace_id: int, body: WsBulkBody, user_id: int = Depends(require_
         )
     except YandexError as exc:
         raise _http(exc) from exc
+
+
+@router.post("/{workspace_id}/campaigns/budget")
+def ws_bulk_budget(workspace_id: int, body: WsBudgetBody, user_id: int = Depends(require_web_user)) -> dict:
+    """Недельный/дневной бюджет и цена цели для выбранных кампаний — задачей: на кампанию 2–3 вызова Директа."""
+    _ws(user_id, workspace_id)
+    own = set(workspace_campaign_row_ids(user_id, workspace_id))
+    if not body.campaign_ids or not set(body.campaign_ids) <= own:
+        raise HTTPException(status_code=404, detail="not-found")
+    try:
+        validate_args(body.weekly_budget_rub, body.daily_budget_rub, body.budget_change_pct, body.target_change_pct)
+    except YandexError as exc:
+        raise _http(exc) from exc
+    payload = {**body.model_dump(), "workspace_id": workspace_id}
+    job = submit("bulk_budget", user_id, payload, priority=PRIORITY_USER, max_attempts=1)
+    return {"job": public_job(job)}
+
+
+def _own_campaigns(user_id: int, workspace_id: int, ids: list[int]) -> None:
+    if ids and not set(ids) <= set(workspace_campaign_row_ids(user_id, workspace_id)):
+        raise HTTPException(status_code=404, detail="not-found")
+
+
+@router.post("/{workspace_id}/slices")
+def ws_slice(workspace_id: int, body: SliceBody, user_id: int = Depends(require_web_user)) -> dict:
+    """Срез статистики (площадки, устройства, пол-возраст, регионы, часы) — задачей: это отчёт Директа."""
+    from app.slices import DIMENSIONS
+
+    _ws(user_id, workspace_id)
+    if body.dimension not in DIMENSIONS:
+        raise HTTPException(status_code=400, detail="dimension")
+    _own_campaigns(user_id, workspace_id, body.campaign_ids)
+    payload = {**body.model_dump(), "workspace_id": workspace_id}
+    job = submit("slice_report", user_id, payload, priority=PRIORITY_USER, max_attempts=2)
+    return {"job": public_job(job)}
+
+
+@router.post("/{workspace_id}/slices/adjust")
+def ws_slice_adjust(workspace_id: int, body: SliceAdjustBody, user_id: int = Depends(require_web_user)) -> dict:
+    """Корректировки ставок по срезу на выбранные кампании; одна запись журнала с откатом."""
+    from app.slices import ADJUSTABLE
+
+    _ws(user_id, workspace_id)
+    if body.dimension not in ADJUSTABLE:
+        raise HTTPException(status_code=400, detail="dimension")
+    if not body.items:
+        raise _http(YandexError("empty", "Не выбрано ни одной корректировки"))
+    _own_campaigns(user_id, workspace_id, body.campaign_ids)
+    payload = {**body.model_dump(), "workspace_id": workspace_id}
+    job = submit("slice_adjust", user_id, payload, priority=PRIORITY_USER, max_attempts=1)
+    return {"job": public_job(job)}
+
+
+@router.post("/{workspace_id}/placements/exclude")
+def ws_placements_exclude(
+    workspace_id: int, body: PlacementsExcludeBody, user_id: int = Depends(require_web_user)
+) -> dict:
+    """Запретить площадки в кампаниях, где они крутились; одна запись журнала с откатом."""
+    _ws(user_id, workspace_id)
+    if not body.items:
+        raise _http(YandexError("empty", "Не выбрано ни одной площадки"))
+    _own_campaigns(user_id, workspace_id, sorted({i for item in body.items for i in item.campaign_ids}))
+    payload = {**body.model_dump(), "workspace_id": workspace_id}
+    job = submit("exclude_placements", user_id, payload, priority=PRIORITY_USER, max_attempts=1)
+    return {"job": public_job(job)}
+
+
+@router.post("/{workspace_id}/placements/ai")
+def ws_placements_ai(workspace_id: int, body: PlacementsAiBody, user_id: int = Depends(require_web_user)) -> dict:
+    """Подсказки ИИ по площадкам — только вердикты, ничего не меняет."""
+    _ws(user_id, workspace_id)
+    if not body.items:
+        raise _http(YandexError("empty", "Нет площадок для разбора"))
+    payload = {"items": body.items, "workspace_id": workspace_id}
+    job = submit("placements_ai", user_id, payload, priority=PRIORITY_USER, max_attempts=1)
+    return {"job": public_job(job)}
+
+
+@router.post("/{workspace_id}/ads/report")
+def ws_ad_report(workspace_id: int, body: AdReportBody, user_id: int = Depends(require_web_user)) -> dict:
+    """Статистика объявлений по сетям с пометкой слабых по CTR — задачей: это отчёт Директа."""
+    _ws(user_id, workspace_id)
+    _own_campaigns(user_id, workspace_id, body.campaign_ids)
+    payload = {**body.model_dump(), "workspace_id": workspace_id}
+    job = submit("ad_report", user_id, payload, priority=PRIORITY_USER, max_attempts=2)
+    return {"job": public_job(job)}
+
+
+@router.post("/{workspace_id}/ads/ai")
+def ws_ads_ai(workspace_id: int, body: AdsAiBody, user_id: int = Depends(require_web_user)) -> dict:
+    """Новые тексты от ИИ для слабых объявлений — только предложения, ничего не меняет."""
+    _ws(user_id, workspace_id)
+    if not body.items:
+        raise _http(YandexError("empty", "Не выбраны объявления"))
+    payload = {**body.model_dump(), "workspace_id": workspace_id}
+    job = submit("ads_ai", user_id, payload, priority=PRIORITY_USER, max_attempts=1)
+    return {"job": public_job(job)}
+
+
+@router.post("/{workspace_id}/ads/ab")
+def ws_ads_ab(workspace_id: int, body: AdsAbBody, user_id: int = Depends(require_web_user)) -> dict:
+    """Новые объявления рядом со старыми (A/B); одна запись журнала с откатом."""
+    _ws(user_id, workspace_id)
+    if not body.items:
+        raise _http(YandexError("empty", "Нет объявлений для добавления"))
+    payload = {**body.model_dump(), "workspace_id": workspace_id}
+    job = submit("ads_ab", user_id, payload, priority=PRIORITY_USER, max_attempts=1)
+    return {"job": public_job(job)}
 
 
 @router.get("/{workspace_id}/campaigns/{campaign_row_id}")

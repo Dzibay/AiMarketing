@@ -206,10 +206,76 @@ def _brief_draft(user_id: int, payload: dict, progress: Progress) -> dict:
     return draft_brief(user_id, {**payload, "workspace_id": _int(payload, "workspace_id")}, progress)
 
 
+def _bulk_budget(user_id: int, payload: dict, progress: Progress) -> dict:
+    from app.budgets import bulk_budget
+
+    def num(key: str) -> float | None:
+        value = payload.get(key)
+        return float(value) if value not in (None, "") else None
+
+    workspace_id = payload.get("workspace_id")
+    with acting_as(str(payload.get("source") or "user")):
+        return bulk_budget(
+            user_id,
+            campaign_ids=[int(i) for i in payload.get("campaign_ids") or []],
+            weekly_budget_rub=num("weekly_budget_rub"),
+            daily_budget_rub=num("daily_budget_rub"),
+            budget_change_pct=num("budget_change_pct"),
+            target_change_pct=num("target_change_pct"),
+            workspace_id=int(workspace_id) if workspace_id else None,
+            progress=progress,
+        )
+
+
 def _undo_action(user_id: int, payload: dict, progress: Progress) -> dict:
     from app.undo import run_undo
 
     return run_undo(user_id, _int(payload, "log_id"), progress)
+
+
+def _slice_report(user_id: int, payload: dict, progress: Progress) -> dict:
+    from app.slices import slice_report
+
+    return slice_report(user_id, payload, progress)
+
+
+def _slice_adjust(user_id: int, payload: dict, progress: Progress) -> dict:
+    from app.slices import apply_adjustments
+
+    with acting_as(str(payload.get("source") or "user")):
+        return apply_adjustments(user_id, payload, progress)
+
+
+def _exclude_placements(user_id: int, payload: dict, progress: Progress) -> dict:
+    from app.slices import exclude_placements
+
+    with acting_as(str(payload.get("source") or "user")):
+        return exclude_placements(user_id, payload, progress)
+
+
+def _placements_ai(user_id: int, payload: dict, progress: Progress) -> dict:
+    from app.slices import ai_placements
+
+    return ai_placements(user_id, payload, progress)
+
+
+def _ad_report(user_id: int, payload: dict, progress: Progress) -> dict:
+    from app.ad_stats import ad_report
+
+    return ad_report(user_id, payload, progress)
+
+
+def _ads_ai(user_id: int, payload: dict, progress: Progress) -> dict:
+    from app.ad_stats import ai_rewrite_ads
+
+    return ai_rewrite_ads(user_id, payload, progress)
+
+
+def _ads_ab(user_id: int, payload: dict, progress: Progress) -> dict:
+    from app.ad_stats import create_ab_ads
+
+    with acting_as(str(payload.get("source") or "user")):
+        return create_ab_ads(user_id, payload, progress)
 
 
 HANDLERS: dict[str, Handler] = {
@@ -233,6 +299,14 @@ HANDLERS: dict[str, Handler] = {
     "apply_query_decisions": _apply_query_decisions,
     "brief_draft": _brief_draft,
     "undo_action": _undo_action,
+    "bulk_budget": _bulk_budget,
+    "slice_report": _slice_report,
+    "slice_adjust": _slice_adjust,
+    "exclude_placements": _exclude_placements,
+    "placements_ai": _placements_ai,
+    "ad_report": _ad_report,
+    "ads_ai": _ads_ai,
+    "ads_ab": _ads_ab,
 }
 
 

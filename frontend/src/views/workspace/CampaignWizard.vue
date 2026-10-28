@@ -207,6 +207,12 @@
                 В ЕПК объявление комбинаторное: Директ сам собирает показы из заголовков и текстов.
               </p>
             </template>
+            <AdExtrasFields
+              :extras="form.group.ad.extras"
+              :account-id="form.account_id"
+              :max-images="unified ? 5 : 1"
+              :disabled="saving"
+            />
           </template>
           <p v-else class="field-hint field--wide">
             Группы, фразы и объявления можно добавить потом на странице кампании.
@@ -259,8 +265,10 @@ import { RouterLink } from 'vue-router'
 import Modal from '../../components/ui/Modal.vue'
 import ScheduleGrid from '../../components/ScheduleGrid.vue'
 import StrategyFields from '../../components/StrategyFields.vue'
+import AdExtrasFields from '../../components/AdExtrasFields.vue'
 import { errorText, wsApi } from '../../api/web'
 import { formatDate, isoDay, priorityGoalsForApi } from '../../utils/format'
+import { emptyExtras, extrasEmpty, extrasPayload, extrasProblem } from '../../utils/adExtras'
 
 const props = defineProps({
   open: { type: Boolean, default: false },
@@ -319,6 +327,7 @@ function blankForm() {
         more_titles: '',
         more_texts: '',
         href: site ? (/^https?:\/\//i.test(site) ? site : `https://${site}`) : '',
+        extras: emptyExtras(),
       },
     },
   }
@@ -411,6 +420,8 @@ function validate() {
     const ad = form.group.ad
     const partial = [ad.title, ad.text, ad.href].filter(Boolean).length
     if (partial && partial < 3) return 'Для объявления нужны заголовок, текст и ссылка — или оставьте все поля пустыми'
+    const extrasError = extrasProblem(ad.extras, unified.value ? 5 : 1)
+    if (extrasError) return extrasError
     if (form.group.region === 'custom' && !regionIds().length) return 'Укажите ID регионов'
   }
   return ''
@@ -446,7 +457,8 @@ function buildSpec() {
     spec.group = { name: g.name || 'Группа 1', region_ids: regionIds(), keywords: g.keywords }
     if (manual.value && g.bid_rub !== '') spec.group.bid_rub = Number(g.bid_rub)
     if (g.ad.title && g.ad.text && g.ad.href) {
-      const { more_titles: moreTitles, more_texts: moreTexts, ...ad } = g.ad
+      const { more_titles: moreTitles, more_texts: moreTexts, extras, ...ad } = g.ad
+      if (!extrasEmpty(extras)) ad.extras = extrasPayload(extras)
       if (unified.value) {
         ad.title2 = ''
         ad.titles = [ad.title, ...lines(moreTitles)].slice(0, 7)

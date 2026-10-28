@@ -14,6 +14,7 @@ from app.clock import today_msk
 from app.db import pool
 from app.overview import SEVERITY_ORDER, build_overview, kpi_state
 from app.stats import structure_tops
+from app.strategy_info import budget_brief
 from app.workspaces import require_workspace
 from app.yandex import YandexError
 
@@ -72,7 +73,7 @@ def _workspace_campaigns(user_id: int, workspace_id: int) -> list[dict]:
         return conn.execute(
             """
             SELECT c.id, c.account_id, c.campaign_id, c.name, c.state, c.status, c.campaign_type,
-                   c.daily_budget_kopecks, a.client_login, a.name AS account_name
+                   c.daily_budget_kopecks, c.bidding_strategy, a.client_login, a.name AS account_name
             FROM workspace_campaigns wc
             JOIN direct_campaigns c ON c.id = wc.campaign_row_id
             JOIN direct_accounts a ON a.id = c.account_id
@@ -257,6 +258,7 @@ def workspace_analytics(
                 "account_id": c["account_id"],
                 "account_login": c["client_login"],
                 "daily_budget_rub": round(budget / 100, 2) if budget else None,
+                **budget_brief(c.get("bidding_strategy")),
                 **m,
             }
         )

@@ -128,6 +128,19 @@ def strategy_brief(bidding: dict | None) -> dict:
     return out
 
 
+def budget_brief(bidding: dict | None) -> dict:
+    """Для списка кампаний: подпись стратегии, недельный бюджет и цена цели (None — не заданы)."""
+    brief = strategy_brief(bidding)
+    out: dict = {"strategy_label": brief.get("label") or "", "weekly_budget_rub": None,
+                 "target_cpa_rub": None, "target_cpc_rub": None}
+    for side in ("search", "network"):
+        info = brief.get(side) or {}
+        for key, field in (("weekly_budget_rub", "weekly_rub"), ("target_cpa_rub", "cpa_rub"), ("target_cpc_rub", "avg_cpc_rub")):
+            if out[key] is None and info.get(field):
+                out[key] = info[field]
+    return out
+
+
 def brief_label(brief: dict) -> str:
     search = brief.get("search") or {}
     network = brief.get("network") or {}

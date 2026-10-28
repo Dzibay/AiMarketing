@@ -10,6 +10,7 @@ from datetime import date, timedelta
 from urllib.parse import urlsplit
 
 import httpx
+from psycopg.types.json import Jsonb
 
 from app import direct_api
 from app.clock import today_msk
@@ -672,19 +673,28 @@ def _create_first_group(user_id: int, campaign_row_id: int, group: dict, *, manu
             warnings.append(f"Фразы не добавлены: {exc.message or exc.code}")
     ad = group.get("ad") or {}
     if ad.get("title") and ad.get("text") and ad.get("href"):
+        fields = dict(
+            adgroup_row_id=adgroup["id"],
+            title=ad["title"],
+            title2=ad.get("title2") or "",
+            text=ad["text"],
+            href=ad["href"],
+            titles=[str(t) for t in ad.get("titles") or []] or None,
+            texts=[str(t) for t in ad.get("texts") or []] or None,
+        )
+        extras = ad.get("extras") or None
         try:
-            out["ad"] = create_text_ad(
-                user_id,
-                adgroup_row_id=adgroup["id"],
-                title=ad["title"],
-                title2=ad.get("title2") or "",
-                text=ad["text"],
-                href=ad["href"],
-                titles=[str(t) for t in ad.get("titles") or []] or None,
-                texts=[str(t) for t in ad.get("texts") or []] or None,
-            )
+            out["ad"] = create_text_ad(user_id, **fields, extras=extras)
         except YandexError as exc:
-            warnings.append(f"Объявление не создано: {exc.message or exc.code}")
+            if not extras:
+                warnings.append(f"Объявление не создано: {exc.message or exc.code}")
+            else:
+                # Расширения не должны стоить объявления: создаём без них и говорим, что не так.
+                warnings.append(f"Быстрые ссылки, уточнения или картинки не добавлены: {exc.message or exc.code}")
+                try:
+                    out["ad"] = create_text_ad(user_id, **fields)
+                except YandexError as exc2:
+                    warnings.append(f"Объявление не создано: {exc2.message or exc2.code}")
     out["warnings"] = warnings
     return out
 
@@ -925,6 +935,15 @@ def update_campaign_settings(user_id: int, campaign_row_id: int, changes: dict) 
     if errors:
         raise YandexError("direct", errors[0][1])
     warnings = [text for _i, text in direct_api.item_warnings(result, "UpdateResults")]
+    if "BiddingStrategy" in block:
+        # Стратегию — как её вернёт Директ, с его значениями по умолчанию: иначе синк примет её за чужую правку.
+        try:
+            item = _fetch_campaign(token, row["client_login"], row["campaign_id"], ctype)
+            fresh = (item.get(block_name) or {}).get("BiddingStrategy")
+            if fresh:
+                local["bidding_strategy"] = Jsonb(fresh)
+        except Exception:
+            log.warning("strategy refresh failed for campaign %s", campaign_row_id, exc_info=True)
     _update_local(campaign_row_id, local)
     out = {"id": campaign_row_id, "changed": changed, "warnings": warnings, "status": "ok"}
     log_action(

@@ -8,7 +8,9 @@ from pydantic import BaseModel, Field
 
 log = logging.getLogger("app.api.web")
 
+from app import ad_extras
 from app.actions import (
+    _account_creds,
     bulk_campaign_action,
     create_text_campaign,
     update_campaign,
@@ -29,6 +31,7 @@ from app.adgroups import (
     update_adgroup,
 )
 from app.ads import (
+    _ad_row as _ad_db_row,
     bulk_ad_action,
     create_text_ad,
     list_ads,
@@ -85,6 +88,7 @@ from app.workspaces import ensure_workspaces, list_workspaces
 from app.yandex import (
     OAUTH_MODES,
     YandexError,
+    get_connection_access_token,
     complete_oauth,
     delete_connection,
     list_connections,
@@ -173,6 +177,19 @@ class AdGroupIdsBody(BaseModel):
     adgroup_ids: list[int] = Field(default_factory=list)
 
 
+class SitelinkBody(BaseModel):
+    title: str = ""
+    href: str = ""
+    description: str = ""
+
+
+class AdExtrasBody(BaseModel):
+    # None — не менять, пустой список — снять с объявления.
+    sitelinks: list[SitelinkBody] | None = Field(default=None, max_length=8)
+    callouts: list[str] | None = Field(default=None, max_length=10)
+    image_hashes: list[str] | None = Field(default=None, max_length=5)
+
+
 class TextAdBody(BaseModel):
     adgroup_row_id: int
     title: str = ""
@@ -182,6 +199,7 @@ class TextAdBody(BaseModel):
     # Варианты комбинаторного объявления ЕПК: до 7 заголовков и 3 текстов.
     titles: list[str] | None = None
     texts: list[str] | None = None
+    extras: AdExtrasBody | None = None
 
 
 class TextAdPatchBody(BaseModel):
@@ -191,6 +209,12 @@ class TextAdPatchBody(BaseModel):
     href: str | None = None
     titles: list[str] | None = None
     texts: list[str] | None = None
+    extras: AdExtrasBody | None = None
+
+
+class AdImageBody(BaseModel):
+    name: str = Field(default="", max_length=255)
+    data: str = Field(min_length=1, max_length=8 * 1024 * 1024)
 
 
 class AdActionBody(BaseModel):
@@ -248,6 +272,7 @@ class RuleBody(BaseModel):
     goal_row_id: int | None = None
     action_budget_rub: float | None = None
     action_bid_rub: float | None = None
+    action_pct: float | None = None
     target: str = "campaign"
 
 
@@ -262,6 +287,7 @@ class RulePatchBody(BaseModel):
     goal_row_id: int | None = None
     action_budget_rub: float | None = None
     action_bid_rub: float | None = None
+    action_pct: float | None = None
     scope_account_id: int | None = None
     scope_workspace_id: int | None = None
     target: str | None = None
@@ -797,6 +823,7 @@ def web_create_ad(body: TextAdBody, user_id: int = Depends(require_web_user)) ->
             href=body.href,
             titles=body.titles,
             texts=body.texts,
+            extras=body.extras.model_dump(exclude_none=True) if body.extras else None,
         )
     except YandexError as exc:
         raise _http(exc) from exc
@@ -818,7 +845,30 @@ def web_patch_ad(
             href=body.href,
             titles=body.titles,
             texts=body.texts,
+            extras=body.extras.model_dump(exclude_none=True) if body.extras else None,
         )
+    except YandexError as exc:
+        raise _http(exc) from exc
+
+
+@router.get("/direct/ads/{ad_row_id}/extras")
+def web_ad_extras(ad_row_id: int, user_id: int = Depends(require_web_user)) -> dict:
+    """Быстрые ссылки, уточнения и картинки объявления — из Директа, для формы правки."""
+    try:
+        row = _ad_db_row(user_id, ad_row_id)
+        token = get_connection_access_token(row["connection_id"], user_id)
+        return ad_extras.read_extras(token, row["client_login"], int(row["ad_id"]))
+    except YandexError as exc:
+        raise _http(exc) from exc
+
+
+@router.post("/direct/accounts/{account_id}/ad-images")
+def web_upload_ad_image(account_id: int, body: AdImageBody, user_id: int = Depends(require_web_user)) -> dict:
+    """Картинка в библиотеку кабинета; хэш потом уходит в объявление."""
+    try:
+        account = _account_creds(user_id, account_id)
+        token = get_connection_access_token(account["connection_id"], user_id)
+        return ad_extras.upload_image(token, account["client_login"], name=body.name, data_b64=body.data)
     except YandexError as exc:
         raise _http(exc) from exc
 
@@ -1122,6 +1172,7 @@ def web_create_rule(body: RuleBody, user_id: int = Depends(require_web_user)) ->
             goal_row_id=body.goal_row_id,
             action_budget_rub=body.action_budget_rub,
             action_bid_rub=body.action_bid_rub,
+            action_pct=body.action_pct,
             target=body.target or "campaign",
         )
     except YandexError as exc:

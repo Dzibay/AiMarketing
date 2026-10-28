@@ -23,9 +23,13 @@
           <label>Условие</label>
           <select v-model="form.rule_type">
             <option value="cpa_above">CPA выше порога, ₽</option>
+            <option v-if="form.target !== 'query'" value="cpa_below">CPA ниже порога, ₽</option>
             <option value="spend_no_conv">Расход без конверсий, ₽</option>
             <option value="cpc_above">CPC выше порога, ₽</option>
             <option v-if="form.target === 'campaign'" value="daily_budget_pct">Израсходовано % дневного бюджета</option>
+            <option v-if="form.target === 'campaign'" value="weekly_budget_pct">
+              Израсходовано % недельного бюджета
+            </option>
           </select>
         </div>
         <div class="field">
@@ -65,11 +69,25 @@
             <option v-if="form.target !== 'query'" value="pause">Остановить</option>
             <option v-if="form.target !== 'query'" value="resume">Запустить</option>
             <option v-if="form.target === 'campaign'" value="set_budget">Установить дневной бюджет</option>
+            <option v-if="form.target === 'campaign'" value="set_weekly_budget">Установить недельный бюджет</option>
+            <option v-if="form.target === 'campaign'" value="change_budget_pct">Изменить бюджет на %</option>
             <option v-if="form.target === 'keyword'" value="set_bid">Установить ставку</option>
             <option v-if="form.target === 'query'" value="negative_adgroup">В минус-фразы группы</option>
             <option v-if="form.target === 'query'" value="negative_campaign">В минус-фразы кампании</option>
             <option value="notify">Только уведомить</option>
           </select>
+        </div>
+        <div v-if="form.action === 'set_weekly_budget'" class="field">
+          <label>Недельный бюджет, ₽</label>
+          <input v-model.number="form.action_budget_rub" type="number" min="300" step="100" />
+        </div>
+        <div v-if="form.action === 'change_budget_pct'" class="field">
+          <label>Изменить на, % (минус — уменьшить)</label>
+          <input v-model.number="form.action_pct" type="number" min="-90" max="500" step="1" />
+        </div>
+        <div v-if="form.action === 'change_budget_pct'" class="field">
+          <label>{{ form.action_pct < 0 ? 'Не ниже' : 'Не выше' }}, ₽/нед. (необязательно)</label>
+          <input v-model.number="form.action_cap_rub" type="number" min="300" step="100" />
         </div>
         <div v-if="form.action === 'set_budget'" class="field">
           <label>Бюджет, ₽</label>
@@ -85,6 +103,10 @@
         </label>
         <button class="btn btn--accent" type="button" :disabled="busy" @click="create">Создать</button>
       </div>
+      <p v-if="['set_weekly_budget', 'change_budget_pct'].includes(form.action)" class="hint">
+        Пример: CPA ниже 800 ₽ за 7 дней → бюджет +20 %, не выше 30 000 ₽/нед. Автостратегии и ручные ставки ЕПК
+        получат недельный бюджет, ручные ставки ТГО — дневной (недельная сумма ÷ 7). Каждый запуск — запись в журнале с откатом.
+      </p>
       <p v-if="form.target !== 'campaign'" class="hint">
         Для фраз и запросов нужна статистика структуры: кампания → «Обновить структуру и статистику».
         <template v-if="form.target === 'query'">Типичный сценарий: расход без конверсий → минус-фраза.</template>
@@ -107,6 +129,14 @@
               {{ rule.threshold_value }}<template v-if="rule.target === 'campaign'"> за {{ rule.lookback_days }} дн.</template>
               → {{ lowerFirst(ACTIONS[rule.action] || rule.action) }}
               <template v-if="rule.action === 'set_budget' && rule.action_budget_rub"> {{ rubles(rule.action_budget_rub) }}</template>
+              <template v-if="rule.action === 'set_weekly_budget' && rule.action_budget_rub">
+                {{ rubles(rule.action_budget_rub) }}/нед.</template
+              >
+              <template v-if="rule.action === 'change_budget_pct' && rule.action_pct != null">
+                {{ rule.action_pct > 0 ? '+' : '' }}{{ rule.action_pct }} %<template v-if="rule.action_budget_rub">,
+                  {{ rule.action_pct < 0 ? 'не ниже' : 'не выше' }} {{ rubles(rule.action_budget_rub) }}/нед.</template
+                ></template
+              >
               <template v-if="rule.action === 'set_bid' && rule.action_bid_rub"> {{ rubles(rule.action_bid_rub, 2) }}</template>
               <template v-if="rule.goal_name"> · цель «{{ rule.goal_name }}»</template>
               <template v-if="!workspace && rule.workspace_name"> · {{ rule.workspace_name }}</template>
@@ -190,19 +220,26 @@ function lowerFirst(text) {
 const TARGETS = { campaign: 'Кампании', keyword: 'Ключевые фразы', query: 'Поисковые запросы' }
 const TYPES = {
   cpa_above: 'CPA выше',
+  cpa_below: 'CPA ниже',
   spend_no_conv: 'Расход без конверсий от',
   cpc_above: 'CPC выше',
   daily_budget_pct: 'Израсходовано % дневного бюджета от',
+  weekly_budget_pct: 'Израсходовано % недельного бюджета от',
 }
 const ACTIONS = {
   pause: 'Остановить',
   resume: 'Запустить',
   set_budget: 'Дневной бюджет',
+  set_weekly_budget: 'Недельный бюджет',
+  change_budget_pct: 'Бюджет',
   set_bid: 'Ставка',
   negative_adgroup: 'Минус-фраза группы',
   negative_campaign: 'Минус-фраза кампании',
   notify: 'Уведомить',
 }
+
+const CAMPAIGN_TYPES = ['daily_budget_pct', 'weekly_budget_pct']
+const CAMPAIGN_ACTIONS = ['set_budget', 'set_weekly_budget', 'change_budget_pct']
 
 const { workspaces } = useWorkspaces()
 const rules = ref([])
@@ -223,6 +260,8 @@ const form = reactive({
   goal_row_id: '',
   action: 'pause',
   action_budget_rub: 500,
+  action_pct: 20,
+  action_cap_rub: null,
   action_bid_rub: 15,
 })
 
@@ -239,11 +278,11 @@ watch(
   () => form.target,
   (target) => {
     if (target === 'keyword') {
-      if (form.rule_type === 'daily_budget_pct') form.rule_type = 'cpa_above'
-      if (['set_budget', 'negative_adgroup', 'negative_campaign'].includes(form.action)) form.action = 'pause'
+      if (CAMPAIGN_TYPES.includes(form.rule_type)) form.rule_type = 'cpa_above'
+      if ([...CAMPAIGN_ACTIONS, 'negative_adgroup', 'negative_campaign'].includes(form.action)) form.action = 'pause'
       form.goal_row_id = ''
     } else if (target === 'query') {
-      if (form.rule_type === 'daily_budget_pct') form.rule_type = 'spend_no_conv'
+      if ([...CAMPAIGN_TYPES, 'cpa_below'].includes(form.rule_type)) form.rule_type = 'spend_no_conv'
       form.action = 'negative_adgroup'
       form.goal_row_id = ''
       if (!form.threshold_value) form.threshold_value = 300
@@ -294,7 +333,12 @@ async function create() {
           ? Number(form.scope_workspace_id)
           : null,
       goal_row_id: form.target === 'campaign' && form.goal_row_id ? Number(form.goal_row_id) : null,
-      action_budget_rub: form.action === 'set_budget' ? Number(form.action_budget_rub) : null,
+      action_budget_rub: ['set_budget', 'set_weekly_budget'].includes(form.action)
+        ? Number(form.action_budget_rub)
+        : form.action === 'change_budget_pct' && form.action_cap_rub
+          ? Number(form.action_cap_rub)
+          : null,
+      action_pct: form.action === 'change_budget_pct' ? Number(form.action_pct) : null,
       action_bid_rub: form.action === 'set_bid' ? Number(form.action_bid_rub) : null,
     })
     pushToast('Правило создано')
