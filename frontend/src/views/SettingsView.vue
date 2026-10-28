@@ -269,7 +269,7 @@
         </template>
       </section>
 
-      <section class="panel">
+      <section class="panel" id="telegram">
         <h2>Telegram</h2>
         <p class="hint">
           Утренний дайджест по всем пространствам и уведомления о срабатывании правил.
