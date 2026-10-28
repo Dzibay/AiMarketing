@@ -266,3 +266,65 @@ def test_add_copy_drops_goals_the_strategy_does_not_use(monkeypatch):
     assert _add_copy("token", "login", body, "TextCampaign", warnings) == 778
     assert "PriorityGoals" not in sent[1]["TextCampaign"]
     assert len(warnings) == 1
+
+
+def test_duplicate_campaign_reads_ads_of_the_source_campaign(monkeypatch):
+    """Цикл по фразам затирал src: объявления читались по логину фразы, и копия падала с KeyError."""
+    source = {
+        "id": 10,
+        "account_id": 1,
+        "campaign_id": 111,
+        "name": "Поиск",
+        "campaign_type": "TEXT_CAMPAIGN",
+        "connection_id": 5,
+        "client_login": "client-src",
+        "enabled": True,
+    }
+    manual = {"Search": {"BiddingStrategyType": "HIGHEST_POSITION"}, "Network": {"BiddingStrategyType": "SERVING_OFF"}}
+    text_ad = {"Title": "Слоны", "Text": "Купите слона", "Href": "https://example.com"}
+    found = {  # (сервис, кампания) → ответ get; 222 — созданная копия
+        ("adgroups", 111): [{"Id": 1, "Name": "Слоны", "Type": "TEXT_AD_GROUP"}],
+        ("keywords", 111): [
+            {"Id": 31, "AdGroupId": 1, "Keyword": "купить слона", "Bid": 5_000_000},
+            {"Id": 32, "AdGroupId": 1, "Keyword": "---autotargeting", "Bid": 3_000_000},
+        ],
+        ("keywords", 222): [{"Id": 42, "AdGroupId": 2, "Keyword": "---autotargeting"}],
+        ("ads", 111): [{"Id": 51, "AdGroupId": 1, "TextAd": text_ad}],
+    }
+    reads: list[tuple] = []
+    journal: list[dict] = []
+
+    def get_all(token, login, service, params, key, *, version="v5"):
+        campaign_id = params["SelectionCriteria"]["CampaignIds"][0]
+        reads.append((login, service, campaign_id))
+        return found[(service, campaign_id)]
+
+    def add_batches(token, login, service, key, objects, *, version="v5"):
+        first = {"adgroups": 2, "keywords": 41, "ads": 61}[service]
+        return [first + i for i in range(len(objects))], []
+
+    monkeypatch.setattr(actions, "_campaign_full", lambda *a: dict(source))
+    monkeypatch.setattr(actions, "_account_creds", lambda *a: {"connection_id": 6, "client_login": "client-dst"})
+    monkeypatch.setattr(actions, "get_connection_access_token", lambda *a: "token")
+    monkeypatch.setattr(actions, "_fetch_campaign", lambda *a: {"TextCampaign": {"BiddingStrategy": manual}})
+    monkeypatch.setattr(actions, "_add_copy", lambda *a: 222)
+    monkeypatch.setattr(actions, "insert_campaign_local", lambda *a, **kw: {"id": 20})
+    monkeypatch.setattr(actions, "_get_all", get_all)
+    monkeypatch.setattr(actions, "_add_batches", add_batches)
+    monkeypatch.setattr(actions.direct_api, "call", lambda *a, **kw: {})
+    monkeypatch.setattr(actions, "log_action", lambda *a, **kw: journal.append(kw))
+    monkeypatch.setattr("app.workspaces.campaign_workspace_id", lambda *a: None)
+    for sync in ("adgroups.sync_campaign_adgroups", "keywords.sync_campaign_keywords", "ads.sync_campaign_ads"):
+        monkeypatch.setattr(f"app.{sync}", lambda *a: None)
+
+    out = actions.duplicate_campaign(7, 10, target_account_id=2)
+    assert out["status"] == "ok"
+    assert (out["groups"], out["keywords"], out["autotargeting"], out["ads"]) == (1, 1, 1, 1)
+    # Объявления — из исходной кампании в её кабинете, автотаргетинг — из созданной копии.
+    assert reads == [
+        ("client-src", "adgroups", 111),
+        ("client-src", "keywords", 111),
+        ("client-dst", "keywords", 222),
+        ("client-src", "ads", 111),
+    ]
+    assert journal[0]["title"] == "Копия «Поиск» → «Поиск (копия)» (client-dst)"

@@ -2064,22 +2064,23 @@ def duplicate_campaign(
         auto_ids: list[int | None] = []
         pending: list[tuple[int, dict]] = []
         updates: list[dict] = []
-        for src in autos:
-            new_group = group_map[int(src["AdGroupId"])]
+        # Фраза — kw, не src: src до конца функции — исходная кампания (логин, id, название).
+        for kw in autos:
+            new_group = group_map[int(kw["AdGroupId"])]
             found = existing_auto.get(new_group)
             if found:
                 auto_ids.append(found)
                 patch: dict = {
                     "Id": found,
-                    "UserParam1": src.get("UserParam1") or None,
-                    "UserParam2": src.get("UserParam2") or None,
-                    "AutotargetingSettings": src.get("AutotargetingSettings") or None,
+                    "UserParam1": kw.get("UserParam1") or None,
+                    "UserParam2": kw.get("UserParam2") or None,
+                    "AutotargetingSettings": kw.get("AutotargetingSettings") or None,
                 }
                 patch = _clean(patch)
                 if len(patch) > 1:
                     updates.append(patch)
             else:
-                pending.append((len(auto_ids), src))
+                pending.append((len(auto_ids), kw))
                 auto_ids.append(None)
         for chunk in direct_api.chunks(updates, 1000):
             try:
@@ -2095,10 +2096,10 @@ def duplicate_campaign(
                 dst["client_login"],
                 "keywords",
                 "Keywords",
-                [_keyword_for_add(src, group_map[int(src["AdGroupId"])], manual=manual, unified=unified) for _i, src in pending],
+                [_keyword_for_add(kw, group_map[int(kw["AdGroupId"])], manual=manual, unified=unified) for _i, kw in pending],
             )
             warnings.extend(f"Автотаргетинг: {e}" for e in errors[:3])
-            for (index, _src), new_id in zip(pending, added):
+            for (index, _kw), new_id in zip(pending, added):
                 auto_ids[index] = new_id
         out["keywords"] = sum(1 for x in new_kw_ids if x)
         out["autotargeting"] = sum(1 for x in auto_ids if x)
@@ -2106,14 +2107,14 @@ def duplicate_campaign(
         network_manual = (not unified) and flat["network"] == "MAXIMUM_COVERAGE"
         bid_items = []
         fixed_auto_bid = False
-        for src, new_id in list(zip(phrases, new_kw_ids)) + list(zip(autos, auto_ids)):
+        for kw, new_id in list(zip(phrases, new_kw_ids)) + list(zip(autos, auto_ids)):
             if not new_id:
                 continue
-            item = _copied_bid(src, new_id, search_manual=search_manual, network_manual=network_manual)
-            if not item:
+            bid = _copied_bid(kw, new_id, search_manual=search_manual, network_manual=network_manual)
+            if not bid:
                 continue
-            bid_items.append(item)
-            if _is_autotargeting(src) and src.get("AutotargetingSearchBidIsAuto") == "YES":
+            bid_items.append(bid)
+            if _is_autotargeting(kw) and kw.get("AutotargetingSearchBidIsAuto") == "YES":
                 fixed_auto_bid = True
         _apply_copied_bids(dst_token, dst["client_login"], bid_items, warnings)
         if fixed_auto_bid:
