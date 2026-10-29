@@ -61,7 +61,22 @@
         >
       </p>
       <p v-if="fixing" class="hint">{{ fixing }}</p>
-      <div v-for="c in issues?.campaigns || []" :key="c.campaign_row_id" class="link-issue">
+      <div v-if="issues?.reasons?.length" class="link-reasons">
+        <p>
+          <strong>Не по шаблону: {{ issues.bad }} {{ plural(issues.bad, 'кампания', 'кампании', 'кампаний') }}.</strong>
+          Чем ссылки отличаются от шаблона:
+        </p>
+        <ul>
+          <li v-for="r in issues.reasons" :key="r.where + r.text">
+            {{ r.where }}: {{ r.text }}
+            <span class="hint">
+              — {{ r.campaigns === issues.bad ? 'во всех' : `в ${r.campaigns} ${plural(r.campaigns, 'кампании', 'кампаниях', 'кампаниях')}` }}
+            </span>
+          </li>
+        </ul>
+        <p class="hint">Если в кампаниях так и задумано, поправьте шаблон выше — проверка сравнивает ссылки с ним.</p>
+      </div>
+      <div v-for="c in shownCampaigns" :key="c.campaign_row_id" class="link-issue">
         <div class="link-issue__head">
           <strong>{{ c.name }}</strong>
           <small>№ {{ c.campaign_id }}</small>
@@ -70,27 +85,58 @@
         <ul>
           <li v-if="c.campaign_problems.length">
             Параметры кампании: {{ c.campaign_problems.join('; ') }}
-            <small class="hint">→ <code>{{ c.fixed_tracking }}</code></small>
+            <dl class="link-diff">
+              <dt>Сейчас</dt>
+              <dd><LinkCode :value="c.tracking" :marked="c.campaign_bad_params" /></dd>
+              <dt>Станет</dt>
+              <dd><LinkCode :value="c.fixed_tracking" :marked="c.campaign_bad_params" good /></dd>
+            </dl>
           </li>
-          <li v-for="g in (c.groups || []).slice(0, 5)" :key="'g' + g.adgroup_row_id">
+          <li v-for="g in (c.groups || []).slice(0, 3)" :key="'g' + g.adgroup_row_id">
             Метки группы «{{ g.name || g.adgroup_id }}»: {{ g.problems.join('; ') }}
-            <small class="hint">→ <code>{{ g.fixed_tracking }}</code></small>
+            <dl class="link-diff">
+              <dt>Сейчас</dt>
+              <dd><LinkCode :value="g.tracking" :marked="g.bad_params" /></dd>
+              <dt>Станет</dt>
+              <dd><LinkCode :value="g.fixed_tracking" :marked="g.bad_params" good /></dd>
+            </dl>
           </li>
-          <li v-if="c.groups_total > 5" class="hint">
-            и ещё {{ c.groups_total - 5 }} {{ plural(c.groups_total - 5, 'группа', 'группы', 'групп') }}
+          <li v-if="c.groups_total > 3" class="hint">
+            и ещё {{ c.groups_total - 3 }} {{ plural(c.groups_total - 3, 'группа', 'группы', 'групп') }} со своими метками
           </li>
-          <li v-for="ad in c.ads.slice(0, 5)" :key="ad.ad_row_id">
-            Объявление «{{ ad.title || ad.ad_id }}»:
-            {{ [...ad.problems, ...(ad.sitelink_problems || []).map((p) => `быстрые ссылки — ${p}`)].join('; ') }}
-            <small class="hint">
-              <template v-if="!ad.fixable">— такой тип объявления правьте в Директе</template>
-              <template v-else-if="ad.problems.length">→ <code>{{ ad.fixed_href }}</code></template>
-              <template v-else>→ новый набор быстрых ссылок по шаблону</template>
-            </small>
+          <li v-for="(link, i) in (c.ad_links || []).slice(0, 3)" :key="'a' + i">
+            {{ link.count > 1 ? `Объявления (${link.count})` : 'Объявление' }}:
+            {{ [...link.problems, ...link.sitelink_problems.map((p) => `быстрые ссылки — ${p}`)].join('; ') }}
+            <small class="link-titles">{{ titlesText(link) }}</small>
+            <dl class="link-diff">
+              <template v-if="link.problems.length">
+                <dt>Сейчас</dt>
+                <dd><LinkCode :value="link.href" :marked="link.bad_params" /></dd>
+                <dt>Станет</dt>
+                <dd v-if="link.fixable"><LinkCode :value="link.fixed_href" :marked="link.bad_params" good /></dd>
+                <dd v-else class="hint">такой тип объявления правьте в Директе</dd>
+              </template>
+              <template v-if="link.sitelink_href">
+                <dt>Быстрая ссылка</dt>
+                <dd><LinkCode :value="link.sitelink_href" /></dd>
+                <dt>Станет</dt>
+                <dd class="hint">{{ link.fixable ? 'новый набор быстрых ссылок по шаблону' : 'такой тип объявления правьте в Директе' }}</dd>
+              </template>
+            </dl>
           </li>
-          <li v-if="c.ads_total > 5" class="hint">и ещё {{ c.ads_total - 5 }} {{ plural(c.ads_total - 5, 'объявление', 'объявления', 'объявлений') }}</li>
+          <li v-if="c.ad_links_total > 3" class="hint">
+            и ещё {{ c.ad_links_total - 3 }} {{ plural(c.ad_links_total - 3, 'ссылка', 'ссылки', 'ссылок') }} не по шаблону
+          </li>
         </ul>
       </div>
+      <button
+        v-if="hiddenCampaigns > 0"
+        class="btn btn--ghost link-more"
+        type="button"
+        @click="showAll = true"
+      >
+        Показать ещё {{ hiddenCampaigns }} {{ plural(hiddenCampaigns, 'кампанию', 'кампании', 'кампаний') }}
+      </button>
       <p v-if="issues?.campaigns.length" class="hint">
         Исправленные объявления и быстрые ссылки Директ заново отправит на модерацию; метки кампаний и групп модерацию
         не требуют. Откат — в журнале действий.
@@ -100,7 +146,7 @@
 </template>
 
 <script setup>
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, h, onMounted, ref, watch } from 'vue'
 import { errorText, jobProgressText, wsApi } from '../../api/web'
 import { askConfirm } from '../../composables/useConfirm'
 import { pushToast } from '../../composables/useToasts'
@@ -140,6 +186,56 @@ const fixable = computed(() =>
   (issues.value?.campaigns || []).filter((c) => c.campaign_problems.length || c.groups_total || c.ads.some((a) => a.fixable)),
 )
 
+// Длинный список кампаний показываем частями.
+const CAMPAIGNS_SHOWN = 10
+const showAll = ref(false)
+const shownCampaigns = computed(() => {
+  const all = issues.value?.campaigns || []
+  return showAll.value ? all : all.slice(0, CAMPAIGNS_SHOWN)
+})
+const hiddenCampaigns = computed(() => (issues.value?.campaigns?.length || 0) - shownCampaigns.value.length)
+
+function titlesText(link) {
+  const shown = link.titles.map((t) => `«${t}»`).join(', ')
+  const rest = link.count - link.titles.length
+  return rest > 0 ? `${shown} и ещё ${rest}` : shown
+}
+
+/** Ссылка или метки с подсвеченными параметрами: marked — ключи (ref, utm_source), good — зелёным, а не красным. */
+function linkParts(value, marked) {
+  const text = value || ''
+  const keys = new Set(marked || [])
+  if (!keys.size) return [{ text }]
+  let base = ''
+  let query = text
+  if (text.includes('://')) {
+    const q = text.indexOf('?')
+    if (q < 0) return [{ text }]
+    base = text.slice(0, q + 1)
+    query = text.slice(q + 1)
+  }
+  const hash = query.indexOf('#')
+  const tail = hash < 0 ? '' : query.slice(hash)
+  if (hash >= 0) query = query.slice(0, hash)
+  const out = base ? [{ text: base }] : []
+  query.split('&').forEach((part, i) => {
+    if (i) out.push({ text: '&' })
+    out.push({ text: part, mark: keys.has(part.split('=', 1)[0]) })
+  })
+  if (tail) out.push({ text: tail })
+  return out
+}
+
+function LinkCode(props) {
+  if (!props.value) return h('span', { class: 'hint' }, 'пусто')
+  const tone = props.good ? 'link-mark link-mark--good' : 'link-mark'
+  return h(
+    'code',
+    linkParts(props.value, props.marked).map((p) => (p.mark ? h('mark', { class: tone }, p.text) : p.text)),
+  )
+}
+LinkCode.props = { value: String, marked: Array, good: Boolean }
+
 async function save() {
   saveError.value = ''
   saving.value = true
@@ -171,7 +267,7 @@ async function load() {
 async function fix(ids) {
   const ads = (issues.value?.campaigns || [])
     .filter((c) => ids.includes(c.campaign_row_id))
-    .reduce((n, c) => n + c.ads.filter((a) => a.fixable).length, 0)
+    .reduce((n, c) => n + (c.ads_fixable ?? c.ads.filter((a) => a.fixable).length), 0)
   const ok = await askConfirm(
     `Кампаний: ${ids.length}. Метки кампаний и групп обновятся без модерации.` +
       (ads ? ` Объявлений с новой ссылкой или быстрыми ссылками: ${ads} — Директ отправит их на модерацию заново.` : ''),
@@ -257,7 +353,57 @@ onMounted(load)
   margin: 6px 0 0;
   padding-left: 18px;
 }
+.link-issue li + li {
+  margin-top: 10px;
+}
 .link-issue code {
   overflow-wrap: anywhere;
+}
+.link-titles {
+  display: block;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* «Сейчас → станет»: подписи слева, ссылки справа. */
+.link-diff {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 2px 10px;
+  margin: 4px 0 0;
+  font-size: 0.9em;
+}
+.link-diff dt {
+  color: var(--muted);
+}
+.link-diff dd {
+  margin: 0;
+}
+.link-issue :deep(.link-mark) {
+  padding: 0 2px;
+  border-radius: 4px;
+  color: var(--danger);
+  background: var(--danger-soft);
+}
+.link-issue :deep(.link-mark--good) {
+  color: var(--ok);
+  background: var(--ok-soft);
+}
+.link-reasons {
+  margin-top: 8px;
+  padding: 10px 14px;
+  border-radius: 12px;
+  background: var(--warn-soft);
+}
+.link-reasons p {
+  margin: 0;
+}
+.link-reasons ul {
+  margin: 6px 0;
+  padding-left: 18px;
+}
+.link-more {
+  margin-top: 8px;
 }
 </style>

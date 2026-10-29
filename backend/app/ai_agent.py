@@ -636,6 +636,8 @@ def _t_links(ctx: Context, args: dict) -> dict:
     from app import links
 
     out = links.workspace_link_issues(ctx.user_id, ctx.ws_id, _scope_ids(ctx, args))
+    for c in out["campaigns"]:
+        c.pop("ad_links", None)  # те же объявления, что в ads, — модели хватит одного списка
     if not out["configured"]:
         out["note"] = "Шаблон ссылки сайта не задан — попроси маркетолога задать его в настройках пространства"
     return out
@@ -1417,7 +1419,7 @@ def _links_args(ctx: Context, args: dict) -> tuple[list[dict], dict]:
 
 def _p_fix_links(ctx: Context, args: dict) -> Plan:
     rows, bad = _links_args(ctx, args)
-    ads = sum(1 for r in rows for a in bad[r["id"]]["ads"] if a["fixable"])
+    ads = sum(bad[r["id"]]["ads_fixable"] for r in rows)
     summary = f"Ссылки по шаблону сайта: {_names(rows)}"
     if ads:
         summary += f"; {_count(ads, 'объявление', 'объявления', 'объявлений')} уйдут на модерацию"

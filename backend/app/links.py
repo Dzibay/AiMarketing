@@ -61,6 +61,16 @@ def _is_tracking(key: str, value: str) -> bool:
     return key.lower().startswith("utm_") or "{" in value
 
 
+def _manages_utm(t: dict) -> bool:
+    """utm-метками распоряжается шаблон, только если они в нём есть; иначе свои метки кампаний не трогаем."""
+    return any(k.lower().startswith("utm_") for k, _ in t["tracking"])
+
+
+def _misplaced(key: str, t: dict) -> bool:
+    """Параметр, которому место в параметрах кампании, а не в ссылке объявления."""
+    return any(k == key for k, _ in t["tracking"]) or (_manages_utm(t) and key.lower().startswith("utm_"))
+
+
 def parse_template(raw: str | None) -> dict | None:
     """Шаблон → {scheme, host, path, ad_params, tracking}; пустая строка — None."""
     text = (raw or "").strip()
@@ -108,14 +118,13 @@ def template_href(t: dict, path: str | None = None) -> str:
 
 def merge_tracking(existing: str | None, t: dict) -> str:
     """Метки шаблона, затем прочие параметры кампании, которых в шаблоне нет."""
-    own = {k for k, _ in t["tracking"]}
     ad_keys = {k for k, _ in t["ad_params"]}
-    rest = [(k, v) for k, v in _pairs(existing or "") if k not in own and k not in ad_keys and not k.lower().startswith("utm_")]
+    rest = [(k, v) for k, v in _pairs(existing or "") if k not in ad_keys and not _misplaced(k, t)]
     return _join(t["tracking"] + rest)[:MAX_LEN]
 
 
 def normalize_href(href: str | None, t: dict) -> str:
-    """Ссылка объявления по шаблону: тот же путь, параметры шаблона, без utm (они в кампании)."""
+    """Ссылка объявления по шаблону: тот же путь, параметры шаблона, без меток шаблона (они в кампании)."""
     href = (href or "").strip()
     if not href:
         return template_href(t)
@@ -124,8 +133,8 @@ def normalize_href(href: str | None, t: dict) -> str:
     parts = urlsplit(href)
     if _host(parts.hostname or "") != _host(t["host"]):
         return template_href(t)
-    drop = {k for k, _ in t["ad_params"]} | {k for k, _ in t["tracking"]}
-    rest = [(k, v) for k, v in _pairs(parts.query) if k not in drop and not k.lower().startswith("utm_")]
+    ad_keys = {k for k, _ in t["ad_params"]}
+    rest = [(k, v) for k, v in _pairs(parts.query) if k not in ad_keys and not _misplaced(k, t)]
     query = _join(t["ad_params"] + rest)
     out = f"{t['scheme']}://{t['host']}{parts.path or '/'}" + (f"?{query}" if query else "")
     if parts.fragment:
@@ -136,44 +145,57 @@ def normalize_href(href: str | None, t: dict) -> str:
 # --- Проверка ----------------------------------------------------------------------------------
 
 
-def _param_problems(pairs: list[tuple[str, str]], wanted: list[tuple[str, str]]) -> list[str]:
-    out = []
+def _param_check(pairs: list[tuple[str, str]], wanted: list[tuple[str, str]]) -> tuple[list[str], list[str]]:
+    """Расхождения с шаблоном и параметры, которые в них виноваты (их подсвечивает интерфейс)."""
+    out, bad = [], []
     for key, value in wanted:
         found = [v for k, v in pairs if k == key]
         if not found:
             out.append(f"нет {key}={value}")
-        elif len(found) > 1:
+            continue
+        if len(found) > 1:
             out.append(f"{key} указан {len(found)} раза")
         elif not _same(found[0], value):
             out.append(f"{key}={found[0] or '(пусто)'} вместо {value}")
-    return out
+        else:
+            continue
+        bad.append(key)
+    return out, bad
 
 
-def href_problems(href: str | None, t: dict) -> list[str]:
+def _href_check(href: str | None, t: dict) -> tuple[list[str], list[str]]:
     href = (href or "").strip()
     if not href:
-        return []
+        return [], []
     if "://" not in href:
         href = "https://" + href
     parts = urlsplit(href)
     if _host(parts.hostname or "") != _host(t["host"]):
-        return [f"домен {parts.hostname or '?'} вместо {t['host']}"]
+        return [f"домен {parts.hostname or '?'} вместо {t['host']}"], []
     pairs = _pairs(parts.query)
-    out = _param_problems(pairs, t["ad_params"])
-    utm = list(dict.fromkeys(k for k, v in pairs if _is_tracking(k, v)))
-    if utm:
-        out.append(f"метки в ссылке объявления ({', '.join(utm)}) — они должны быть в параметрах кампании")
-    return out
+    out, bad = _param_check(pairs, t["ad_params"])
+    tags = list(dict.fromkeys(k for k, _ in pairs if _misplaced(k, t)))
+    if tags:
+        out.append(f"метки в ссылке объявления ({', '.join(tags)}) — они должны быть в параметрах кампании")
+    return out, bad + tags
+
+
+def _tracking_check(tracking: str | None, t: dict) -> tuple[list[str], list[str]]:
+    pairs = _pairs(tracking or "")
+    out, bad = _param_check(pairs, t["tracking"])
+    ad_keys = {k for k, _ in t["ad_params"]}
+    dup = list(dict.fromkeys(k for k, _ in pairs if k in ad_keys))
+    if dup:
+        out.append(f"{', '.join(dup)} и в параметрах кампании, и в ссылке")
+    return out, bad + dup
+
+
+def href_problems(href: str | None, t: dict) -> list[str]:
+    return _href_check(href, t)[0]
 
 
 def tracking_problems(tracking: str | None, t: dict) -> list[str]:
-    pairs = _pairs(tracking or "")
-    out = _param_problems(pairs, t["tracking"])
-    ad_keys = {k for k, _ in t["ad_params"]}
-    dup = [k for k, _ in pairs if k in ad_keys]
-    if dup:
-        out.append(f"{', '.join(dict.fromkeys(dup))} и в параметрах кампании, и в ссылке")
-    return out
+    return _tracking_check(tracking, t)[0]
 
 
 def sitelink_problems(hrefs: list[str] | None, t: dict) -> list[str]:
@@ -190,11 +212,11 @@ def check_campaign(t: dict, tracking: str | None, ads: list[dict], groups: list[
     ads — [{id, ad_id, type, state, href, title, sitelink_hrefs}], groups — [{id, adgroup_id, name,
     tracking_params}]. None вместо меток или адресов быстрых ссылок — ещё не загружены.
     """
-    campaign = tracking_problems(tracking, t) if tracking is not None else []
+    campaign, campaign_bad = _tracking_check(tracking, t) if tracking is not None else ([], [])
     bad_groups = []
     for g in groups or []:
         own = (g.get("tracking_params") or "").strip()
-        problems = tracking_problems(own, t) if own else []
+        problems, bad = _tracking_check(own, t) if own else ([], [])
         if problems:
             bad_groups.append(
                 {
@@ -204,13 +226,14 @@ def check_campaign(t: dict, tracking: str | None, ads: list[dict], groups: list[
                     "tracking": own,
                     "fixed_tracking": merge_tracking(own, t),
                     "problems": problems,
+                    "bad_params": bad,
                 }
             )
     bad_ads = []
     for ad in ads:
         if (ad.get("state") or "") == "ARCHIVED":
             continue
-        problems = href_problems(ad.get("href"), t)
+        problems, bad = _href_check(ad.get("href"), t)
         links = sitelink_problems(ad.get("sitelink_hrefs"), t)
         if problems or links:
             bad_ads.append(
@@ -221,7 +244,9 @@ def check_campaign(t: dict, tracking: str | None, ads: list[dict], groups: list[
                     "href": ad.get("href") or "",
                     "fixed_href": normalize_href(ad.get("href"), t) if problems else ad.get("href") or "",
                     "problems": problems,
+                    "bad_params": bad,
                     "sitelink_problems": links,
+                    "sitelink_href": next((h for h in ad.get("sitelink_hrefs") or [] if href_problems(h, t)), ""),
                     "fixable": (ad.get("type") or "") in FIXABLE_TYPES,
                 }
             )
@@ -230,10 +255,45 @@ def check_campaign(t: dict, tracking: str | None, ads: list[dict], groups: list[
         "tracking": tracking or "",
         "fixed_tracking": merge_tracking(tracking, t),
         "campaign_problems": campaign,
+        "campaign_bad_params": campaign_bad,
         "groups": bad_groups,
         "ads": bad_ads,
+        "ad_links": group_ad_links(bad_ads),
         "ok": not campaign and not bad_groups and not bad_ads,
     }
+
+
+def group_ad_links(bad_ads: list[dict]) -> list[dict]:
+    """Объявления с одной и той же ссылкой и теми же расхождениями — одной строкой, частые сверху."""
+    out: dict[tuple, dict] = {}
+    for ad in bad_ads:
+        key = (ad["href"], tuple(ad["problems"]), tuple(ad["sitelink_problems"]), ad["fixable"])
+        item = out.get(key)
+        if item is None:
+            item = out[key] = {
+                **{k: ad[k] for k in ("href", "fixed_href", "problems", "bad_params", "sitelink_problems", "sitelink_href", "fixable")},
+                "count": 0,
+                "titles": [],
+            }
+        item["count"] += 1
+        title = ad["title"] or str(ad["ad_id"] or "")
+        if title and title not in item["titles"] and len(item["titles"]) < 3:
+            item["titles"].append(title)
+    return sorted(out.values(), key=lambda item: -item["count"])
+
+
+def _reasons(checked: list[dict], limit: int = 6) -> list[dict]:
+    """Почему кампании не по шаблону: каждое расхождение и в скольких кампаниях оно есть."""
+    counts: dict[tuple[str, str], int] = {}
+    for res in checked:
+        seen = {("Параметры кампании", p) for p in res["campaign_problems"]}
+        seen |= {("Метки групп", p) for g in res["groups"] for p in g["problems"]}
+        seen |= {("Ссылки объявлений", p) for a in res["ads"] for p in a["problems"]}
+        seen |= {("Быстрые ссылки", p) for a in res["ads"] for p in a["sitelink_problems"]}
+        for key in seen:
+            counts[key] = counts.get(key, 0) + 1
+    top = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))[:limit]
+    return [{"where": where, "text": text, "campaigns": n} for (where, text), n in top]
 
 
 def _ws_template(user_id: int, workspace_id: int) -> dict | None:
@@ -344,12 +404,13 @@ def workspace_link_issues(user_id: int, workspace_id: int, campaign_row_ids: lis
     row_ids = [int(c["id"]) for c in campaigns]
     ads = _campaign_ads(user_id, row_ids)
     groups = _campaign_groups(user_id, row_ids)
-    items, unknown = [], 0
+    items, checked, unknown = [], [], 0
     for c in campaigns:
         res = check_campaign(t, c.get("tracking_params"), ads.get(int(c["id"]), []), groups.get(int(c["id"]), []))
         unknown += int(res["tracking_unknown"])
         if res["ok"]:
             continue
+        checked.append(res)
         items.append(
             {
                 "campaign_row_id": c["id"],
@@ -359,7 +420,10 @@ def workspace_link_issues(user_id: int, workspace_id: int, campaign_row_ids: lis
                 "status": c.get("status") or "",
                 **res,
                 "ads_total": len(res["ads"]),
+                "ads_fixable": sum(1 for a in res["ads"] if a["fixable"]),
                 "ads": res["ads"][:30],
+                "ad_links_total": len(res["ad_links"]),
+                "ad_links": res["ad_links"][:10],
                 "groups_total": len(res["groups"]),
                 "groups": res["groups"][:30],
             }
@@ -370,6 +434,7 @@ def workspace_link_issues(user_id: int, workspace_id: int, campaign_row_ids: lis
         "ad_href": template_href(t),
         "tracking": template_tracking(t),
         "campaigns": items,
+        "reasons": _reasons(checked),
         "bad": len(items),
         "unknown": unknown,
     }

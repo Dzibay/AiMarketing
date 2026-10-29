@@ -113,6 +113,35 @@ def test_check_campaign_groups_and_sitelinks(t):
     assert links.check_campaign(t, TRACKING, ads[1:], groups[1:])["ok"]
 
 
+def test_template_without_utm_keeps_own_tags():
+    """Шаблон только с ref: свои utm кампании не требуем переносить и не стираем при исправлении."""
+    t = links.parse_template("https://happ-connection.ru/?ref=Yandex")
+    href = "https://happ-connection.ru/?ref=Yandex_CPC&utm_source=yandex&utm_term={keyword}"
+    assert links.href_problems(href, t) == ["ref=Yandex_CPC вместо Yandex"]
+    assert links.normalize_href(href, t) == "https://happ-connection.ru/?ref=Yandex&utm_source=yandex&utm_term={keyword}"
+    assert links.tracking_problems("ref=Yandex_CPC&utm_medium=cpc", t) == ["ref и в параметрах кампании, и в ссылке"]
+    assert links.merge_tracking("ref=Yandex_CPC&utm_medium=cpc", t) == "utm_medium=cpc"
+
+
+def test_check_campaign_groups_same_links_and_marks_bad_params(t):
+    bad = "https://happ-connection.ru/?ref=Yandex_CPC&utm_source=yandex"
+    ads = [
+        {"id": i, "ad_id": 10 + i, "type": "TEXT_AD", "state": "ON", "title": title, "href": href}
+        for i, (title, href) in enumerate(
+            [("Окна", bad), ("Двери", bad), ("Окна", bad), ("Сайт", "https://other.ru/")], start=1
+        )
+    ]
+    out = links.check_campaign(t, TRACKING.replace("yandex", "google") + "&ref=Yandex", ads)
+    assert out["campaign_bad_params"] == ["utm_source", "ref"]
+    first, other = out["ad_links"]
+    assert (first["href"], first["count"], first["titles"]) == (bad, 3, ["Окна", "Двери"])
+    assert first["bad_params"] == ["ref", "utm_source"]
+    assert first["fixed_href"] == "https://happ-connection.ru/?ref=Yandex"
+    assert (other["count"], other["bad_params"]) == (1, [])
+    reasons = links._reasons([out])
+    assert {"where": "Ссылки объявлений", "text": "ref=Yandex_CPC вместо Yandex", "campaigns": 1} in reasons
+
+
 def test_parse_ads_and_groups_read_link_fields():
     from app.adgroups import parse_adgroups
     from app.ads import parse_ads
