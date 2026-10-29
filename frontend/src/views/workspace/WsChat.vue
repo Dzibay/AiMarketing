@@ -31,6 +31,7 @@
         </div>
         <div class="row-actions">
           <button
+            v-if="!isFirst"
             class="btn"
             type="button"
             :disabled="!canReview"
@@ -63,15 +64,32 @@
 
         <div v-else-if="!items.length" class="chat__intro">
           <h3>Чем помочь с «{{ ws.name }}»?</h3>
-          <p class="hint">
+          <p v-if="isFirst" class="hint">
+            Кампаний здесь пока нет, поэтому разбирать нечего. ИИ соберёт первую по этапам — анализ, ключевые фразы,
+            заголовки и объявления, настройки — и каждый этап покажет вам таблицей на согласование. Любое изменение в
+            Директе он сначала покажет вам.
+          </p>
+          <p v-else class="hint">
             ИИ видит статистику, кампании, ключевые фразы, объявления и поисковые запросы этого пространства. Любое
             изменение в Директе он сначала покажет вам на согласование.
           </p>
           <div class="chat__review">
-            <button class="btn btn--accent" type="button" :disabled="!canReview" @click="startReview()">
+            <button
+              v-if="isFirst"
+              class="btn btn--accent"
+              type="button"
+              :disabled="!canSendStarter"
+              @click="send(NEW_CAMPAIGN_PROMPT)"
+            >
+              Собрать первую кампанию
+            </button>
+            <button v-else class="btn btn--accent" type="button" :disabled="!canReview" @click="startReview()">
               {{ reviewing ? 'Запускаем…' : 'Разбор пространства' }}
             </button>
-            <span class="hint">
+            <span v-if="isFirst" class="hint">
+              ИИ задаст вопросы по продукту, гео, бюджету и цели, изучит спрос в Вордстате и предложит направления.
+            </span>
+            <span v-else class="hint">
               Что работает, что затухает и почему, что стоит повторить. Сигналы за 30 дней считает код — ИИ получает
               короткую выжимку, а не сырые таблицы.
             </span>
@@ -103,7 +121,7 @@
 
           <h4 class="chat__subhead">Или спросите сами</h4>
           <div class="chat__suggestions">
-            <button v-for="s in SUGGESTIONS" :key="s" type="button" class="quick-action" :disabled="!aiConfigured" @click="send(s)">
+            <button v-for="s in starters" :key="s" type="button" class="quick-action" :disabled="!aiConfigured" @click="send(s)">
               {{ s }}
             </button>
           </div>
@@ -251,11 +269,18 @@ import AiQuestionsCard from './AiQuestionsCard.vue'
 import { useWs } from './context'
 
 const POLL_MS = 1500
+const NEW_CAMPAIGN_PROMPT = 'Хочу собрать новую кампанию. Задай вопросы, которых не хватает, и веди меня по этапам'
 const SUGGESTIONS = [
+  NEW_CAMPAIGN_PROMPT,
   'Проанализируй кампании за последние 7 дней и дай рекомендации',
   'Где сливается бюджет? Найди кампании и фразы с расходом без конверсий',
   'Почисти поисковые запросы: предложи минус-фразы',
   'Составь план оптимизации на неделю',
+]
+// В пространстве без кампаний нет ни статистики, ни запросов: спрашивать про них нечего.
+const FIRST_SUGGESTIONS = [
+  'Помоги заполнить бриф: продукт, оффер, гео, бюджет и цель',
+  'Какую стратегию и какой бюджет выбрать для первой кампании?',
 ]
 const STATUS_LABELS = {
   pending: 'ждёт решения',
@@ -327,6 +352,10 @@ const canSend = computed(
 const canReview = computed(
   () => !reviewing.value && !sending.value && status.value !== 'running' && aiConfigured.value,
 )
+// Первая кампания: «Разбор» и сигналы без данных пусты, вместо них — сборка по этапам.
+const isFirst = computed(() => !ws.value.campaigns_count)
+const starters = computed(() => (isFirst.value ? [NEW_CAMPAIGN_PROMPT, ...FIRST_SUGGESTIONS] : SUGGESTIONS))
+const canSendStarter = computed(() => !sending.value && status.value !== 'running' && aiConfigured.value)
 
 const thinkingText = computed(() => {
   const messages = chat.value ? data.value.messages : []
@@ -738,7 +767,7 @@ const showIntro = computed(() => !loadError.value && !items.value.length && (!ch
 watch(
   showIntro,
   (show) => {
-    if (show && !signals.value && !signalsError.value) loadSignals()
+    if (show && !isFirst.value && !signals.value && !signalsError.value) loadSignals()
   },
   { immediate: true },
 )

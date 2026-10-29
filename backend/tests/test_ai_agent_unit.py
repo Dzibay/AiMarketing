@@ -17,7 +17,7 @@ class FakeContext:
     def __init__(self, ws: dict | None = None):
         self.user_id = 1
         self.ws_id = 2
-        self.ws = {"name": "Окна", "counter_id": 555, "accounts": [], **(ws or {})}
+        self.ws = {"name": "Окна", "counter_id": 555, "accounts": [], "campaigns_count": 1, **(ws or {})}
         self.access = normalize_ai_access(self.ws.get("ai_access"))
         self.chat_id = None
 
@@ -157,6 +157,15 @@ def test_prompt_offers_scheme_hypothesis_until_marketer_confirms(no_memory):
     assert f"key {SCHEME_FACT}" not in prompt
     assert "Что маркетолог уже ответил (учитывай, не переспрашивай):\n- Как работает схема 0 ₽?: Платим только за заказ" in prompt
     assert "без ключа" not in prompt
+
+
+def test_prompt_for_first_campaign_has_no_history_hypothesis(no_memory):
+    prompt = ai_agent._system_prompt(FakeContext({"campaigns_count": 0}))
+    assert "ещё нет ни одной кампании" in prompt and "«Максимум кликов»" in prompt
+    assert "Механика конверсий за 0" not in prompt and f"key {SCHEME_FACT}" not in prompt
+    assert "Вордстат не подключён" in prompt  # запасной путь анализа, когда частот нет
+    with_campaigns = ai_agent._system_prompt(FakeContext())
+    assert "ещё нет ни одной кампании" not in with_campaigns and f"key {SCHEME_FACT}" in with_campaigns
 
 
 def test_prompt_access_policy(no_memory):

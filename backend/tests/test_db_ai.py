@@ -443,3 +443,91 @@ def test_items_table_rejected_and_decide_all_with_exclude(db, monkeypatch):
     ai_agent.decide_all(user, chat, approve=True, exclude={str(card["id"]): ["campaign_row_ids.1"]})
     _turn(user, chat, monkeypatch, _text("Остановил."))
     assert done[0]["campaign_ids"] == [s["search"]]
+
+
+def _empty_workspace(db):
+    """Первое пространство нового пользователя: кабинет и счётчик есть, кампаний нет."""
+    user = make_user(db, "first@example.com")
+    conn_id = make_connection(db, user, "agency")
+    acc = make_account(db, user, conn_id, name="Новый кабинет", login="new-acc")
+    counter = make_counter(db, user, conn_id, 888, site="sofa.ru")
+    ws = make_workspace(db, user, 888, "Диваны", counter_row_id=counter, accounts=[acc], campaigns=[])
+    ai.save_settings(user, provider="openai", api_key="sk-test-1234abcd", model="gpt-test")
+    chat = ai_agent.create_chat(user, ws)
+    return {"user": user, "acc": acc, "ws": ws, "chat": chat["id"]}
+
+
+def test_first_campaign_in_empty_workspace(db, monkeypatch):
+    s = _empty_workspace(db)
+    user, chat = s["user"], s["chat"]
+    created = []
+    monkeypatch.setattr(
+        actions, "create_campaign", lambda user_id, **kw: created.append(kw) or {"campaign": {"id": 99}, "status": "ok"}
+    )
+
+    # Первая кампания: модель знает, что истории нет, и не выдвигает гипотезу про 0 ₽ на пустом месте.
+    fake, _out = _start(
+        user, chat, "Хочу первую кампанию на диваны", monkeypatch,
+        _call("list_campaigns", {}),
+        _call("get_signals", {}, "c2"),
+        _call("get_wordstat", {"phrases": ["купить диван"], "region_ids": [213]}, "c3"),
+        _call("propose_items", {"stage": "analysis", "rows": [
+            {"cells": ["Диваны прямые", "—"]}, {"cells": ["Угловые диваны", "—"]},
+        ]}, "c4"),
+    )
+    prompt = fake.calls[0][0]["content"]
+    assert "ещё нет ни одной кампании" in prompt and "Максимум кликов" in prompt
+    assert "Механика конверсий за 0" not in prompt
+
+    # Пустое пространство отдаёт пустые данные, а не падает.
+    assert json.loads(fake.calls[1][-1]["content"])["campaigns"] == []
+    assert "Итого: 0 кампаний" in json.loads(fake.calls[2][-1]["content"])["digest"]
+    assert "Вордстат не подключён" in json.loads(fake.calls[3][-1]["content"])["error"]
+
+    # Дальше — те же согласуемые этапы, что и для любой новой кампании.
+    ai_agent.decide_items(user, _pending(user, chat, "propose_items")["id"], rows=[1, 2])
+    stages = [
+        ("keywords", [
+            {"section": "Прямые", "cells": ["купить диван", "—"]},
+            {"section": "Прямые", "cells": ["диван прямой цена", "—"]},
+        ]),
+        ("negatives", [{"kind": "negative", "cells": ["бесплатно"]}, {"kind": "negative", "cells": ["б у"]}]),
+        ("ads", [
+            {"section": "Прямые", "kind": "title", "cells": ["Диваны от производителя"]},
+            {"section": "Прямые", "kind": "title", "cells": ["Прямые диваны со скидкой"]},
+            {"section": "Прямые", "kind": "title", "cells": ["Доставка по городу"]},
+            {"section": "Прямые", "kind": "text", "cells": ["Гарантия 2 года, примерка в салоне"]},
+        ]),
+        ("settings", [
+            {"kind": "setting", "cells": ["Стратегия", "Максимум кликов"]},
+            {"kind": "setting", "cells": ["Бюджет", "3500 ₽/неделя"]},
+        ]),
+    ]
+    for stage, rows in stages:
+        _turn(user, chat, monkeypatch, _call("propose_items", {"stage": stage, "rows": rows}, f"s-{stage}"))
+        ai_agent.decide_items(user, _pending(user, chat, "propose_items")["id"], rows=list(range(1, len(rows) + 1)))
+
+    spec = {
+        "name": "Диваны — поиск",
+        "strategy": {"search": "WB_MAXIMUM_CLICKS", "weekly_budget_rub": 3500},
+        "negative_keywords": ["бесплатно", "б у"],
+        "groups": [{
+            "name": "Прямые",
+            "keywords": ["купить диван", "диван прямой цена"],
+            "ad": {"titles": ["Диваны от производителя", "Прямые диваны со скидкой", "Доставка по городу"],
+                   "texts": ["Гарантия 2 года, примерка в салоне"], "href": "https://sofa.ru"},
+        }],
+    }
+    _turn(user, chat, monkeypatch, _call("create_campaign", {"account_id": s["acc"], "spec": spec}, "c-create"))
+    card = _pending(user, chat, "create_campaign")
+    assert "WB_MAXIMUM_CLICKS" in card["summary"] and not created
+    ai_agent.decide_action(user, card["id"], approve=True)
+    _turn(user, chat, monkeypatch, _text("Черновик создан."))
+    assert [kw["spec"]["name"] for kw in created] == ["Диваны — поиск"]
+
+
+def test_prompt_with_campaigns_has_no_first_campaign_rule(db, monkeypatch):
+    s = _seed(db)
+    fake, _out = _start(s["user"], s["chat"], "Привет", monkeypatch, _text("Здравствуйте"))
+    prompt = fake.calls[0][0]["content"]
+    assert "ещё нет ни одной кампании" not in prompt and "Механика конверсий за 0" in prompt
