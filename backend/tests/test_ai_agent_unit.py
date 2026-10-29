@@ -19,6 +19,7 @@ class FakeContext:
         self.ws_id = 2
         self.ws = {"name": "Окна", "counter_id": 555, "accounts": [], **(ws or {})}
         self.access = normalize_ai_access(self.ws.get("ai_access"))
+        self.chat_id = None
 
     def campaign(self, campaign_row_id: int) -> dict:
         if campaign_row_id != SOURCE["id"]:

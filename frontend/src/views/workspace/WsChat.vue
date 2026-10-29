@@ -137,6 +137,12 @@
                 :disabled="deciding || status === 'running'"
                 @submit="respond(() => aiApi.plan(a.id, $event))"
               />
+              <AiItemsCard
+                v-else-if="a.tool === 'propose_items'"
+                :action="a"
+                :disabled="deciding || status === 'running'"
+                @submit="respond(() => aiApi.items(a.id, $event))"
+              />
               <AiQuestionsCard
                 v-else
                 :action="a"
@@ -154,6 +160,21 @@
               </div>
               <p class="action-card__summary">{{ a.summary }}</p>
               <AiChanges v-if="a.changes?.length" :changes="a.changes" />
+              <div v-if="a.status === 'pending' && a.picks" class="ai-picks">
+                <p class="hint">Снимите галочки с того, что не нужно, — этого не будет в действии.</p>
+                <AiCheckTable
+                  v-model:off="excluded[a.id]"
+                  :columns="a.picks.columns"
+                  :rows="a.picks.rows"
+                  :groups="a.picks.groups"
+                  :disabled="deciding"
+                />
+              </div>
+              <p v-if="a.removed?.length" class="hint ai-removed">
+                Снято перед выполнением ({{ a.removed.length }}):
+                <s v-for="(r, i) in a.removed.slice(0, 12)" :key="i">{{ r.section ? `${r.section}: ${r.text}` : r.text }}</s>
+                <span v-if="a.removed.length > 12">и ещё {{ a.removed.length - 12 }}</span>
+              </p>
               <p v-if="a.reason" class="hint">Зачем: {{ a.reason }}</p>
               <p v-if="a.categories?.length" class="action-card__cats">
                 <span v-for="c in a.categories" :key="c.id" class="chip">{{ c.label }}</span>
@@ -169,8 +190,11 @@
               </details>
               <p v-if="a.status === 'rejected' && a.error" class="hint">{{ a.error }}</p>
               <div v-if="a.status === 'pending' && a.id" class="action-card__buttons">
-                <button class="btn btn--accent" type="button" :disabled="deciding" @click="decide(a, true)">Выполнить</button>
+                <button class="btn btn--accent" type="button" :disabled="deciding || allOff(a)" @click="decide(a, true)">
+                  {{ offCount(a) ? `Выполнить без снятых (${offCount(a)})` : 'Выполнить' }}
+                </button>
                 <button class="btn btn--ghost" type="button" :disabled="deciding" @click="decide(a, false)">Отклонить</button>
+                <span v-if="allOff(a)" class="hint">Сняты все строки — отклоните действие</span>
                 <label v-if="a.categories?.length && !a.categories.some((c) => c.id === 'destructive')" class="check-row">
                   <input v-model="remember[a.id]" type="checkbox" />
                   <span>Больше не спрашивать для «{{ a.categories.map((c) => c.label).join('», «') }}»</span>
@@ -220,6 +244,8 @@ import { pushToast } from '../../composables/useToasts'
 import { formatDateTime } from '../../utils/format'
 import { renderMarkdown } from '../../utils/markdown'
 import AiChanges from './AiChanges.vue'
+import AiCheckTable from './AiCheckTable.vue'
+import AiItemsCard from './AiItemsCard.vue'
 import AiPlanCard from './AiPlanCard.vue'
 import AiQuestionsCard from './AiQuestionsCard.vue'
 import { useWs } from './context'
@@ -258,6 +284,8 @@ const signalsError = ref('')
 const deciding = ref(false)
 const accessBusy = ref(false)
 const remember = reactive({})
+// {id действия: [id снятых строк]} — что маркетолог убрал из карточки перед «Выполнить».
+const excluded = reactive({})
 const scroller = ref(null)
 const input = ref(null)
 let pollTimer = null
@@ -269,7 +297,7 @@ const status = computed(() => chat.value?.status || 'idle')
 const access = computed(() => ws.value.ai_access || { full_access: false, categories: {}, max_change_pct: 30 })
 const actions = computed(() => (chat.value ? data.value.actions : []))
 const pendingActions = computed(() => actions.value.filter((a) => a.status === 'pending'))
-// Вопросы и план закрываются ответом в своей карточке, а не кнопками «Выполнить / Отклонить все».
+// Вопросы, план и таблицы закрываются ответом в своей карточке, а не кнопками «Выполнить / Отклонить все».
 const pendingWrites = computed(() => pendingActions.value.filter((a) => a.kind !== 'ask'))
 const pendingAsks = computed(() => pendingActions.value.filter((a) => a.kind === 'ask'))
 const plans = computed(() => actions.value.filter((a) => a.tool === 'propose_plan'))
@@ -351,7 +379,7 @@ const items = computed(() => {
         const action = byCall.get(call.id)
         if (action) {
           const { reason: _reason, plan_step: _step, ...argsShown } = action.args || {}
-          writes.push({ ...action, key: `a${action.id}`, argsShown })
+          writes.push({ ...action, key: `a${action.id}`, argsShown, picks: pickRows(action.items) })
         } else {
           // Подготовка не прошла (ошибка в аргументах) — ответ инструмента вместо карточки.
           writes.push({
@@ -374,6 +402,37 @@ const items = computed(() => {
   }
   return out
 })
+
+/** Строки с галочками карточки действия: «вся группа» — галочка раздела, остальное — строки. */
+function pickRows(items) {
+  if (!items?.length) return null
+  const groups = {}
+  const rows = []
+  for (const p of items) {
+    if (p.kind === 'group') groups[p.section] = p.id
+    else rows.push({ id: p.id, section: p.section, kind: p.kind, cells: [p.text, p.note].slice(0, items.some((i) => i.note) ? 2 : 1) })
+  }
+  return { groups, rows, columns: items.some((i) => i.note) ? ['Строка', 'Что меняется'] : ['Строка'] }
+}
+
+function offRows(action) {
+  const off = new Set(excluded[action.id] || [])
+  if (!action.picks || !off.size) return []
+  return action.picks.rows.filter((r) => off.has(r.id) || (action.picks.groups[r.section] != null && off.has(action.picks.groups[r.section])))
+}
+
+function offCount(action) {
+  return offRows(action).length
+}
+
+function allOff(action) {
+  return !!action.picks && offCount(action) === action.picks.rows.length
+}
+
+/** id снятых строк ждущих действий — для «Выполнить» и «Выполнить все». */
+function excludeFor(action) {
+  return action.picks ? (excluded[action.id] || []) : []
+}
 
 /** Действия ИИ по шагам плана: с номером шага, после этого плана и до следующего. */
 function planProgress(plan) {
@@ -536,7 +595,7 @@ async function decide(action, approve) {
   deciding.value = true
   const rememberIt = approve && !!remember[action.id]
   try {
-    await aiApi.decide(action.id, approve, rememberIt)
+    await aiApi.decide(action.id, approve, rememberIt, approve ? excludeFor(action) : [])
     if (rememberIt) reloadWs()
     await loadChat(chatId.value)
   } catch (err) {
@@ -566,7 +625,13 @@ async function decideAll(approve) {
   if (!chatId.value) return
   deciding.value = true
   try {
-    await aiApi.decideAll(chatId.value, approve)
+    const exclude = {}
+    if (approve) {
+      for (const item of items.value) {
+        for (const a of item.writes || []) if (a.status === 'pending' && excludeFor(a).length) exclude[a.id] = excludeFor(a)
+      }
+    }
+    await aiApi.decideAll(chatId.value, approve, exclude)
     await loadChat(chatId.value)
   } catch (err) {
     pushToast(errorText(err), 'error')

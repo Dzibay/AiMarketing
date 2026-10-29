@@ -6,9 +6,11 @@
 
 from __future__ import annotations
 
+import copy
 import json
 import logging
 import math
+import re
 import secrets
 from datetime import date, datetime, timedelta, timezone
 
@@ -264,6 +266,8 @@ class Context:
         self.access = normalize_ai_access(self.ws.get("ai_access"))
         # Действие ai_actions, которое сейчас выполняется: эксперимент запоминает, из какого чата запущен.
         self.action: dict | None = None
+        # Чат, в котором работает модель: новая кампания проверяется по таблицам, согласованным в нём.
+        self.chat_id: int | None = None
 
     def account_ids(self) -> set[int]:
         return {int(a["id"]) for a in self.ws.get("accounts") or []}
@@ -945,6 +949,8 @@ def _campaign_negatives(ctx: Context, campaign_row_id: int) -> list[str]:
 def _p_add_negatives(ctx: Context, args: dict) -> Plan:
     row = ctx.campaign(_int(args, "campaign_row_id"))
     new, already = _split_new(_phrases(args), _campaign_negatives(ctx, int(row["id"])))
+    if _made_here(ctx, int(row["id"])):
+        _require_approved(ctx, {"negative": new}, stages=[])
     return Plan(f"Минус-фразы кампании {_cname(row)}: {_added(new, already, 6)}", ["negatives"])
 
 
@@ -967,11 +973,182 @@ def _x_add_negatives(ctx: Context, args: dict) -> dict:
     return {"added": added, "skipped": [s["reason"] for s in result["skipped"]][:10]}
 
 
+# --- Новая кампания по этапам ------------------------------------------------------------------
+#
+# Новую кампанию модель собирает по этапам, и каждый маркетолог согласует таблицей propose_items:
+# анализ → ключи и группы → заголовки и тексты → настройки. create_campaign с группами не пройдёт,
+# пока этапы не согласованы, а фразы, минус-фразы, заголовки и тексты в ней — только из согласованных
+# строк или из слов самого маркетолога. То же для фраз и объявлений, которые потом добавляются в
+# кампанию, созданную в этом чате.
+
+ITEM_STAGES = {
+    "analysis": "Анализ",
+    "keywords": "Ключи и группы",
+    "negatives": "Минус-фразы",
+    "ads": "Заголовки и тексты",
+    "extras": "Ссылка и расширения",
+    "settings": "Настройки",
+    "other": "На согласование",
+}
+ITEM_KINDS = ("direction", "keyword", "negative", "title", "text", "extra", "setting", "other")
+_STAGE_KINDS = {"analysis": "direction", "keywords": "keyword", "negatives": "negative", "extras": "extra", "settings": "setting"}
+_CONTENT_WORDS = {"keyword": "фразы", "negative": "минус-фразы", "title": "заголовки", "text": "тексты"}
+
+
+def _item_key(text, kind: str = "") -> str:
+    """Строка для сравнения: регистр, ё/е, знаки и операторы Директа не важны; у фраз — без минус-слов."""
+    words = str(text or "").lower().replace("ё", "е").split()
+    if kind in ("keyword", "negative"):
+        if kind == "negative" and words:
+            words[0] = words[0].lstrip("-")
+        words = [w for w in words if not w.startswith("-")]
+    return " ".join(re.findall(r"\w+", " ".join(words)))
+
+
+def _stage_approvals(ctx: Context) -> tuple[set[str], set[str], str]:
+    """Что маркетолог согласовал в этом чате: (этапы таблиц, ключи согласованных строк, его собственные слова)."""
+    stages: set[str] = set()
+    approved: set[str] = set()
+    said: list[str] = []
+    with pool.connection() as conn:
+        cards = conn.execute(
+            "SELECT tool, args, result FROM ai_actions WHERE chat_id = %s AND tool = ANY(%s) AND status = 'done'",
+            (ctx.chat_id, list(ASK_TOOLS)),
+        ).fetchall()
+        said += [
+            m["content"] or ""
+            for m in conn.execute(
+                "SELECT content FROM ai_messages WHERE chat_id = %s AND role = 'user'", (ctx.chat_id,)
+            ).fetchall()
+        ]
+    for card in cards:
+        result = card["result"] or {}
+        said.append(str(result.get("comment") or ""))
+        said += [str(a.get("answer") or "") for a in result.get("answers") or [] if isinstance(a, dict)]
+        if card["tool"] != "propose_items":
+            continue
+        args = card["args"] or {}
+        stages.add(args.get("stage") or "other")
+        chosen = set(result.get("approved_rows") or [])
+        for row in args.get("rows") or []:
+            if row.get("n") in chosen and row.get("cells"):
+                # Вид строки не важен: фраза могла быть согласована и в таблице анализа.
+                approved.add(_item_key(row["cells"][0], "keyword"))
+                approved.add(_item_key(row["cells"][0]))
+    return stages, approved, f" {_item_key(' '.join(said))} "
+
+
+def _require_approved(ctx: Context, content: dict[str, list[str]], *, stages: list[str]) -> None:
+    """Новая кампания: этапы stages согласованы, а фразы, заголовки и тексты — из согласованных строк."""
+    if ctx.chat_id is None:  # не из чата ИИ — согласовывать нечем
+        return
+    done, approved, said = _stage_approvals(ctx)
+    missing = [ITEM_STAGES[s] for s in stages if s not in done]
+    if missing:
+        raise YandexError(
+            "args",
+            "Новая кампания собирается по этапам, и каждый маркетолог согласует таблицей propose_items. Ещё не "
+            f"согласовано: {', '.join(missing)}. Пройди эти этапы по порядку, и только потом создавай кампанию",
+        )
+    bad: list[str] = []
+    for kind, values in content.items():
+        off: list[str] = []
+        for value in values:
+            key = _item_key(value, kind)
+            if key and key not in approved and f" {key} " not in said and value not in off:
+                off.append(value)
+        if off:
+            bad.append(f"{_CONTENT_WORDS[kind]} {_preview([f'«{v}»' for v in off], 5)}")
+    if bad:
+        raise YandexError(
+            "args",
+            "Этого маркетолог не согласовывал или снял галочку: " + "; ".join(bad) + ". Убери это или покажи "
+            "новой таблицей propose_items и добавляй только после согласования",
+        )
+
+
+def _made_here(ctx: Context, campaign_row_id: int) -> bool:
+    """Кампания создана create_campaign в этом чате — в неё добавляется только согласованное."""
+    if ctx.chat_id is None:
+        return False
+    with pool.connection() as conn:
+        row = conn.execute(
+            """
+            SELECT 1 FROM ai_actions
+            WHERE chat_id = %s AND tool = 'create_campaign' AND status = 'done'
+              AND result -> 'campaign' ->> 'id' = %s
+            LIMIT 1
+            """,
+            (ctx.chat_id, str(campaign_row_id)),
+        ).fetchone()
+    return row is not None
+
+
+def _group_ad(ctx: Context, ad, name: str, account_id: int) -> tuple[list[str], list[str]] | None:
+    """Объявление группы новой кампании → (заголовки, тексты); None — объявления нет. Проверка без запросов."""
+    from app.ads import MAX_TEXTS, MAX_TITLES, TEXT_LEN, TITLE_LEN, clean_variants
+
+    if ad in (None, {}):
+        return None
+    if not isinstance(ad, dict):
+        raise YandexError("args", f"Группа «{name}»: ad — объект {{titles, texts, href}}")
+    titles = clean_variants(_variants(ad, "titles") or [ad.get("title")], MAX_TITLES, TITLE_LEN, "заголовков")
+    texts = clean_variants(_variants(ad, "texts") or [ad.get("text")], MAX_TEXTS, TEXT_LEN, "текстов")
+    if not titles or not texts:
+        raise YandexError("args", f"Группа «{name}»: в объявлении нужны titles и texts")
+    if str(ad.get("title2") or "").strip():
+        raise YandexError(
+            "args", f"Группа «{name}»: объявление комбинаторное, второго заголовка нет — добавь его в titles"
+        )
+    _ad_extras_args(ctx, ad, "RESPONSIVE_AD", account_id)
+    return titles, texts
+
+
 def _p_create_campaign(ctx: Context, args: dict) -> Plan:
+    from app import actions
+
     account = ctx.require_account(_int(args, "account_id"))
     spec = args.get("spec")
     if not isinstance(spec, dict) or not str(spec.get("name") or "").strip():
         raise YandexError("args", "spec — объект кампании, нужен хотя бы name")
+    groups = actions.spec_groups(spec)
+    negatives = spec.get("negative_keywords")
+    content: dict[str, list[str]] = {
+        "keyword": [],
+        "negative": [str(p) for p in negatives] if isinstance(negatives, list) else [],
+        "title": [],
+        "text": [],
+    }
+    names: list[str] = []
+    ads: dict[tuple, str] = {}
+    href_default = bool(actions._ws_link_template(ctx.ws))
+    for index, group in enumerate(groups):
+        name = str(group.get("name") or f"Группа {index + 1}").strip()
+        if name in names:
+            raise YandexError("args", f"Две группы называются «{name}» — назови их по-разному")
+        names.append(name)
+        if group.get("keywords") not in (None, "", []):
+            phrases = actions._phrases(group.get("keywords"))
+            if len(phrases) > 200:
+                raise YandexError("args", f"Группа «{name}»: больше 200 фраз — раздели её на несколько групп")
+            content["keyword"] += phrases
+        variants = _group_ad(ctx, group.get("ad"), name, int(account["id"]))
+        if variants is None:
+            continue
+        if not str(group["ad"].get("href") or "").strip() and not href_default:
+            raise YandexError("args", f"Группа «{name}»: укажи href объявления — шаблона ссылки в пространстве нет")
+        key = (tuple(sorted(variants[0])), tuple(sorted(variants[1])))
+        if key in ads:
+            raise YandexError(
+                "args", f"У групп «{ads[key]}» и «{name}» одинаковые объявления — каждой группе тексты под её фразы"
+            )
+        ads[key] = name
+        content["title"] += variants[0]
+        content["text"] += variants[1]
+    if groups:
+        stages = ["analysis", *(["keywords"] if content["keyword"] else []), *(["ads"] if ads else []), "settings"]
+        _require_approved(ctx, {k: v for k, v in content.items() if v}, stages=stages)
+
     details = []
     strategy = spec.get("strategy") or {}
     if isinstance(strategy, dict) and strategy.get("search"):
@@ -980,9 +1157,11 @@ def _p_create_campaign(ctx: Context, args: dict) -> Plan:
         details.append(f"бюджет {_money(spec['daily_budget_rub'])}/день")
     if isinstance(strategy, dict) and strategy.get("weekly_budget_rub"):
         details.append(f"бюджет {_money(strategy['weekly_budget_rub'])}/нед.")
-    group = spec.get("group") if isinstance(spec.get("group"), dict) else None
-    if group:
-        details.append(f"группа с {len(group.get('keywords') or [])} фразами")
+    if groups:
+        details.append(
+            f"{_count(len(groups), 'группа', 'группы', 'групп')}, {_count(len(content['keyword']), *_PHRASE_WORDS)}, "
+            f"{_count(len(ads), 'объявление', 'объявления', 'объявлений')}"
+        )
     extra = f" ({', '.join(details)})" if details else ""
     return Plan(
         f"Создать кампанию «{str(spec['name']).strip()}» в кабинете {account['client_login']}{extra}",
@@ -991,11 +1170,21 @@ def _p_create_campaign(ctx: Context, args: dict) -> Plan:
 
 
 def _x_create_campaign(ctx: Context, args: dict) -> dict:
-    from app.actions import create_campaign
+    from app.actions import create_campaign, spec_groups
 
     account_id = _int(args, "account_id")
     ctx.require_account(account_id)
-    return create_campaign(ctx.user_id, account_id=account_id, spec=dict(args["spec"]), workspace_id=ctx.ws_id)
+    spec = copy.deepcopy(args["spec"])
+    groups = spec_groups(spec)
+    for group in groups:
+        ad = group.get("ad")
+        # Расширения «как у объявления» — сразу набором: группе новой кампании их не у кого взять.
+        if isinstance(ad, dict) and _has_extras(ad):
+            ad["extras"] = _ad_extras_args(ctx, ad, "RESPONSIVE_AD", account_id, fetch=True)
+            ad.pop("extras_from_ad_row_id", None)
+    spec["groups"] = groups
+    spec.pop("group", None)
+    return create_campaign(ctx.user_id, account_id=account_id, spec=spec, workspace_id=ctx.ws_id)
 
 
 def _p_duplicate(ctx: Context, args: dict) -> Plan:
@@ -1423,6 +1612,8 @@ def _group_keywords(ctx: Context, adgroup_row_id: int) -> list[str]:
 def _p_add_keywords(ctx: Context, args: dict) -> Plan:
     group = ctx.adgroup(_int(args, "adgroup_row_id"))
     new, already = _split_new(_phrases(args), _group_keywords(ctx, int(group["id"])))
+    if _made_here(ctx, int(group["campaign_row_id"])):
+        _require_approved(ctx, {"keyword": new}, stages=[])
     bid = _float(args, "bid_rub")
     return Plan(
         f"Фразы в группу «{group['name']}»: {_added(new, already, 5)}" + (f" (ставка {bid:g} ₽)" if bid and new else ""),
@@ -1573,6 +1764,8 @@ def _p_create_ad(ctx: Context, args: dict) -> Plan:
             "ничего не добавит. Поменяй формулировки или не создавай его",
         )
     _ad_extras_args(ctx, args, ad_type, group["account_id"])
+    if _made_here(ctx, int(group["campaign_row_id"])):
+        _require_approved(ctx, {"title": titles, "text": texts}, stages=[])
     more = ""
     if len(titles) + len(texts) > 2:
         more = f" ({_count(len(titles), 'заголовок', 'заголовка', 'заголовков')}, {_count(len(texts), 'текст', 'текста', 'текстов')})"
@@ -2170,16 +2363,34 @@ def _d_create_campaign(ctx: Context, args: dict) -> list[dict]:
         out.append(_ch("Стратегия", "—", _fail(exc)))
     if spec.get("daily_budget_rub") not in (None, "", 0):
         out.append(_ch("Дневной бюджет", "—", _try(lambda: _daily_text(spec["daily_budget_rub"], manual, weekly))))
-    group = spec.get("group") if isinstance(spec.get("group"), dict) else None
-    if group:
-        name = str(group.get("name") or "Группа 1").strip()[:255] or "Группа 1"
+    negatives = spec.get("negative_keywords")
+    if isinstance(negatives, list) and negatives:
+        out.append(_ch("Минус-фразы кампании", "—", _preview([str(p) for p in negatives])))
+    regions_all = geo.load_regions(ctx.user_id)
+    template = actions._ws_link_template(ctx.ws)
+    try:
+        groups = actions.spec_groups(spec)
+    except YandexError:
+        groups = []
+    for index, group in enumerate(groups):
+        name = str(group.get("name") or f"Группа {index + 1}").strip()[:255] or f"Группа {index + 1}"
         phrases = actions._phrases(group.get("keywords"))[:200]
-        out.append(_ch("Группа", "нет", f"«{name}», {_count(len(phrases), *_PHRASE_WORDS)}"))
         regions = [int(r) for r in group.get("region_ids") or [] if str(r).lstrip("-").isdigit()] or [225]
-        out.append(_ch("Регионы группы", "—", geo.region_label(regions, geo.load_regions(ctx.user_id))))
+        parts = [_count(len(phrases), *_PHRASE_WORDS), geo.region_label(regions, regions_all)]
         ad = group.get("ad") if isinstance(group.get("ad"), dict) else {}
-        if ad.get("title") and ad.get("text") and ad.get("href"):
-            out.append(_ch("Объявление", "нет", f"«{ad['title']}» — {ad['text']}"))
+        titles = _variants(ad, "titles") or ([ad["title"]] if ad.get("title") else [])
+        texts = _variants(ad, "texts") or ([ad["text"]] if ad.get("text") else [])
+        if titles and texts:
+            href = str(ad.get("href") or "").strip() or ("ссылка по шаблону" if template else "без ссылки")
+            parts.append(
+                f"объявление: {_count(len(titles), 'заголовок', 'заголовка', 'заголовков')}, "
+                f"{_count(len(texts), 'текст', 'текста', 'текстов')}, {href}"
+            )
+        else:
+            parts.append("без объявления")
+        out.append(_ch(f"Группа «{name}»", "нет", " · ".join(parts)))
+        if titles and texts:
+            out += [dict(r, what=f"{r['what']} «{name}»") for r in _extras_rows(ctx, ad)]
     return out
 
 
@@ -2625,7 +2836,191 @@ def _changes(ctx: Context, tool: str, args: dict) -> list[dict]:
     return out
 
 
-# --- Вопросы и план: ждут ответа маркетолога в карточке ---------------------------------------
+# --- Строки карточки с галочками ----------------------------------------------------------------
+#
+# Списки в карточке действия (фразы, заголовки, объявления, кампании) маркетолог видит строками с
+# галочками: сняв галочку, он убирает строку из действия перед «Одобрить», не переписывая его словами.
+# id строки — путь к значению в аргументах («phrases.3», «spec.groups.0.keywords.2»).
+
+MAX_PICKS = 300
+
+
+def _pick(path: str, text, section: str = "", kind: str = "other", note: str = "") -> dict:
+    return {"id": path, "section": section, "kind": kind, "text": _line(text, 300), "note": note}
+
+
+def _list_picks(args: dict, key: str, section: str = "", kind: str = "other", prefix: str = "") -> list[dict]:
+    values = args.get(key)
+    if not isinstance(values, list):
+        return []
+    return [_pick(f"{prefix}{key}.{i}", v, section, kind) for i, v in enumerate(values) if str(v or "").strip()]
+
+
+def _row_picks(args: dict, key: str, rows: list[dict], field: str) -> list[dict]:
+    names = {int(r["id"]): r.get(field) for r in rows}
+    out = []
+    for i, value in enumerate(args.get(key) or []):
+        try:
+            text = names.get(int(value)) or str(value)
+        except (TypeError, ValueError):
+            continue
+        out.append(_pick(f"{key}.{i}", text))
+    return out
+
+
+def _k_phrases(kind: str):
+    def build(ctx: Context, args: dict) -> list[dict]:
+        return _list_picks(args, "phrases", kind=kind)
+
+    return build
+
+
+def _k_ad(ctx: Context, args: dict) -> list[dict]:
+    return _list_picks(args, "titles", "Заголовки", "title") + _list_picks(args, "texts", "Тексты", "text")
+
+
+def _k_update_ads(ctx: Context, args: dict) -> list[dict]:
+    out = []
+    for i, (item, row) in enumerate(_ad_items(ctx, args)):
+        what = ", ".join(_AD_LABELS[k].lower() for k in _AD_FIELDS if item.get(k) is not None)
+        out.append(_pick(f"items.{i}", row["title"] or row["id"], note=what or ("расширения" if _has_extras(item) else "")))
+    return out
+
+
+def _k_ids(key: str, lookup: str, field: str):
+    def build(ctx: Context, args: dict) -> list[dict]:
+        return _row_picks(args, key, getattr(ctx, lookup)(_ids(args, key)), field)
+
+    return build
+
+
+def _k_create_campaign(ctx: Context, args: dict) -> list[dict]:
+    spec = args.get("spec") if isinstance(args.get("spec"), dict) else {}
+    groups = spec.get("groups") if isinstance(spec.get("groups"), list) else []
+    out: list[dict] = []
+    for g, group in enumerate(groups):
+        if not isinstance(group, dict):
+            continue
+        name = str(group.get("name") or f"Группа {g + 1}").strip()
+        base = f"spec.groups.{g}"
+        if len(groups) > 1:
+            out.append(_pick(base, f"Вся группа «{name}»", name, "group"))
+        out += _list_picks(group, "keywords", name, "keyword", f"{base}.")
+        ad = group.get("ad")
+        if isinstance(ad, dict):
+            out += _list_picks(ad, "titles", name, "title", f"{base}.ad.")
+            out += _list_picks(ad, "texts", name, "text", f"{base}.ad.")
+    out += _list_picks(spec, "negative_keywords", "Минус-фразы кампании", "negative", "spec.")
+    out += _list_picks(spec, "excluded_sites", "Запрещённые площадки", "other", "spec.")
+    return out
+
+
+_PICKS = {
+    "add_campaign_negatives": _k_phrases("negative"),
+    "add_keywords": _k_phrases("keyword"),
+    "create_text_ad": _k_ad,
+    "update_text_ad": _k_ad,
+    "update_text_ads": _k_update_ads,
+    "keywords_action": _k_ids("keyword_row_ids", "keywords", "keyword"),
+    "ads_action": _k_ids("ad_row_ids", "ads", "title"),
+    "search_queries_action": _k_ids("query_row_ids", "queries", "query"),
+    "campaigns_action": _k_ids("campaign_row_ids", "campaigns", "name"),
+    "fix_links": _k_ids("campaign_row_ids", "campaigns", "name"),
+    "create_campaign": _k_create_campaign,
+}
+
+
+def _picks(ctx: Context, tool: str, args: dict) -> list[dict]:
+    """Строки с галочками для карточки; одна строка — снимать нечего, пусто."""
+    build = _PICKS.get(tool)
+    if build is None:
+        return []
+    try:
+        out = build(ctx, args)
+    except Exception:
+        log.warning("Строки карточки для %s не собраны", tool, exc_info=True)
+        return []
+    return out[:MAX_PICKS] if len([p for p in out if p["kind"] != "group"]) > 1 else []
+
+
+def _top_paths(paths: list[str]) -> list[str]:
+    """Пути без вложенных в другие снятые: строки снятой группы уходят вместе с ней."""
+    kept: list[str] = []
+    for path in sorted(set(paths), key=len):
+        if not any(path.startswith(f"{p}.") for p in kept):
+            kept.append(path)
+    return kept
+
+
+def _path_parts(path: str) -> list:
+    return [int(p) if p.isdigit() else p for p in path.split(".")]
+
+
+def _drop_paths(args: dict, paths: list[str]) -> dict:
+    """Копия аргументов без значений по путям; внутри снятой группы её строки уже не важны."""
+    out = copy.deepcopy(args)
+    by_container: dict[tuple, list[int]] = {}
+    for path in _top_paths(paths):
+        parts = _path_parts(path)
+        if not parts or not isinstance(parts[-1], int):
+            continue
+        by_container.setdefault(tuple(parts[:-1]), []).append(parts[-1])
+    for container, indexes in by_container.items():
+        node = out
+        try:
+            for part in container:
+                node = node[part]
+        except (KeyError, IndexError, TypeError):
+            continue
+        if not isinstance(node, list):
+            continue
+        for index in sorted(set(indexes), reverse=True):
+            if 0 <= index < len(node):
+                del node[index]
+    return out
+
+
+def _exclude_rows(user_id: int, row: dict, exclude) -> dict:
+    """Снимает отмеченные строки из ждущего действия: заново проверяет его и пересобирает карточку.
+
+    Проверка не прошла (например, сняли все заголовки) — ошибка, действие остаётся как было.
+    """
+    paths = [str(p) for p in exclude if str(p or "").strip()] if isinstance(exclude, list) else []
+    args = dict(row.get("args") or {})
+    picks = args.get("_items") or []
+    allowed = {p["id"]: p for p in picks}
+    paths = [p for p in paths if p in allowed]
+    if not paths:
+        return row
+    clean = {k: v for k, v in args.items() if k not in ("_diff", "_items", "_removed")}
+    new_args = _drop_paths(clean, paths)
+    with pool.connection() as conn:
+        ws_id = conn.execute("SELECT workspace_id FROM ai_chats WHERE id = %s", (row["chat_id"],)).fetchone()["workspace_id"]
+    ctx = Context(user_id, ws_id)
+    ctx.chat_id = row["chat_id"]
+    prepare, _execute = WRITE_TOOLS[row["tool"]]
+    try:
+        plan = prepare(ctx, new_args)
+    except YandexError as exc:
+        raise YandexError("args", f"Без снятых строк действие не пройдёт: {exc.message or exc.code}") from exc
+    top = set(_top_paths(paths))
+    removed = [{"section": p["section"], "kind": p["kind"], "text": p["text"]} for p in picks if p["id"] in top]
+    stored = dict(new_args)
+    changes = _changes(ctx, row["tool"], new_args)
+    if changes:
+        stored["_diff"] = changes
+    stored["_removed"] = removed
+    with pool.connection() as conn:
+        updated = conn.execute(
+            "UPDATE ai_actions SET args = %s, summary = %s WHERE id = %s AND status = 'pending' RETURNING *",
+            (Jsonb(stored), plan.summary[:1000], row["id"]),
+        ).fetchone()
+    if updated is None:
+        raise YandexError("decided", "Решение уже принято")
+    return updated
+
+
+# --- Вопросы, план и таблицы: ждут ответа маркетолога в карточке ---------------------------
 
 
 def _option_text(item) -> str:
@@ -2715,7 +3110,83 @@ def _q_plan(ctx: Context, args: dict) -> dict:
     return {"goal": _para(args.get("goal"), 500), "steps": steps}
 
 
-ASK_TOOLS = {"ask_questions": _q_questions, "propose_plan": _q_plan}
+MAX_ITEM_ROWS = 200
+MAX_ITEM_COLUMNS = 5
+_ITEM_COLUMNS = {
+    "analysis": ["Направление", "Показов в месяц", "Откуда", "Комментарий"],
+    "keywords": ["Фраза", "Показов в месяц", "Комментарий"],
+    "negatives": ["Минус-фраза", "Почему"],
+    "ads": ["Вариант", "Комментарий"],
+    "extras": ["Что", "Значение"],
+    "settings": ["Настройка", "Значение", "Почему"],
+    "other": ["Что", "Комментарий"],
+}
+_ITEM_LIMITS = {"title": 56, "text": 81}
+
+
+def _q_items(ctx: Context, args: dict) -> dict:
+    """propose_items → таблица на согласование: строки с галочками, маркетолог снимает лишние."""
+    stage = str(args.get("stage") or "other").strip().lower()
+    if stage not in ITEM_STAGES:
+        raise YandexError("args", f"stage — одно из {list(ITEM_STAGES)}")
+    raw_columns = args.get("columns")
+    columns = [_line(c, 60) for c in raw_columns if _line(c, 60)] if isinstance(raw_columns, list) else []
+    raw = args.get("rows")
+    if isinstance(raw, (str, dict)):
+        raw = [raw]
+    rows: list[dict] = []
+    seen: set[tuple] = set()
+    too_long: list[str] = []
+    for item in raw if isinstance(raw, list) else []:
+        if isinstance(item, str):
+            item = {"cells": [item]}
+        if not isinstance(item, dict):
+            continue
+        cells = item.get("cells")
+        if isinstance(cells, str):
+            cells = [cells]
+        if not isinstance(cells, list):
+            cells = [item.get("text")]
+        cells = [_line(c, 300) for c in cells[:MAX_ITEM_COLUMNS]]
+        if not cells or not cells[0]:
+            continue
+        kind = str(item.get("kind") or "").strip().lower()
+        if kind not in ITEM_KINDS:
+            if stage == "ads":
+                raise YandexError("args", f"«{cells[0]}»: в таблице ads у строки kind — title или text")
+            kind = _STAGE_KINDS.get(stage, "other")
+        section = _line(item.get("section") or item.get("group"), 120)
+        key = (section, kind, _item_key(cells[0], kind))
+        if key in seen:
+            continue
+        seen.add(key)
+        limit = _ITEM_LIMITS.get(kind)
+        if limit and len(cells[0]) > limit:
+            too_long.append(f"«{cells[0]}» ({len(cells[0])} > {limit})")
+        rows.append(
+            {"n": len(rows) + 1, "section": section, "kind": kind, "cells": cells, "checked": _bool(item, "checked", True)}
+        )
+    if too_long:
+        raise YandexError("args", "Длиннее предела Директа, сократи: " + _preview(too_long, 5))
+    if not rows:
+        raise YandexError("args", "В таблице нет ни одной строки с текстом")
+    if len(rows) > MAX_ITEM_ROWS:
+        raise YandexError("args", f"Не больше {MAX_ITEM_ROWS} строк в таблице — раздели этап на части")
+    width = max(len(r["cells"]) for r in rows)
+    columns = (columns or _ITEM_COLUMNS[stage])[:width]
+    columns += [""] * (width - len(columns))
+    for row in rows:
+        row["cells"] += [""] * (width - len(row["cells"]))
+    return {
+        "stage": stage,
+        "title": _line(args.get("title"), 120) or ITEM_STAGES[stage],
+        "intro": _para(args.get("intro"), 1500),
+        "columns": columns,
+        "rows": rows,
+    }
+
+
+ASK_TOOLS = {"ask_questions": _q_questions, "propose_plan": _q_plan, "propose_items": _q_items}
 
 
 def _kind(tool: str) -> str:
@@ -2748,6 +3219,7 @@ TOOL_LABELS = {
     "list_ad_images": "Картинки кабинета",
     "ask_questions": "Вопросы перед работой",
     "propose_plan": "План работ",
+    "propose_items": "Таблица на согласование",
     "campaigns_action": "Действие с кампаниями",
     "update_campaign_settings": "Настройки кампании",
     "add_campaign_negatives": "Минус-фразы кампании",
@@ -3031,6 +3503,42 @@ TOOLS = [
         ["steps"],
     ),
     _fn(
+        "propose_items",
+        "Таблица на согласование: строки с галочками, маркетолог снимет лишние и согласует остальное. Для всего, "
+        "что выбирают списком: направления и группы, фразы, минус-фразы, заголовки, тексты, расширения, настройки. "
+        "Ответ придёт результатом вызова: approved — согласованные строки, removed — снятые; используй только "
+        "согласованные. До ответа следующий этап не начинай.",
+        {
+            "stage": {
+                "type": "string",
+                "enum": list(ITEM_STAGES),
+                "description": "этап: analysis — направления/группы, keywords — фразы по группам, negatives — "
+                "минус-фразы, ads — заголовки и тексты, extras — ссылка и расширения, settings — настройки",
+            },
+            "title": {"type": "string", "description": "заголовок таблицы"},
+            "intro": {"type": "string", "description": "1–3 предложения: на чём основано и что согласовать"},
+            "columns": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": f"названия колонок (до {MAX_ITEM_COLUMNS}); первая — сама строка (фраза, заголовок…)",
+            },
+            "rows": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "section": {"type": "string", "description": "раздел строки, обычно группа"},
+                        "kind": {"type": "string", "enum": list(ITEM_KINDS), "description": "в stage=ads обязательно: title или text"},
+                        "cells": {"type": "array", "items": {"type": "string"}, "description": "ячейки по колонкам"},
+                        "checked": {"type": "boolean", "description": "отмечена сразу (по умолчанию да)"},
+                    },
+                    "required": ["cells"],
+                },
+            },
+        },
+        ["stage", "rows"],
+    ),
+    _fn(
         "campaigns_action",
         "Остановить, запустить, сменить дневной бюджет, архивировать или удалить кампании.",
         {
@@ -3063,8 +3571,11 @@ TOOLS = [
         "Создать кампанию (черновик) в кабинете пространства. Сначала посмотри get_campaign_options. spec: type "
         "(TEXT_CAMPAIGN|UNIFIED_CAMPAIGN), name, start_date, end_date, strategy {search, network, параметры}, "
         "daily_budget_rub (только ручные ставки), negative_keywords [], excluded_sites [], schedule, "
-        "attribution_model, priority_goals, tracking_params, group {name, region_ids, keywords [], bid_rub, "
-        "ad {titles (до 7), texts (до 3), href}}: объявление комбинаторное, второго заголовка в нём нет. "
+        "attribution_model, priority_goals, tracking_params, groups [{name, region_ids, keywords [] (до 200), "
+        "bid_rub, ad {titles (до 7), texts (до 3), href, extras или extras_from_ad_row_id}}] (до 20 групп): "
+        "объявление комбинаторное, второго заголовка в нём нет; href можно не давать, если в пространстве есть "
+        "шаблон ссылки. Кампания с группами создаётся только после согласованных таблиц propose_items по этапам "
+        "(анализ, ключи и группы, заголовки и тексты, настройки) и только из согласованных строк. "
         "Счётчик пространства подставится сам.",
         {"account_id": _ID, "spec": {"type": "object"}, **_REASON},
         ["account_id", "spec"],
@@ -3485,7 +3996,13 @@ def _system_prompt(ctx: Context) -> str:
         "",
         "Правила:",
         "- Отвечай по-русски, кратко и по делу. Цифры бери только из инструментов, ничего не выдумывай.",
-        "- Для анализа сначала собери данные инструментами, затем дай выводы и конкретные рекомендации списком.",
+        "- Для анализа сначала собери данные инструментами, затем дай выводы и конкретные рекомендации. Данные "
+        "со многими строками (кампании, группы, фразы, запросы, заголовки с цифрами) показывай markdown-таблицей, "
+        "а не списком.",
+        "- Всё, что маркетолог выбирает или согласует списком (направления, группы, фразы, минус-фразы, заголовки, "
+        "тексты, расширения), показывай таблицей propose_items, а не перечнем в тексте: он снимет галочки с "
+        "лишнего. ask_questions — для вопросов, propose_plan — для плана шагов. Списки в карточках действий тоже "
+        "идут строками с галочками: снятое не выполняется, результат действия скажет, что снято.",
         "- Если ответ инструмента обрезан или в нём есть not_all_shown, ты видел не всё: дозапроси остальное или "
         "прямо скажи, что смотрел часть, — не делай вывода «всё в порядке» о том, чего не видел.",
         "- Суммы в инструментах — в рублях. Кампании, группы и объявления называй по имени или по тексту (у "
@@ -3506,10 +4023,27 @@ def _system_prompt(ctx: Context) -> str:
         "карточку «Выполнить / Отклонить». Не спрашивай разрешения текстом. В reason коротко объясни зачем. "
         "То, что по доступу выполнится без согласования, делай только по просьбе пользователя или по "
         "согласованному плану.",
-        "- Перед крупной работой (несколько кампаний, новая кампания, перезапуски, копии на новое гео): "
+        "- Перед крупной работой (несколько кампаний, перезапуски, копии на новое гео): "
         "1) ask_questions — если чего-то не хватает; 2) propose_plan — шаги «было → станет → зачем»; 3) после "
         "согласования выполняй только согласованные шаги, по одному инструменту на шаг, с plan_step. Новый шаг "
-        "или изменённый план — новый propose_plan. Мелкую прямую просьбу выполняй без плана.",
+        "или изменённый план — новый propose_plan. Мелкую прямую просьбу выполняй без плана. Новую кампанию — "
+        "по этапам ниже.",
+        "- Новую кампанию собирай строго по этапам. Каждый этап заканчивается таблицей propose_items, и к "
+        "следующему переходишь только после её согласования; без согласованных этапов create_campaign вернёт "
+        "ошибку. 1) Бриф — ask_questions, если чего-то не хватает: продукт и оффер, гео, бюджет, цель, ссылка. "
+        "2) Анализ: похожие кампании пространства (list_campaigns, get_campaign — какие группы, фразы и тексты "
+        "приносили конверсии), get_search_queries с with_conversions, get_wordstat по 1–5 главным фразам с "
+        "регионами кампании. Короткий отчёт с цифрами таблицей, затем propose_items stage=analysis — направления, "
+        "они станут группами (направление, показов в месяц, откуда идея). 3) Ключи и группы — propose_items "
+        "stage=keywords: фразы согласованных направлений с частотой из get_wordstat, section — группа; минус-фразы "
+        "кампании — там же строками kind=negative с section «Минус-фразы» или отдельной таблицей stage=negatives. "
+        "4) Заголовки и тексты — propose_items stage=ads: каждой группе до 7 заголовков (kind=title, до 56 "
+        "знаков) и до 3 текстов (kind=text, до 81) под её фразы, section — группа. 5) Ссылка и расширения — "
+        "propose_items stage=extras: ссылка или шаблон пространства, быстрые ссылки, уточнения, у какого "
+        "объявления взять расширения. 6) Настройки — propose_items stage=settings: тип, стратегия, бюджет, "
+        "регионы, расписание, цель. 7) create_campaign — одним вызовом черновик со всеми группами (spec.groups), "
+        "только из согласованных строк: снятое галочкой не бери, новое не добавляй без новой таблицы. "
+        "8) На модерацию — только после отдельного согласия (moderate_campaign).",
         "- Затухшую кампанию, если причина не в балансе, модерации или настройке, которую проще поправить, "
         "предлагай перезапустить копией — restart_campaign_copy.",
         "- Копию кампании на другой регион делай через copy_campaign_geo; id регионов бери из find_regions, "
@@ -3541,10 +4075,11 @@ def _system_prompt(ctx: Context) -> str:
         "Отчёт: лучшие заголовки по конверсиям ключевой цели с CR и CPA (enough=false — честно скажи, что выводы "
         "предварительные), что их объединяет (оффер, выгода, ключ, формулировка), где кампания теряет деньги. "
         "Если почти всё в mixed — точных цифр заголовков нет: предложи загрузить отчёт Мастера по заголовкам "
-        "(экран «Объявления») или начать с теста. Затем ask_questions — какие заголовки масштабировать (варианты — "
-        "лучшие заголовки). 2) Новые заголовки: к каждому выбранному 2–4 близких — тот же смысл и выгода, другая "
-        "формулировка или порядок слов, ключ из конвертящих запросов, до 56 знаков; покажи списком и спроси через "
-        "ask_questions, что поправить или убрать. 3) Структура теста — propose_plan: копии только выбранной "
+        "(экран «Объявления») или начать с теста. Затем propose_items stage=ads — какие заголовки масштабировать "
+        "(строки kind=title — лучшие заголовки, в колонках конверсии, CR и CPA). 2) Новые заголовки: к каждому "
+        "выбранному 2–4 близких — тот же смысл и выгода, другая формулировка или порядок слов, ключ из "
+        "конвертящих запросов, до 56 знаков; покажи таблицей propose_items stage=ads (section — исходный "
+        "заголовок, kind=title), лишние маркетолог снимет галочкой. 3) Структура теста — propose_plan: копии только выбранной "
         "кампании; label гипотезы, названия копии «{label} · дд.мм» и групп «{группа} — {label}»; ads.per_title с "
         "одобренными заголовками плюс исходный лучший как контроль; тексты — лучшие тексты оригинала; недельный "
         "бюджет. 4) create_campaign_variants с moderate=false — черновики. 5) Отдельно спроси, отправлять ли на "
@@ -3682,6 +4217,8 @@ def _message_out(row: dict) -> dict:
 def _action_out(row: dict) -> dict:
     args = dict(row.get("args") or {})
     changes = args.pop("_diff", None) or []
+    items = args.pop("_items", None) or []
+    removed = args.pop("_removed", None) or []
     cats = [c for c in (row.get("category") or "").split(",") if c]
     try:
         plan_step = int(args["plan_step"]) if args.get("plan_step") not in (None, "") else None
@@ -3697,6 +4234,8 @@ def _action_out(row: dict) -> dict:
         "label": TOOL_LABELS.get(row["tool"], row["tool"]),
         "args": args,
         "changes": changes,
+        "items": items,
+        "removed": removed,
         "plan_step": plan_step,
         "reason": str(args.get("reason") or ""),
         "summary": row["summary"],
@@ -3796,6 +4335,11 @@ _ASK_SKIPPED = {
         "ok": False,
         "note": "Маркетолог не согласовал план в карточке, а написал сообщение ниже — учти его; "
         "шаги плана выполняй, только если он их согласовал",
+    },
+    "propose_items": {
+        "ok": False,
+        "note": "Маркетолог не согласовал таблицу в карточке, а написал сообщение ниже — учти его. К следующему "
+        "этапу переходи только после согласования: покажи таблицу этого этапа заново с его правками",
     },
 }
 
@@ -3999,8 +4543,9 @@ def _decide(user_id: int, chat_id: int, action_ids: list[int] | None, approve: b
     return rows, int(left)
 
 
-def decide_action(user_id: int, action_id: int, *, approve: bool, remember: bool = False) -> dict:
-    """Решение по одному действию; remember — разрешить его категории без согласования впредь."""
+def decide_action(user_id: int, action_id: int, *, approve: bool, remember: bool = False, exclude=None) -> dict:
+    """Решение по одному действию; remember — разрешить его категории без согласования впредь;
+    exclude — id строк, с которых маркетолог снял галочки: их в действии не будет."""
     from app.jobs import public_job
 
     with pool.connection() as conn:
@@ -4008,7 +4553,9 @@ def decide_action(user_id: int, action_id: int, *, approve: bool, remember: bool
     if row is None:
         raise YandexError("not-found")
     if row["tool"] in ASK_TOOLS:
-        raise YandexError("args", "Ответьте в карточке вопросов или плана")
+        raise YandexError("args", "Ответьте в карточке вопросов, плана или таблицы")
+    if approve and exclude and row["status"] == "pending":
+        _exclude_rows(user_id, row, exclude)
     rows, left = _decide(user_id, row["chat_id"], [action_id], approve)
     if not rows:
         raise YandexError("decided", "Решение по этому действию уже принято")
@@ -4022,9 +4569,21 @@ def decide_action(user_id: int, action_id: int, *, approve: bool, remember: bool
     return {"action": _action_out(rows[0]), "pending": left, "job": public_job(job) if job else None}
 
 
-def decide_all(user_id: int, chat_id: int, *, approve: bool) -> dict:
+def decide_all(user_id: int, chat_id: int, *, approve: bool, exclude: dict | None = None) -> dict:
+    """Решение по всем ждущим действиям чата; exclude — {id действия: [id снятых строк]}."""
     from app.jobs import public_job
 
+    if approve and isinstance(exclude, dict):
+        with pool.connection() as conn:
+            _require_chat(conn, user_id, chat_id)
+            pending = conn.execute(
+                "SELECT * FROM ai_actions WHERE chat_id = %s AND status = 'pending' AND tool <> ALL(%s)",
+                (chat_id, list(ASK_TOOLS)),
+            ).fetchall()
+        for row in pending:
+            paths = exclude.get(str(row["id"])) or exclude.get(row["id"])
+            if paths:
+                _exclude_rows(user_id, row, paths)
     rows, left = _decide(user_id, chat_id, None, approve)
     if not rows:
         raise YandexError("decided", "Нет действий, ждущих решения")
@@ -4174,15 +4733,7 @@ def decide_plan(user_id: int, action_id: int, *, steps=None, comment: str = "", 
     row = _pending_interactive(user_id, action_id, "propose_plan")
     plan = (row.get("args") or {}).get("steps") or []
     numbers = [s["n"] for s in plan]
-    chosen: list[int] = []
-    for value in steps if isinstance(steps, list) else []:
-        try:
-            n = int(value)
-        except (TypeError, ValueError):
-            continue
-        if n in numbers and n not in chosen:
-            chosen.append(n)
-    chosen.sort()
+    chosen = _numbers(steps, numbers)
     comment = _para(comment, 2000)
     if not approve:
         error = "Пользователь отклонил план"
@@ -4218,6 +4769,90 @@ def decide_plan(user_id: int, action_id: int, *, steps=None, comment: str = "", 
         }
         updated, left = _close_interactive(user_id, row, status="done", result=result, error="", reply=reply)
     job = _submit(user_id, row["chat_id"], f"p{action_id}") if not left else None
+    return {"action": _action_out(updated), "pending": left, "job": public_job(job) if job else None}
+
+
+def _numbers(values, allowed: list[int]) -> list[int]:
+    """Номера строк или шагов, отмеченные в карточке: только из allowed, без повторов, по порядку."""
+    out: list[int] = []
+    for value in values if isinstance(values, list) else []:
+        try:
+            n = int(value)
+        except (TypeError, ValueError):
+            continue
+        if n in allowed and n not in out:
+            out.append(n)
+    return sorted(out)
+
+
+_ITEM_PREFIX = {"negative": "минус-фраза", "title": "заголовок", "text": "текст"}
+
+
+def _items_brief(rows: list[dict]) -> dict[str, list[str]]:
+    """Строки таблицы для модели: по разделам, фразы и тексты — как есть, остальное — ячейками через «—»."""
+    out: dict[str, list[str]] = {}
+    for row in rows:
+        if row["kind"] in ("keyword", "negative", "title", "text"):
+            text = row["cells"][0]
+        else:
+            text = " — ".join(c for c in row["cells"] if c)
+        if row["kind"] in _ITEM_PREFIX:
+            text = f"{_ITEM_PREFIX[row['kind']]}: {text}"
+        out.setdefault(row["section"] or "—", []).append(text)
+    return out
+
+
+def decide_items(user_id: int, action_id: int, *, rows=None, comment: str = "", approve: bool = True) -> dict:
+    """Решение по таблице propose_items: отмеченные строки согласованы, снятые — нет."""
+    from app.jobs import public_job
+
+    row = _pending_interactive(user_id, action_id, "propose_items")
+    payload = row.get("args") or {}
+    table = payload.get("rows") or []
+    stage = ITEM_STAGES.get(payload.get("stage") or "other", "")
+    comment = _para(comment, 2000)
+    if not approve:
+        error = "Пользователь не согласовал таблицу"
+        reply = {
+            "ok": False,
+            "error": error,
+            "stage": stage,
+            "note": "Этап не согласован: к следующему этапу не переходи и ничего из таблицы не делай. Учти "
+            "комментарий и предложи таблицу этого этапа заново",
+        }
+        if comment:
+            reply["comment"] = comment
+        updated, left = _close_interactive(
+            user_id,
+            row,
+            status="rejected",
+            result={"comment": comment} if comment else None,
+            error=error,
+            reply=reply,
+        )
+    else:
+        chosen = _numbers(rows, [r["n"] for r in table])
+        if not chosen:
+            raise YandexError("args", "Отметьте хотя бы одну строку или отклоните таблицу")
+        result = {
+            "approved_rows": chosen,
+            "removed_rows": [r["n"] for r in table if r["n"] not in chosen],
+            "comment": comment,
+        }
+        removed = [r for r in table if r["n"] not in chosen]
+        reply = {
+            "ok": True,
+            "stage": stage,
+            "approved": _items_brief([r for r in table if r["n"] in chosen]),
+            "comment": comment,
+            "note": "Этап согласован. Дальше используй только согласованные строки (и правки из комментария); "
+            "снятые галочкой не используй и не предлагай снова без новой причины. Следующий этап — новой "
+            "таблицей propose_items",
+        }
+        if removed:
+            reply["removed"] = _items_brief(removed)
+        updated, left = _close_interactive(user_id, row, status="done", result=result, error="", reply=reply)
+    job = _submit(user_id, row["chat_id"], f"i{action_id}") if not left else None
     return {"action": _action_out(updated), "pending": left, "job": public_job(job) if job else None}
 
 
@@ -4285,12 +4920,17 @@ def _run_action(ctx: Context, action: dict) -> None:
     _prepare, execute = WRITE_TOOLS[action["tool"]]
     args = dict(action["args"] or {})
     args.pop("_diff", None)
+    args.pop("_items", None)
+    removed = args.pop("_removed", None) or []
     result = None
     ctx.action = action
     try:
         result = execute(ctx, args)
         status, error = "done", ""
         payload = {"ok": True, "result": result}
+        if removed:
+            payload["removed_by_user"] = [f"{r['section']}: {r['text']}" if r.get("section") else r["text"] for r in removed]
+            payload["note"] = "Маркетолог снял галочки с этих строк — они не выполнены; не предлагай их снова без новой причины"
     except YandexError as exc:
         status, error = "error", exc.message or exc.code
         payload = {"ok": False, "error": error}
@@ -4310,6 +4950,27 @@ def _run_action(ctx: Context, action: dict) -> None:
         )
 
 
+def _normalize_call(name: str, args: dict) -> dict:
+    """Аргументы модели к виду, который ждут карточка и галочки: без служебных полей, списки — списками."""
+    for key in ("_diff", "_items", "_removed"):  # служебные поля карточки, не от модели
+        args.pop(key, None)
+    if name in ("add_keywords", "add_campaign_negatives") and isinstance(args.get("phrases"), str):
+        args["phrases"] = args["phrases"].splitlines()
+    spec = args.get("spec")
+    if name == "create_campaign" and isinstance(spec, dict):
+        from app.actions import _phrases as parse_phrases
+
+        if spec.get("group") and not spec.get("groups"):
+            spec["groups"] = [spec["group"]]
+        spec.pop("group", None)
+        for group in spec.get("groups") if isinstance(spec.get("groups"), list) else []:
+            if isinstance(group, dict) and isinstance(group.get("keywords"), str):
+                group["keywords"] = parse_phrases(group["keywords"])
+        if isinstance(spec.get("negative_keywords"), str):
+            spec["negative_keywords"] = spec["negative_keywords"].splitlines()
+    return args
+
+
 def _handle_call(ctx: Context, chat_id: int, message_id: int, call: dict) -> int:
     """Выполняет вызов инструмента; возвращает 1, если действие ждёт согласования."""
     name = call["name"]
@@ -4325,7 +4986,7 @@ def _handle_call(ctx: Context, chat_id: int, message_id: int, call: dict) -> int
             raise ValueError
     except ValueError:
         return reply({"ok": False, "error": "Аргументы должны быть JSON-объектом"})
-    args.pop("_diff", None)  # служебное поле карточки, не от модели
+    args = _normalize_call(name, args)
 
     if name in READ_TOOLS:
         try:
@@ -4349,7 +5010,7 @@ def _handle_call(ctx: Context, chat_id: int, message_id: int, call: dict) -> int
                     "note": "На эти вопросы маркетолог уже ответил — используй ответы",
                 }
             )
-        summary = payload.get("understanding") or payload.get("goal") or TOOL_LABELS[name]
+        summary = payload.get("understanding") or payload.get("goal") or payload.get("title") or TOOL_LABELS[name]
         with pool.connection() as conn:
             conn.execute(
                 """
@@ -4369,6 +5030,10 @@ def _handle_call(ctx: Context, chat_id: int, message_id: int, call: dict) -> int
         return reply({"ok": False, "error": exc.message or exc.code})
     changes = _changes(ctx, name, args)
     auto = _allowed(ctx.access, plan.categories, plan.change_pct)
+    stored = {**args, "_diff": changes} if changes else dict(args)
+    picks = [] if auto else _picks(ctx, name, args)
+    if picks:
+        stored["_items"] = picks
     with pool.connection() as conn:
         action = conn.execute(
             """
@@ -4382,7 +5047,7 @@ def _handle_call(ctx: Context, chat_id: int, message_id: int, call: dict) -> int
                 ctx.user_id,
                 call["id"],
                 name,
-                Jsonb({**args, "_diff": changes} if changes else args),
+                Jsonb(stored),
                 plan.summary[:1000],
                 ",".join(plan.categories),
                 "approved" if auto else "pending",
@@ -4408,6 +5073,7 @@ def run_chat(user_id: int, chat_id: int, progress=None) -> dict:
     try:
         cfg = ai.load_config(user_id, "chat", chat["workspace_id"])
         ctx = Context(user_id, chat["workspace_id"])
+        ctx.chat_id = chat_id
     except YandexError as exc:
         _set_status(chat_id, "error", exc.message or exc.code)
         return {"status": "error"}

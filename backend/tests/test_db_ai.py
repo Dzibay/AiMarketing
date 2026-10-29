@@ -305,3 +305,141 @@ def test_same_named_campaigns_get_direct_number(db):
         )
     assert ai_agent._cnames(ctx.campaigns([s["search"], s["network"], twin])) == "«Поиск» №11, «Поиск» №13, «РСЯ»"
     assert ai_agent._cname(ctx.campaign(s["search"])) == "«Поиск» №11"
+
+
+def _pending(user, chat, tool):
+    [action] = [a for a in ai_agent.get_chat(user, chat)["actions"] if a["status"] == "pending" and a["tool"] == tool]
+    return action
+
+
+def _turn(user, chat, monkeypatch, *replies):
+    fake = FakeModel(*replies)
+    monkeypatch.setattr(ai, "complete", fake)
+    return fake, ai_agent.run_chat(user, chat)
+
+
+def test_new_campaign_goes_by_stages(db, monkeypatch):
+    s = _seed(db)
+    user, chat = s["user"], s["chat"]
+    created = []
+    monkeypatch.setattr(
+        actions, "create_campaign", lambda user_id, **kw: created.append(kw) or {"campaign": {"id": 99}, "status": "ok"}
+    )
+
+    def spec(keywords, titles):
+        return {"account_id": s["acc"], "spec": {"name": "Окна", "negative_keywords": ["бесплатно"], "groups": [
+            {"name": "Окна ПВХ", "keywords": keywords,
+             "ad": {"titles": titles, "texts": ["Замер в день заказа"], "href": "https://shop.ru"}},
+        ]}}
+
+    # Сразу кампанию — нельзя: ни один этап не согласован.
+    fake, out = _start(
+        user, chat, "Сделай новую кампанию на окна", monkeypatch,
+        _call("create_campaign", spec(["купить окна пвх"], ["Окна от завода"])),
+        _call("propose_items", {"stage": "analysis", "rows": [{"cells": ["Окна ПВХ", "12 000"]}, {"cells": ["Двери", "5 000"]}]}, "c2"),
+    )
+    error = json.loads(fake.calls[1][-1]["content"])["error"]
+    assert "Ещё не согласовано: Анализ, Ключи и группы, Заголовки и тексты, Настройки" in error
+    assert out["status"] == "waiting"
+    table = _pending(user, chat, "propose_items")
+    assert table["kind"] == "ask" and table["summary"] == "Анализ" and len(table["args"]["rows"]) == 2
+    with pytest.raises(YandexError):  # таблица решается только своей кнопкой
+        ai_agent.decide_action(user, table["id"], approve=True)
+
+    # Анализ: «Двери» сняты галочкой.
+    decided = ai_agent.decide_items(user, table["id"], rows=[1])
+    assert decided["action"]["result"]["removed_rows"] == [2] and decided["job"]["kind"] == "ai_chat"
+    fake, out = _turn(user, chat, monkeypatch, _call("propose_items", {"stage": "keywords", "rows": [
+        {"section": "Окна ПВХ", "cells": ["купить окна пвх", "12 000"]},
+        {"section": "Окна ПВХ", "cells": ["окна дешево", "900"]},
+        {"section": "Минус-фразы", "kind": "negative", "cells": ["бесплатно"]},
+    ]}, "c3"))
+    reply = json.loads(fake.calls[0][-1]["content"])
+    assert reply["approved"] == {"—": ["Окна ПВХ — 12 000"]} and reply["removed"] == {"—": ["Двери — 5 000"]}
+
+    ai_agent.decide_items(user, _pending(user, chat, "propose_items")["id"], rows=[1, 3], comment="Добавь «окна в рассрочку»")
+    _turn(user, chat, monkeypatch, _call("propose_items", {"stage": "ads", "rows": [
+        {"section": "Окна ПВХ", "kind": "title", "cells": ["Окна от завода"]},
+        {"section": "Окна ПВХ", "kind": "title", "cells": ["Окна за 1 день"]},
+        {"section": "Окна ПВХ", "kind": "text", "cells": ["Замер в день заказа"]},
+    ]}, "c4"))
+    ai_agent.decide_items(user, _pending(user, chat, "propose_items")["id"], rows=[1, 2, 3])
+    _turn(user, chat, monkeypatch, _call("propose_items", {"stage": "settings", "columns": ["Настройка", "Значение"], "rows": [
+        {"kind": "setting", "cells": ["Бюджет", "500 ₽/день"]},
+    ]}, "c5"))
+    ai_agent.decide_items(user, _pending(user, chat, "propose_items")["id"], rows=[1])
+
+    # Снятую фразу взять нельзя; добавленную комментарием — можно.
+    fake, out = _turn(
+        user, chat, monkeypatch,
+        _call("create_campaign", spec(["купить окна пвх", "окна дешево"], ["Окна от завода", "Окна за 1 день"]), "c6"),
+        _call("create_campaign", spec(["купить окна пвх", "окна в рассрочку"], ["Окна от завода", "Окна за 1 день"]), "c7"),
+    )
+    error = json.loads(fake.calls[1][-1]["content"])["error"]
+    assert "снял галочку" in error and "«окна дешево»" in error
+    assert out["status"] == "waiting" and not created
+    card = _pending(user, chat, "create_campaign")
+    assert [(i["id"], i["kind"]) for i in card["items"]] == [
+        ("spec.groups.0.keywords.0", "keyword"),
+        ("spec.groups.0.keywords.1", "keyword"),
+        ("spec.groups.0.ad.titles.0", "title"),
+        ("spec.groups.0.ad.titles.1", "title"),
+        ("spec.groups.0.ad.texts.0", "text"),
+        ("spec.negative_keywords.0", "negative"),
+    ]
+
+    # Галочки: без единственного текста объявление не собрать — действие остаётся как было.
+    with pytest.raises(YandexError) as err:
+        ai_agent.decide_action(user, card["id"], approve=True, exclude=["spec.groups.0.ad.texts.0"])
+    assert "Без снятых строк" in err.value.message
+    assert _pending(user, chat, "create_campaign")["args"] == card["args"]
+
+    # Сняли фразу и заголовок (и чужой путь — он не учитывается).
+    ai_agent.decide_action(
+        user, card["id"], approve=True, exclude=["spec.groups.0.keywords.1", "spec.groups.0.ad.titles.1", "spec.name"]
+    )
+    fake, out = _turn(user, chat, monkeypatch, _text("Черновик создан."))
+    [kw] = created
+    group = kw["spec"]["groups"][0]
+    assert group["keywords"] == ["купить окна пвх"] and group["ad"]["titles"] == ["Окна от завода"]
+    result = json.loads(fake.calls[0][-1]["content"])
+    assert result["ok"] and result["removed_by_user"] == ["Окна ПВХ: окна в рассрочку", "Окна ПВХ: Окна за 1 день"]
+    done = [a for a in ai_agent.get_chat(user, chat)["actions"] if a["id"] == card["id"]][0]
+    assert done["status"] == "done" and [r["text"] for r in done["removed"]] == ["окна в рассрочку", "Окна за 1 день"]
+    assert "1 фраза" in done["summary"]
+
+    # В созданную здесь кампанию — тоже только согласованное.
+    with db.connection() as conn:
+        conn.execute("UPDATE ai_actions SET result = %s WHERE id = %s", (json.dumps({"campaign": {"id": s["search"]}}), card["id"]))
+    ctx = ai_agent.Context(user, s["ws"])
+    ctx.chat_id = chat
+    with pytest.raises(YandexError) as err:
+        ai_agent._p_add_negatives(ctx, {"campaign_row_id": s["search"], "phrases": ["бесплатно", "своими руками"]})
+    assert "«своими руками»" in err.value.message
+
+
+def test_items_table_rejected_and_decide_all_with_exclude(db, monkeypatch):
+    s = _seed(db)
+    user, chat = s["user"], s["chat"]
+    _start(user, chat, "Предложи заголовки", monkeypatch, _call("propose_items", {"stage": "ads", "rows": [
+        {"kind": "title", "cells": ["Окна от завода"]},
+    ]}))
+    table = _pending(user, chat, "propose_items")
+    ai_agent.decide_items(user, table["id"], approve=False, comment="Скучно")
+    fake, _out = _turn(user, chat, monkeypatch, _text("Переделаю"))
+    reply = json.loads(fake.calls[0][-1]["content"])
+    assert reply["ok"] is False and reply["comment"] == "Скучно" and "не переходи" in reply["note"]
+    with pytest.raises(YandexError):
+        ai_agent.decide_items(user, table["id"], rows=[1])  # уже решено
+
+    # «Одобрить все» тоже учитывает снятые галочки.
+    done = []
+    monkeypatch.setattr(actions, "bulk_campaign_action", lambda user_id, **kw: done.append(kw) or {"ok": 1})
+    _start(user, chat, "Останови обе", monkeypatch, _call("campaigns_action", {
+        "campaign_row_ids": [s["search"], s["network"]], "action": "pause", "reason": "дорого",
+    }, "c3"))
+    card = _pending(user, chat, "campaigns_action")
+    assert [i["text"] for i in card["items"]] == ["Поиск", "РСЯ"]
+    ai_agent.decide_all(user, chat, approve=True, exclude={str(card["id"]): ["campaign_row_ids.1"]})
+    _turn(user, chat, monkeypatch, _text("Остановил."))
+    assert done[0]["campaign_ids"] == [s["search"]]

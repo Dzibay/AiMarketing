@@ -4968,6 +4968,173 @@ body.has-modal {
   font-size: 0.82rem;
 }
 
+/* Строки с галочками: таблицы этапов ИИ и списки в карточках действий */
+.ai-items__chips {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+}
+
+.ai-picks {
+  display: grid;
+  gap: 0.4rem;
+}
+
+.ai-removed s {
+  margin-left: 0.5rem;
+}
+
+.ai-check {
+  display: grid;
+  gap: 0.4rem;
+}
+
+.ai-check__bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.3rem 0.9rem;
+  font-size: 0.82rem;
+  color: var(--muted);
+}
+
+.ai-check__link {
+  appearance: none;
+  border: 0;
+  padding: 0;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  cursor: pointer;
+}
+
+.ai-check__link:hover:not(:disabled) {
+  text-decoration: underline;
+}
+
+.ai-check__link:disabled {
+  color: var(--muted);
+  opacity: 0.6;
+  cursor: default;
+}
+
+.ai-check__tip {
+  margin-left: auto;
+  font-size: 0.78rem;
+}
+
+.ai-check__scroll {
+  max-height: 26rem;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+}
+
+.ai-check table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.86rem;
+  background: var(--surface);
+}
+
+.ai-check th,
+.ai-check td {
+  padding: 0.4rem 0.6rem;
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+  vertical-align: top;
+  overflow-wrap: anywhere;
+}
+
+.ai-check thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--surface-2);
+  font-size: 0.78rem;
+  font-weight: 560;
+  color: var(--muted);
+}
+
+.ai-check tbody:last-child tr:last-child td {
+  border-bottom: 0;
+}
+
+.ai-check .ai-check__box {
+  width: 2.4rem;
+  text-align: center;
+}
+
+.ai-check__section th {
+  background: color-mix(in srgb, var(--surface-2) 55%, var(--surface));
+  font-weight: 600;
+}
+
+.ai-check__section small {
+  margin-left: 0.5rem;
+  font-weight: 400;
+  color: var(--muted);
+}
+
+.ai-check__section.is-off th > :first-child {
+  color: var(--muted);
+  text-decoration: line-through;
+}
+
+.ai-check__section-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.55rem;
+  cursor: pointer;
+}
+
+.ai-check__row {
+  cursor: pointer;
+}
+
+.ai-check__row:hover td {
+  background: var(--surface-2);
+}
+
+.ai-check--readonly .ai-check__row {
+  cursor: default;
+}
+
+.ai-check--readonly .ai-check__row:hover td {
+  background: none;
+}
+
+.ai-check__row.is-locked {
+  cursor: default;
+}
+
+.ai-check__row.is-off td {
+  color: var(--muted);
+}
+
+.ai-check__row.is-off td:not(.ai-check__box) {
+  text-decoration: line-through;
+}
+
+.ai-check__row .chip {
+  display: inline-block;
+  margin-left: 0.4rem;
+}
+
+.ai-check .ai-check__kind {
+  width: 1%;
+  white-space: nowrap;
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+
+.ai-check__len {
+  margin-left: 0.35rem;
+  font-size: 0.74rem;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
 .chat__pending {
   display: flex;
   flex-wrap: wrap;

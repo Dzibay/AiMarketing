@@ -170,13 +170,17 @@ export const aiApi = {
   renameChat: (id, title) => patch(`/api/web/ai/chats/${id}`, { title }),
   deleteChat: (id) => del(`/api/web/ai/chats/${id}`),
   send: (id, text) => post(`/api/web/ai/chats/${id}/messages`, { text }),
-  decide: (actionId, approve, remember = false) =>
-    post(`/api/web/ai/actions/${actionId}/decide`, { approve, remember }),
-  decideAll: (chatId, approve) => post(`/api/web/ai/chats/${chatId}/decide-all`, { approve }),
+  /** exclude — id строк, с которых сняли галочки: их в действии не будет. */
+  decide: (actionId, approve, remember = false, exclude = []) =>
+    post(`/api/web/ai/actions/${actionId}/decide`, { approve, remember, exclude }),
+  /** exclude — { id действия: [id снятых строк] }. */
+  decideAll: (chatId, approve, exclude = {}) => post(`/api/web/ai/chats/${chatId}/decide-all`, { approve, exclude }),
   /** Ответы в карточке вопросов ИИ: { answers: [{ n, selected, text }], comment } или { skip: true }. */
   answer: (actionId, payload) => post(`/api/web/ai/actions/${actionId}/answer`, payload),
   /** Решение по плану ИИ: { approve, steps: [номера шагов], comment }. */
   plan: (actionId, payload) => post(`/api/web/ai/actions/${actionId}/plan`, payload),
+  /** Решение по таблице ИИ: { approve, rows: [номера отмеченных строк], comment }. */
+  items: (actionId, payload) => post(`/api/web/ai/actions/${actionId}/items`, payload),
   /** Чем ИИ может помочь: сигналы считает код без ИИ, бесплатно. */
   signals: (workspaceId) => request(`${WS(workspaceId)}/signals`),
   /** «Разбор»: { prompt?, title?, chat_id? } → { chat, message, job }; без chat_id — новый чат. */

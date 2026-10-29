@@ -635,22 +635,25 @@ def create_campaign(user_id: int, *, account_id: int, spec: dict, workspace_id: 
         attach_campaign(user_id, int(ws["id"]), row["id"])
     _update_local(row["id"], {"tracking_params": block.get("TrackingParams") or ""})
 
-    group_out = None
-    if spec.get("group"):
+    groups_out: list[dict] = []
+    for index, group in enumerate(spec_groups(spec)):
         try:
-            # Группа, фразы и объявление — часть создания кампании, отдельных записей в журнале не нужно.
+            # Группы, фразы и объявления — часть создания кампании, отдельных записей в журнале не нужно.
             with journal_quiet():
-                group_out = _create_first_group(user_id, row["id"], spec["group"], manual=manual)
+                group_out = _create_group(user_id, row["id"], group, manual=manual, n=index + 1)
             warnings.extend(group_out.pop("warnings", []))
+            groups_out.append(group_out)
         except YandexError as exc:
-            warnings.append(f"Группа не создана: {exc.message or exc.code}")
+            name = str(group.get("name") or "").strip()
+            warnings.append(f"Группа{f' «{name}»' if name else ''} не создана: {exc.message or exc.code}")
 
-    out = {"campaign": row, "group": group_out, "warnings": warnings, "status": "ok"}
+    group_out = groups_out[0] if groups_out else None
+    out = {"campaign": row, "group": group_out, "groups": groups_out, "warnings": warnings, "status": "ok"}
     log_action(
         user_id,
         "create",
         {"account_id": account_id, "campaign_row_id": row["id"], "name": name, "type": ctype, "strategy": strategy},
-        {"campaign_id": campaign_id, "group": group_out, "warnings": warnings},
+        {"campaign_id": campaign_id, "groups": groups_out, "warnings": warnings},
         "ok",
         workspace_id=int(ws["id"]) if ws else None,
         title=f"Создание кампании «{name}»",
@@ -676,7 +679,22 @@ def _delete_undo(campaign_row_id: int, label: str) -> dict:
     }
 
 
-def _create_first_group(user_id: int, campaign_row_id: int, group: dict, *, manual: bool) -> dict:
+MAX_NEW_GROUPS = 20
+
+
+def spec_groups(spec: dict) -> list[dict]:
+    """Группы новой кампании: spec.groups или одна spec.group (старый формат)."""
+    raw = spec.get("groups")
+    if raw in (None, "", []):
+        raw = [spec["group"]] if spec.get("group") else []
+    if not isinstance(raw, list) or not all(isinstance(g, dict) for g in raw):
+        raise YandexError("args", "groups — список групп {name, region_ids, keywords, bid_rub, ad}")
+    if len(raw) > MAX_NEW_GROUPS:
+        raise YandexError("args", f"Не больше {MAX_NEW_GROUPS} групп в новой кампании")
+    return raw
+
+
+def _create_group(user_id: int, campaign_row_id: int, group: dict, *, manual: bool, n: int = 1) -> dict:
     from app.adgroups import create_adgroup
     from app.ads import create_text_ad
     from app.keywords import create_keywords
@@ -686,7 +704,7 @@ def _create_first_group(user_id: int, campaign_row_id: int, group: dict, *, manu
     adgroup = create_adgroup(
         user_id,
         campaign_row_id=campaign_row_id,
-        name=str(group.get("name") or "Группа 1").strip()[:255] or "Группа 1",
+        name=str(group.get("name") or f"Группа {n}").strip()[:255] or f"Группа {n}",
         region_ids=regions,
     )
     out: dict = {"adgroup": adgroup, "keywords": 0, "ad": None}
@@ -709,12 +727,13 @@ def _create_first_group(user_id: int, campaign_row_id: int, group: dict, *, manu
     template = links.campaign_template(user_id, campaign_row_id)
     if not ad.get("href") and template:
         ad["href"] = links.template_href(template)
-    if ad.get("title") and ad.get("text") and ad.get("href"):
+    # Комбинаторное объявление приходит списками titles/texts, мастер кампании — одним title/text.
+    if (ad.get("title") or ad.get("titles")) and (ad.get("text") or ad.get("texts")) and ad.get("href"):
         fields = dict(
             adgroup_row_id=adgroup["id"],
-            title=ad["title"],
+            title=ad.get("title") or "",
             title2=ad.get("title2") or "",
-            text=ad["text"],
+            text=ad.get("text") or "",
             href=ad["href"],
             titles=[str(t) for t in ad.get("titles") or []] or None,
             texts=[str(t) for t in ad.get("texts") or []] or None,

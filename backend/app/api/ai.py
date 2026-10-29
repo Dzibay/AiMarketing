@@ -42,10 +42,14 @@ class MessageBody(BaseModel):
 class DecideBody(BaseModel):
     approve: bool
     remember: bool = False
+    # id строк карточки, с которых сняли галочки: их в действии не будет.
+    exclude: list[str] = []
 
 
 class DecideAllBody(BaseModel):
     approve: bool
+    # {id действия: [id снятых строк]}.
+    exclude: dict[str, list[str]] = {}
 
 
 class AnswerBody(BaseModel):
@@ -59,6 +63,13 @@ class PlanBody(BaseModel):
     approve: bool = True
     # Номера согласованных шагов плана.
     steps: list[int] = []
+    comment: str = ""
+
+
+class ItemsBody(BaseModel):
+    approve: bool = True
+    # Номера отмеченных строк таблицы.
+    rows: list[int] = []
     comment: str = ""
 
 
@@ -210,12 +221,13 @@ def chat_message(chat_id: int, body: MessageBody, user_id: int = Depends(require
 
 @router.post("/ai/chats/{chat_id}/decide-all")
 def chat_decide_all(chat_id: int, body: DecideAllBody, user_id: int = Depends(require_web_user)) -> dict:
-    return _call(ai_agent.decide_all, user_id, chat_id, approve=body.approve)
+    return _call(ai_agent.decide_all, user_id, chat_id, approve=body.approve, exclude=body.exclude)
 
 
 @router.post("/ai/actions/{action_id}/decide")
 def action_decide(action_id: int, body: DecideBody, user_id: int = Depends(require_web_user)) -> dict:
-    return _call(ai_agent.decide_action, user_id, action_id, approve=body.approve, remember=body.remember)
+    return _call(ai_agent.decide_action, user_id, action_id, approve=body.approve, remember=body.remember,
+                 exclude=body.exclude)
 
 
 @router.post("/ai/actions/{action_id}/answer")
@@ -229,4 +241,11 @@ def action_answer(action_id: int, body: AnswerBody, user_id: int = Depends(requi
 def action_plan(action_id: int, body: PlanBody, user_id: int = Depends(require_web_user)) -> dict:
     """Решение по плану ИИ: какие шаги делать."""
     return _call(ai_agent.decide_plan, user_id, action_id, steps=body.steps, comment=body.comment,
+                 approve=body.approve)
+
+
+@router.post("/ai/actions/{action_id}/items")
+def action_items(action_id: int, body: ItemsBody, user_id: int = Depends(require_web_user)) -> dict:
+    """Решение по таблице ИИ: какие строки согласованы."""
+    return _call(ai_agent.decide_items, user_id, action_id, rows=body.rows, comment=body.comment,
                  approve=body.approve)
