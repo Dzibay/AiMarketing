@@ -247,8 +247,21 @@
         </label>
       </fieldset>
       <div v-field class="field">
-        <label>Предел разового изменения бюджета или ставки: {{ ai.max_change_pct }}%</label>
-        <input v-model.number="ai.max_change_pct" type="range" min="0" max="200" step="5" :disabled="ai.full_access" />
+        <label>Предел разового изменения бюджета или ставки, %</label>
+        <div class="range-row">
+          <input v-model.number="ai.max_change_pct" type="range" min="0" max="200" step="5" :disabled="ai.full_access" />
+          <input
+            v-model.number="ai.max_change_pct"
+            type="number"
+            min="0"
+            max="200"
+            step="1"
+            required
+            inputmode="numeric"
+            aria-label="Предел изменения, %"
+            :disabled="ai.full_access"
+          />
+        </div>
         <small class="field-hint">
           Изменение больше предела ИИ всё равно отправит на согласование, даже если категория разрешена.
         </small>

@@ -1,9 +1,6 @@
 <template>
-  <div v-if="visible" class="cookie-banner">
-    <p>
-      Мы храним сессию входа в кабинете и используем необходимые cookie.
-      <RouterLink to="/cookies">Подробнее</RouterLink>
-    </p>
+  <div v-if="visible" class="cookie-banner" role="region" aria-label="Cookie">
+    <p>Только необходимые <RouterLink to="/cookies">cookie</RouterLink></p>
     <button class="btn btn--accent" type="button" @click="accept">Понятно</button>
   </div>
 </template>

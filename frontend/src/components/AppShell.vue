@@ -49,29 +49,6 @@
     </header>
 
     <aside class="rail">
-      <div class="rail__group rail__theme" role="group" aria-label="Тема">
-        <button
-          class="rail__btn"
-          :class="{ active: !isDark }"
-          type="button"
-          :aria-pressed="!isDark"
-          @click="!isDark || toggleTheme($event)"
-        >
-          <Sun aria-hidden="true" />
-          <span class="rail__tip">Светлая тема</span>
-        </button>
-        <button
-          class="rail__btn"
-          :class="{ active: isDark }"
-          type="button"
-          :aria-pressed="isDark"
-          @click="isDark || toggleTheme($event)"
-        >
-          <Moon aria-hidden="true" />
-          <span class="rail__tip">Тёмная тема</span>
-        </button>
-      </div>
-
       <nav class="rail__group rail__group--nav" :aria-label="wsId ? 'Разделы пространства' : 'Разделы кабинета'">
         <template v-if="wsId">
           <RouterLink class="rail__btn" to="/cabinet">
@@ -100,6 +77,12 @@
           <Settings aria-hidden="true" />
           <span class="rail__tip">{{ settingsGroup.label }}</span>
         </RouterLink>
+        <!-- Одна кнопка темы под настройками: подсвеченным в колонке остаётся только текущий раздел. -->
+        <button class="rail__btn" type="button" :aria-label="isDark ? 'Светлая тема' : 'Тёмная тема'" @click="toggleTheme">
+          <Sun v-if="isDark" aria-hidden="true" />
+          <Moon v-else aria-hidden="true" />
+          <span class="rail__tip">{{ isDark ? 'Светлая тема' : 'Тёмная тема' }}</span>
+        </button>
       </nav>
     </aside>
 

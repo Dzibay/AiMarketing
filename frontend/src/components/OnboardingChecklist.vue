@@ -1,25 +1,38 @@
 <template>
-  <section v-if="state?.visible" class="panel onboarding">
-    <div class="panel__head">
-      <div>
-        <h2>С чего начать</h2>
-        <p class="hint">
-          Шаги отмечаются сами по данным кабинета — сделано {{ requiredDone }} из {{ required.length }}.
-        </p>
+  <section v-if="state?.visible" class="panel onboarding" :class="{ 'is-compact': !open }">
+    <div class="onboarding__head">
+      <h2>С чего начать</h2>
+      <div
+        class="onboarding__bar"
+        role="progressbar"
+        :aria-valuenow="requiredDone"
+        aria-valuemin="0"
+        :aria-valuemax="required.length"
+        aria-label="Пройдено шагов"
+      >
+        <span :style="{ width: `${progressPct}%` }"></span>
       </div>
-      <button class="btn btn--ghost" type="button" :disabled="busy" @click="setDismissed(true)">Скрыть</button>
+      <span class="onboarding__count">{{ requiredDone }} из {{ required.length }}</span>
+      <span v-if="!open && nextStep" class="onboarding__next">Дальше: {{ nextStep.title }}</span>
+      <div class="row-actions">
+        <RouterLink v-if="!open && nextStep?.to" class="btn btn--accent" :to="nextStep.to">Продолжить</RouterLink>
+        <button class="btn btn--ghost" type="button" :aria-expanded="open" @click="setOpen(!open)">
+          {{ open ? 'Свернуть' : 'Все шаги' }}
+        </button>
+      </div>
+      <button
+        class="icon-btn onboarding__close"
+        type="button"
+        aria-label="Скрыть чек-лист"
+        title="Скрыть"
+        :disabled="busy"
+        @click="setDismissed(true)"
+      >
+        <X aria-hidden="true" />
+      </button>
     </div>
-    <div
-      class="onboarding__bar"
-      role="progressbar"
-      :aria-valuenow="requiredDone"
-      aria-valuemin="0"
-      :aria-valuemax="required.length"
-      aria-label="Пройдено шагов"
-    >
-      <span :style="{ width: `${progressPct}%` }"></span>
-    </div>
-    <ol class="checklist">
+    <p v-if="open" class="hint">Шаги отмечаются сами по данным кабинета.</p>
+    <ol v-if="open" class="checklist">
       <li
         v-for="(step, i) in state.steps"
         :key="step.id"
@@ -56,19 +69,22 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { RouterLink } from 'vue-router'
-import { Check, CircleAlert, LoaderCircle } from '@lucide/vue'
+import { Check, CircleAlert, LoaderCircle, X } from '@lucide/vue'
 import { errorText, webApi } from '../api/web'
 import { pushToast } from '../composables/useToasts'
 
 // Пока идёт первая загрузка кабинета — перечитываем чек-лист, чтобы шаг отметился сам.
 const POLL_MS = 15000
 const DETAIL_TONES = { error: 'tone-bad', progress: 'tone-warn' }
+const OPEN_KEY = 'aimarketing-onboarding-open'
 
 const emit = defineEmits(['advanced'])
 
 const state = ref(null)
 const busy = ref(false)
 const justDismissed = ref(false)
+// Выбор «Все шаги / Свернуть» запоминаем; пока его нет — список открыт только до первого сделанного шага.
+const openChoice = ref(localStorage.getItem(OPEN_KEY))
 let timer = 0
 
 const required = computed(() => (state.value?.steps || []).filter((s) => !s.optional))
@@ -76,6 +92,16 @@ const requiredDone = computed(() => required.value.filter((s) => s.done).length)
 const progressPct = computed(() =>
   required.value.length ? Math.round((requiredDone.value / required.value.length) * 100) : 0,
 )
+const open = computed(() => (openChoice.value == null ? requiredDone.value === 0 : openChoice.value === '1'))
+const nextStep = computed(() => {
+  const todo = (state.value?.steps || []).filter((s) => !s.done && s.status !== 'blocked')
+  return todo.find((s) => !s.optional) || todo[0] || null
+})
+
+function setOpen(value) {
+  openChoice.value = value ? '1' : '0'
+  localStorage.setItem(OPEN_KEY, openChoice.value)
+}
 
 function schedule() {
   window.clearTimeout(timer)
@@ -118,9 +144,50 @@ onBeforeUnmount(() => window.clearTimeout(timer))
 </script>
 
 <style scoped>
+/* Свёрнутый чек-лист — одна строка: прогресс, следующий шаг и кнопка «Продолжить». */
+.onboarding__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.6rem 1rem;
+}
+
+.onboarding__head h2 {
+  margin: 0;
+}
+
+.onboarding__head .row-actions {
+  margin-left: auto;
+}
+
+.onboarding__close {
+  width: 38px;
+  height: 38px;
+  margin-left: -0.4rem;
+}
+
+.onboarding:not(.is-compact) .onboarding__head {
+  margin-bottom: 0.35rem;
+}
+
+.onboarding.is-compact {
+  padding-block: 0.85rem;
+}
+
+.onboarding__count {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.onboarding__next {
+  color: var(--muted);
+  font-size: 0.92rem;
+}
+
 .onboarding__bar {
+  flex: 0 1 160px;
   height: 6px;
-  margin: 0.25rem 0 1rem;
   border-radius: 999px;
   background: var(--surface-2);
   overflow: hidden;
@@ -182,6 +249,35 @@ onBeforeUnmount(() => window.clearTimeout(timer))
 }
 
 @media (max-width: 640px) {
+  /* На телефоне: заголовок, счётчик и крестик — первой строкой, полоса и «Дальше» — под ними. */
+  .onboarding__head {
+    gap: 0.55rem 0.75rem;
+  }
+
+  .onboarding__count {
+    order: 1;
+  }
+
+  .onboarding__close {
+    order: 2;
+    margin-left: auto;
+  }
+
+  .onboarding__bar {
+    order: 3;
+    flex-basis: 100%;
+  }
+
+  .onboarding__next {
+    order: 4;
+    flex-basis: 100%;
+  }
+
+  .onboarding__head .row-actions {
+    order: 5;
+    margin-left: 0;
+  }
+
   .checklist li {
     flex-wrap: wrap;
   }

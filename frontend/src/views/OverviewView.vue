@@ -40,13 +40,24 @@
               <small>Сегодня</small>
             </div>
             <strong>{{ rub(totals.spend_today) }}</strong>
+            <span v-if="weekAgo.today" class="cell-note">
+              {{ WEEKDAY_LAST[weekdayOf(weekAgo.today.day)] }} — {{ rub(weekAgo.today.cost_kopecks) }} за день
+            </span>
           </div>
           <div class="stat-card">
             <div class="stat-card__head">
               <span class="stat-card__icon is-teal"><Wallet aria-hidden="true" /></span>
               <small>Вчера</small>
             </div>
-            <strong>{{ rub(totals.spend_yesterday) }}</strong>
+            <div class="stat-card__value">
+              <strong>{{ rub(totals.spend_yesterday) }}</strong>
+              <span v-if="yesterdayChange != null" class="delta" :class="deltaTone(yesterdayChange, true)">
+                {{ delta(yesterdayChange) }}
+              </span>
+            </div>
+            <span v-if="weekAgo.yesterday" class="cell-note">
+              {{ WEEKDAY_TO_LAST[weekdayOf(weekAgo.yesterday.day)] }} — {{ rub(weekAgo.yesterday.cost_kopecks) }}
+            </span>
           </div>
           <div class="stat-card">
             <div class="stat-card__head">
@@ -85,19 +96,28 @@
             <span class="cell-note">к прошлой неделе</span>
             <Sparkline :points="lastWeek" :prev-points="prevWeek" value-key="cpa_kopecks" color="var(--c-amber)" />
           </div>
-          <div class="stat-card">
-            <div class="stat-card__head">
+          <button
+            class="stat-card stat-card--action"
+            type="button"
+            :disabled="!fireCount"
+            :aria-pressed="onlyProblems"
+            @click="toggleOnlyProblems"
+          >
+            <span class="stat-card__head">
               <span class="stat-card__icon" :class="fireCount ? 'is-danger' : ''"><TriangleAlert aria-hidden="true" /></span>
               <small>Горит</small>
-            </div>
+            </span>
             <strong :class="fireCount ? 'tone-bad' : 'tone-ok'">{{ fireCount }}</strong>
             <span class="cell-note">
               {{ fireCount ? `${plural(fireCount, 'проблема требует', 'проблемы требуют', 'проблем требуют')} внимания` : 'всё спокойно' }}
             </span>
-          </div>
+            <span v-if="fireCount" class="stat-card__action">
+              {{ onlyProblems ? 'Показать все пространства' : 'Показать только их' }}
+            </span>
+          </button>
         </div>
 
-        <section class="panel">
+        <section ref="spacesPanel" class="panel overview-spaces">
           <div class="panel__head">
             <h2>Пространства</h2>
             <div class="filters filters--inline">
@@ -211,9 +231,14 @@
                       title="Показать проблемы"
                       @click.stop="focusWorkspace(w.id)"
                     >
-                      <span v-if="w.problems.critical" class="tone-bad">● {{ w.problems.critical }}</span>
-                      <span v-if="w.problems.warning" class="tone-warn">● {{ w.problems.warning }}</span>
-                      <span v-if="w.problems.info" class="cell-note">ⓘ {{ w.problems.info }}</span>
+                      <span v-if="w.problems.critical" class="tone-bad">
+                        {{ w.problems.critical }} {{ plural(w.problems.critical, 'критичная', 'критичные', 'критичных') }}
+                      </span>
+                      <span v-if="w.problems.warning" class="tone-warn">
+                        {{ w.problems.warning }}
+                        {{ plural(w.problems.warning, 'предупреждение', 'предупреждения', 'предупреждений') }}
+                      </span>
+                      <span v-if="w.problems.info" class="cell-note">{{ w.problems.info }} к сведению</span>
                     </button>
                     <span v-else class="tone-ok">✓</span>
                   </td>
@@ -305,6 +330,25 @@ useHead('Обзор — AiMarketing', true)
 
 const PROBLEMS_LIMIT = 30
 const SEVERITY_RANK = { critical: 0, warning: 1, info: 2, '': 3 }
+// Сравнение дня с тем же днём недели неделю назад; индекс — getUTCDay().
+const WEEKDAY_LAST = [
+  'в прошлое воскресенье',
+  'в прошлый понедельник',
+  'в прошлый вторник',
+  'в прошлую среду',
+  'в прошлый четверг',
+  'в прошлую пятницу',
+  'в прошлую субботу',
+]
+const WEEKDAY_TO_LAST = [
+  'к прошлому воскресенью',
+  'к прошлому понедельнику',
+  'к прошлому вторнику',
+  'к прошлой среде',
+  'к прошлому четвергу',
+  'к прошлой пятнице',
+  'к прошлой субботе',
+]
 
 const router = useRouter()
 const { loadWorkspaces } = useWorkspaces()
@@ -318,6 +362,7 @@ const severityFilter = ref('all')
 const wsFilter = ref('')
 const showAllProblems = ref(false)
 const problemsPanel = ref(null)
+const spacesPanel = ref(null)
 
 watch([severityFilter, wsFilter], () => {
   showAllProblems.value = false
@@ -344,6 +389,26 @@ const weekChange = computed(() => {
     cost: change(cost, prevCost),
     cpa: conv && prevConv ? change(cost / conv, prevCost / prevConv) : null,
   }
+})
+
+function shiftDay(iso, days) {
+  const d = new Date(`${iso}T00:00:00Z`)
+  d.setUTCDate(d.getUTCDate() + days)
+  return d.toISOString().slice(0, 10)
+}
+
+function weekdayOf(iso) {
+  return new Date(`${iso}T00:00:00Z`).getUTCDay()
+}
+
+// Тот же день недели неделю назад — для карточек «Сегодня» и «Вчера».
+const weekAgo = computed(() => {
+  const find = (iso) => (iso ? byDay.value.find((r) => r.day === shiftDay(iso, -7)) || null : null)
+  return { today: find(data.value.today), yesterday: find(data.value.yesterday) }
+})
+const yesterdayChange = computed(() => {
+  const prev = weekAgo.value.yesterday?.cost_kopecks
+  return prev ? ((totals.value.spend_yesterday - prev) / prev) * 100 : null
 })
 
 function wsKey(id) {
@@ -405,6 +470,12 @@ const visibleProblems = computed(() =>
 
 function openWs(id) {
   router.push(`/w/${id}/summary`)
+}
+
+// Карточка «Горит» включает фильтр таблицы и прокручивает к ней — на телефоне таблица ниже экрана.
+function toggleOnlyProblems() {
+  onlyProblems.value = !onlyProblems.value
+  if (onlyProblems.value) spacesPanel.value?.scrollIntoView({ behavior: 'smooth', block: 'start' })
 }
 
 function focusWorkspace(id) {
