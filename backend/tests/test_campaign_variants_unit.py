@@ -44,14 +44,26 @@ def test_normalize_defaults_and_cleanup(monkeypatch):
     }
 
 
+def test_normalize_control_variant(monkeypatch):
+    monkeypatch.setattr(variants, "today_msk", lambda: TODAY)
+    out = variants.normalize_variants([{"control": True, "weekly_budget_rub": 1500}, {"schedule": "daytime"}], "Окна")
+    assert out[0] == {"n": 1, "name": "Контроль · 28.10", "idea": "", "label": "Контроль", "weekly_budget_rub": 1500,
+                      "control": True}
+    assert "control" not in out[1]
+
+
 @pytest.mark.parametrize(
     "raw, text",
     [
         ([], "variants — список вариантов, от 1 до 5"),
         ([{"schedule": "always"}] * 6, "Не больше 5 вариантов за раз — оставь самые сильные гипотезы"),
         ([{"idea": "просто копия"}], "Вариант 1 ничего не меняет — задай хотя бы одно: region_ids, schedule, "
-                                     "priority_goals, weekly_budget_rub, ads, keywords, groups; просто копия — "
-                                     "duplicate_campaign"),
+                                     "priority_goals, weekly_budget_rub, ads, keywords, groups; контрольная копия "
+                                     "без изменений — control: true; просто копия — duplicate_campaign"),
+        ([{"control": True, "schedule": "always", "keywords": ["окна"]}],
+         "Вариант 1: контрольная копия (control) повторяет оригинал — убери schedule, keywords"),
+        ([{"ads": {"mode": "add", "titles": ["Окна"], "texts": ["Т"], "title2": "Ещё"}}],
+         "Вариант 1: новые объявления комбинаторные — второго заголовка в них нет: добавь его в titles или убери title2"),
         ([{"name": "А", "schedule": "always"}, {"name": "а", "schedule": "daytime"}],
          "Вариант 2: название «а» уже занято — у вариантов разные названия"),
         ([{"schedule": "nights"}], "Вариант 1: schedule — одно из ['always', 'workdays', 'workhours', 'daytime']"),
@@ -379,6 +391,26 @@ def test_create_variant_group_not_copied_stays_a_draft(grouped, direct):
     assert out["ready"] is False and "moderate" not in _names(direct)
 
 
+def test_new_group_failure_says_what_is_already_made(grouped, direct):
+    direct.fail = {"create_ad"}
+    v = variants.normalize_variants([{"groups": GROUPS["groups"][3:]}], "Окна")
+    variants.check_source(1, {"id": 7, "name": "Окна"}, v)
+    out = variants.create_variant(1, 7, v[0], workspace_id=2, moderate=True)
+    assert out["errors"] == [
+        "новая группа «Балконы»: группа создана (adgroup_row_id 802), фраз добавлено 1; не встали: объявления — "
+        "готово 0, ошибки: группа «Балконы», «Балконы»: create_ad упал. Допиши их в эту группу, заново её не создавай"
+    ]
+    assert out["ready"] is False and "moderate" not in _names(direct)
+
+
+def test_new_group_regions_follow_the_campaign(monkeypatch):
+    groups = [{"id": 9, "region_ids": [2]}, {"id": 5, "region_ids": [213, -20279]}, {"id": 3, "region_ids": []}]
+    monkeypatch.setattr(adgroups, "list_adgroups", lambda user_id, cid: groups)
+    assert adgroups.campaign_regions(1, 7) == [213, -20279]
+    monkeypatch.setattr(adgroups, "list_adgroups", lambda user_id, cid: [])
+    assert adgroups.campaign_regions(1, 7) == [225]
+
+
 def test_plan_and_diff_for_groups(grouped, tool):
     args = {"campaign_row_id": 7, "variants": [{"name": "Окна — группы", **GROUPS}], "moderate": False}
     plan = ai_agent._p_create_variants(FakeContext(), args)
@@ -479,7 +511,7 @@ def test_plan_always_asks(tool):
     simple = ai_agent._p_create_variants(FakeContext(), {"campaign_row_id": 7, "variants": [{"schedule": "always"}],
                                                          "moderate": False})
     assert (simple.categories, simple.change_pct) == (["campaigns"], None)
-    assert "→ черновиками;" in simple.summary
+    assert "→ черновиками → без эксперимента;" in simple.summary
 
 
 def test_plan_refuses_budget_over_the_experiment_limit(tool):

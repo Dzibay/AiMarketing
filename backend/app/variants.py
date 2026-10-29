@@ -89,6 +89,10 @@ def _ads(raw, who: str) -> dict:
         raise YandexError("args", f"{who}: title2 длиннее {TITLE2_LEN} символов — сократи")
     if mode == "add" and not (titles and texts):
         raise YandexError("args", f"{who}: для нового объявления (mode=add) нужны titles и texts")
+    if mode == "add" and title2:
+        raise YandexError(
+            "args", f"{who}: новые объявления комбинаторные — второго заголовка в них нет: добавь его в titles или убери title2"
+        )
     if not titles and not texts:
         raise YandexError("args", f"{who}: в ads нет ни titles, ни texts")
     out = {"mode": mode, "titles": titles, "texts": texts, "title2": title2, "href": _text(raw.get("href"), 1024)}
@@ -215,7 +219,8 @@ def group_name(source_name: str, label: str) -> str:
 def _variant(item: dict, n: int, source_name: str) -> dict:
     who = f"Вариант {n}"
     idea = _text(item.get("idea"), 300)
-    label = short_label(item.get("label") or "") or short_label(idea)
+    control = item.get("control") in (True, 1, "true", "True")
+    label = short_label(item.get("label") or "") or short_label(idea) or ("Контроль" if control else "")
     name = _text(item.get("name"), 255) or default_name(label, n, source_name)
     v: dict = {"n": n, "name": name, "idea": idea}
     if label:
@@ -260,10 +265,17 @@ def _variant(item: dict, n: int, source_name: str) -> dict:
                 f"{who}: фразы и объявления задай либо на всю кампанию (ads, keywords), либо по группам (groups)",
             )
         v["groups"] = _groups(item["groups"], who)
-    if not any(k in v for k in CHANGE_KEYS):
+    if control:
+        # Контроль — копия как есть: стартует вместе с вариантами, сравнение с ней честнее, чем с оригиналом.
+        changed = [k for k in CHANGE_KEYS if k in v and k != "weekly_budget_rub"]
+        if changed:
+            raise YandexError("args", f"{who}: контрольная копия (control) повторяет оригинал — убери {', '.join(changed)}")
+        v["control"] = True
+    elif not any(k in v for k in CHANGE_KEYS):
         raise YandexError(
             "args",
-            f"{who} ничего не меняет — задай хотя бы одно: {', '.join(CHANGE_KEYS)}; просто копия — duplicate_campaign",
+            f"{who} ничего не меняет — задай хотя бы одно: {', '.join(CHANGE_KEYS)}; контрольная копия без изменений "
+            "— control: true; просто копия — duplicate_campaign",
         )
     return v
 
@@ -453,7 +465,6 @@ def _ads_in(user_id: int, groups: list[dict], ads: list[dict], spec: dict, fallb
                         user_id,
                         adgroup_row_id=int(group["id"]),
                         href=href,
-                        title2=spec["title2"],
                         titles=titles,
                         texts=spec["texts"],
                         extras=extras,
@@ -523,12 +534,14 @@ def _keywords_in(user_id: int, group: dict, spec: dict, existing: list[dict]) ->
     new = [p for p in spec["phrases"] if p.casefold() not in have]
     added = 0
     errors = 0
+    reason = ""
     for chunk in direct_api.chunks(new, KEYWORD_BATCH):
         result = create_keywords(user_id, adgroup_row_id=int(group["id"]), phrases=chunk, bid_rub=spec["bid_rub"])
         added += int(result["created"])
         errors += int(result["errors"])
+        reason = reason or result.get("message") or ""
     if errors:
-        raise YandexError("keywords", f"добавлено {added}, не прошли {errors}")
+        raise YandexError("keywords", f"добавлено {added}, не прошли {errors}" + (f": {reason}" if reason else ""))
     return {"added": added, "removed": removed, "group": group["name"]}
 
 
@@ -581,12 +594,29 @@ def _change_group(user_id: int, cid: int, row: dict, g: dict, label: str = "") -
 
 
 def _new_group(user_id: int, cid: int, g: dict, region_ids: list[int], href: str) -> dict:
+    """Новая группа с фразами и объявлениями. Группа в Директе появляется первой: если фразы или объявления
+    не встали, ошибка говорит, что уже создано, — чтобы группу дописали, а не создали второй раз."""
     from app.adgroups import create_adgroup
 
     row = create_adgroup(user_id, campaign_row_id=cid, name=g["name"], region_ids=region_ids or None)
-    keywords = _keywords_in(user_id, row, g["keywords"], [])
-    ads = _ads_in(user_id, [row], _live_ads(user_id, cid), g["ads"], href)
-    return {"group": row["name"], "keywords": keywords, **ads}
+    out: dict = {"group": row["name"], "adgroup_row_id": int(row["id"])}
+    done = [f"группа создана (adgroup_row_id {row['id']})"]
+    failed = []
+    try:
+        out["keywords"] = _keywords_in(user_id, row, g["keywords"], [])
+        done.append(f"фраз добавлено {out['keywords']['added']}")
+    except YandexError as exc:
+        failed.append(f"фразы — {exc.message or exc.code}")
+    try:
+        out.update(_ads_in(user_id, [row], _live_ads(user_id, cid), g["ads"], href))
+        done.append(f"объявлений {out['ads']}")
+    except YandexError as exc:
+        failed.append(f"объявления — {exc.message or exc.code}")
+    if failed:
+        raise YandexError(
+            "group", f"{', '.join(done)}; не встали: {'; '.join(failed)}. Допиши их в эту группу, заново её не создавай"
+        )
+    return out
 
 
 def _apply_groups(out: dict, user_id: int, source_row_id: int, cid: int, copy: dict, v: dict) -> None:

@@ -182,7 +182,7 @@
               <label>Заголовок 1 <span class="field-hint">{{ form.group.ad.title.length }}/56</span></label>
               <input v-model="form.group.ad.title" type="text" maxlength="56" />
             </div>
-            <div v-if="!unified" v-field class="field">
+            <div v-if="!responsiveAd" v-field class="field">
               <label>Заголовок 2 <span class="field-hint">{{ form.group.ad.title2.length }}/30</span></label>
               <input v-model="form.group.ad.title2" type="text" maxlength="30" />
             </div>
@@ -194,7 +194,7 @@
               <label>Текст <span class="field-hint">{{ form.group.ad.text.length }}/81</span></label>
               <textarea v-model="form.group.ad.text" rows="2" maxlength="81" />
             </div>
-            <template v-if="unified">
+            <template v-if="responsiveAd">
               <div v-field class="field field--wide">
                 <label>Ещё заголовки — по одному на строку, до 6 <span class="field-hint">до 56 символов</span></label>
                 <textarea v-model="form.group.ad.more_titles" rows="3" />
@@ -204,13 +204,13 @@
                 <textarea v-model="form.group.ad.more_texts" rows="2" />
               </div>
               <p class="field-hint field--wide">
-                В ЕПК объявление комбинаторное: Директ сам собирает показы из заголовков и текстов.
+                Объявление комбинаторное: Директ сам собирает показы из заголовков и текстов.
               </p>
             </template>
             <AdExtrasFields
               :extras="form.group.ad.extras"
               :account-id="form.account_id"
-              :max-images="unified ? 5 : 1"
+              :max-images="responsiveAd ? 5 : 1"
               :disabled="saving"
             />
           </template>
@@ -349,6 +349,8 @@ const manual = computed(
     (form.strategy.search === 'SERVING_OFF' && form.strategy.network === 'MAXIMUM_COVERAGE'),
 )
 const unified = computed(() => form.type === 'UNIFIED_CAMPAIGN')
+// Новые объявления текстовых кампаний и ЕПК Директ делает комбинаторными: до 7 заголовков, без второго.
+const responsiveAd = computed(() => ['TEXT_CAMPAIGN', 'UNIFIED_CAMPAIGN'].includes(form.type))
 // Недельный бюджет ручных ставок ЕПК заменяет дневной — оба Директ не принимает.
 const dailyBudget = computed(() => manual.value && !(unified.value && form.strategy.weekly_budget_rub))
 const typeLabel = computed(() => options.value?.types.find((t) => t.id === form.type)?.label || form.type)
@@ -420,7 +422,15 @@ function validate() {
     const ad = form.group.ad
     const partial = [ad.title, ad.text, ad.href].filter(Boolean).length
     if (partial && partial < 3) return 'Для объявления нужны заголовок, текст и ссылка — или оставьте все поля пустыми'
-    const extrasError = extrasProblem(ad.extras, unified.value ? 5 : 1)
+    if (partial && responsiveAd.value) {
+      const titles = lines(ad.more_titles)
+      const texts = lines(ad.more_texts)
+      if (titles.length > 6) return `Заголовков — не больше 7 вместе с первым, сейчас ${titles.length + 1}`
+      if (texts.length > 2) return `Текстов — не больше 3 вместе с первым, сейчас ${texts.length + 1}`
+      const long = titles.find((t) => t.length > 56) || texts.find((t) => t.length > 81)
+      if (long) return `«${long}» — ${long.length} символов, длиннее предела Директа: сократите`
+    }
+    const extrasError = extrasProblem(ad.extras, responsiveAd.value ? 5 : 1)
     if (extrasError) return extrasError
     if (form.group.region === 'custom' && !regionIds().length) return 'Укажите ID регионов'
   }
@@ -459,10 +469,10 @@ function buildSpec() {
     if (g.ad.title && g.ad.text && g.ad.href) {
       const { more_titles: moreTitles, more_texts: moreTexts, extras, ...ad } = g.ad
       if (!extrasEmpty(extras)) ad.extras = extrasPayload(extras)
-      if (unified.value) {
+      if (responsiveAd.value) {
         ad.title2 = ''
-        ad.titles = [ad.title, ...lines(moreTitles)].slice(0, 7)
-        ad.texts = [ad.text, ...lines(moreTexts)].slice(0, 3)
+        ad.titles = [ad.title, ...lines(moreTitles)]
+        ad.texts = [ad.text, ...lines(moreTexts)]
       }
       spec.group.ad = ad
     }

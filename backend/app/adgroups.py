@@ -187,6 +187,14 @@ def list_adgroups(user_id: int, campaign_row_id: int) -> list[dict]:
     return [_public(r) for r in rows]
 
 
+def campaign_regions(user_id: int, campaign_row_id: int) -> list[int]:
+    """Регионы новой группы, когда их не задали: как у первой группы кампании, групп нет — Россия."""
+    groups = [g for g in list_adgroups(user_id, campaign_row_id) if g["region_ids"]]
+    if not groups:
+        return [225]
+    return [int(r) for r in min(groups, key=lambda g: int(g["id"]))["region_ids"]]
+
+
 def create_adgroup(
     user_id: int,
     *,
@@ -198,7 +206,7 @@ def create_adgroup(
     if not name_n:
         raise YandexError("empty")
     camp = _campaign_row(user_id, campaign_row_id)
-    regions = region_ids if region_ids else [225]  # Россия
+    regions = region_ids if region_ids else campaign_regions(user_id, campaign_row_id)
     token = get_connection_access_token(camp["connection_id"], user_id)
     group: dict = {"Name": name_n, "CampaignId": int(camp["campaign_id"]), "RegionIds": regions}
     # В ЕПК группа — UNIFIED_AD_GROUP, у неё обязательный OfferRetargeting.

@@ -79,7 +79,10 @@ def _for_ai(value):
 def _dump(value, limit: int = TOOL_RESULT_LIMIT) -> str:
     text = json.dumps(_for_ai(value), ensure_ascii=False, default=str)
     if len(text) > limit:
-        text = text[:limit] + "… [обрезано]"
+        text = (
+            text[:limit] + f"… [ответ обрезан: показано {limit} из {len(text)} знаков — об остальном выводов не "
+            "делай, запроси по частям или скажи, что видел не всё]"
+        )
     return text
 
 
@@ -114,6 +117,39 @@ def _names(rows: list[dict], limit: int = 3) -> str:
     names = [f"«{r.get('name') or r.get('keyword') or r.get('title') or r.get('query') or r['id']}»" for r in rows]
     text = ", ".join(names[:limit])
     return text + (f" и ещё {len(names) - limit}" if len(names) > limit else "")
+
+
+def _cname(row: dict) -> str:
+    """«Название» кампании для карточки; у одноимённых в пространстве — с номером кампании, как в Директе."""
+    return f"«{row['name']}»" + (f" №{row['campaign_id']}" if row.get("twin") and row.get("campaign_id") else "")
+
+
+def _cnames(rows: list[dict], limit: int = 3) -> str:
+    return _preview([_cname(r) for r in rows], limit)
+
+
+def _split_new(phrases: list[str], existing: list[str]) -> tuple[list[str], list[str]]:
+    """Фразы → (новые, уже есть); повторы внутри запроса не считаем."""
+    from app.negative_lists import phrase_key
+
+    known = {phrase_key(p) for p in existing}
+    seen: set[str] = set()
+    new: list[str] = []
+    already: list[str] = []
+    for phrase in phrases:
+        key = phrase_key(phrase)
+        if key in seen:
+            continue
+        seen.add(key)
+        (already if key in known else new).append(phrase)
+    return new, already
+
+
+def _added(new: list[str], already: list[str], limit: int) -> str:
+    """«+7 (13 уже есть): а, б…» — сколько фраз действительно добавится."""
+    if not new:
+        return "+0 — " + ("фраза уже есть" if len(already) == 1 else f"все {len(already)} уже есть")
+    return f"+{len(new)}" + (f" ({len(already)} уже есть)" if already else "") + f": {_preview(new, limit)}"
 
 
 def _ids(args: dict, key: str) -> list[int]:
@@ -248,12 +284,16 @@ class Context:
             rows = conn.execute(
                 """
                 SELECT c.id, c.campaign_id, c.name, c.state, c.status, c.campaign_type,
-                       c.daily_budget_kopecks, c.account_id
+                       c.daily_budget_kopecks, c.account_id,
+                       EXISTS (
+                           SELECT 1 FROM direct_campaigns o
+                           WHERE o.user_id = c.user_id AND o.id = ANY(%s) AND o.id <> c.id AND o.name = c.name
+                       ) AS twin
                 FROM direct_campaigns c
                 WHERE c.user_id = %s AND c.id = ANY(%s)
-                ORDER BY c.name
+                ORDER BY c.name, c.id
                 """,
-                (self.user_id, ids),
+                (sorted(allowed), self.user_id, ids),
             ).fetchall()
         return rows
 
@@ -287,7 +327,7 @@ class Context:
     def ads(self, ids: list[int]) -> list[dict]:
         return self._scoped(
             """
-            SELECT ad.id, ad.title, g.campaign_row_id
+            SELECT ad.id, ad.title, ad.type, ad.account_id, ad.adgroup_row_id, g.campaign_row_id
             FROM direct_ads ad JOIN direct_adgroups g ON g.id = ad.adgroup_row_id
             WHERE ad.user_id = %s AND ad.id = ANY(%s)
             """,
@@ -297,7 +337,11 @@ class Context:
 
     def adgroup(self, adgroup_row_id: int) -> dict:
         return self._scoped(
-            "SELECT g.id, g.name, g.campaign_row_id FROM direct_adgroups g WHERE g.user_id = %s AND g.id = ANY(%s)",
+            """
+            SELECT g.id, g.name, g.type, g.account_id, g.campaign_row_id, c.campaign_type
+            FROM direct_adgroups g JOIN direct_campaigns c ON c.id = g.campaign_row_id
+            WHERE g.user_id = %s AND g.id = ANY(%s)
+            """,
             [adgroup_row_id],
             "Группы",
         )[0]
@@ -372,6 +416,39 @@ def _t_campaigns(ctx: Context, args: dict) -> dict:
     }
 
 
+# Сколько знаков JSON get_campaign отдаёт на раздел. Вместе они влезают в TOOL_RESULT_LIMIT: иначе ответ
+# обрезался бы посреди объявлений, и модель решила бы, что видела всё.
+CAMPAIGN_BUDGET = {"negatives": 1000, "adgroups": 2500, "ads": 4300, "keywords": 2200}
+CAMPAIGN_PARTS = {"adgroups": "группы", "ads": "объявления", "keywords": "фразы"}
+
+
+def _offset(args: dict, key: str) -> int:
+    try:
+        return max(0, int(args.get(key) or 0))
+    except (TypeError, ValueError) as exc:
+        raise YandexError("args", f"{key} — число") from exc
+
+
+def _fit(items: list, offset: int, budget: int) -> list:
+    """Элементы начиная с offset, сколько влезает в budget знаков JSON (хотя бы один)."""
+    out: list = []
+    used = 0
+    for item in items[offset:]:
+        used += len(json.dumps(_for_ai(item), ensure_ascii=False, default=str)) + 1
+        if out and used > budget:
+            break
+        out.append(item)
+    return out
+
+
+def _ad_brief(ad: dict) -> dict:
+    out = {k: ad[k] for k in ("id", "adgroup_row_id", "type", "state", "status", "titles", "texts")}
+    if ad["title2"]:
+        out["title2"] = ad["title2"]
+    out.update(href=ad["href"], sitelinks=bool(ad.get("sitelink_set_id")), images=len(ad["image_hashes"]))
+    return out
+
+
 def _t_campaign(ctx: Context, args: dict) -> dict:
     from app.adgroups import list_adgroups
     from app.ads import list_ads
@@ -380,31 +457,86 @@ def _t_campaign(ctx: Context, args: dict) -> dict:
 
     cid = _int(args, "campaign_row_id")
     ctx.campaign(cid)
-    keywords = list_keywords(ctx.user_id, campaign_row_id=cid)
+    groups = list_adgroups(ctx.user_id, cid)
+    if args.get("adgroup_row_ids"):
+        wanted = set(_ids(args, "adgroup_row_ids"))
+        unknown = wanted - {int(g["id"]) for g in groups}
+        if unknown:
+            raise YandexError("args", f"В кампании нет групп {sorted(unknown)}")
+        groups = [g for g in groups if int(g["id"]) in wanted]
+    in_groups = {int(g["id"]) for g in groups}
+    ads = [a for a in list_ads(ctx.user_id, campaign_row_id=cid) if int(a["adgroup_row_id"]) in in_groups]
+    archived = sum(1 for a in ads if a["state"] == "ARCHIVED")
+    ads = sorted((a for a in ads if a["state"] != "ARCHIVED"), key=lambda a: (int(a["adgroup_row_id"]), int(a["id"])))
+    keywords = [k for k in list_keywords(ctx.user_id, campaign_row_id=cid) if int(k["adgroup_row_id"]) in in_groups]
     keywords.sort(key=lambda k: (k.get("period_cost_kopecks") or 0, k.get("period_clicks") or 0), reverse=True)
-    ads = list_ads(ctx.user_id, campaign_row_id=cid)
-    return {
-        "campaign": get_campaign(ctx.user_id, cid),
-        "adgroups": list_adgroups(ctx.user_id, cid)[:100],
-        "ads": [
-            {k: a.get(k) for k in (
-                "id", "adgroup_row_id", "type", "state", "status", "title", "title2", "text", "titles", "texts", "href",
-            )}
-            for a in ads[:100]
-        ],
-        "keywords_total": len(keywords),
-        "keywords": [
+
+    per_group: dict[str, dict[int, int]] = {"ads": {}, "keywords": {}}
+    for part, rows in (("ads", ads), ("keywords", keywords)):
+        for r in rows:
+            gid = int(r["adgroup_row_id"])
+            per_group[part][gid] = per_group[part].get(gid, 0) + 1
+    groups.sort(key=lambda g: (-(g.get("period_cost_kopecks") or 0), int(g["id"])))
+    rows: dict[str, list[dict]] = {
+        "adgroups": [
             {
-                k: kw.get(k)
-                for k in (
-                    "id", "adgroup_row_id", "adgroup_name", "keyword", "state", "status", "bid_rub",
-                    "period_impressions", "period_clicks", "period_cost_kopecks", "period_conversions",
-                    "period_cpa_rub", "stats_from", "stats_to",
-                )
+                **{k: g[k] for k in ("id", "name", "status", "type", "region_ids")},
+                "negative_keywords": g["negative_keywords"][:10],
+                "negative_keywords_total": len(g["negative_keywords"]),
+                "ads": per_group["ads"].get(int(g["id"]), 0),
+                "keywords": per_group["keywords"].get(int(g["id"]), 0),
+                **{k: g[k] for k in ("period_impressions", "period_clicks", "period_cost_kopecks", "period_conversions")},
             }
-            for kw in keywords[:150]
+            for g in groups
+        ],
+        "ads": [],
+        "keywords": [
+            {k: kw.get(k) for k in (
+                "id", "adgroup_row_id", "keyword", "state", "status", "bid_rub", "period_impressions", "period_clicks",
+                "period_cost_kopecks", "period_conversions", "period_cpa_rub",
+            )}
+            for kw in keywords
         ],
     }
+    # Одинаковые объявления — ссылкой на первое такое же: длинные комбинаторные тексты не повторяем.
+    first: dict[str, int] = {}
+    for ad in ads:
+        brief = _ad_brief(ad)
+        head = {k: brief.pop(k) for k in ("id", "adgroup_row_id", "state", "status")}
+        same = json.dumps(brief, ensure_ascii=False, sort_keys=True)
+        if same in first:
+            rows["ads"].append(head | {"same_as": first[same]})
+        else:
+            first[same] = head["id"]
+            rows["ads"].append(head | brief)
+
+    camp = get_campaign(ctx.user_id, cid) or {}
+    negatives = camp.get("negative_keywords") or []
+    camp["negative_keywords"] = _fit(negatives, 0, CAMPAIGN_BUDGET["negatives"])
+    camp["negative_keywords_total"] = len(negatives)
+    stats = next((r for r in (*groups, *keywords) if r.get("stats_from")), None)
+    out: dict = {"campaign": camp, "stats_period": f"{stats['stats_from']} — {stats['stats_to']}" if stats else None}
+    cut = []
+    for part, label in CAMPAIGN_PARTS.items():
+        start = _offset(args, f"{part}_offset")
+        shown = _fit(rows[part], start, CAMPAIGN_BUDGET[part])
+        end, total = start + len(shown), len(rows[part])
+        out[f"{part}_total"] = total
+        out[part] = shown
+        if start >= total > 0:
+            cut.append(f"{label}: всего {total}, с {start + 1}-й ничего нет")
+        elif start or end < total:
+            cut.append(f"{label} {start + 1}–{end} из {total}" + (f" (дальше — {part}_offset={end})" if end < total else ""))
+    out["ads_archived"] = archived
+    out["ads_duplicates"] = sum(1 for a in rows["ads"] if "same_as" in a)
+    if len(negatives) > len(camp["negative_keywords"]):
+        cut.append(f"минус-фразы кампании {len(camp['negative_keywords'])} из {len(negatives)} (все — get_campaign_settings)")
+    if cut:
+        out["not_all_shown"] = (
+            "Показано не всё: " + "; ".join(cut) + ". Об остальном выводов не делай — дозапроси (можно только нужные "
+            "группы: adgroup_row_ids) или скажи маркетологу, что смотрел часть."
+        )
+    return out
 
 
 def _t_settings(ctx: Context, args: dict) -> dict:
@@ -643,6 +775,34 @@ def _t_links(ctx: Context, args: dict) -> dict:
     return out
 
 
+def _t_ad_extras(ctx: Context, args: dict) -> dict:
+    from app.ads import read_ad_extras
+
+    row = ctx.ads([_int(args, "ad_row_id")])[0]
+    out = read_ad_extras(ctx.user_id, int(row["id"]))
+    return {
+        "ad_row_id": row["id"],
+        "type": out["type"],
+        "sitelinks": out["sitelinks"],
+        "callouts": out["callouts"],
+        "image_hashes": out["image_hashes"],
+        "max_images": out["max_images"],
+    }
+
+
+def _t_ad_images(ctx: Context, args: dict) -> dict:
+    from app.ads import campaign_images
+
+    cid = _int(args, "campaign_row_id")
+    ctx.campaign(cid)
+    out = campaign_images(ctx.user_id, cid)
+    out["hint"] = (
+        "Хэш картинки — в extras.image_hashes объявления. in_campaign — картинки, что уже стоят в объявлениях "
+        "кампании (ads — в скольких); library — остальные картинки кабинета"
+    )
+    return out
+
+
 READ_TOOLS = {
     "get_workspace_summary": _t_summary,
     "get_analytics": _t_analytics,
@@ -663,6 +823,8 @@ READ_TOOLS = {
     "get_headline_stats": _t_headlines,
     "get_slices": _t_slices,
     "check_links": _t_links,
+    "get_ad_extras": _t_ad_extras,
+    "list_ad_images": _t_ad_images,
 }
 
 
@@ -691,7 +853,7 @@ def _p_campaigns_action(ctx: Context, args: dict) -> Plan:
     if action not in BULK_ACTIONS:
         raise YandexError("args", f"action — одно из {sorted(BULK_ACTIONS)}")
     rows = ctx.campaigns(_ids(args, "campaign_row_ids"))
-    summary = f"{_CAMPAIGN_VERBS[action]}: {_names(rows)}"
+    summary = f"{_CAMPAIGN_VERBS[action]}: {_cnames(rows)}"
     if action in ("pause", "resume"):
         return Plan(summary, ["pause_resume"])
     if action != "set_budget":
@@ -760,7 +922,7 @@ def _p_update_settings(ctx: Context, args: dict) -> Plan:
         change = _pct_change(row["daily_budget_kopecks"], float(new) * 100) if new else math.inf
     if "negative_keywords" in changes:
         cats.append("negatives")
-    return Plan(f"Настройки «{row['name']}»: " + ", ".join(parts), cats, change)
+    return Plan(f"Настройки {_cname(row)}: " + ", ".join(parts), cats, change)
 
 
 def _x_update_settings(ctx: Context, args: dict) -> dict:
@@ -771,11 +933,19 @@ def _x_update_settings(ctx: Context, args: dict) -> dict:
     return update_campaign_settings(ctx.user_id, cid, dict(args["changes"]))
 
 
+def _campaign_negatives(ctx: Context, campaign_row_id: int) -> list[str]:
+    """Минус-фразы кампании по последнему синку."""
+    with pool.connection() as conn:
+        row = conn.execute(
+            "SELECT negative_keywords FROM direct_campaigns WHERE user_id = %s AND id = %s", (ctx.user_id, campaign_row_id)
+        ).fetchone()
+    return _json_list((row or {}).get("negative_keywords"))
+
+
 def _p_add_negatives(ctx: Context, args: dict) -> Plan:
     row = ctx.campaign(_int(args, "campaign_row_id"))
-    phrases = _phrases(args)
-    preview = ", ".join(phrases[:6]) + (f" и ещё {len(phrases) - 6}" if len(phrases) > 6 else "")
-    return Plan(f"Минус-фразы кампании «{row['name']}»: +{len(phrases)} ({preview})", ["negatives"])
+    new, already = _split_new(_phrases(args), _campaign_negatives(ctx, int(row["id"])))
+    return Plan(f"Минус-фразы кампании {_cname(row)}: {_added(new, already, 6)}", ["negatives"])
 
 
 def _x_add_negatives(ctx: Context, args: dict) -> dict:
@@ -788,7 +958,7 @@ def _x_add_negatives(ctx: Context, args: dict) -> dict:
     result = add_negatives_logged(
         ctx.user_id,
         campaigns={cid: {"add": phrases}},
-        title=f"Минус-фразы кампании «{row['name']}»",
+        title=f"Минус-фразы кампании {_cname(row)}",
         payload={"phrases": phrases[:50]},
     )
     added = (result["campaigns"].get(cid) or {}).get("added") or []
@@ -836,7 +1006,7 @@ def _p_duplicate(ctx: Context, args: dict) -> Plan:
         account = ctx.require_account(_int(args, "target_account_id"))
         where = f" в кабинет {account['client_login']}"
     name = str(args.get("name") or "").strip()
-    return Plan(f"Копия кампании «{row['name']}»{where}" + (f" под именем «{name}»" if name else ""), ["campaigns"])
+    return Plan(f"Копия кампании {_cname(row)}{where}" + (f" под именем «{name}»" if name else ""), ["campaigns"])
 
 
 def _x_duplicate(ctx: Context, args: dict) -> dict:
@@ -858,7 +1028,7 @@ def _x_duplicate(ctx: Context, args: dict) -> dict:
 
 def _p_moderate(ctx: Context, args: dict) -> Plan:
     row = ctx.campaign(_int(args, "campaign_row_id"))
-    return Plan(f"Отправить на модерацию «{row['name']}»", ["campaigns"])
+    return Plan(f"Отправить на модерацию {_cname(row)}", ["campaigns"])
 
 
 def _x_moderate(ctx: Context, args: dict) -> dict:
@@ -875,8 +1045,8 @@ def _p_restart(ctx: Context, args: dict) -> Plan:
     steps = [f"копия «{name}» в том же кабинете", "на модерацию"]
     if _bool(args, "pause_source", True):
         steps.append("оригинал на паузу")
-        return Plan(f"Перезапуск «{row['name']}» копией: " + " → ".join(steps), ["campaigns", "pause_resume"])
-    return Plan(f"Перезапуск «{row['name']}» копией: " + " → ".join(steps) + ", оригинал работает", ["campaigns"])
+        return Plan(f"Перезапуск {_cname(row)} копией: " + " → ".join(steps), ["campaigns", "pause_resume"])
+    return Plan(f"Перезапуск {_cname(row)} копией: " + " → ".join(steps) + ", оригинал работает", ["campaigns"])
 
 
 def _x_restart(ctx: Context, args: dict) -> dict:
@@ -952,7 +1122,7 @@ def _p_copy_geo(ctx: Context, args: dict) -> Plan:
     steps = [f"копия «{_geo_name(row, region_ids, args, regions)}»{where}", geo.region_label(region_ids, regions)]
     if _bool(args, "moderate", True):
         steps.append("на модерацию")
-    return Plan(f"Копия «{row['name']}» на новое гео: " + " → ".join(steps) + "; оригинал работает", ["campaigns"])
+    return Plan(f"Копия {_cname(row)} на новое гео: " + " → ".join(steps) + "; оригинал работает", ["campaigns"])
 
 
 def _x_copy_geo(ctx: Context, args: dict) -> dict:
@@ -1019,7 +1189,7 @@ def _experiment_args(ctx: Context, args: dict) -> tuple[dict, list[dict], dict |
     source = ctx.campaign(d["source_campaign_row_id"]) if d["source_campaign_row_id"] else None
     busy = experiments.busy_campaigns(ctx.user_id, ctx.ws_id)
     taken = [
-        f"«{r['name']}» — в #{busy[int(r['id'])]['id']} «{busy[int(r['id'])]['title']}»"
+        f"{_cname(r)} — в #{busy[int(r['id'])]['id']} «{busy[int(r['id'])]['title']}»"
         for r in rows
         if int(r["id"]) in busy
     ]
@@ -1037,7 +1207,7 @@ def _p_start_experiment(ctx: Context, args: dict) -> Plan:
     set_limit = _bool(args, "set_limit", True)
     limit = f"лимит {_money(d['weekly_budget_rub'])}/нед. на кампанию" + ("" if set_limit else " (ставит маркетолог)")
     summary = (
-        f"Эксперимент «{d['title']}»: {_names(rows)}, {limit}, {_count(d['days'], 'день', 'дня', 'дней')}, "
+        f"Эксперимент «{d['title']}»: {_cnames(rows)}, {limit}, {_count(d['days'], 'день', 'дня', 'дней')}, "
         f"успех — {experiments.criterion_text(d)}"
     )
     if set_limit:
@@ -1096,14 +1266,16 @@ def _variants_args(ctx: Context, args: dict) -> tuple[dict, list[dict], dict | N
 
 def _p_create_variants(ctx: Context, args: dict) -> Plan:
     row, items, exp = _variants_args(ctx, args)
-    names = ", ".join(f"«{v['name']}»" for v in items)
-    steps = [f"{_count(len(items), 'вариант', 'варианта', 'вариантов')} «{row['name']}»: {names}"]
+    names = ", ".join(f"«{v['name']}»" + (" (контроль)" if v.get("control") else "") for v in items)
+    steps = [f"{_count(len(items), 'вариант', 'варианта', 'вариантов')} {_cname(row)}: {names}"]
     steps.append("на модерацию" if _bool(args, "moderate", False) else "черновиками")
     if exp:
         steps.append(
             f"эксперимент «{exp['title']}», лимит {_money(exp['weekly_budget_rub'])}/нед. на вариант, "
             f"{_count(exp['days'], 'день', 'дня', 'дней')}, успех — {experiments.criterion_text(exp)}"
         )
+    else:
+        steps.append("без эксперимента")
     summary = "Варианты кампании: " + " → ".join(steps) + "; оригинал работает"
     categories = ["campaigns"]
     parts = [*items, *(g for v in items for g in v.get("groups") or [])]
@@ -1197,7 +1369,7 @@ def _p_create_adgroup(ctx: Context, args: dict) -> Plan:
     name = str(args.get("name") or "").strip()
     if not name:
         raise YandexError("args", "Укажите name группы")
-    return Plan(f"Новая группа «{name}» в кампании «{row['name']}»", ["campaigns"])
+    return Plan(f"Новая группа «{name}» в кампании {_cname(row)}", ["campaigns"])
 
 
 def _x_create_adgroup(ctx: Context, args: dict) -> dict:
@@ -1237,13 +1409,23 @@ def _x_keywords_action(ctx: Context, args: dict) -> dict:
     return bulk_keyword_action(ctx.user_id, keyword_row_ids=ids, action=str(args["action"]), bid_rub=_float(args, "bid_rub"))
 
 
+def _group_keywords(ctx: Context, adgroup_row_id: int) -> list[str]:
+    with pool.connection() as conn:
+        return [
+            r["keyword"]
+            for r in conn.execute(
+                "SELECT keyword FROM direct_keywords WHERE user_id = %s AND adgroup_row_id = %s",
+                (ctx.user_id, adgroup_row_id),
+            ).fetchall()
+        ]
+
+
 def _p_add_keywords(ctx: Context, args: dict) -> Plan:
     group = ctx.adgroup(_int(args, "adgroup_row_id"))
-    phrases = _phrases(args)
-    preview = ", ".join(phrases[:5]) + (f" и ещё {len(phrases) - 5}" if len(phrases) > 5 else "")
+    new, already = _split_new(_phrases(args), _group_keywords(ctx, int(group["id"])))
     bid = _float(args, "bid_rub")
     return Plan(
-        f"Добавить {len(phrases)} фраз в группу «{group['name']}»: {preview}" + (f" (ставка {bid:g} ₽)" if bid else ""),
+        f"Фразы в группу «{group['name']}»: {_added(new, already, 5)}" + (f" (ставка {bid:g} ₽)" if bid and new else ""),
         ["keywords"],
     )
 
@@ -1301,34 +1483,114 @@ def _variants(args: dict, key: str) -> list[str] | None:
     return [str(v).strip() for v in value if str(v or "").strip()]
 
 
-def _p_create_ad(ctx: Context, args: dict) -> Plan:
+def _new_ad(ctx: Context, args: dict) -> tuple[dict, str, list[str], list[str]]:
+    """Группа, тип нового объявления и его варианты — с проверкой пределов Директа, без обрезки."""
+    from app.ads import MAX_TEXTS, MAX_TITLES, TEXT_LEN, TITLE_LEN, clean_title2, clean_variants, new_ad_type
+
     group = ctx.adgroup(_int(args, "adgroup_row_id"))
-    titles = _variants(args, "titles") or [str(args.get("title") or "").strip()]
-    texts = _variants(args, "texts") or [str(args.get("text") or "").strip()]
-    if not titles[0]:
+    ad_type = new_ad_type(group)
+    responsive = ad_type == "RESPONSIVE_AD"
+    titles = clean_variants(
+        _variants(args, "titles") or [args.get("title")], MAX_TITLES if responsive else 1, TITLE_LEN, "заголовков"
+    )
+    texts = clean_variants(_variants(args, "texts") or [args.get("text")], MAX_TEXTS if responsive else 1, TEXT_LEN, "текстов")
+    if not titles:
         raise YandexError("args", "Укажите title или titles")
-    if not texts[0]:
+    if not texts:
         raise YandexError("args", "Укажите text или texts")
+    if responsive and str(args.get("title2") or "").strip():
+        raise YandexError(
+            "args",
+            "Новое объявление в этой группе комбинаторное — второго заголовка в нём нет: "
+            "добавь его в titles отдельным вариантом или убери title2",
+        )
+    clean_title2(args.get("title2"))
+    return group, ad_type, titles, texts
+
+
+def _ad_extras_args(ctx: Context, args: dict, ad_type: str, account_id: int, *, fetch: bool = False) -> dict | None:
+    """extras и extras_from_ad_row_id → extras для ads: свои ключи важнее взятых у другого объявления.
+    fetch=False — только проверка для карточки, без запросов в Директ."""
+    from app import ad_extras
+    from app.ads import extras_like
+
+    raw = args.get("extras")
+    if raw is not None and not isinstance(raw, dict):
+        raise YandexError("args", "extras — объект {sitelinks, callouts, image_hashes}")
+    own = {k: v for k, v in (raw or {}).items() if k in ("sitelinks", "callouts", "image_hashes") and v is not None}
+    for key, value in own.items():
+        if not isinstance(value, list):
+            raise YandexError("args", f"extras.{key} — список")
+    if not all(isinstance(link, dict) for link in own.get("sitelinks") or []):
+        raise YandexError("args", "extras.sitelinks — список объектов {title, href, description}")
+    out: dict = {}
+    source = args.get("extras_from_ad_row_id")
+    if source not in (None, ""):
+        src = ctx.ads([int(source)])[0]
+        if int(src["account_id"]) != int(account_id):
+            raise YandexError("args", "Расширения можно взять только у объявления из того же кабинета")
+        if fetch:
+            out = extras_like(ctx.user_id, int(src["id"]))
+    out.update(own)
+    ad_extras.clean_extras(out, ad_type)
+    return out or None
+
+
+def _has_extras(args: dict) -> bool:
+    if args.get("extras_from_ad_row_id") not in (None, ""):
+        return True
+    extras = args.get("extras")
+    return isinstance(extras, dict) and any(extras.get(k) is not None for k in ("sitelinks", "callouts", "image_hashes"))
+
+
+def _twin_ads(ctx: Context, campaign_row_id: int, titles: list[str], texts: list[str]) -> list[dict]:
+    """Объявления кампании с теми же заголовками и текстами, в любом порядке."""
+    key = (sorted(titles), sorted(texts))
+    with pool.connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT ad.id, ad.title, ad.text, ad.titles, ad.texts, ad.adgroup_row_id, g.name AS adgroup_name
+            FROM direct_ads ad JOIN direct_adgroups g ON g.id = ad.adgroup_row_id
+            WHERE ad.user_id = %s AND g.campaign_row_id = %s AND ad.state <> 'ARCHIVED'
+            """,
+            (ctx.user_id, campaign_row_id),
+        ).fetchall()
+    return [
+        r
+        for r in rows
+        if (sorted(_json_list(r["titles"]) or [r["title"]]), sorted(_json_list(r["texts"]) or [r["text"]])) == key
+    ]
+
+
+def _p_create_ad(ctx: Context, args: dict) -> Plan:
+    group, ad_type, titles, texts = _new_ad(ctx, args)
     if not str(args.get("href") or "").strip():
         raise YandexError("args", "Укажите href")
-    more = f" (+{len(titles) - 1} заг., +{len(texts) - 1} текст.)" if len(titles) + len(texts) > 2 else ""
+    if any(r["adgroup_row_id"] == group["id"] for r in _twin_ads(ctx, group["campaign_row_id"], titles, texts)):
+        raise YandexError(
+            "args",
+            f"В группе «{group['name']}» уже есть объявление с теми же заголовками и текстами — второе такое же "
+            "ничего не добавит. Поменяй формулировки или не создавай его",
+        )
+    _ad_extras_args(ctx, args, ad_type, group["account_id"])
+    more = ""
+    if len(titles) + len(texts) > 2:
+        more = f" ({_count(len(titles), 'заголовок', 'заголовка', 'заголовков')}, {_count(len(texts), 'текст', 'текста', 'текстов')})"
     return Plan(f"Объявление в группу «{group['name']}»: «{titles[0]}» — {texts[0]}{more}", ["ads"])
 
 
 def _x_create_ad(ctx: Context, args: dict) -> dict:
     from app.ads import create_text_ad
 
-    group_id = _int(args, "adgroup_row_id")
-    ctx.adgroup(group_id)
+    group, ad_type, titles, texts = _new_ad(ctx, args)
     return create_text_ad(
         ctx.user_id,
-        adgroup_row_id=group_id,
-        title=str(args.get("title") or ""),
+        adgroup_row_id=int(group["id"]),
         title2=str(args.get("title2") or ""),
-        text=str(args.get("text") or ""),
         href=str(args["href"]),
-        titles=_variants(args, "titles"),
-        texts=_variants(args, "texts"),
+        titles=titles,
+        texts=texts,
+        extras=_ad_extras_args(ctx, args, ad_type, group["account_id"], fetch=True),
     )
 
 
@@ -1336,28 +1598,86 @@ _AD_FIELDS = ("title", "title2", "text", "href", "titles", "texts")
 
 
 def _p_update_ad(ctx: Context, args: dict) -> Plan:
+    from app.ads import MAX_TEXTS, MAX_TITLES, TEXT_LEN, TITLE_LEN, clean_title2, clean_variants
+
     row = ctx.ads([_int(args, "ad_row_id")])[0]
     fields = [k for k in _AD_FIELDS if args.get(k) is not None]
-    if not fields:
-        raise YandexError("args", "Укажите, что поменять: title, title2, text, href, titles или texts")
-    for key in ("titles", "texts"):
-        if args.get(key) is not None and not _variants(args, key):
+    if not fields and not _has_extras(args):
+        raise YandexError("args", "Укажите, что поменять: title, title2, text, href, titles, texts или extras")
+    # Точные пределы — по типу из Директа при выполнении: тип в базе мог устареть.
+    for key, limit, length, what in (("titles", MAX_TITLES, TITLE_LEN, "заголовков"), ("texts", MAX_TEXTS, TEXT_LEN, "текстов")):
+        if args.get(key) is not None and not clean_variants(_variants(args, key), limit, length, what):
             raise YandexError("args", f"{key} не может быть пустым")
-    return Plan(f"Правка объявления «{row['title']}»: {', '.join(fields)}", ["ads"])
+    for key, length in (("title", TITLE_LEN), ("text", TEXT_LEN)):
+        if args.get(key) is not None:
+            clean_variants([args[key]], 1, length)
+    if args.get("title2") is not None:
+        if row["type"] == "RESPONSIVE_AD":
+            raise YandexError(
+                "args", "Объявление комбинаторное — второго заголовка в нём нет: добавь его в titles отдельным вариантом"
+            )
+        clean_title2(args["title2"])
+    _ad_extras_args(ctx, args, row["type"] or "TEXT_AD", row["account_id"])
+    what = fields + (["расширения"] if _has_extras(args) else [])
+    return Plan(f"Правка объявления «{row['title']}»: {', '.join(what)}", ["ads"])
 
 
 def _x_update_ad(ctx: Context, args: dict) -> dict:
     from app.ads import update_text_ad
 
-    ad_id = _int(args, "ad_row_id")
-    ctx.ads([ad_id])
+    row = ctx.ads([_int(args, "ad_row_id")])[0]
     return update_text_ad(
         ctx.user_id,
-        ad_id,
+        int(row["id"]),
         **{k: str(args[k]) for k in ("title", "title2", "text", "href") if args.get(k) is not None},
         titles=_variants(args, "titles"),
         texts=_variants(args, "texts"),
+        extras=_ad_extras_args(ctx, args, row["type"] or "TEXT_AD", row["account_id"], fetch=True),
     )
+
+
+MAX_BULK_ADS = 30
+
+
+def _ad_items(ctx: Context, args: dict) -> list[tuple[dict, dict]]:
+    """Правки update_text_ads с объявлениями из базы, в порядке items."""
+    items = args.get("items")
+    if not isinstance(items, list) or not items or not all(isinstance(i, dict) for i in items):
+        raise YandexError("args", "items — непустой список правок {ad_row_id, поля}")
+    if len(items) > MAX_BULK_ADS:
+        raise YandexError("args", f"За раз — до {MAX_BULK_ADS} объявлений")
+    ids = [_int(i, "ad_row_id") for i in items]
+    if len(set(ids)) < len(ids):
+        raise YandexError("args", "Одно объявление указано дважды — собери его правки в одну запись")
+    rows = {int(r["id"]): r for r in ctx.ads(ids)}
+    return [(item, rows[i]) for item, i in zip(items, ids)]
+
+
+def _ad_name(row: dict) -> str:
+    return f"«{row['title'] or row['id']}»"
+
+
+def _p_update_ads(ctx: Context, args: dict) -> Plan:
+    pairs = _ad_items(ctx, args)
+    for item, row in pairs:
+        try:
+            _p_update_ad(ctx, item)
+        except YandexError as exc:
+            raise YandexError("args", f"Объявление {_ad_name(row)}: {exc.message or exc.code}") from exc
+    return Plan(f"Правка {_count(len(pairs), 'объявления', 'объявлений', 'объявлений')}: {_names([r for _i, r in pairs])}", ["ads"])
+
+
+def _x_update_ads(ctx: Context, args: dict) -> dict:
+    done, failed = [], []
+    for item, row in _ad_items(ctx, args):
+        try:
+            _x_update_ad(ctx, item)
+            done.append(_ad_name(row))
+        except YandexError as exc:
+            failed.append(f"{_ad_name(row)} — {exc.message or exc.code}")
+    if failed:
+        raise YandexError("ads", (f"Изменены: {', '.join(done)}; " if done else "") + "не изменены: " + "; ".join(failed))
+    return {"updated": len(done), "ads": done}
 
 
 _AD_ACTIONS = {
@@ -1404,7 +1724,7 @@ def _links_args(ctx: Context, args: dict) -> tuple[list[dict], dict]:
 def _p_fix_links(ctx: Context, args: dict) -> Plan:
     rows, bad = _links_args(ctx, args)
     ads = sum(bad[r["id"]]["ads_fixable"] for r in rows)
-    summary = f"Ссылки по шаблону сайта: {_names(rows)}"
+    summary = f"Ссылки по шаблону сайта: {_cnames(rows)}"
     if ads:
         summary += f"; {_count(ads, 'объявление', 'объявления', 'объявлений')} уйдут на модерацию"
     return Plan(summary, ["campaigns", "ads"] if ads else ["campaigns"])
@@ -1435,6 +1755,7 @@ WRITE_TOOLS = {
     "search_queries_action": (_p_queries_action, _x_queries_action),
     "create_text_ad": (_p_create_ad, _x_create_ad),
     "update_text_ad": (_p_update_ad, _x_update_ad),
+    "update_text_ads": (_p_update_ads, _x_update_ads),
     "ads_action": (_p_ads_action, _x_ads_action),
     "fix_links": (_p_fix_links, _x_fix_links),
 }
@@ -1647,7 +1968,7 @@ def _d_campaigns_action(ctx: Context, args: dict) -> list[dict]:
     action = str(args["action"])
     rows = ctx.campaigns(_ids(args, "campaign_row_ids"))
     if action != "set_budget":
-        return [_ch(f"«{r['name']}»", _state_label(r["state"], r["status"]), _CAMPAIGN_AFTER[action]) for r in rows]
+        return [_ch(_cname(r), _state_label(r["state"], r["status"]), _CAMPAIGN_AFTER[action]) for r in rows]
     daily = _float(args, "daily_budget_rub")
     pct = _float(args, "budget_change_pct")
     out = []
@@ -1665,7 +1986,7 @@ def _d_campaigns_action(ctx: Context, args: dict) -> list[dict]:
             after = "не выйдет: неверная сумма бюджета"
         else:
             after = _money(new / 100)
-        out.append(_ch(f"«{r['name']}»: дневной бюджет", _money(old / 100) if old else "не задан", after))
+        out.append(_ch(f"{_cname(r)}: дневной бюджет", _money(old / 100) if old else "не задан", after))
     return out
 
 
@@ -1813,28 +2134,20 @@ def _d_update_settings(ctx: Context, args: dict) -> list[dict]:
 
 def _d_add_negatives(ctx: Context, args: dict) -> list[dict]:
     """Добавляются только новые фразы (как в add_negatives_logged); «было» — по последнему синку."""
-    from app.negative_lists import phrase_key
-
     cid = _int(args, "campaign_row_id")
     ctx.campaign(cid)
-    with pool.connection() as conn:
-        row = conn.execute(
-            "SELECT negative_keywords FROM direct_campaigns WHERE user_id = %s AND id = %s", (ctx.user_id, cid)
-        ).fetchone()
-    old = _json_list((row or {}).get("negative_keywords"))
-    known = {phrase_key(p) for p in old}
-    new: list[str] = []
-    for phrase in _phrases(args):
-        if phrase_key(phrase) not in known:
-            known.add(phrase_key(phrase))
-            new.append(phrase)
+    old = _campaign_negatives(ctx, cid)
+    new, already = _split_new(_phrases(args), old)
     what = "Минус-фразы кампании"
     if not new:
         return [_ch(what, _count(len(old), *_PHRASE_WORDS), "без изменений — все фразы уже есть")]
-    return [
+    out = [
         _ch(what, _count(len(old), *_PHRASE_WORDS), _count(len(old) + len(new), *_PHRASE_WORDS)),
         _ch("Добавятся", "—", _preview(new)),
     ]
+    if already:
+        out.append(_ch("Уже есть", _preview(already), "без изменений"))
+    return out
 
 
 def _d_create_campaign(ctx: Context, args: dict) -> list[dict]:
@@ -1878,13 +2191,13 @@ def _d_duplicate(ctx: Context, args: dict) -> list[dict]:
     name = str(args.get("name") or "").strip() or f"{row['name']} (копия)"
     return [
         _ch("Кампания", "нет", f"«{name}» — черновик {where}"),
-        _ch(f"Оригинал «{row['name']}»", _state_label(row["state"], row["status"]), "без изменений"),
+        _ch(f"Оригинал {_cname(row)}", _state_label(row["state"], row["status"]), "без изменений"),
     ]
 
 
 def _d_moderate(ctx: Context, args: dict) -> list[dict]:
     row = ctx.campaign(_int(args, "campaign_row_id"))
-    return [_ch(f"«{row['name']}»", _state_label(row["state"], row["status"]), "на модерации")]
+    return [_ch(_cname(row), _state_label(row["state"], row["status"]), "на модерации")]
 
 
 def _d_restart(ctx: Context, args: dict) -> list[dict]:
@@ -1893,7 +2206,7 @@ def _d_restart(ctx: Context, args: dict) -> list[dict]:
     source = "на паузе, когда копия уйдёт на модерацию" if _bool(args, "pause_source", True) else "без изменений"
     return [
         _ch("Копия", "нет", f"«{name}» — на модерации"),
-        _ch(f"Оригинал «{row['name']}»", _state_label(row["state"], row["status"]), source),
+        _ch(f"Оригинал {_cname(row)}", _state_label(row["state"], row["status"]), source),
     ]
 
 
@@ -1911,7 +2224,7 @@ def _d_copy_geo(ctx: Context, args: dict) -> list[dict]:
             geo.region_label(geo.campaign_regions(ctx.user_id, row["id"]), regions),
             geo.region_label(region_ids, regions),
         ),
-        _ch(f"Оригинал «{row['name']}»", _state_label(row["state"], row["status"]), "без изменений"),
+        _ch(f"Оригинал {_cname(row)}", _state_label(row["state"], row["status"]), "без изменений"),
     ]
 
 
@@ -1925,10 +2238,10 @@ def _d_start_experiment(ctx: Context, args: dict) -> list[dict]:
             try:
                 plan = experiments.limit_plan({**settings, "name": row["name"]}, d["weekly_budget_rub"])
             except YandexError as exc:
-                out.append(_ch(f"Лимит «{row['name']}»", _strategy_text(settings.get("strategy"), names), _fail(exc)))
+                out.append(_ch(f"Лимит {_cname(row)}", _strategy_text(settings.get("strategy"), names), _fail(exc)))
                 continue
             after = plan["after"] + (f"; {plan['note']}" if plan["note"] else "")
-            out.append(_ch(f"Лимит «{row['name']}»", plan["before"], after))
+            out.append(_ch(f"Лимит {_cname(row)}", plan["before"], after))
     else:
         out.append(
             _ch("Лимит в Директе", "как есть", f"не меняем — {_money(d['weekly_budget_rub'])}/нед. на кампанию ставит маркетолог")
@@ -1939,7 +2252,7 @@ def _d_start_experiment(ctx: Context, args: dict) -> list[dict]:
         _ch("Критерий успеха", "—", experiments.criterion_text(d)),
     ]
     if source:
-        out.append(_ch("Сравнение", "—", f"с «{source['name']}»"))
+        out.append(_ch("Сравнение", "—", f"с {_cname(source)}"))
     out.append(_ch("Остановка", "—", "только по вашему решению после итогов"))
     return out
 
@@ -2010,7 +2323,7 @@ def _d_create_variants(ctx: Context, args: dict) -> list[dict]:
     )
     state = "на модерацию" if _bool(args, "moderate", False) else "черновиками"
     source_groups = None
-    out = [_ch("Новые кампании", "нет", f"{_count(len(items), 'копия', 'копии', 'копий')} «{row['name']}» — {state}")]
+    out = [_ch("Новые кампании", "нет", f"{_count(len(items), 'копия', 'копии', 'копий')} {_cname(row)} — {state}")]
     for v in items:
         before, after = [], []
         if "region_ids" in v:
@@ -2031,6 +2344,8 @@ def _d_create_variants(ctx: Context, args: dict) -> list[dict]:
             except YandexError as exc:
                 after.append("бюджет: " + _fail(exc))
         title = f"«{v['name']}»"
+        if v.get("control"):
+            out.append(_ch(title, "—", "контрольная копия: всё как у оригинала"))
         if after:
             out.append(_ch(f"{title}: настройки", "; ".join(before), "; ".join(after)))
         content = []
@@ -2046,7 +2361,7 @@ def _d_create_variants(ctx: Context, args: dict) -> list[dict]:
             if source_groups is None:
                 source_groups = list_adgroups(ctx.user_id, row["id"])
             out.append(_ch(f"{title}: группы", *_variant_groups(v, source_groups)))
-    out.append(_ch(f"Оригинал «{row['name']}»", _state_label(row["state"], row["status"]), "без изменений"))
+    out.append(_ch(f"Оригинал {_cname(row)}", _state_label(row["state"], row["status"]), "без изменений"))
     if exp:
         ends = today_msk() + timedelta(days=exp["days"] - 1)
         out += [
@@ -2058,6 +2373,8 @@ def _d_create_variants(ctx: Context, args: dict) -> list[dict]:
                 f"{ends:%d.%m}; успех — {experiments.criterion_text(exp)}; сравнение с оригиналом",
             ),
         ]
+    else:
+        out.append(_ch("Эксперимент", "—", "не запускается — варианты придётся сравнивать по отчётам"))
     return out
 
 
@@ -2075,12 +2392,15 @@ def _d_finish_experiment(ctx: Context, args: dict) -> list[dict]:
 
 def _d_create_adgroup(ctx: Context, args: dict) -> list[dict]:
     from app import geo
+    from app.adgroups import campaign_regions, list_adgroups
 
     row = ctx.campaign(_int(args, "campaign_row_id"))
-    regions = [int(r) for r in args.get("region_ids") or [] if str(r).lstrip("-").isdigit()] or [225]
+    regions = [int(r) for r in args.get("region_ids") or [] if str(r).lstrip("-").isdigit()]
+    inherited = not regions and bool(list_adgroups(ctx.user_id, int(row["id"])))
+    label = geo.region_label(regions or campaign_regions(ctx.user_id, int(row["id"])), geo.load_regions(ctx.user_id))
     return [
-        _ch("Группа", "нет", f"«{str(args.get('name') or '').strip()}» в кампании «{row['name']}»"),
-        _ch("Регионы группы", "—", geo.region_label(regions, geo.load_regions(ctx.user_id))),
+        _ch("Группа", "нет", f"«{str(args.get('name') or '').strip()}» в кампании {_cname(row)}"),
+        _ch("Регионы группы", "—", f"{label} (как у первой группы кампании)" if inherited else label),
     ]
 
 
@@ -2111,21 +2431,10 @@ def _d_keywords_action(ctx: Context, args: dict) -> list[dict]:
 
 
 def _d_add_keywords(ctx: Context, args: dict) -> list[dict]:
-    from app.negative_lists import phrase_key
-
     group = ctx.adgroup(_int(args, "adgroup_row_id"))
     phrases = _phrases(args)
-    with pool.connection() as conn:
-        existing = [
-            r["keyword"]
-            for r in conn.execute(
-                "SELECT keyword FROM direct_keywords WHERE user_id = %s AND adgroup_row_id = %s",
-                (ctx.user_id, group["id"]),
-            ).fetchall()
-        ]
-    known = {phrase_key(k) for k in existing}
-    new = [p for p in phrases if phrase_key(p) not in known]
-    already = [p for p in phrases if phrase_key(p) in known]
+    existing = _group_keywords(ctx, int(group["id"]))
+    new, already = _split_new(phrases, existing)
     bid = _float(args, "bid_rub")
     if len(phrases) > 100:
         after = "не выйдет: не больше 100 фраз за раз"
@@ -2153,19 +2462,50 @@ def _d_queries_action(ctx: Context, args: dict) -> list[dict]:
     return [_ch(f"«{r['query']}»", "поисковый запрос", after) for r in rows]
 
 
+def _extras_rows(ctx: Context, args: dict, current: dict | None = None) -> list[dict]:
+    """Строки карточки про быстрые ссылки, уточнения и картинки; current — объявление из базы при правке."""
+
+    def before(value: str) -> str:
+        return "—" if current is None else value
+
+    def images(n: int) -> str:
+        return _count(n, "картинка", "картинки", "картинок") if n else "нет"
+
+    empty = "нет" if current is None else "убрать"
+    out = []
+    source = args.get("extras_from_ad_row_id")
+    if source not in (None, ""):
+        src = ctx.ads([int(source)])[0]
+        out.append(_ch("Расширения", before("текущие"), f"как у объявления «{src['title'] or src['id']}»"))
+    extras = args.get("extras") if isinstance(args.get("extras"), dict) else {}
+    if extras.get("sitelinks") is not None:
+        titles = [str(link.get("title") or "").strip() for link in extras["sitelinks"] if isinstance(link, dict)]
+        had = "есть" if (current or {}).get("sitelink_set_id") else "нет"
+        out.append(_ch("Быстрые ссылки", before(had), " | ".join(t for t in titles if t) or empty))
+    if extras.get("callouts") is not None:
+        callouts = [str(c).strip() for c in extras["callouts"] if str(c or "").strip()]
+        out.append(_ch("Уточнения", before("текущие"), " | ".join(callouts) or empty))
+    if extras.get("image_hashes") is not None:
+        n = len([h for h in extras["image_hashes"] if str(h or "").strip()])
+        had = len(_json_list((current or {}).get("image_hashes")))
+        out.append(_ch("Картинки", before(images(had)), images(n) if n else empty))
+    return out
+
+
 def _d_create_ad(ctx: Context, args: dict) -> list[dict]:
-    group = ctx.adgroup(_int(args, "adgroup_row_id"))
-    titles = _variants(args, "titles") or [str(args.get("title") or "").strip()]
-    texts = _variants(args, "texts") or [str(args.get("text") or "").strip()]
-    out = [_ch("Объявление", "нет", f"«{titles[0]}» — {texts[0]} (группа «{group['name']}»)")]
+    group, ad_type, titles, texts = _new_ad(ctx, args)
+    kind = "комбинаторное" if ad_type == "RESPONSIVE_AD" else "текстовое"
+    out = [_ch("Объявление", "нет", f"{kind}, группа «{group['name']}»")]
+    out.append(_ch("Заголовки" if len(titles) > 1 else "Заголовок", "—", " | ".join(titles)))
     if str(args.get("title2") or "").strip():
         out.append(_ch("Заголовок 2", "—", str(args["title2"]).strip()))
-    if len(titles) > 1:
-        out.append(_ch("Варианты заголовков", "—", " | ".join(titles)))
-    if len(texts) > 1:
-        out.append(_ch("Варианты текстов", "—", " | ".join(texts)))
+    out.append(_ch("Тексты" if len(texts) > 1 else "Текст", "—", " | ".join(texts)))
     out.append(_ch("Ссылка", "—", str(args.get("href") or "").strip()))
-    return out
+    twins = [r for r in _twin_ads(ctx, group["campaign_row_id"], titles, texts) if r["adgroup_row_id"] != group["id"]]
+    if twins:
+        groups = sorted({r["adgroup_name"] or str(r["adgroup_row_id"]) for r in twins})
+        out.append(_ch("Такое же объявление уже есть", "—", _preview([f"«{g}»" for g in groups], 4)))
+    return out + _extras_rows(ctx, args)
 
 
 _AD_LABELS = {
@@ -2181,7 +2521,10 @@ _AD_LABELS = {
 def _d_update_ad(ctx: Context, args: dict) -> list[dict]:
     with pool.connection() as conn:
         row = conn.execute(
-            "SELECT title, title2, text, href, titles, texts FROM direct_ads WHERE user_id = %s AND id = %s",
+            """
+            SELECT title, title2, text, href, titles, texts, sitelink_set_id, image_hashes
+            FROM direct_ads WHERE user_id = %s AND id = %s
+            """,
             (ctx.user_id, _int(args, "ad_row_id")),
         ).fetchone() or {}
     out = []
@@ -2195,6 +2538,20 @@ def _d_update_ad(ctx: Context, args: dict) -> list[dict]:
             old = str(row.get(key) or "")
             new = str(args[key]).strip()
         out.append(_ch(_AD_LABELS[key], old or "—", new or "—"))
+    return out + _extras_rows(ctx, args, row)
+
+
+def _d_update_ads(ctx: Context, args: dict) -> list[dict]:
+    """Одна карточка на все объявления: строки с названием объявления, сначала — одинаковые тексты."""
+    pairs = _ad_items(ctx, args)
+    same: dict[str, list[str]] = {}
+    for item, row in pairs:
+        titles, texts = _variants(item, "titles"), _variants(item, "texts")
+        if titles and texts:
+            same.setdefault(json.dumps([sorted(titles), sorted(texts)], ensure_ascii=False), []).append(_ad_name(row))
+    out = [_ch("Станут одинаковыми", "—", _preview(names, 4)) for names in same.values() if len(names) > 1]
+    for item, row in pairs:
+        out += [{**ch, "what": f"{_ad_name(row)}: {ch['what']}"} for ch in _d_update_ad(ctx, item)]
     return out
 
 
@@ -2217,9 +2574,9 @@ def _d_fix_links(ctx: Context, args: dict) -> list[dict]:
     for r in rows:
         c = bad[r["id"]]
         if c["campaign_problems"]:
-            out.append(_ch(f"«{r['name']}»: метки", c["tracking"] or "нет", c["fixed_tracking"]))
+            out.append(_ch(f"{_cname(r)}: метки", c["tracking"] or "нет", c["fixed_tracking"]))
         for a in c["ads"]:
-            what = f"«{r['name']}»: «{a['title'] or a['ad_id']}»"
+            what = f"{_cname(r)}: «{a['title'] or a['ad_id']}»"
             out.append(_ch(what, a["href"] or "нет", a["fixed_href"] if a["fixable"] else "правьте в Директе"))
     return out
 
@@ -2242,6 +2599,7 @@ _DIFFS = {
     "search_queries_action": _d_queries_action,
     "create_text_ad": _d_create_ad,
     "update_text_ad": _d_update_ad,
+    "update_text_ads": _d_update_ads,
     "ads_action": _d_ads_action,
     "fix_links": _d_fix_links,
 }
@@ -2386,6 +2744,8 @@ TOOL_LABELS = {
     "get_headline_stats": "Статистика заголовков",
     "get_slices": "Срезы статистики",
     "check_links": "Проверка ссылок",
+    "get_ad_extras": "Расширения объявления",
+    "list_ad_images": "Картинки кабинета",
     "ask_questions": "Вопросы перед работой",
     "propose_plan": "План работ",
     "campaigns_action": "Действие с кампаниями",
@@ -2405,6 +2765,7 @@ TOOL_LABELS = {
     "search_queries_action": "Поисковые запросы",
     "create_text_ad": "Новое объявление",
     "update_text_ad": "Правка объявления",
+    "update_text_ads": "Правка объявлений",
     "ads_action": "Объявления",
     "fix_links": "Ссылки по шаблону",
 }
@@ -2435,6 +2796,43 @@ _REASON = {
     "plan_step": {"type": "integer", "description": "номер шага согласованного плана, если действие из него"},
 }
 _PHRASES = {"type": "array", "items": {"type": "string"}}
+_EXTRAS = {
+    "extras": {
+        "type": "object",
+        "description": "Расширения: переданный ключ заменяет текущие, пустой список — убрать",
+        "properties": {
+            "sitelinks": {
+                "type": "array",
+                "description": "быстрые ссылки, до 8: title до 30 символов, href, description до 60",
+                "items": {
+                    "type": "object",
+                    "properties": {"title": {"type": "string"}, "href": {"type": "string"}, "description": {"type": "string"}},
+                    "required": ["title", "href"],
+                },
+            },
+            "callouts": {"type": "array", "items": {"type": "string"}, "description": "уточнения, до 25 символов"},
+            "image_hashes": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "картинки из list_ad_images: у комбинаторного до 5, у текстового одна",
+            },
+        },
+    },
+    "extras_from_ad_row_id": {
+        "type": "integer",
+        "description": "взять быстрые ссылки, уточнения и картинки у этого объявления того же кабинета; ключи extras важнее",
+    },
+}
+# Поля правки объявления: update_text_ad и записи update_text_ads.
+_AD_EDIT = {
+    "title": {"type": "string"},
+    "title2": {"type": "string"},
+    "text": {"type": "string"},
+    "titles": {"type": "array", "items": {"type": "string"}},
+    "texts": {"type": "array", "items": {"type": "string"}},
+    "href": {"type": "string"},
+    **_EXTRAS,
+}
 
 TOOLS = [
     _fn("get_workspace_summary", "Сводка: расход сегодня, проблемы («где горит»), неделя к неделе, топ кампаний."),
@@ -2446,8 +2844,16 @@ TOOLS = [
     _fn("list_campaigns", "Кампании пространства (campaign_row_id, статус, бюджет, стратегия) с метриками за период.", _RANGE),
     _fn(
         "get_campaign",
-        "Структура кампании: группы, объявления, ключевые фразы со ставками и статистикой.",
-        {"campaign_row_id": _ID},
+        "Структура кампании: группы (статистика, сколько в них объявлений и фраз), объявления без архивных "
+        "(одинаковое — ссылкой same_as на первое такое же; sitelinks и images — есть ли расширения), фразы по расходу. "
+        "Большая кампания отдаётся частями: есть not_all_shown — запроси дальше с *_offset или только нужные группы.",
+        {
+            "campaign_row_id": _ID,
+            "adgroup_row_ids": {**_IDS, "description": "только эти группы"},
+            "adgroups_offset": {"type": "integer"},
+            "ads_offset": {"type": "integer"},
+            "keywords_offset": {"type": "integer"},
+        },
         ["campaign_row_id"],
     ),
     _fn(
@@ -2564,6 +2970,19 @@ TOOLS = [
         {"campaign_row_ids": {**_IDS, "description": "кампании; по умолчанию все"}},
     ),
     _fn(
+        "get_ad_extras",
+        "Быстрые ссылки, уточнения и картинки объявления — из Директа.",
+        {"ad_row_id": _ID},
+        ["ad_row_id"],
+    ),
+    _fn(
+        "list_ad_images",
+        "Картинки для объявлений: какие уже стоят в объявлениях кампании и сколько раз, и что ещё есть в "
+        "библиотеке кабинета. Хэш — для extras.image_hashes.",
+        {"campaign_row_id": _ID},
+        ["campaign_row_id"],
+    ),
+    _fn(
         "ask_questions",
         "Вопросы маркетологу карточкой с вариантами ответа. Сначала в understanding перескажи, как понял задачу. "
         "До 5 вопросов — только о том, чего нет в данных и в прежних ответах; к каждому дай варианты, свой ответ "
@@ -2645,7 +3064,8 @@ TOOLS = [
         "(TEXT_CAMPAIGN|UNIFIED_CAMPAIGN), name, start_date, end_date, strategy {search, network, параметры}, "
         "daily_budget_rub (только ручные ставки), negative_keywords [], excluded_sites [], schedule, "
         "attribution_model, priority_goals, tracking_params, group {name, region_ids, keywords [], bid_rub, "
-        "ad {title, title2, text, href}}. Счётчик пространства подставится сам.",
+        "ad {titles (до 7), texts (до 3), href}}: объявление комбинаторное, второго заголовка в нём нет. "
+        "Счётчик пространства подставится сам.",
         {"account_id": _ID, "spec": {"type": "object"}, **_REASON},
         ["account_id", "spec"],
     ),
@@ -2751,6 +3171,11 @@ TOOLS = [
                             "названий копии и изменённых групп; по умолчанию — начало idea",
                         },
                         "idea": {"type": "string", "description": "гипотеза варианта одной фразой"},
+                        "control": {
+                            "type": "boolean",
+                            "description": "контрольная копия без изменений (можно только weekly_budget_rub): "
+                            "стартует вместе с вариантами, сравнивать с ней честнее, чем с оригиналом",
+                        },
                         "plan_step": {"type": "integer", "description": "номер одобренного шага propose_plan"},
                         "region_ids": {**_IDS, "description": "регионы показа (find_regions); минус — исключить"},
                         "schedule": {"type": "string", "enum": ["always", "workdays", "workhours", "daytime"]},
@@ -2792,7 +3217,11 @@ TOOLS = [
                                     "description": "до 7 (с per_title — до 10), ≤56 знаков",
                                 },
                                 "texts": {"type": "array", "items": {"type": "string"}, "description": "до 3, ≤81 знака"},
-                                "title2": {"type": "string", "description": "≤30 знаков"},
+                                "title2": {
+                                    "type": "string",
+                                    "description": "≤30 знаков, только mode=replace и только для старых текстовых "
+                                    "объявлений: в комбинаторных и новых объявлениях второго заголовка нет",
+                                },
                                 "href": {"type": "string", "description": "другая ссылка; по умолчанию — как у оригинала"},
                             },
                         },
@@ -2903,7 +3332,7 @@ TOOLS = [
     ),
     _fn(
         "create_adgroup",
-        "Создать группу объявлений в кампании.",
+        "Создать группу объявлений в кампании. Без region_ids регионы — как у первой группы кампании.",
         {"campaign_row_id": _ID, "name": {"type": "string"}, "region_ids": _IDS, **_REASON},
         ["campaign_row_id", "name"],
     ),
@@ -2938,16 +3367,19 @@ TOOLS = [
     ),
     _fn(
         "create_text_ad",
-        "Объявление в группе: title до 56 символов, title2 до 30, text до 81, href. В ЕПК объявление "
-        "комбинаторное — можно передать titles (до 7) и texts (до 3) вместо title/text.",
+        "Объявление в группе. В текстовых группах и ЕПК оно комбинаторное: titles — до 7 заголовков до 56 "
+        "символов, texts — до 3 текстов до 81, второго заголовка нет. В остальных группах — один title, "
+        "title2 до 30 и один text. Длиннее предела — ошибка, сокращай сам. Расширения — extras или "
+        "extras_from_ad_row_id; без них объявление выйдет без быстрых ссылок, уточнений и картинок.",
         {
             "adgroup_row_id": _ID,
-            "title": {"type": "string"},
-            "title2": {"type": "string"},
-            "text": {"type": "string"},
             "titles": {"type": "array", "items": {"type": "string"}},
             "texts": {"type": "array", "items": {"type": "string"}},
+            "title": {"type": "string", "description": "один заголовок вместо titles"},
+            "text": {"type": "string", "description": "один текст вместо texts"},
+            "title2": {"type": "string", "description": "только для групп, где объявление не комбинаторное"},
             "href": {"type": "string"},
+            **_EXTRAS,
             **_REASON,
         },
         ["adgroup_row_id", "href"],
@@ -2955,18 +3387,23 @@ TOOLS = [
     _fn(
         "update_text_ad",
         "Изменить объявление (только переданные поля). У комбинаторного titles/texts заменяют все "
-        "варианты целиком; title/text меняют первый вариант.",
+        "варианты целиком, title/text меняют первый вариант, второго заголовка нет. Длиннее предела — "
+        "ошибка. Несколько объявлений — одним update_text_ads.",
+        {"ad_row_id": _ID, **_AD_EDIT, **_REASON},
+        ["ad_row_id"],
+    ),
+    _fn(
+        "update_text_ads",
+        f"Изменить несколько объявлений одной карточкой (до {MAX_BULK_ADS}): в items по записи на объявление — "
+        "ad_row_id и только меняемые поля, как в update_text_ad. Одинаковые тексты разным объявлениям не давай.",
         {
-            "ad_row_id": _ID,
-            "title": {"type": "string"},
-            "title2": {"type": "string"},
-            "text": {"type": "string"},
-            "titles": {"type": "array", "items": {"type": "string"}},
-            "texts": {"type": "array", "items": {"type": "string"}},
-            "href": {"type": "string"},
+            "items": {
+                "type": "array",
+                "items": {"type": "object", "properties": {"ad_row_id": _ID, **_AD_EDIT}, "required": ["ad_row_id"]},
+            },
             **_REASON,
         },
-        ["ad_row_id"],
+        ["items"],
     ),
     _fn(
         "ads_action",
@@ -2986,12 +3423,33 @@ TOOLS = [
 
 
 def _running_experiments(ctx: Context) -> list[dict]:
-    """Идущие эксперименты для системного промпта; без них ход не должен падать."""
+    """Идущие эксперименты для системного промпта, с названиями кампаний; без них ход не должен падать."""
     try:
-        return experiments.running_experiments(ctx.user_id, ctx.ws_id)
+        rows = experiments.running_experiments(ctx.user_id, ctx.ws_id)
     except Exception:
         log.warning("Идущие эксперименты пространства %s не загружены", ctx.ws_id, exc_info=True)
         return []
+    ids = sorted({int(i) for e in rows for i in e["campaign_row_ids"] or []})
+    names: dict[int, str] = {}
+    if ids:
+        try:
+            with pool.connection() as conn:
+                found = conn.execute(
+                    "SELECT id, name FROM direct_campaigns WHERE user_id = %s AND id = ANY(%s)", (ctx.user_id, ids)
+                ).fetchall()
+            names = {int(r["id"]): r["name"] for r in found}
+        except Exception:
+            log.warning("Названия кампаний экспериментов пространства %s не загружены", ctx.ws_id, exc_info=True)
+    return [{**e, "campaign_names": names} for e in rows]
+
+
+def _experiment_campaigns(e: dict) -> str:
+    """Кампании эксперимента для промпта: название и id для инструментов."""
+    names = e.get("campaign_names") or {}
+    return ", ".join(
+        (f"«{names[int(i)]}» (campaign_row_id {i})" if int(i) in names else f"campaign_row_id {i}")
+        for i in e["campaign_row_ids"] or []
+    )
 
 
 def _system_prompt(ctx: Context) -> str:
@@ -3028,7 +3486,11 @@ def _system_prompt(ctx: Context) -> str:
         "Правила:",
         "- Отвечай по-русски, кратко и по делу. Цифры бери только из инструментов, ничего не выдумывай.",
         "- Для анализа сначала собери данные инструментами, затем дай выводы и конкретные рекомендации списком.",
-        "- Суммы в инструментах — в рублях. Кампании называй по имени; id нужны только для вызова инструментов.",
+        "- Если ответ инструмента обрезан или в нём есть not_all_shown, ты видел не всё: дозапроси остальное или "
+        "прямо скажи, что смотрел часть, — не делай вывода «всё в порядке» о том, чего не видел.",
+        "- Суммы в инструментах — в рублях. Кампании, группы и объявления называй по имени или по тексту (у "
+        "одинаковых названий добавляй номер кампании в Директе — campaign_id); внутренние id (campaign_row_id, "
+        "adgroup_row_id, ad_row_id и т. п.) в ответах не пиши — они только для вызова инструментов.",
         "- Разбор начинай с get_signals, если выжимки ещё нет в чате: там уже посчитаны конверсии за 0 ₽, "
         "затухание, перезапуски копиями и успешные кампании. Кампанию по дням — get_campaign_history. "
         "Сырые таблицы запрашивай, только когда без них не обойтись.",
@@ -3059,7 +3521,7 @@ def _system_prompt(ctx: Context) -> str:
         "get_campaign (тексты всех объявлений), get_search_queries с with_conversions (конвертящие запросы — "
         "основа новых текстов и фраз), бриф, для новых ключей — get_wordstat; 3) propose_plan — шаг на каждый вариант: что меняется и какую "
         "гипотезу проверяет; варианты отличаются друг от друга одним-двумя параметрами, иначе не понять, что "
-        "сработало; 4) create_campaign_variants только с одобренными вариантами — одним вызовом или по вызову на "
+        "сработало; контрольная копия без изменений — вариант с control: true; 4) create_campaign_variants только с одобренными вариантами — одним вызовом или по вызову на "
         "вариант, как решил маркетолог; копии создаются черновиками (moderate=false), на модерацию — отдельным "
         "шагом после согласия (moderate_campaign по каждой копии). Тексты пиши в пределах Директа (заголовок до 56 знаков, текст до 81), "
         "без выдуманных цен и обещаний, которых нет в объявлениях оригинала или брифе. Ключи расширяй "
@@ -3086,8 +3548,15 @@ def _system_prompt(ctx: Context) -> str:
         "кампании; label гипотезы, названия копии «{label} · дд.мм» и групп «{группа} — {label}»; ads.per_title с "
         "одобренными заголовками плюс исходный лучший как контроль; тексты — лучшие тексты оригинала; недельный "
         "бюджет. 4) create_campaign_variants с moderate=false — черновики. 5) Отдельно спроси, отправлять ли на "
-        "модерацию, и только после согласия — moderate_campaign по каждой копии. Быстрые ссылки и уточнения "
-        "копия и новые объявления берут у оригинала.",
+        "модерацию, и только после согласия — moderate_campaign по каждой копии. Быстрые ссылки, уточнения и "
+        "картинки копия и объявления теста берут у оригинала сами.",
+        "- Объявления: в текстовых группах и ЕПК новое объявление комбинаторное — до 7 заголовков и до 3 текстов, "
+        "второго заголовка нет; пределы знаков соблюдай сам, сервис не обрезает, а возвращает ошибку. Одинаковых "
+        "объявлений (те же заголовки и тексты) не делай ни в одной группе, ни в разных: каждой группе — тексты под "
+        "её фразы. Новому объявлению передавай расширения: extras_from_ad_row_id — как у объявления-образца "
+        "(get_ad_extras покажет, что у него есть) или extras; картинки кабинета — list_ad_images. Без них "
+        "объявление выйдет без быстрых ссылок, уточнений и картинок. Правку нескольких объявлений делай одним "
+        "update_text_ads — маркетолог согласует её одной карточкой.",
         "- Ссылки: в настройках пространства задаётся шаблон ссылки сайта (адрес и ref — в объявлении, utm — в "
         "метках кампании). При разборе кампаний вызывай check_links; косяки (другой домен, нет ref, неверные или "
         "задвоенные utm) показывай как проблему с предложением исправить — fix_links после согласия. Новые "
@@ -3107,6 +3576,8 @@ def _system_prompt(ctx: Context) -> str:
         "не подтвердилось — остановить тестовые кампании. Итог записывай finish_experiment, когда маркетолог "
         "согласен с выводом.",
         "- Если действие отклонено, не повторяй его без новой просьбы. Если ошибка — объясни её пользователю.",
+        "- Если часть согласованного плана не выполнена (ошибка, отклонено, пропущено) или ты её убрал, прямо "
+        "скажи, что именно не сделано, — не называй план выполненным.",
         "- Работай только с кампаниями и кабинетами этого пространства.",
     ]
     facts = normalize_ai_facts(ws.get("ai_facts"))
@@ -3140,7 +3611,7 @@ def _system_prompt(ctx: Context) -> str:
         ]
         lines += [
             f"- #{e['id']} «{e['title']}»: с {e['started_on']:%d.%m} на {_count(int(e['days']), 'день', 'дня', 'дней')}, "
-            "кампании " + ", ".join(f"[{i}]" for i in e["campaign_row_ids"] or [])
+            f"кампании {_experiment_campaigns(e)}"
             for e in running
         ]
     examples = examples_prompt(memory_examples(ctx.ws_id, 10))
@@ -3329,6 +3800,18 @@ _ASK_SKIPPED = {
 }
 
 
+def _write_skipped(reason: str, tool: str, args: dict) -> dict:
+    """Ответ модели за карточку действия, которую пропустили сообщением: её поправляют словами, и модель
+    должна предложить действие заново целиком, а не только исправленную часть."""
+    note = (
+        "Не выполнено: маркетолог написал сообщение ниже, не нажав кнопку. Если он поправил это действие, "
+        "предложи его заново целиком — с прежними аргументами и правками; если отказался — не повторяй"
+    )
+    if tool == "create_campaign_variants" and isinstance(args, dict) and args.get("experiment"):
+        note += ". В карточке был эксперимент (experiment) — передай его снова, иначе варианты соберутся без теста"
+    return {"ok": False, "error": reason, "note": note}
+
+
 def _skip_open_actions(conn, chat_id: int, reason: str, *, by_message: bool = False) -> None:
     """Незакрытые действия закрываются ответом инструмента — иначе история для модели некорректна.
 
@@ -3340,13 +3823,15 @@ def _skip_open_actions(conn, chat_id: int, reason: str, *, by_message: bool = Fa
         UPDATE ai_actions SET status = 'rejected', decided_at = NOW(),
                error = CASE WHEN tool = ANY(%s) THEN %s ELSE %s END
         WHERE chat_id = %s AND status IN ('pending', 'approved')
-        RETURNING tool_call_id, tool
+        RETURNING tool_call_id, tool, args
         """,
         (list(ASK_TOOLS), ask_reason, reason, chat_id),
     ).fetchall()
     for r in rows:
         if by_message and r["tool"] in ASK_TOOLS:
             payload = _ASK_SKIPPED[r["tool"]]
+        elif by_message:
+            payload = _write_skipped(reason, r["tool"], r.get("args") or {})
         else:
             payload = {"ok": False, "error": reason}
         _insert_message(

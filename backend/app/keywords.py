@@ -312,7 +312,7 @@ def create_keywords(
         },
         targets=[f"keyword:{c['id']}" for c in created] + [f"adgroup:{adgroup_row_id}"],
     )
-    return {"items": created, "created": len(created), "errors": errors, "status": "ok"}
+    return {"items": created, "created": len(created), "errors": errors, "message": first_err, "status": "ok"}
 
 
 def update_keyword(

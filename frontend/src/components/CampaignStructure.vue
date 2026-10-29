@@ -347,7 +347,7 @@
           <textarea v-model="adForm.more_texts" rows="2"></textarea>
         </div>
         <p v-if="adResponsive" class="field-hint field--wide">
-          Комбинаторное объявление ЕПК: Директ сам собирает показы из заголовков и текстов.
+          Комбинаторное объявление: Директ сам собирает показы из заголовков и текстов.
         </p>
         <div v-field class="field field--wide">
           <label>Ссылка</label>
@@ -436,11 +436,12 @@ const autoBids = computed(() => {
   const strategy = camp.strategy === 'SERVING_OFF' ? camp.network_strategy : camp.strategy
   return !MANUAL_STRATEGIES.has(strategy || '')
 })
-// Комбинаторное объявление: так Директ создаёт новые объявления в ЕПК.
+// Комбинаторное объявление: так Директ создаёт новые объявления в текстовых кампаниях и ЕПК.
+const RESPONSIVE_CAMPAIGNS = new Set(['TEXT_CAMPAIGN', 'UNIFIED_CAMPAIGN'])
 const adResponsive = computed(() =>
   adModal.item
     ? adModal.item.type === 'RESPONSIVE_AD'
-    : (campaign.value?.campaign_type || campaign.value?.type) === 'UNIFIED_CAMPAIGN',
+    : RESPONSIVE_CAMPAIGNS.has(campaign.value?.campaign_type || campaign.value?.type),
 )
 
 // Состояние фразы с учётом кампании: у фраз черновика Директ всё равно пишет «ON».
@@ -634,9 +635,14 @@ function addQueryNegative(q, scope) {
 function createGroup() {
   if (!groupForm.name) return
   return run(async () => {
-    await webApi.createAdGroup(props.campaignId, { name: groupForm.name, region_ids: [225] })
+    const hadGroups = adgroups.value.length > 0
+    await webApi.createAdGroup(props.campaignId, { name: groupForm.name })
     groupForm.name = ''
-    pushToast('Группа создана (регион — Россия, поменять можно в Директе)')
+    pushToast(
+      hadGroups
+        ? 'Группа создана с регионами первой группы кампании (поменять можно в Директе)'
+        : 'Группа создана (регион — Россия, поменять можно в Директе)',
+    )
     await load()
   })
 }
@@ -710,8 +716,9 @@ function saveAd() {
   return run(async () => {
     const fields = adResponsive.value
       ? {
-          titles: [adForm.title, ...variantLines(adForm.more_titles)].slice(0, 7),
-          texts: [adForm.text, ...variantLines(adForm.more_texts)].slice(0, 3),
+          // Лишние варианты не отрезаем: Директ их не примет, и сервер скажет, сколько можно.
+          titles: [adForm.title, ...variantLines(adForm.more_titles)],
+          texts: [adForm.text, ...variantLines(adForm.more_texts)],
           href: adForm.href,
         }
       : { title: adForm.title, title2: adForm.title2, text: adForm.text, href: adForm.href }

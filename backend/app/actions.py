@@ -700,7 +700,9 @@ def _create_first_group(user_id: int, campaign_row_id: int, group: dict, *, manu
                 bid_rub=group.get("bid_rub") if manual else None,
             )
             out["keywords"] += int(res.get("created") or 0)
-            warnings.extend(str(e.get("message") or e.get("error") or e) for e in res.get("errors") or [])
+            if res.get("errors"):
+                reason = f": {res['message']}" if res.get("message") else ""
+                warnings.append(f"Не добавлено фраз: {res['errors']}{reason}")
         except YandexError as exc:
             warnings.append(f"Фразы не добавлены: {exc.message or exc.code}")
     ad = dict(group.get("ad") or {})
@@ -730,6 +732,8 @@ def _create_first_group(user_id: int, campaign_row_id: int, group: dict, *, manu
                     out["ad"] = create_text_ad(user_id, **fields)
                 except YandexError as exc2:
                     warnings.append(f"Объявление не создано: {exc2.message or exc2.code}")
+        if out["ad"] and fields["title2"] and out["ad"]["type"] == "RESPONSIVE_AD":
+            warnings.append("Второго заголовка в комбинаторном объявлении нет — добавьте его отдельным заголовком")
     out["warnings"] = warnings
     return out
 

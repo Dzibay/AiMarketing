@@ -289,3 +289,19 @@ def test_read_tools_work_on_local_data(db):
         ai_agent.READ_TOOLS["get_campaign"](ctx, {"campaign_row_id": s["foreign"]})
     # Копейки модель видит рублями.
     assert ai_agent._for_ai({"cost_kopecks": 12345, "bid_micros": 2_500_000}) == {"cost_rub": 123.45, "bid_rub": 2.5}
+
+
+def test_same_named_campaigns_get_direct_number(db):
+    s = _seed(db)
+    ctx = ai_agent.Context(s["user"], s["ws"])
+    make_campaign(db, s["user"], s["acc"], 31, "Поиск")  # одноимённая, но вне пространства — номер не нужен
+    assert ai_agent._cnames(ctx.campaigns([s["search"], s["network"]])) == "«Поиск», «РСЯ»"
+
+    twin = make_campaign(db, s["user"], s["acc"], 13, "Поиск")
+    with db.connection() as conn:
+        conn.execute(
+            "INSERT INTO workspace_campaigns (workspace_id, campaign_row_id, user_id) VALUES (%s, %s, %s)",
+            (s["ws"], twin, s["user"]),
+        )
+    assert ai_agent._cnames(ctx.campaigns([s["search"], s["network"], twin])) == "«Поиск» №11, «Поиск» №13, «РСЯ»"
+    assert ai_agent._cname(ctx.campaign(s["search"])) == "«Поиск» №11"

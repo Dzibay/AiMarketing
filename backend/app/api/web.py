@@ -166,7 +166,8 @@ class UpdateCampaignBody(BaseModel):
 
 class AdGroupBody(BaseModel):
     name: str = ""
-    region_ids: list[int] = Field(default_factory=lambda: [225])
+    # Пусто — регионы как у первой группы кампании.
+    region_ids: list[int] = Field(default_factory=list)
 
 
 class AdGroupPatchBody(BaseModel):
@@ -779,7 +780,7 @@ def web_create_adgroup(
             user_id,
             campaign_row_id=campaign_row_id,
             name=body.name,
-            region_ids=body.region_ids or [225],
+            region_ids=body.region_ids or None,
         )
     except YandexError as exc:
         raise _http(exc) from exc

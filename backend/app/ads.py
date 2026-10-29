@@ -1,9 +1,10 @@
 """Объявления Яндекс Директа: текстовые (TextAd), комбинаторные (ResponsiveAd) и графические.
 
 В ЕПК с 30.06.2026 текстово-графические объявления только редактируются, новые — комбинаторные
-(RESPONSIVE_AD): до 7 заголовков, до 3 текстов, до 5 картинок. Читаем их через
-ResponsiveAdFieldNames: без него Директ отдаёт комбинаторное как TextAd с первым заголовком,
-текстом и картинкой, а правка через TextAd оставляет в объявлении по одному варианту.
+(RESPONSIVE_AD): до 7 заголовков, до 3 текстов, до 5 картинок. В текстовых группах новые объявления
+тоже комбинаторные: TextAd Директ сам переделывает в комбинаторное, и у него остаются один заголовок
+и один текст. Читаем их через ResponsiveAdFieldNames: без него Директ отдаёт комбинаторное как TextAd
+с первым заголовком, текстом и картинкой, а правка через TextAd оставляет в объявлении по одному варианту.
 """
 
 from __future__ import annotations
@@ -58,16 +59,27 @@ _RESULT_KEYS = {
 }
 
 
-def clean_variants(values, limit: int, length: int) -> list[str]:
-    """Варианты заголовков или текстов: без пустых и повторов, обрезанные до пределов Директа."""
+def clean_variants(values, limit: int, length: int, what: str = "вариантов") -> list[str]:
+    """Варианты заголовков или текстов без пустых и повторов. Длиннее предела Директа или больше limit —
+    ошибка, а не обрезка: оборванный посреди слова текст должен переписать человек или ИИ."""
     out: list[str] = []
     for value in values or []:
-        text = str(value or "").strip()[:length].strip()
-        if text and text not in out:
-            out.append(text)
-        if len(out) >= limit:
-            break
+        text = str(value or "").strip()
+        if not text or text in out:
+            continue
+        if len(text) > length:
+            raise YandexError("args", f"«{text}» — {len(text)} символов, в Директе до {length}: сократи")
+        out.append(text)
+    if len(out) > limit:
+        raise YandexError("args", f"{what.capitalize()} в объявлении — не больше {limit}, передано {len(out)}")
     return out
+
+
+def clean_title2(value) -> str:
+    text = str(value or "").strip()
+    if len(text) > TITLE2_LEN:
+        raise YandexError("args", f"Заголовок 2 «{text}» — {len(text)} символов, в Директе до {TITLE2_LEN}: сократи")
+    return text
 
 
 def _href(value: str | None) -> str:
@@ -270,8 +282,19 @@ def list_ads(user_id: int, *, campaign_row_id: int | None = None, adgroup_row_id
     return [_public(r) for r in rows]
 
 
-def _is_unified(group: dict) -> bool:
-    return group.get("type") == "UNIFIED_AD_GROUP" or group.get("campaign_type") == "UNIFIED_CAMPAIGN"
+# Группы, куда Директ принимает комбинаторные объявления (ads.add v501); тип группы не синхронизирован —
+# смотрим на тип кампании.
+RESPONSIVE_GROUP_TYPES = ("TEXT_AD_GROUP", "UNIFIED_AD_GROUP")
+RESPONSIVE_CAMPAIGN_TYPES = ("TEXT_CAMPAIGN", "UNIFIED_CAMPAIGN")
+
+
+def new_ad_type(group: dict) -> str:
+    """Тип нового объявления в группе: в текстовых группах и ЕПК — комбинаторное."""
+    if group.get("type"):
+        responsive = group["type"] in RESPONSIVE_GROUP_TYPES
+    else:
+        responsive = group.get("campaign_type") in RESPONSIVE_CAMPAIGN_TYPES
+    return "RESPONSIVE_AD" if responsive else "TEXT_AD"
 
 
 def create_text_ad(
@@ -286,33 +309,37 @@ def create_text_ad(
     texts: list[str] | None = None,
     extras: dict | None = None,
 ) -> dict:
-    """Новое объявление: в ЕПК — комбинаторное со всеми вариантами, в остальных — TextAd.
+    """Новое объявление: в текстовых группах и ЕПК — комбинаторное со всеми вариантами (второго
+    заголовка в нём нет — title2 не ставится), в остальных — TextAd с одним заголовком и текстом.
     extras — быстрые ссылки, уточнения и картинки: {sitelinks, callouts, image_hashes}."""
-    titles_n = clean_variants(titles or [title], MAX_TITLES, TITLE_LEN)
-    texts_n = clean_variants(texts or [text], MAX_TEXTS, TEXT_LEN)
-    href_n = _href(href)
-    title2_n = (title2 or "").strip()[:TITLE2_LEN]
     group = _adgroup_row(user_id, adgroup_row_id)
+    ad_type = new_ad_type(group)
+    responsive = ad_type == "RESPONSIVE_AD"
+    titles_n = clean_variants(titles or [title], MAX_TITLES if responsive else 1, TITLE_LEN, "заголовков")
+    texts_n = clean_variants(texts or [text], MAX_TEXTS if responsive else 1, TEXT_LEN, "текстов")
+    title2_n = "" if responsive else clean_title2(title2)
+    href_n = _href(href)
     # Шаблон ссылки сайта: тот же путь, ref и прочее из шаблона; utm — в параметрах кампании.
     template = links.campaign_template(user_id, int(group["campaign_row_id"]))
     if template:
         href_n = links.normalize_href(href_n, template)
     if not titles_n or not texts_n or not href_n:
         raise YandexError("empty")
-    ad_type = "RESPONSIVE_AD" if _is_unified(group) else "TEXT_AD"
     extras_n = ad_extras.clean_extras(extras, ad_type)
     token = get_connection_access_token(group["connection_id"], user_id)
     resolved = ad_extras.resolve(token, group["client_login"], extras_n) if extras_n else {}
-    if ad_type == "RESPONSIVE_AD":
-        title2_n = ""  # в комбинаторном объявлении дополнительного заголовка нет
+    if responsive:
         payload = {"ResponsiveAd": {"Titles": titles_n, "Texts": texts_n, "Href": href_n, **ad_extras.add_fields(resolved, ad_type)}}
     else:
-        titles_n, texts_n = titles_n[:1], texts_n[:1]
         text_ad: dict = {"Title": titles_n[0], "Text": texts_n[0], "Href": href_n, "Mobile": "NO"}
         if title2_n:
             text_ad["Title2"] = title2_n
         payload = {"TextAd": {**text_ad, **ad_extras.add_fields(resolved, ad_type)}}
-    images = list(resolved.get("image_hashes") or [])[: 1 if ad_type == "TEXT_AD" else None]
+    images = list(resolved.get("image_hashes") or [])
+    set_id = resolved.get("sitelink_set_id")
+    # Адреса набора, взятого у другого объявления, узнаем при следующей синхронизации.
+    hrefs = [link["href"] for link in extras_n["sitelinks"]] if "sitelinks" in extras_n else None
+    hrefs = [] if not set_id else hrefs
     result = _call(token, group["client_login"], "add", {"Ads": [{"AdGroupId": int(group["adgroup_id"]), **payload}]})
     error = _first_error(result, "AddResults")
     add = (result.get("AddResults") or [{}])[0]
@@ -326,13 +353,15 @@ def create_text_ad(
             INSERT INTO direct_ads (
                 user_id, account_id, adgroup_row_id, ad_id,
                 type, state, status, title, title2, text, href,
-                titles, texts, image_hashes, synced_at
+                titles, texts, image_hashes, sitelink_set_id, sitelink_hrefs, synced_at
             )
-            VALUES (%s, %s, %s, %s, %s, 'OFF', '', %s, %s, %s, %s, %s, %s, %s, NOW())
+            VALUES (%s, %s, %s, %s, %s, 'OFF', '', %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
             ON CONFLICT (account_id, ad_id) DO UPDATE SET
                 type = EXCLUDED.type, title = EXCLUDED.title, title2 = EXCLUDED.title2,
                 text = EXCLUDED.text, href = EXCLUDED.href, titles = EXCLUDED.titles,
-                texts = EXCLUDED.texts, image_hashes = EXCLUDED.image_hashes, synced_at = NOW()
+                texts = EXCLUDED.texts, image_hashes = EXCLUDED.image_hashes,
+                sitelink_set_id = EXCLUDED.sitelink_set_id, sitelink_hrefs = EXCLUDED.sitelink_hrefs,
+                synced_at = NOW()
             RETURNING *
             """,
             (
@@ -348,6 +377,8 @@ def create_text_ad(
                 Jsonb(titles_n),
                 Jsonb(texts_n),
                 Jsonb(images),
+                set_id,
+                Jsonb(hrefs) if hrefs is not None else None,
             ),
         ).fetchone()
     log_action(
@@ -410,20 +441,21 @@ def update_text_ad(
     cur_titles = list(current.get("titles") or ([current["title"]] if current.get("title") else []))
     cur_texts = list(current.get("texts") or ([current["text"]] if current.get("text") else []))
     responsive = current.get("type") == "RESPONSIVE_AD"
+    max_titles, max_texts = (MAX_TITLES, MAX_TEXTS) if responsive else (1, 1)
     new_titles = None
     if titles is not None:
-        new_titles = clean_variants(titles, MAX_TITLES if responsive else 1, TITLE_LEN)
+        new_titles = clean_variants(titles, max_titles, TITLE_LEN, "заголовков")
     elif title is not None:
-        new_titles = clean_variants(_replace_first(cur_titles, title), MAX_TITLES if responsive else 1, TITLE_LEN)
+        new_titles = clean_variants(_replace_first(cur_titles, title), max_titles, TITLE_LEN, "заголовков")
     new_texts = None
     if texts is not None:
-        new_texts = clean_variants(texts, MAX_TEXTS if responsive else 1, TEXT_LEN)
+        new_texts = clean_variants(texts, max_texts, TEXT_LEN, "текстов")
     elif text is not None:
-        new_texts = clean_variants(_replace_first(cur_texts, text), MAX_TEXTS if responsive else 1, TEXT_LEN)
+        new_texts = clean_variants(_replace_first(cur_texts, text), max_texts, TEXT_LEN, "текстов")
     if new_titles == [] or new_texts == []:
         raise YandexError("empty")
     href_n = _href(href) if href is not None else None
-    title2_n = (title2 or "").strip()[:TITLE2_LEN] if title2 is not None and not responsive else None
+    title2_n = clean_title2(title2) if title2 is not None and not responsive else None
 
     changes: dict = {}
     if new_titles is not None:
@@ -629,6 +661,65 @@ def _bulk_undo(action: str, done: list[dict]) -> dict | None:
     return None  # удаление не откатывается
 
 
+def read_ad_extras(user_id: int, ad_row_id: int) -> dict:
+    """Быстрые ссылки, уточнения и картинки объявления — из Директа."""
+    row = _ad_row(user_id, ad_row_id)
+    token = get_connection_access_token(row["connection_id"], user_id)
+    return ad_extras.read_extras(token, row["client_login"], int(row["ad_id"]))
+
+
+def extras_like(user_id: int, ad_row_id: int) -> dict:
+    """Расширения объявления как extras для create_text_ad и update_text_ad: те же наборы ссылок,
+    уточнения и картинки кабинета, без пересоздания."""
+    row = _ad_row(user_id, ad_row_id)
+    token = get_connection_access_token(row["connection_id"], user_id)
+    refs = ad_extras._ad_refs(token, row["client_login"], int(row["ad_id"]))
+    return {key: refs[key] for key in ("sitelink_set_id", "callout_ids", "image_hashes")}
+
+
+def campaign_images(user_id: int, campaign_row_id: int, *, limit: int = 30) -> dict:
+    """Картинки для объявлений кампании: какие уже стоят в её объявлениях (и в скольких)
+    и какие ещё лежат в библиотеке кабинета."""
+    with pool.connection() as conn:
+        account = conn.execute(
+            """
+            SELECT a.connection_id, a.client_login, a.enabled
+            FROM direct_campaigns c JOIN direct_accounts a ON a.id = c.account_id
+            WHERE c.id = %s AND c.user_id = %s
+            """,
+            (campaign_row_id, user_id),
+        ).fetchone()
+        used = conn.execute(
+            """
+            SELECT h.value AS hash, COUNT(*) AS ads
+            FROM direct_ads ad
+            JOIN direct_adgroups g ON g.id = ad.adgroup_row_id
+            CROSS JOIN LATERAL jsonb_array_elements_text(ad.image_hashes) AS h(value)
+            WHERE ad.user_id = %s AND g.campaign_row_id = %s
+            GROUP BY h.value
+            ORDER BY COUNT(*) DESC, h.value
+            LIMIT 100
+            """,
+            (user_id, campaign_row_id),
+        ).fetchall()
+    if account is None:
+        raise YandexError("not-found")
+    if not account.get("enabled"):
+        raise YandexError("disabled")
+    token = get_connection_access_token(account["connection_id"], user_id)
+    counts = {r["hash"]: int(r["ads"]) for r in used}
+    known: dict[str, dict] = {}
+    if counts:
+        found, _ = ad_extras.image_library(token, account["client_login"], hashes=list(counts), limit=len(counts))
+        known = {i["hash"]: i for i in found}
+    library, more = ad_extras.image_library(token, account["client_login"], limit=limit + len(counts))
+    return {
+        "in_campaign": [{**known.get(h, {"hash": h, "name": "", "type": ""}), "ads": n} for h, n in counts.items()],
+        "library": [i for i in library if i["hash"] not in counts][:limit],
+        "library_more": more,
+    }
+
+
 def _ad_row(user_id: int, ad_row_id: int) -> dict:
     with pool.connection() as conn:
         row = conn.execute(
@@ -665,6 +756,7 @@ def _public(row: dict) -> dict:
         "titles": list(row.get("titles") or ([title] if title else [])),
         "texts": list(row.get("texts") or ([text] if text else [])),
         "image_hashes": list(row.get("image_hashes") or []),
+        "sitelink_set_id": row.get("sitelink_set_id"),
         "adgroup_name": row.get("adgroup_name") or "",
         "adgroup_id": row.get("adgroup_id"),
         "synced_at": row["synced_at"].isoformat() if row.get("synced_at") else None,

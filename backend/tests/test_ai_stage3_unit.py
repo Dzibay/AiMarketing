@@ -936,7 +936,13 @@ def test_prompt_lists_running_experiments(monkeypatch):
     monkeypatch.setattr(ai_agent, "_running_experiments", lambda ctx: running)
     prompt = ai_agent._system_prompt(FakeContext())
     assert "Идут эксперименты (не меняй настройки их кампаний без просьбы маркетолога" in prompt
-    assert "- #4 «Казань»: с 20.10 на 14 дней, кампании [70], [71]" in prompt.splitlines()
+    assert "- #4 «Казань»: с 20.10 на 14 дней, кампании campaign_row_id 70, campaign_row_id 71" in prompt.splitlines()
+
+    # Названия кампаний — чтобы модель называла их маркетологу словами, а не id.
+    named = [{**running[0], "campaign_names": {70: "Казань копия"}}]
+    monkeypatch.setattr(ai_agent, "_running_experiments", lambda ctx: named)
+    line = "- #4 «Казань»: с 20.10 на 14 дней, кампании «Казань копия» (campaign_row_id 70), campaign_row_id 71"
+    assert line in ai_agent._system_prompt(FakeContext()).splitlines()
 
 
 def test_running_experiments_failure_keeps_chat_alive(monkeypatch):

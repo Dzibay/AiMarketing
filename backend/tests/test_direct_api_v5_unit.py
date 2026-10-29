@@ -14,7 +14,7 @@ from app.actions import (
     campaign_options,
     strategy_from_api,
 )
-from app.ads import clean_variants, parse_ads
+from app.ads import clean_title2, clean_variants, new_ad_type, parse_ads
 from app.yandex import YandexError, create_oauth_state
 
 RESPONSIVE = {
@@ -54,8 +54,37 @@ def test_parse_text_ad_keeps_title2():
     assert (row["titles"], row["title2"], row["texts"], row["image_hashes"]) == (["А"], "Б", ["В"], ["h"])
 
 
-def test_clean_variants_trims_dedupes_and_limits():
-    assert clean_variants([" a ", "a", "", "b" * 70, "c"], 2, 56) == ["a", "b" * 56]
+def test_clean_variants_strips_and_dedupes():
+    assert clean_variants([" a ", "a", "", None, "c"], 2, 56) == ["a", "c"]
+
+
+def test_clean_variants_rejects_long_and_extra_instead_of_cutting():
+    """Обрезка рвала тексты посреди слова, а ИИ узнавал об этом уже после правки."""
+    with pytest.raises(YandexError) as long:
+        clean_variants(["a", "b" * 57], 7, 56)
+    assert "57 символов" in long.value.message and "сократи" in long.value.message
+    with pytest.raises(YandexError) as extra:
+        clean_variants(["a", "b"], 1, 56, "заголовков")
+    assert extra.value.message == "Заголовков в объявлении — не больше 1, передано 2"
+    with pytest.raises(YandexError) as title2:
+        clean_title2("в" * 31)
+    assert "сократи" in title2.value.message
+    assert clean_title2(" второй ") == "второй"
+
+
+@pytest.mark.parametrize(
+    ("group", "expected"),
+    [
+        ({"type": "TEXT_AD_GROUP", "campaign_type": "TEXT_CAMPAIGN"}, "RESPONSIVE_AD"),
+        ({"type": "UNIFIED_AD_GROUP", "campaign_type": "UNIFIED_CAMPAIGN"}, "RESPONSIVE_AD"),
+        ({"type": "", "campaign_type": "TEXT_CAMPAIGN"}, "RESPONSIVE_AD"),
+        ({"type": "DYNAMIC_TEXT_AD_GROUP", "campaign_type": "TEXT_CAMPAIGN"}, "TEXT_AD"),
+        ({"type": "", "campaign_type": "MOBILE_APP_CAMPAIGN"}, "TEXT_AD"),
+    ],
+)
+def test_new_ads_in_text_groups_are_responsive(group, expected):
+    """TextAd в текстовой группе Директ сам делает комбинаторным, но с одним заголовком и текстом."""
+    assert new_ad_type(group) == expected
 
 
 def test_attribution_maps_retired_models():

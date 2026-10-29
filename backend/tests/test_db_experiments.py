@@ -231,7 +231,10 @@ def test_start_and_finish_through_chat_approval(db, monkeypatch):
 
     # Следующий ход уже знает об эксперименте: в системном промпте и в get_experiments.
     system = fake.calls[0][0]["content"]
-    assert f"- #{exp_id} «Казань»: с 28.10 на 14 дней, кампании [{s['kazan']}], [{s['samara']}]" in system
+    assert (
+        f"- #{exp_id} «Казань»: с 28.10 на 14 дней, кампании «Казань копия» (campaign_row_id {s['kazan']}), "
+        f"«Самара копия» (campaign_row_id {s['samara']})"
+    ) in system
     digest = json.loads(fake.calls[1][-1]["content"])["digest"]
     assert f"#{exp_id} «Казань» — новое гео, идёт" in digest
     assert "Сейчас: нет статистики — статистика кабинета ещё не загружалась." in digest
@@ -336,7 +339,7 @@ def test_review_card_and_chat_with_digest(db, monkeypatch):
     sent = fake.calls[0]
     assert [m["role"] for m in sent] == ["system", "user", "assistant", "tool"]
     assert sent[2]["tool_calls"][0]["function"]["name"] == "get_experiments"
-    assert f"- #{kazan} «Казань»: с 20.10 на 14 дней, кампании [{s['kazan']}]" in sent[0]["content"]
+    assert f"- #{kazan} «Казань»: с 20.10 на 14 дней, кампании «Казань копия» (campaign_row_id {s['kazan']})" in sent[0]["content"]
     digest = _flat(json.loads(sent[-1]["content"])["digest"])
     assert f"#{kazan} «Казань» — новое гео, идёт; 14 дн. с 21.10 по 03.11, день 8 из 14; статистика по 27.10." in digest
     assert "Сейчас: критерий выполнен — 3 конверсии при расходе 1 ₽" in digest

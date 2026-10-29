@@ -282,6 +282,27 @@ def image_previews(token, client_login: str, hashes: list[str]) -> dict[str, str
     return {str(i["AdImageHash"]): str(i.get("PreviewUrl") or "") for i in found if i.get("AdImageHash")}
 
 
+def image_library(token, client_login: str, *, hashes: list[str] | None = None, limit: int = 50) -> tuple[list[dict], bool]:
+    """Картинки библиотеки кабинета [{hash, name, type}] — все или только hashes; второе — есть ли ещё."""
+    result = direct_api.call(
+        token,
+        client_login,
+        "adimages",
+        "get",
+        {
+            "SelectionCriteria": {"AdImageHashes": list(hashes)} if hashes else {},
+            "FieldNames": ["AdImageHash", "Name", "Type"],
+            "Page": {"Limit": limit},
+        },
+    )
+    items = [
+        {"hash": str(i["AdImageHash"]), "name": str(i.get("Name") or ""), "type": str(i.get("Type") or "")}
+        for i in result.get("AdImages") or []
+        if i.get("AdImageHash")
+    ]
+    return items, bool(result.get("LimitedBy"))
+
+
 def read_extras(token, client_login: str, ad_id: int) -> dict:
     """Расширения объявления для формы: тексты, ссылки и превью картинок, плюс id для отката."""
     refs = _ad_refs(token, client_login, ad_id)
