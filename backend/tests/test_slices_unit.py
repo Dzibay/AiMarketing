@@ -208,3 +208,14 @@ def test_exclude_placements_merges(monkeypatch):
     assert res["sites"] == 2 and res["applied"] == 2
     steps = logged["undo"]["steps"]
     assert {"op": "campaign_settings", "args": {"campaign_row_id": 1, "changes": {"excluded_sites": ["old.ru"]}}} in steps
+
+
+def test_waste_threshold():
+    # Цель и средний CPA берём как есть, если они не дешевле десятка средних кликов.
+    assert slices.waste_threshold(100_000, 30_000, 2_000) == 100_000
+    assert slices.waste_threshold(None, 30_000, 2_000) == 30_000
+    # Без конверсий — 20 средних кликов, но не меньше 500 ₽.
+    assert slices.waste_threshold(None, None, 2_000) == 50_000
+    assert slices.waste_threshold(None, None, 5_000) == 100_000
+    # Конверсии за 0 ₽: средний CPA 40 коп. при клике 1,10 ₽ — порог 10 кликов, а не 40 копеек.
+    assert slices.waste_threshold(None, 40, 110) == 1_100

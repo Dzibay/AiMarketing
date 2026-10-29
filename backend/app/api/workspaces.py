@@ -34,7 +34,7 @@ from app.query_cleaning import (
     needs_direct,
     query_queue,
 )
-from app.rules import list_rules
+from app.rules import list_rules, rule_campaigns
 from app.web_auth import require_web_user
 from app.workspaces import (
     account_candidates,
@@ -669,7 +669,10 @@ def ws_actions(
 @router.get("/{workspace_id}/rules")
 def ws_rules(workspace_id: int, user_id: int = Depends(require_web_user)) -> dict:
     _ws(user_id, workspace_id)
-    return {"items": list_rules(user_id, workspace_id=workspace_id)}
+    return {
+        "items": list_rules(user_id, workspace_id=workspace_id),
+        "campaigns": rule_campaigns(user_id, workspace_id=workspace_id),
+    }
 
 
 # --- Чистка поисковых запросов и бриф ---------------------------------------------------------

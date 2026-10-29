@@ -382,7 +382,7 @@ def get_campaign(user_id: int, campaign_row_id: int) -> dict | None:
         row = conn.execute(
             """
             SELECT c.id, c.account_id, c.campaign_id, c.name, c.campaign_type,
-                   c.state, c.status, c.strategy, c.daily_budget_kopecks,
+                   c.state, c.status, c.strategy, c.bidding_strategy, c.daily_budget_kopecks,
                    c.negative_keywords, c.synced_at,
                    a.client_login, a.name AS account_name
             FROM direct_campaigns c
@@ -402,6 +402,8 @@ def get_campaign(user_id: int, campaign_row_id: int) -> dict | None:
         "state": row["state"],
         "status": row["status"],
         "strategy": row["strategy"],
+        # При выключенном поиске ставками распоряжается стратегия в сетях.
+        "network_strategy": str(((row.get("bidding_strategy") or {}).get("Network") or {}).get("BiddingStrategyType") or ""),
         "daily_budget_kopecks": row["daily_budget_kopecks"],
         "negative_keywords": _parse_phrases(row.get("negative_keywords") or "[]"),
         "synced_at": row["synced_at"].isoformat() if row.get("synced_at") else None,

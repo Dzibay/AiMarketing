@@ -35,11 +35,8 @@ def test_clean_sitelinks():
         clean_sitelinks([{"title": "А", "href": "a.ru"}, {"title": "а", "href": "a.ru/2"}])
     with _raises("не больше 8"):
         clean_sitelinks([{"title": f"С{i}", "href": "a.ru"} for i in range(9)])
-    # Четыре заголовка по 17 символов — 68 > 66.
-    with _raises("1–4 вместе"):
-        clean_sitelinks([{"title": f"{i}" + "я" * 16, "href": "a.ru"} for i in range(4)])
-    # Вторая четвёрка считается отдельно.
-    ok = [{"title": f"{i}" + "я" * 15, "href": "a.ru"} for i in range(8)]
+    # Предела «1–4 вместе до 66 символов» Директ больше не держит: четвёрка по 21 символу проходит.
+    ok = [{"title": f"{i}" + "я" * 20, "href": "a.ru"} for i in range(8)]
     assert len(clean_sitelinks(ok)) == 8
 
 

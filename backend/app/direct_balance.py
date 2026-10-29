@@ -81,16 +81,17 @@ def _save_balance(account_id: int, balance: dict | None, error: str) -> None:
             )
 
 
-def sync_balances_for_user(user_id: int) -> dict:
-    """Балансы всех включённых кабинетов; логины одного подключения — одним запросом."""
+def sync_balances_for_user(user_id: int, account_ids: list[int] | None = None) -> dict:
+    """Балансы включённых кабинетов (всех или указанных); логины одного подключения — одним запросом."""
     with pool.connection() as conn:
         accounts = conn.execute(
             """
             SELECT id, connection_id, client_login
             FROM direct_accounts
             WHERE user_id = %s AND enabled = TRUE AND client_login <> ''
+              AND (%s::bigint[] IS NULL OR id = ANY(%s::bigint[]))
             """,
-            (user_id,),
+            (user_id, account_ids, account_ids),
         ).fetchall()
     by_connection: dict[int, list[dict]] = defaultdict(list)
     for account in accounts:

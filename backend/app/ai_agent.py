@@ -15,7 +15,7 @@ from datetime import date, datetime, timedelta, timezone
 from psycopg.types.json import Jsonb
 
 from app import ai, experiments
-from app.actions import BULK_ACTIONS, campaign_options
+from app.actions import BULK_ACTIONS, SETTINGS_LABELS, campaign_options
 from app.brief import brief_filled, normalize_brief
 from app.clock import today_msk
 from app.db import pool
@@ -726,23 +726,7 @@ def _x_campaigns_action(ctx: Context, args: dict) -> dict:
     )
 
 
-_SETTINGS_LABELS = {
-    "name": "название",
-    "start_date": "дата начала",
-    "end_date": "дата окончания",
-    "daily_budget_rub": "дневной бюджет",
-    "strategy": "стратегия",
-    "negative_keywords": "минус-фразы (замена списка)",
-    "excluded_sites": "запрещённые площадки",
-    "schedule": "расписание",
-    "consider_working_weekends": "рабочие выходные",
-    "counter_ids": "счётчики",
-    "priority_goals": "ключевые цели",
-    "attribution_model": "атрибуция",
-    "settings": "опции",
-    "tracking_params": "параметры ссылок",
-    "client_info": "информация о клиенте",
-}
+_SETTINGS_LABELS = {**SETTINGS_LABELS, "negative_keywords": "минус-фразы (замена списка)"}
 
 
 def _p_update_settings(ctx: Context, args: dict) -> Plan:

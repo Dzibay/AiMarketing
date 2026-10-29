@@ -54,6 +54,15 @@
             <option v-for="a in accounts" :key="a.id" :value="String(a.id)">{{ a.name || a.client_login }}</option>
           </select>
         </div>
+        <div v-field class="field">
+          <label>Кампания</label>
+          <select v-model="form.scope_campaign_row_id">
+            <option value="">Все</option>
+            <option v-for="c in campaignOptions" :key="c.id" :value="String(c.id)">
+              {{ campaignLabel(c, repeatedCampaigns) }}
+            </option>
+          </select>
+        </div>
         <div v-if="form.target === 'campaign'" v-field class="field">
           <label>Конверсии</label>
           <select v-model="form.goal_row_id">
@@ -141,6 +150,7 @@
               <template v-if="rule.goal_name"> · цель «{{ rule.goal_name }}»</template>
               <template v-if="!workspace && rule.workspace_name"> · {{ rule.workspace_name }}</template>
               <template v-if="rule.account_name"> · {{ rule.account_name }}</template>
+              <template v-if="rule.campaign_name"> · кампания «{{ rule.campaign_name }}»</template>
               <template v-if="!rule.enabled"> · выключено</template>
             </small>
           </div>
@@ -207,6 +217,7 @@ import { errorText, webApi, wsApi } from '../api/web'
 import { pushToast } from '../composables/useToasts'
 import { useWorkspaces } from '../composables/useWorkspaces'
 import { formatDateTime, rubles } from '../utils/format'
+import { campaignLabel, repeatedNames } from '../utils/campaignNames'
 
 const props = defineProps({
   // Пространство: правила только его кампаний; без него — все правила пользователя.
@@ -248,6 +259,7 @@ const rules = ref([])
 const runs = ref([])
 const allAccounts = ref([])
 const allGoals = ref([])
+const allCampaigns = ref([])
 const lastRun = ref(null)
 const busy = ref(false)
 const form = reactive({
@@ -259,6 +271,7 @@ const form = reactive({
   dry_run: true,
   scope_account_id: '',
   scope_workspace_id: '',
+  scope_campaign_row_id: '',
   goal_row_id: '',
   action: 'pause',
   action_budget_rub: 500,
@@ -275,6 +288,23 @@ const goals = computed(() =>
     ? (props.workspace.goals || []).map((g) => ({ id: g.row_id, goal_id: g.goal_id, name: g.name }))
     : allGoals.value,
 )
+
+// Кампании выбранных кабинета и пространства; выбор вне них сбрасываем.
+const campaignOptions = computed(() => {
+  const ws = props.workspace ? '' : form.scope_workspace_id
+  return allCampaigns.value.filter(
+    (c) =>
+      (!form.scope_account_id || String(c.account_id) === form.scope_account_id) &&
+      (!ws || (c.workspace_ids || []).map(String).includes(ws)),
+  )
+})
+const repeatedCampaigns = computed(() => repeatedNames(campaignOptions.value.map((c) => c.name)))
+
+watch(campaignOptions, (list) => {
+  if (form.scope_campaign_row_id && !list.some((c) => String(c.id) === form.scope_campaign_row_id)) {
+    form.scope_campaign_row_id = ''
+  }
+})
 
 watch(
   () => form.target,
@@ -303,11 +333,13 @@ async function load() {
     if (props.workspace) {
       const [r, rr] = await Promise.all([wsApi.rules(props.workspace.id), webApi.ruleRuns()])
       rules.value = r.items || []
+      allCampaigns.value = r.campaigns || []
       const ids = new Set(rules.value.map((x) => x.id))
       runs.value = (rr.items || []).filter((x) => ids.has(x.rule_id))
     } else {
       const [r, rr, me, g] = await Promise.all([webApi.rules(), webApi.ruleRuns(), webApi.me(), webApi.goals()])
       rules.value = r.items || []
+      allCampaigns.value = r.campaigns || []
       runs.value = rr.items || []
       allAccounts.value = (me.direct || []).filter((a) => a.enabled)
       allGoals.value = g.items || []
@@ -334,6 +366,7 @@ async function create() {
         : form.scope_workspace_id
           ? Number(form.scope_workspace_id)
           : null,
+      scope_campaign_row_id: form.scope_campaign_row_id ? Number(form.scope_campaign_row_id) : null,
       goal_row_id: form.target === 'campaign' && form.goal_row_id ? Number(form.goal_row_id) : null,
       action_budget_rub: ['set_budget', 'set_weekly_budget'].includes(form.action)
         ? Number(form.action_budget_rub)
@@ -346,6 +379,7 @@ async function create() {
     pushToast('Правило создано')
     form.name = ''
     form.scope_account_id = ''
+    form.scope_campaign_row_id = ''
     form.goal_row_id = ''
     await load()
   } catch (err) {

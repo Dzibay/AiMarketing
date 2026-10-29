@@ -212,7 +212,7 @@
 </template>
 
 <script setup>
-import { askConfirm } from '../../composables/useConfirm'
+import { askConfirm, askText } from '../../composables/useConfirm'
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
 import { aiApi, errorText, wsApi } from '../../api/web'
@@ -608,10 +608,10 @@ function newChat() {
 }
 
 async function renameChat() {
-  const title = window.prompt('Название чата', chat.value.title)
-  if (title == null) return
+  const title = await askText('Название чата', { title: 'Переименовать чат', value: chat.value.title, required: true })
+  if (title == null || !title.trim() || title.trim() === chat.value.title) return
   try {
-    const updated = await aiApi.renameChat(chat.value.id, title)
+    const updated = await aiApi.renameChat(chat.value.id, title.trim())
     data.value = { ...data.value, chat: updated }
     chats.value = chats.value.map((c) => (c.id === updated.id ? updated : c))
   } catch (err) {

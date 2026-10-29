@@ -25,7 +25,13 @@
           </p>
         </div>
         <div class="row-actions">
-          <button class="btn btn--ghost" type="button" :disabled="busy || !state" @click="toggleState">
+          <button
+            v-if="state === 'ON' || status !== 'DRAFT'"
+            class="btn btn--ghost"
+            type="button"
+            :disabled="busy || !state"
+            @click="toggleState"
+          >
             {{ state === 'ON' ? 'Остановить' : 'Запустить' }}
           </button>
           <button class="btn btn--ghost" type="button" :disabled="busy" @click="moderate">На модерацию</button>

@@ -71,6 +71,7 @@ def create_rule(
     action_bid_rub: float | None = None,
     target: str = "campaign",
     action_pct: float | None = None,
+    scope_campaign_row_id: int | None = None,
 ) -> dict:
     target_n = (target or "campaign").strip() or "campaign"
     if target_n not in RULE_TARGETS:
@@ -89,15 +90,17 @@ def create_rule(
     bid = _validate_bid(action, action_bid_rub)
     pct = _validate_pct(action, action_pct)
     scope_workspace_id = _validate_workspace(user_id, scope_workspace_id)
+    scope_campaign_row_id = _validate_campaign(user_id, scope_campaign_row_id, scope_account_id, scope_workspace_id)
     with pool.connection() as conn:
         row = conn.execute(
             """
             INSERT INTO automation_rules (
                 user_id, name, enabled, dry_run, scope_account_id,
                 rule_type, threshold_value, lookback_days, action, cooldown_hours,
-                goal_row_id, action_budget_rub, target, action_bid_rub, scope_workspace_id, action_pct
+                goal_row_id, action_budget_rub, target, action_bid_rub, scope_workspace_id, action_pct,
+                scope_campaign_row_id
             )
-            VALUES (%s, %s, TRUE, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            VALUES (%s, %s, TRUE, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             RETURNING *
             """,
             (
@@ -116,9 +119,10 @@ def create_rule(
                 bid,
                 scope_workspace_id,
                 pct,
+                scope_campaign_row_id,
             ),
         ).fetchone()
-    return _public_rule(row)
+    return _public_rule(_with_names(row))
 
 
 def _validate_workspace(user_id: int, workspace_id: int | None) -> int | None:
@@ -134,16 +138,57 @@ def _validate_workspace(user_id: int, workspace_id: int | None) -> int | None:
     return int(row["id"])
 
 
+def _validate_campaign(
+    user_id: int, campaign_row_id: int | None, account_id: int | None, workspace_id: int | None
+) -> int | None:
+    """Кампания-ограничение правила: своя и из выбранных кабинета и пространства."""
+    if not campaign_row_id:
+        return None
+    with pool.connection() as conn:
+        row = conn.execute(
+            """
+            SELECT c.id, c.account_id,
+                   (%s::bigint IS NULL OR EXISTS (
+                        SELECT 1 FROM workspace_campaigns wc
+                        WHERE wc.workspace_id = %s AND wc.campaign_row_id = c.id)) AS in_workspace
+            FROM direct_campaigns c
+            WHERE c.id = %s AND c.user_id = %s
+            """,
+            (workspace_id, workspace_id, campaign_row_id, user_id),
+        ).fetchone()
+    if row is None:
+        raise YandexError("not-found")
+    if account_id and int(row["account_id"]) != int(account_id):
+        raise YandexError("rule-campaign", "Кампания не из выбранного кабинета.")
+    if not row["in_workspace"]:
+        raise YandexError("rule-campaign", "Кампания не из выбранного пространства.")
+    return int(row["id"])
+
+
+_NAMED_RULES = """
+    SELECT r.*, g.name AS goal_name, g.goal_id AS yandex_goal_id, w.name AS workspace_name,
+           COALESCE(NULLIF(a.name, ''), a.client_login) AS account_name,
+           c.name AS campaign_name, c.campaign_id AS scope_campaign_id
+    FROM automation_rules r
+    LEFT JOIN metrika_goals g ON g.id = r.goal_row_id
+    LEFT JOIN workspaces w ON w.id = r.scope_workspace_id
+    LEFT JOIN direct_accounts a ON a.id = r.scope_account_id
+    LEFT JOIN direct_campaigns c ON c.id = r.scope_campaign_row_id
+"""
+
+
+def _with_names(row: dict) -> dict:
+    """Строка правила с названиями цели, пространства, кабинета и кампании — как в списке."""
+    with pool.connection() as conn:
+        named = conn.execute(_NAMED_RULES + "WHERE r.id = %s", (row["id"],)).fetchone()
+    return named or row
+
+
 def list_rules(user_id: int, *, workspace_id: int | None = None) -> list[dict]:
     with pool.connection() as conn:
         rows = conn.execute(
-            """
-            SELECT r.*, g.name AS goal_name, g.goal_id AS yandex_goal_id, w.name AS workspace_name,
-                   COALESCE(NULLIF(a.name, ''), a.client_login) AS account_name
-            FROM automation_rules r
-            LEFT JOIN metrika_goals g ON g.id = r.goal_row_id
-            LEFT JOIN workspaces w ON w.id = r.scope_workspace_id
-            LEFT JOIN direct_accounts a ON a.id = r.scope_account_id
+            _NAMED_RULES
+            + """
             WHERE r.user_id = %s
               AND (%s::bigint IS NULL OR r.scope_workspace_id = %s)
             ORDER BY r.id DESC
@@ -151,6 +196,35 @@ def list_rules(user_id: int, *, workspace_id: int | None = None) -> list[dict]:
             (user_id, workspace_id, workspace_id),
         ).fetchall()
     return [_public_rule(r) for r in rows]
+
+
+def rule_campaigns(user_id: int, *, workspace_id: int | None = None) -> list[dict]:
+    """Кампании, которыми можно ограничить правило: все, кроме архивных (в пространстве — только его)."""
+    with pool.connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT c.id, c.campaign_id, c.name, c.account_id, c.state,
+                   ARRAY(SELECT wc.workspace_id FROM workspace_campaigns wc
+                         WHERE wc.campaign_row_id = c.id ORDER BY 1) AS workspace_ids
+            FROM direct_campaigns c
+            WHERE c.user_id = %s AND c.state <> 'ARCHIVED'
+              AND (%s::bigint IS NULL OR c.id IN (
+                    SELECT campaign_row_id FROM workspace_campaigns WHERE workspace_id = %s))
+            ORDER BY c.name, c.campaign_id
+            """,
+            (user_id, workspace_id, workspace_id),
+        ).fetchall()
+    return [
+        {
+            "id": r["id"],
+            "campaign_id": r["campaign_id"],
+            "name": r["name"],
+            "account_id": r["account_id"],
+            "state": r["state"],
+            "workspace_ids": list(r["workspace_ids"] or []),
+        }
+        for r in rows
+    ]
 
 
 def update_rule(user_id: int, rule_id: int, **fields) -> dict:
@@ -168,6 +242,7 @@ def update_rule(user_id: int, rule_id: int, **fields) -> dict:
         "action_pct",
         "scope_account_id",
         "scope_workspace_id",
+        "scope_campaign_row_id",
         "target",
         "rule_type",
     }
@@ -192,6 +267,12 @@ def update_rule(user_id: int, rule_id: int, **fields) -> dict:
             raise YandexError("rule-type")
     if "scope_workspace_id" in updates:
         updates["scope_workspace_id"] = _validate_workspace(user_id, updates["scope_workspace_id"])
+    scope_keys = ("scope_campaign_row_id", "scope_account_id", "scope_workspace_id")
+    if updates.keys() & set(scope_keys):
+        scope = [updates[k] if k in updates else current.get(k) for k in scope_keys]
+        campaign = _validate_campaign(user_id, *scope)
+        if "scope_campaign_row_id" in updates:
+            updates["scope_campaign_row_id"] = campaign
     target_n = updates.get("target") or current.get("target") or "campaign"
     rule_type_n = updates.get("rule_type") or current.get("rule_type")
     action_n = updates.get("action") or current.get("action") or "pause"
@@ -245,7 +326,7 @@ def update_rule(user_id: int, rule_id: int, **fields) -> dict:
         ).fetchone()
     if row is None:
         raise YandexError("not-found")
-    return _public_rule(row)
+    return _public_rule(_with_names(row))
 
 
 def delete_rule(user_id: int, rule_id: int) -> None:
@@ -352,8 +433,11 @@ def _public_rule(row: dict) -> dict:
         "target": row.get("target") or "campaign",
         "scope_account_id": row["scope_account_id"],
         "scope_workspace_id": row.get("scope_workspace_id"),
+        "scope_campaign_row_id": row.get("scope_campaign_row_id"),
+        "scope_campaign_id": row.get("scope_campaign_id"),
         "workspace_name": row.get("workspace_name") or "",
         "account_name": row.get("account_name") or "",
+        "campaign_name": row.get("campaign_name") or "",
         "rule_type": row["rule_type"],
         "threshold_value": float(row["threshold_value"] or 0),
         "lookback_days": row["lookback_days"],
@@ -395,6 +479,7 @@ def _matching_campaigns(user_id: int, rule: dict) -> list[dict]:
     threshold = Decimal(str(rule["threshold_value"]))
     account_id = rule.get("scope_account_id")
     workspace_id = rule.get("scope_workspace_id")
+    campaign_row_id = rule.get("scope_campaign_row_id")
     goal = _goal_meta(user_id, rule.get("goal_row_id"))
     yandex_goal_id = int(goal["goal_id"]) if goal else None
 
@@ -476,13 +561,17 @@ def _matching_campaigns(user_id: int, rule: dict) -> list[dict]:
             for a in a_rows:
                 goal_by_account[int(a["account_id"])] = int(a["goal_reaches"] or 0)
 
-    week_spend = _week_spend(user_id, [int(r["row_id"]) for r in rows]) if rule["rule_type"] == "weekly_budget_pct" else {}
-
     # Если по кампаниям цели нет — распределяем account total пропорционально расходу
     account_costs: dict[int, Decimal] = {}
     for row in rows:
         aid = int(row["account_id"])
         account_costs[aid] = account_costs.get(aid, Decimal(0)) + Decimal(row["cost_kopecks"] or 0)
+
+    # Правило одной кампании: долю целей кабинета посчитали по всем кампаниям выше, проверяем только её.
+    if campaign_row_id:
+        rows = [r for r in rows if int(r["row_id"]) == int(campaign_row_id)]
+
+    week_spend = _week_spend(user_id, [int(r["row_id"]) for r in rows]) if rule["rule_type"] == "weekly_budget_pct" else {}
 
     matched = []
     for row in rows:
@@ -599,6 +688,7 @@ def _matching_keywords(user_id: int, rule: dict) -> list[dict]:
     threshold = Decimal(str(rule["threshold_value"]))
     account_id = rule.get("scope_account_id")
     workspace_id = rule.get("scope_workspace_id")
+    campaign_row_id = rule.get("scope_campaign_row_id")
     action = rule.get("action") or "pause"
     with pool.connection() as conn:
         rows = conn.execute(
@@ -616,6 +706,7 @@ def _matching_keywords(user_id: int, rule: dict) -> list[dict]:
               AND (%s::bigint IS NULL OR k.account_id = %s)
               AND (%s::bigint IS NULL OR g.campaign_row_id IN (
                     SELECT campaign_row_id FROM workspace_campaigns WHERE workspace_id = %s))
+              AND (%s::bigint IS NULL OR g.campaign_row_id = %s)
               AND (
                 (%s = 'resume' AND k.state = 'SUSPENDED')
                 OR (%s <> 'resume' AND (k.state = 'ON' OR k.state = '' OR k.state IS NULL))
@@ -625,7 +716,7 @@ def _matching_keywords(user_id: int, rule: dict) -> list[dict]:
             ORDER BY k.period_cost_kopecks DESC NULLS LAST
             LIMIT 500
             """,
-            (user_id, account_id, account_id, workspace_id, workspace_id, action, action),
+            (user_id, account_id, account_id, workspace_id, workspace_id, campaign_row_id, campaign_row_id, action, action),
         ).fetchall()
 
     matched = []
@@ -681,6 +772,7 @@ def _matching_queries(user_id: int, rule: dict) -> list[dict]:
     threshold = Decimal(str(rule["threshold_value"]))
     account_id = rule.get("scope_account_id")
     workspace_id = rule.get("scope_workspace_id")
+    campaign_row_id = rule.get("scope_campaign_row_id")
     with pool.connection() as conn:
         rows = conn.execute(
             """
@@ -694,11 +786,12 @@ def _matching_queries(user_id: int, rule: dict) -> list[dict]:
               AND (%s::bigint IS NULL OR q.account_id = %s)
               AND (%s::bigint IS NULL OR q.campaign_row_id IN (
                     SELECT campaign_row_id FROM workspace_campaigns WHERE workspace_id = %s))
+              AND (%s::bigint IS NULL OR q.campaign_row_id = %s)
               AND COALESCE(q.clicks, 0) + COALESCE(q.cost_kopecks, 0) > 0
             ORDER BY q.cost_kopecks DESC NULLS LAST
             LIMIT 500
             """,
-            (user_id, account_id, account_id, workspace_id, workspace_id),
+            (user_id, account_id, account_id, workspace_id, workspace_id, campaign_row_id, campaign_row_id),
         ).fetchall()
 
     matched = []

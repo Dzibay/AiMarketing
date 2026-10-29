@@ -16,14 +16,14 @@ from app.yandex import YandexError
 
 log = logging.getLogger("app.ad_extras")
 
-# Пределы Директа: до 8 быстрых ссылок, заголовок до 30 символов, описание до 60;
-# заголовки ссылок 1–4 и 5–8 вместе — не длиннее 66 символов каждая четвёрка.
+# Пределы Директа: до 8 быстрых ссылок, заголовок до 30 символов, описание до 60.
+# Старого предела «заголовки 1–4 вместе до 66 символов» Директ больше не держит:
+# sitelinks.add принимает четвёрку длиннее, такие наборы есть в живых кабинетах.
 MAX_SITELINKS = 8
 SITELINK_TITLE_LEN = 30
 SITELINK_DESC_LEN = 60
-SITELINK_GROUP_LEN = 66
 CALLOUT_LEN = 25
-MAX_CALLOUTS = 10
+MAX_CALLOUTS = 50
 # У текстово-графического одна картинка, у комбинаторного ЕПК — до 5.
 MAX_IMAGES = {"TEXT_AD": 1, "RESPONSIVE_AD": 5}
 # nginx пропускает тело до 8 МБ, а base64 раздувает файл на треть.
@@ -63,12 +63,6 @@ def clean_sitelinks(raw) -> list[dict]:
         links.append({"title": title, "href": href, "description": description})
     if len(links) > MAX_SITELINKS:
         raise _bad(f"Быстрых ссылок не больше {MAX_SITELINKS}")
-    for start in (0, 4):
-        group = links[start : start + 4]
-        if sum(len(link["title"]) for link in group) > SITELINK_GROUP_LEN:
-            raise _bad(
-                f"Заголовки быстрых ссылок {start + 1}–{start + len(group)} вместе длиннее {SITELINK_GROUP_LEN} символов"
-            )
     return links
 
 

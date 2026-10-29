@@ -1,10 +1,9 @@
 // Быстрые ссылки, уточнения и картинки объявления: пределы Директа и сборка тела запроса.
 export const SITELINK_TITLE_LEN = 30
 export const SITELINK_DESC_LEN = 60
-export const SITELINK_GROUP_LEN = 66
 export const MAX_SITELINKS = 8
 export const CALLOUT_LEN = 25
-export const MAX_CALLOUTS = 10
+export const MAX_CALLOUTS = 50
 export const IMAGE_MAX_BYTES = 5 * 1024 * 1024
 
 export function emptyExtras() {
@@ -53,12 +52,6 @@ export function extrasDiff(before, after) {
   return Object.keys(out).length ? out : null
 }
 
-export function groupLengths(extras) {
-  const links = extras.sitelinks || []
-  const sum = (part) => part.reduce((n, l) => n + l.title.trim().length, 0)
-  return [sum(links.slice(0, 4)), sum(links.slice(4, 8))]
-}
-
 // Та же проверка, что на сервере, — чтобы ошибка была видна до отправки.
 export function extrasProblem(extras, maxImages = 1) {
   const links = filledSitelinks(extras)
@@ -70,9 +63,6 @@ export function extrasProblem(extras, maxImages = 1) {
   const titles = links.map((l) => l.title.toLowerCase())
   if (new Set(titles).size !== titles.length) return 'Заголовки быстрых ссылок повторяются'
   if (links.length > MAX_SITELINKS) return `Быстрых ссылок не больше ${MAX_SITELINKS}`
-  const [first, second] = groupLengths({ sitelinks: links })
-  if (first > SITELINK_GROUP_LEN) return `Заголовки быстрых ссылок 1–4 вместе длиннее ${SITELINK_GROUP_LEN} символов`
-  if (second > SITELINK_GROUP_LEN) return `Заголовки быстрых ссылок 5–8 вместе длиннее ${SITELINK_GROUP_LEN} символов`
   const callouts = calloutLines(extras)
   const long = callouts.find((c) => c.length > CALLOUT_LEN)
   if (long) return `Уточнение «${long}» длиннее ${CALLOUT_LEN} символов`

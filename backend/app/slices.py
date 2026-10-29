@@ -81,6 +81,8 @@ _PCT_RANGE = {"device": (0, 1300), "demography": (0, 1300), "region": (10, 1300)
 SUGGEST_RANGE = (50, 150)
 MIN_CLICKS = {"device": 30, "demography": 30, "region": 30, "hour": 0}
 MIN_VISITS_HOUR = 30
+# Меньше десятка средних кликов без конверсий — ещё не повод запрещать площадку.
+MIN_WASTE_CLICKS = 10
 # Сила «приора» для сглаживания CR: столько конверсий по среднему CR добавляем каждому срезу.
 PRIOR_CONVERSIONS = 5
 
@@ -214,6 +216,13 @@ def excludable(placement: str) -> bool:
     """Числовые id App Store Директ в ExcludedSites не принимает (и отклоняет весь список кампании)."""
     p = (placement or "").strip().lower()
     return bool(p) and not _IOS_RE.match(p) and placement_kind(p) != "yandex"
+
+
+def waste_threshold(ref_cpa: int | None, avg_cpa: int | None, avg_cpc: float) -> int:
+    """Расход без конверсий, с которого площадка подозрительна: цена цели, иначе средний CPA, иначе
+    20 средних кликов (не меньше 500 ₽). Но не меньше 10 средних кликов: при конверсиях за 0 ₽
+    средний CPA — копейки, и под «расход без конверсий» попала бы площадка с парой кликов."""
+    return max(ref_cpa or avg_cpa or max(int(avg_cpc * 20), 50_000), int(avg_cpc * MIN_WASTE_CLICKS))
 
 
 def placement_flags(row: dict, *, ref_cpa: int | None, avg_ctr: float | None, waste_kopecks: int) -> list[str]:
@@ -587,7 +596,7 @@ def slice_report(user_id: int, payload: dict, progress: Progress | None = None) 
     ref_cpa = _target_cpa_kopecks(ws)
     avg_cpa = round(totals["cost_kopecks"] / totals["conversions"]) if totals["conversions"] else None
     avg_cpc = totals["cost_kopecks"] / totals["clicks"] if totals["clicks"] else 0
-    waste = ref_cpa or avg_cpa or max(int(avg_cpc * 20), 50_000)
+    waste = waste_threshold(ref_cpa, avg_cpa, avg_cpc)
 
     names = {c["id"]: c["name"] for c in campaigns}
     for row in items:

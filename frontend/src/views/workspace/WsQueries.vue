@@ -2,12 +2,12 @@
   <div class="ws-toolbar">
     <div class="seg" role="group" aria-label="Период загрузки из Директа">
       <button
-        v-for="d in [7, 14, 30]"
+        v-for="d in PERIODS"
         :key="d"
         type="button"
         :class="{ active: days === d }"
         :disabled="!!busy"
-        @click="days = d"
+        @click="pickDays(d)"
       >
         {{ d }} дней
       </button>
@@ -124,7 +124,7 @@
         <label>Кампания</label>
         <select v-model="filters.campaign">
           <option value="">Все кампании</option>
-          <option v-for="c in campaigns" :key="c.id" :value="String(c.id)">{{ c.name }}</option>
+          <option v-for="c in campaigns" :key="c.id" :value="String(c.id)">{{ campaignLabel(c, repeatedCampaigns) }}</option>
         </select>
       </div>
       <div v-field class="field">
@@ -263,7 +263,7 @@
                     aria-label="Группа"
                     @change="touch(q.query_norm)"
                   >
-                    <option v-for="g in q.adgroups" :key="g.id" :value="g.id">{{ g.name || `группа ${g.id}` }}</option>
+                    <option v-for="g in q.adgroups" :key="g.id" :value="g.id">{{ groupLabel(q, g) }}</option>
                   </select>
                 </label>
                 <p
@@ -509,6 +509,7 @@ import UndoDialog from '../../components/UndoDialog.vue'
 import { errorText, jobProgressText, wsApi } from '../../api/web'
 import { askConfirm } from '../../composables/useConfirm'
 import { pushToast } from '../../composables/useToasts'
+import { campaignLabel, repeatedNames } from '../../utils/campaignNames'
 import { formatDate, formatDateTime, num, plural, rubAi, rubles } from '../../utils/format'
 import { useWs } from './context'
 
@@ -539,7 +540,10 @@ const items = ref([])
 const loading = ref(false)
 const loadError = ref('')
 const tab = ref(TABS.some((t) => t.key === route.query.tab) ? route.query.tab : '')
+const PERIODS = [7, 14, 30]
 const days = ref(14)
+// Пока период не выбирали руками, он повторяет уже загруженный — чип не спорит с подписью «Запросы за …».
+const daysPicked = ref(false)
 const busy = ref('') // sync | classify | apply
 const busyText = ref('')
 const filters = reactive({ search: '', campaign: '', minCost: '', noConv: false })
@@ -561,6 +565,16 @@ const mem = reactive({ items: [], total: 0, loading: false, busy: false, error: 
 
 const counts = computed(() => data.value?.counts || EMPTY_COUNTS)
 const campaigns = computed(() => data.value?.campaigns || [])
+const repeatedCampaigns = computed(() => repeatedNames(campaigns.value.map((c) => c.name)))
+
+// Группы с одинаковым названием (обычно из копии кампании) различаем кампанией.
+function groupLabel(q, g) {
+  const name = g.name || `группа ${g.id}`
+  if (!repeatedNames(q.adgroups.map((x) => x.name || `группа ${x.id}`)).has(name)) return name
+  const camp = campaigns.value.find((c) => c.id === g.campaign_row_id)
+  return camp ? `${name} · ${campaignLabel(camp, repeatedCampaigns.value)}` : `${name} · №${g.id}`
+}
+
 const hasFilters = computed(() => !!(filters.search || filters.campaign || filters.minCost || filters.noConv))
 const canClassify = computed(() => counts.value.new > 0 || counts.value.negative + counts.value.target > 0)
 const briefFilled = computed(() => {
@@ -769,6 +783,7 @@ async function load({ more = false } = {}) {
     }
     for (const q of res.items) initDecision(q)
     data.value = res
+    if (!daysPicked.value) days.value = loadedDays(res) || days.value
     items.value = more ? [...items.value, ...res.items] : res.items
     if (!more) {
       const present = new Set(res.items.map((q) => q.query_norm))
@@ -779,6 +794,19 @@ async function load({ more = false } = {}) {
   } finally {
     if (seq === loadSeq) loading.value = false
   }
+}
+
+function pickDays(d) {
+  days.value = d
+  daysPicked.value = true
+}
+
+// Длина загруженного периода → ближайший из чипов.
+function loadedDays(res) {
+  if (!res?.date_from || !res?.date_to) return 0
+  const span = Math.round((Date.parse(res.date_to) - Date.parse(res.date_from)) / 86_400_000) + 1
+  if (!(span > 0)) return 0
+  return PERIODS.reduce((best, d) => (Math.abs(d - span) < Math.abs(best - span) ? d : best), PERIODS[0])
 }
 
 async function refreshCounts() {

@@ -535,6 +535,9 @@ async function remove() {
     await webApi.deleteNegativeList(selectedId.value)
     selectedId.value = null
     detail.value = null
+    // Итог применения и предпросмотр относились к удалённому списку.
+    result.value = null
+    preview.value = null
     fillForm('', [])
     await loadLists()
     pushToast('Список удалён')

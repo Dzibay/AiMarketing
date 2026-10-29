@@ -278,7 +278,9 @@ def describe_step(user_id: int, step: dict) -> str:
     if op == "campaign_update":
         return f"Вернуть название кампании: «{a.get('name')}»"
     if op == "campaign_settings":
-        fields = ", ".join(sorted(a.get("changes") or {}))
+        from app.actions import SETTINGS_LABELS
+
+        fields = ", ".join(SETTINGS_LABELS.get(k, k) for k in sorted(a.get("changes") or {}))
         return f"Вернуть настройки {_names(user_id, 'direct_campaigns', 'name', [a.get('campaign_row_id')])}: {fields}"
     if op == "bid_modifiers":
         return f"Вернуть корректировки ставок {_names(user_id, 'direct_campaigns', 'name', [a.get('campaign_row_id')])}"
@@ -313,7 +315,9 @@ def describe_step(user_id: int, step: dict) -> str:
     if op == "ad_update":
         names = {"title": "заголовок", "title2": "доп. заголовок", "text": "текст", "href": "ссылку",
                  "titles": "заголовки", "texts": "тексты"}
-        return "Вернуть объявлению " + ", ".join(v for k, v in names.items() if k in a)
+        extras = {"sitelink_set_id": "быстрые ссылки", "callout_ids": "уточнения", "image_hashes": "картинки"}
+        parts = [v for k, v in names.items() if k in a] + [v for k, v in extras.items() if k in (a.get("extras") or {})]
+        return "Вернуть объявлению " + ", ".join(parts)
     if op == "adgroup_update":
         return f"Вернуть название группы: «{a.get('name')}»"
     if op == "adgroups_delete":
@@ -370,6 +374,14 @@ def _later_changes(user_id: int, row: dict) -> list[dict]:
     ]
 
 
+def _counted(texts: list[str]) -> list[str]:
+    """Одинаковые шаги — одной строкой: «Вернуть объявлению ссылку (×15)», а не пятнадцать строк."""
+    counts: dict[str, int] = {}
+    for text in texts:
+        counts[text] = counts.get(text, 0) + 1
+    return [f"{text} (×{n})" if n > 1 else text for text, n in counts.items()]
+
+
 def undo_preview(user_id: int, log_id: int) -> dict:
     """Что сделает откат: шаги словами и предупреждения — для окна подтверждения."""
     row = _load(user_id, log_id)
@@ -393,7 +405,7 @@ def undo_preview(user_id: int, log_id: int) -> dict:
         "danger": bool(undo.get("danger")),
         "available": not reason,
         "reason": reason,
-        "steps": [describe_step(user_id, s) for s in steps] if not reason else [],
+        "steps": _counted([describe_step(user_id, s) for s in steps]) if not reason else [],
         "warnings": warnings,
         "later": later,
     }

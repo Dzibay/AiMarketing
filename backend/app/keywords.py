@@ -18,6 +18,11 @@ def _call(access_token: str, client_login: str, method: str, params: dict) -> di
     return direct_api.call(access_token, client_login, "keywords", method, params)
 
 
+# Предупреждение «Ставка не будет применена»: при автостратегии Директ принимает запрос, но ставку не ставит.
+BID_IGNORED = 10160
+BID_IGNORED_TEXT = "Ставка не применена: в кампании автостратегия — ставки фраз назначает Директ"
+
+
 def _set_bids(access_token: str, client_login: str, bids: list[tuple[int, int]]) -> dict[int, str]:
     """Ставки на поиске через keywordbids.set: keywords.update поля Bid не принимает.
     bids — [(keyword_id, микроединицы)] → {индекс: ошибка Директа} по фразам, что не прошли."""
@@ -28,7 +33,17 @@ def _set_bids(access_token: str, client_login: str, bids: list[tuple[int, int]])
         "set",
         {"KeywordBids": [{"KeywordId": int(kid), "SearchBid": int(micros)} for kid, micros in bids]},
     )
-    return dict(direct_api.item_errors(result, "SetResults"))
+    return bid_errors(result)
+
+
+def bid_errors(result: dict) -> dict[int, str]:
+    """Ошибки keywordbids.set по индексам; проигнорированная ставка — тоже ошибка, а не «сохранено»."""
+    errors = dict(direct_api.item_errors(result, "SetResults"))
+    for index, item in enumerate(result.get("SetResults") or []):
+        warnings = item.get("Warnings") or []
+        if index not in errors and any(str(w.get("Code")) == str(BID_IGNORED) for w in warnings):
+            errors[index] = BID_IGNORED_TEXT
+    return errors
 
 
 _RESULT_KEYS = {"suspend": "SuspendResults", "resume": "ResumeResults", "delete": "DeleteResults"}
@@ -186,6 +201,25 @@ def list_keywords(
     return [_public(r) for r in rows]
 
 
+def _fetch_added(access_token: str, client_login: str, add_result: dict) -> dict[int, dict]:
+    """Только что добавленные фразы из keywords.get → {keyword_id: строка}. Не вышло — пусто, хватит ответа add."""
+    ids = [int(a["Id"]) for a in add_result.get("AddResults") or [] if a.get("Id")]
+    if not ids:
+        return {}
+    try:
+        raw = direct_api.get_all(
+            access_token,
+            client_login,
+            "keywords",
+            {"SelectionCriteria": {"Ids": ids}, "FieldNames": KEYWORD_FIELDS},
+            "Keywords",
+        )
+    except YandexError as exc:
+        log.warning("keywords.get after add: %s", exc.code)
+        return {}
+    return {item["keyword_id"]: item for item in parse_keywords(raw)}
+
+
 def create_keywords(
     user_id: int,
     *,
@@ -212,6 +246,7 @@ def create_keywords(
             item["Bid"] = bid_micros
         payload_items.append(item)
     result = _call(token, group["client_login"], "add", {"Keywords": payload_items})
+    fresh = _fetch_added(token, group["client_login"], result)
     created = []
     errors = 0
     first_err = ""
@@ -226,16 +261,20 @@ def create_keywords(
                         first_err = msg
                 continue
             kid = int(add["Id"])
-            phrase = cleaned[idx] if idx < len(cleaned) else ""
+            # Что Директ записал на деле: ставку по умолчанию, статус черновика и т. п.
+            got = fresh.get(kid) or {}
+            phrase = got.get("keyword") or (cleaned[idx] if idx < len(cleaned) else "")
             row = conn.execute(
                 """
                 INSERT INTO direct_keywords (
                     user_id, account_id, adgroup_row_id, keyword_id,
                     keyword, state, status, bid_micros, synced_at
                 )
-                VALUES (%s, %s, %s, %s, %s, 'ON', '', %s, NOW())
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, NOW())
                 ON CONFLICT (account_id, keyword_id) DO UPDATE SET
                     keyword = EXCLUDED.keyword,
+                    state = EXCLUDED.state,
+                    status = EXCLUDED.status,
                     bid_micros = EXCLUDED.bid_micros,
                     synced_at = NOW()
                 RETURNING *
@@ -246,7 +285,9 @@ def create_keywords(
                     adgroup_row_id,
                     kid,
                     phrase,
-                    bid_micros,
+                    got.get("state") or "ON",
+                    got.get("status") or "",
+                    got["bid_micros"] if got.get("bid_micros") is not None else bid_micros,
                 ),
             ).fetchone()
             created.append(_public(row))

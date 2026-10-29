@@ -649,12 +649,17 @@ def apply_negative_list(
 
     done = out["linked"] + out["detached"]
     out["status"] = "ok" if not out["errors"] else ("partial" if done else "error")
+    parts = [f"привязан к кампаниям: {out['linked']}" if out["linked"] else "",
+             f"снят с кампаний: {out['detached']}" if out["detached"] else ""]
     _log_action(
         user_id,
         "negative_list_apply",
         {"list_id": list_id, "name": nlist["name"], "campaign_row_ids": sorted(selected)},
         out,
         out["status"],
+        title=f"Список минус-фраз «{nlist['name']}»" + (" — " + ", ".join(p for p in parts if p) if done else ""),
+        # Снятый список тоже меняет кампанию: в журнале она должна быть видна.
+        targets=[f"campaign:{r['id']}" for r in rows],
     )
     if out["status"] == "error":
         first_error = out["errors"][0]

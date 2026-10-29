@@ -62,6 +62,7 @@ from app.rules import (
     delete_rule,
     list_rule_runs,
     list_rules,
+    rule_campaigns,
     run_rule,
     update_rule,
 )
@@ -269,6 +270,7 @@ class RuleBody(BaseModel):
     dry_run: bool = True
     scope_account_id: int | None = None
     scope_workspace_id: int | None = None
+    scope_campaign_row_id: int | None = None
     cooldown_hours: int = 24
     goal_row_id: int | None = None
     action_budget_rub: float | None = None
@@ -291,6 +293,7 @@ class RulePatchBody(BaseModel):
     action_pct: float | None = None
     scope_account_id: int | None = None
     scope_workspace_id: int | None = None
+    scope_campaign_row_id: int | None = None
     target: str | None = None
     rule_type: str | None = None
 
@@ -1102,7 +1105,10 @@ def web_get_job(job_id: int, user_id: int = Depends(require_web_user)) -> dict:
 
 @router.get("/rules")
 def web_list_rules(workspace_id: int | None = None, user_id: int = Depends(require_web_user)) -> dict:
-    return {"items": list_rules(user_id, workspace_id=workspace_id)}
+    return {
+        "items": list_rules(user_id, workspace_id=workspace_id),
+        "campaigns": rule_campaigns(user_id, workspace_id=workspace_id),
+    }
 
 
 @router.get("/rules/runs")
@@ -1169,6 +1175,7 @@ def web_create_rule(body: RuleBody, user_id: int = Depends(require_web_user)) ->
             dry_run=body.dry_run,
             scope_account_id=body.scope_account_id,
             scope_workspace_id=body.scope_workspace_id,
+            scope_campaign_row_id=body.scope_campaign_row_id,
             cooldown_hours=body.cooldown_hours,
             goal_row_id=body.goal_row_id,
             action_budget_rub=body.action_budget_rub,

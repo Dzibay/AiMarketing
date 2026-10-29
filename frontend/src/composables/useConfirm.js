@@ -32,6 +32,39 @@ export function askConfirm(message, { title = 'Подтвердите дейст
   })
 }
 
+// То же окно с полем ввода (вместо window.prompt): askText(подпись) → Promise<string | null>, null — отмена.
+export function askText(
+  label,
+  {
+    title = label,
+    value = '',
+    message = '',
+    placeholder = '',
+    type = 'text',
+    required = false,
+    confirmText = 'Сохранить',
+    cancelText = 'Отмена',
+    danger = false,
+  } = {},
+) {
+  if (current.value) current.value.resolve(false)
+  return new Promise((resolve) => {
+    current.value = {
+      message,
+      title,
+      confirmText,
+      cancelText,
+      danger,
+      input: { label, value: value == null ? '' : String(value), placeholder, type, required },
+      resolve: (ok) => {
+        const text = current.value?.input?.value ?? ''
+        current.value = null
+        resolve(ok ? text : null)
+      },
+    }
+  })
+}
+
 export function useConfirm() {
-  return { current, askConfirm }
+  return { current, askConfirm, askText }
 }

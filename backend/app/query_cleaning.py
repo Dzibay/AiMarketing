@@ -259,7 +259,7 @@ def workspace_search_campaigns(user_id: int, workspace_id: int) -> list[dict]:
     with pool.connection() as conn:
         rows = conn.execute(
             """
-            SELECT c.id, c.name, c.state, c.campaign_type,
+            SELECT c.id, c.campaign_id, c.name, c.state, c.campaign_type,
                    (SELECT COUNT(*) FROM direct_search_queries q WHERE q.campaign_row_id = c.id) AS queries,
                    (SELECT MAX(q.synced_at) FROM direct_search_queries q WHERE q.campaign_row_id = c.id) AS synced_at
             FROM workspace_campaigns wc
@@ -272,6 +272,7 @@ def workspace_search_campaigns(user_id: int, workspace_id: int) -> list[dict]:
     return [
         {
             "id": r["id"],
+            "campaign_id": r["campaign_id"],
             "name": r["name"],
             "state": r["state"],
             "queries": int(r["queries"] or 0),

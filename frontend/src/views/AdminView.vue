@@ -84,6 +84,7 @@ import { onMounted, ref } from 'vue'
 import SiteHeader from '../components/SiteHeader.vue'
 import { adminApi } from '../api/admin'
 import { clearAdminSession, setAdminSession, useAdminSession } from '../composables/useAdminSession'
+import { askText } from '../composables/useConfirm'
 import { useHead } from '../utils/useHead'
 
 useHead('Админка — AiMarketing', true)
@@ -129,7 +130,12 @@ function logout() {
 }
 
 async function blockUser(user) {
-  const reason = window.prompt('Причина блокировки (необязательно):', '') ?? ''
+  const reason = await askText('Причина (необязательно)', {
+    title: `Заблокировать ${user.email || 'пользователя'}?`,
+    confirmText: 'Заблокировать',
+    danger: true,
+  })
+  if (reason == null) return
   busyId.value = user.id
   try {
     const updated = await adminApi.blockUser(user.id, reason)

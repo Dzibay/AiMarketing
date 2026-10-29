@@ -33,6 +33,11 @@ def _rub(value: float | None) -> str:
     return rub(None if value is None else round(float(value) * 100))
 
 
+def _price(value: float) -> str:
+    """Цена цели до 100 ₽ — с копейками: CPC 0,90 → 1,08 ₽, а не «1 ₽ → 1 ₽»."""
+    return _rub(value) if value >= 100 else f"{float(value):.2f}".replace(".", ",") + " ₽"
+
+
 def _scaled(value: float, pct: float) -> float:
     return float(value) * (1 + float(pct) / 100)
 
@@ -142,8 +147,8 @@ def budget_plan(
         if new <= 0:
             raise YandexError("strategy", "цена цели должна быть больше нуля")
         what = "CPC" if key == "average_cpc_rub" else "CPA"
-        before.append(f"{what} {_rub(current)}")
-        after.append(f"{what} {_rub(new)}")
+        before.append(f"{what} {_price(current)}")
+        after.append(f"{what} {_price(new)}")
         if new != current:
             strategy[key] = new
             changes["strategy"] = strategy

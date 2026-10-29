@@ -86,7 +86,15 @@ def _sync_connection(user_id: int, payload: dict, progress: Progress) -> dict:
 
 
 def _load_account(user_id: int, payload: dict, progress: Progress) -> dict:
-    return run_account(user_id, _int(payload, "account_id"), progress)
+    account_id = _int(payload, "account_id")
+    result = run_account(user_id, account_id, progress)
+    if result.get("mode") == "initial":
+        # Иначе баланс нового кабинета появится только с ежечасной задачей stats_today.
+        try:
+            sync_balances_for_user(user_id, [account_id])
+        except Exception:
+            log.exception("balance after load_account %s", account_id)
+    return result
 
 
 def _load_counter(user_id: int, payload: dict, progress: Progress) -> dict:

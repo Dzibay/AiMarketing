@@ -40,8 +40,9 @@ const displayName = computed(() => user.value?.name || user.value?.email || 'П�
 const initials = computed(() => {
   const source = (user.value?.name || user.value?.email || '').trim()
   if (!source) return '·'
-  const words = source.split(/[\s@._-]+/).filter(Boolean)
-  const letters = words.length > 1 ? words[0][0] + words[1][0] : source.slice(0, 2)
+  const words = source.split(/[^\p{L}\p{N}]+/u).filter(Boolean)
+  if (!words.length) return '·'
+  const letters = words.length > 1 ? words[0][0] + words[1][0] : words[0].slice(0, 2)
   return letters.toUpperCase()
 })
 

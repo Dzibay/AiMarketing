@@ -131,8 +131,8 @@
             <option v-for="g in adgroups" :key="g.id" :value="String(g.id)">{{ g.name }}</option>
           </select>
         </div>
-        <div v-field class="field">
-          <label>Ставка, ₽ (для ручной стратегии)</label>
+        <div v-if="!autoBids" v-field class="field">
+          <label>Ставка, ₽</label>
           <input v-model="kwForm.bid_rub" type="number" min="0" step="0.01" placeholder="по умолчанию" />
         </div>
         <div v-field class="field field--wide">
@@ -186,8 +186,10 @@
                 {{ kw.keyword }}
                 <small class="cell-note">{{ kw.adgroup_name }}</small>
               </td>
-              <td>{{ CAMPAIGN_STATES[kw.state] || kw.state || '—' }}</td>
-              <td class="num">{{ kw.bid_rub != null ? rubles(kw.bid_rub, 2) : '—' }}</td>
+              <td :title="keywordState(kw).hint">{{ keywordState(kw).text }}</td>
+              <td class="num" :title="autoBids ? 'Автостратегия: ставки фраз назначает Директ' : ''">
+                {{ autoBids ? 'авто' : kw.bid_rub != null ? rubles(kw.bid_rub, 2) : '—' }}
+              </td>
               <td class="num">{{ num(kw.period_clicks) }}</td>
               <td class="num">{{ rub(kw.period_cost_kopecks) }}</td>
               <td class="num" :class="{ 'tone-bad': !kw.period_conversions && kw.period_cost_kopecks > 0 }">
@@ -195,8 +197,10 @@
               </td>
               <td class="num">{{ kw.period_cpa_rub != null ? rubles(kw.period_cpa_rub) : '—' }}</td>
               <td class="row-actions">
-                <button class="btn btn--ghost" type="button" @click="editKeywordBid(kw)">Ставка</button>
-                <button class="btn btn--ghost" type="button" @click="editKeywordText(kw)">Текст</button>
+                <button v-if="!autoBids" class="btn btn--ghost" type="button" @click="editKeywordBid(kw)">Ставка</button>
+                <button v-if="kw.keyword !== '---autotargeting'" class="btn btn--ghost" type="button" @click="editKeywordText(kw)">
+                  Текст
+                </button>
               </td>
             </tr>
           </tbody>
@@ -377,7 +381,7 @@
 </template>
 
 <script setup>
-import { askConfirm } from '../composables/useConfirm'
+import { askConfirm, askText } from '../composables/useConfirm'
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import Modal from './ui/Modal.vue'
 import AdExtrasFields from './AdExtrasFields.vue'
@@ -423,12 +427,32 @@ const adForm = reactive({
 const adExtras = reactive(emptyExtras())
 // before — расширения как в Директе: при правке отправляем только изменившиеся части.
 const adExtrasState = reactive({ loading: false, error: '', before: emptyExtras(), maxImages: 1 })
+// Ставки фраз Директ берёт только при ручной стратегии, при автостратегии назначает их сам.
+// Если поиск выключен, ставками управляет стратегия в сетях.
+const MANUAL_STRATEGIES = new Set(['', 'HIGHEST_POSITION', 'MAXIMUM_COVERAGE', 'SERVING_OFF', 'UNKNOWN'])
+const autoBids = computed(() => {
+  const camp = campaign.value
+  if (!camp) return false
+  const strategy = camp.strategy === 'SERVING_OFF' ? camp.network_strategy : camp.strategy
+  return !MANUAL_STRATEGIES.has(strategy || '')
+})
 // Комбинаторное объявление: так Директ создаёт новые объявления в ЕПК.
 const adResponsive = computed(() =>
   adModal.item
     ? adModal.item.type === 'RESPONSIVE_AD'
     : (campaign.value?.campaign_type || campaign.value?.type) === 'UNIFIED_CAMPAIGN',
 )
+
+// Состояние фразы с учётом кампании: у фраз черновика Директ всё равно пишет «ON».
+function keywordState(kw) {
+  const camp = campaign.value || {}
+  if (kw.status === 'REJECTED') return { text: 'Отклонена', hint: '' }
+  if (kw.state === 'SUSPENDED') return { text: 'Остановлена', hint: '' }
+  if (kw.status === 'DRAFT' || camp.status === 'DRAFT') return { text: 'Черновик', hint: 'Кампания ещё не отправлена на модерацию' }
+  if (kw.state === 'ON' && camp.state && camp.state !== 'ON') return { text: 'Включена', hint: 'Фраза включена, но кампания сейчас не показывается' }
+  if (kw.state === 'OFF') return { text: 'Не показывается', hint: '' }
+  return { text: CAMPAIGN_STATES[kw.state] || kw.state || '—', hint: '' }
+}
 
 function variantsLabel(ad) {
   const parts = []
@@ -617,8 +641,8 @@ function createGroup() {
   })
 }
 
-function renameGroup(g) {
-  const name = window.prompt('Новое название группы', g.name)
+async function renameGroup(g) {
+  const name = await askText('Название группы', { title: 'Переименовать группу', value: g.name, required: true })
   if (!name || !name.trim() || name.trim() === g.name) return
   return run(async () => {
     await webApi.patchAdGroup(g.id, { name: name.trim() })
@@ -675,7 +699,10 @@ async function loadAdExtras(ad) {
 
 function saveAd() {
   const editable = !adExtrasState.loading && !adExtrasState.error
-  const problem = editable ? extrasProblem(adExtras, adExtrasState.maxImages) : ''
+  // При правке расширения уходят, только если их меняли, — нетронутые из Директа не проверяем.
+  const changed = editable && adModal.item ? extrasDiff(adExtrasState.before, adExtras) : null
+  const checked = editable && (!adModal.item || changed)
+  const problem = checked ? extrasProblem(adExtras, adExtrasState.maxImages) : ''
   if (problem) {
     pushToast(problem, 'error')
     return
@@ -688,13 +715,17 @@ function saveAd() {
           href: adForm.href,
         }
       : { title: adForm.title, title2: adForm.title2, text: adForm.text, href: adForm.href }
-    if (editable && adModal.item) {
-      const changed = extrasDiff(adExtrasState.before, adExtras)
-      if (changed) fields.extras = changed
-    } else if (editable && !extrasEmpty(adExtras)) fields.extras = extrasPayload(adExtras)
+    if (changed) fields.extras = changed
+    else if (editable && !adModal.item && !extrasEmpty(adExtras)) fields.extras = extrasPayload(adExtras)
     if (adModal.item) await webApi.patchAd(adModal.item.id, fields)
     else await webApi.createAd({ adgroup_row_id: Number(adForm.adgroup_row_id), ...fields })
-    pushToast(adModal.item ? 'Объявление обновлено — уйдёт на модерацию' : 'Объявление создано черновиком')
+    pushToast(
+      !adModal.item
+        ? 'Объявление создано черновиком'
+        : adModal.item.status === 'DRAFT'
+          ? 'Черновик объявления обновлён'
+          : 'Объявление обновлено — уйдёт на модерацию',
+    )
     adModal.open = false
     await load()
   })
@@ -727,8 +758,14 @@ function createKeywords() {
   })
 }
 
-function editKeywordBid(kw) {
-  const raw = window.prompt('Ставка, ₽', kw.bid_rub != null ? String(kw.bid_rub) : '')
+async function editKeywordBid(kw) {
+  const raw = await askText('Ставка, ₽', {
+    title: `Ставка фразы «${kw.keyword}»`,
+    value: kw.bid_rub != null ? String(kw.bid_rub).replace('.', ',') : '',
+    type: 'number',
+    placeholder: 'например, 12,50',
+    required: true,
+  })
   if (raw == null || !String(raw).trim()) return
   const bid = Number(String(raw).replace(',', '.'))
   if (!(bid > 0)) {
@@ -742,8 +779,8 @@ function editKeywordBid(kw) {
   })
 }
 
-function editKeywordText(kw) {
-  const text = window.prompt('Ключевая фраза', kw.keyword)
+async function editKeywordText(kw) {
+  const text = await askText('Ключевая фраза', { title: 'Изменить фразу', value: kw.keyword, required: true })
   if (text == null || !text.trim() || text.trim() === kw.keyword) return
   return run(async () => {
     await webApi.patchKeyword(kw.id, { keyword: text.trim() })

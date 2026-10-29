@@ -174,7 +174,13 @@
             <td class="num" :class="{ 'tone-bad': !c.conversions && c.cost_kopecks > 0 }">{{ num(c.conversions) }}</td>
             <td class="num">{{ c.cpa_kopecks != null ? rub(c.cpa_kopecks) : '—' }}</td>
             <td class="row-actions">
-              <button class="btn btn--ghost" type="button" :disabled="busy" @click="quickToggle(c)">
+              <button
+                v-if="c.state === 'ON' || c.status !== 'DRAFT'"
+                class="btn btn--ghost"
+                type="button"
+                :disabled="busy"
+                @click="quickToggle(c)"
+              >
                 {{ c.state === 'ON' ? 'Стоп' : 'Старт' }}
               </button>
               <button class="btn btn--ghost" type="button" @click="openDuplicate(c)">Копия</button>
@@ -340,13 +346,15 @@ const budgetProgress = ref('')
 const accounts = computed(() => data.value?.accounts || [])
 // Какие действия имеют смысл для выбранных: запустить нечего, если всё уже идёт, и т. п.
 const picked = computed(() => {
-  const states = (data.value?.items || []).filter((c) => selected.value.has(c.campaign_row_id)).map((c) => c.state)
+  const items = (data.value?.items || []).filter((c) => selected.value.has(c.campaign_row_id))
+  const states = items.map((c) => c.state)
   const archived = states.filter((s) => s === 'ARCHIVED').length
   return {
     active: states.length - archived,
     archived,
     canPause: states.includes('ON'),
-    canResume: states.some((s) => s !== 'ON' && s !== 'ARCHIVED'),
+    // Черновик Директ не запускает, пока он не прошёл модерацию.
+    canResume: items.some((c) => c.state !== 'ON' && c.state !== 'ARCHIVED' && c.status !== 'DRAFT'),
   }
 })
 const moreMenu = ref(null)

@@ -6,8 +6,7 @@
       </summary>
       <p class="field-hint">
         Под объявлением — до 8 ссылок на разделы сайта. Заголовок до {{ SITELINK_TITLE_LEN }} символов, описание до
-        {{ SITELINK_DESC_LEN }}; заголовки 1–4 и 5–8 вместе — до {{ SITELINK_GROUP_LEN }} символов
-        (сейчас {{ lengths[0] }}<template v-if="extras.sitelinks.length > 4"> и {{ lengths[1] }}</template>).
+        {{ SITELINK_DESC_LEN }}.
       </p>
       <div v-for="(link, i) in extras.sitelinks" :key="i" class="ad-extras__link">
         <input v-model="link.title" type="text" :maxlength="SITELINK_TITLE_LEN" placeholder="Заголовок" :disabled="disabled" />
@@ -65,9 +64,7 @@ import {
   MAX_CALLOUTS,
   MAX_SITELINKS,
   SITELINK_DESC_LEN,
-  SITELINK_GROUP_LEN,
   SITELINK_TITLE_LEN,
-  groupLengths,
   readFileBase64,
 } from '../utils/adExtras'
 
@@ -81,7 +78,6 @@ const props = defineProps({
 
 const uploading = ref(false)
 const uploadError = ref('')
-const lengths = computed(() => groupLengths(props.extras))
 const calloutCount = computed(() => String(props.extras.callouts || '').split('\n').filter((l) => l.trim()).length)
 
 async function upload(event) {

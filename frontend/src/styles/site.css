@@ -886,6 +886,7 @@ button.stat-card[aria-pressed='true'] {
 
 .filters select,
 .row-actions select,
+.filters input[type='text'],
 .filters input[type='search'],
 .filters input[type='date'],
 .filters input[type='number'],
@@ -1954,6 +1955,18 @@ a.btn {
   white-space: pre-line;
 }
 
+.confirm-form {
+  width: min(380px, 100%);
+}
+
+.confirm-text + .confirm-form {
+  margin-top: 0.9rem;
+}
+
+.confirm-form .field {
+  margin-bottom: 0;
+}
+
 select,
 textarea {
   font: inherit;
@@ -2092,11 +2105,19 @@ textarea {
   bottom: 0;
   z-index: 5;
   padding: 0.85rem 1.1rem;
-  margin: 1rem -1.4rem -1.3rem;
-  border-radius: 0 0 var(--r-card) var(--r-card);
+  margin: 1rem 0 0;
+  border-radius: var(--r-card);
   background: var(--glass);
-  border-top: 1px solid var(--line);
+  border: 1px solid var(--line);
   backdrop-filter: blur(10px);
+}
+
+/* Внутри карточки панель растягивается до её краёв; вне карточки отрицательные поля вылезали за страницу. */
+.panel > .form-actions--sticky {
+  margin: 1rem -1.4rem -1.3rem;
+  border: 0;
+  border-top: 1px solid var(--line);
+  border-radius: 0 0 var(--r-card) var(--r-card);
 }
 
 .form-actions--sticky .hint {
@@ -2770,13 +2791,24 @@ textarea {
 }
 
 @media (max-width: 1180px) {
-  .topbar__name small,
+  /* На ноутбуке вкладки и инструменты не помещаются рядом: оставляем логотип и иконку ИИ. */
+  .topbar__name,
   .profile__text {
     display: none;
   }
 
   .profile__toggle {
     padding-right: 0.55rem;
+  }
+
+  .topbar__ai span {
+    display: none;
+  }
+
+  .topbar__ai {
+    width: 44px;
+    height: 44px;
+    padding: 0;
   }
 }
 

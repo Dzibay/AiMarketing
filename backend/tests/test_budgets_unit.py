@@ -69,6 +69,14 @@ def test_target_pct():
         budget_plan(_auto(weekly=5000, search="WB_MAXIMUM_CLICKS"), target_pct=10)
 
 
+def test_small_target_keeps_kopecks():
+    """CPC 0,90 + 20 % — «0,90 ₽ → 1,08 ₽», а не «1 ₽ → 1 ₽»."""
+    settings = {"type": "TEXT_CAMPAIGN", "strategy": {"search": "AVERAGE_CPC", "weekly_budget_rub": 5000, "average_cpc_rub": 0.9}}
+    plan = budget_plan(settings, target_pct=20)
+    assert plan["changes"]["strategy"]["average_cpc_rub"] == 1.08
+    assert plan["before"] == "CPC 0,90 ₽" and plan["after"] == "CPC 1,08 ₽"
+
+
 def test_previous_values_for_undo():
     settings = _auto(weekly=5000, cpa=1000)
     plan = budget_plan(settings, weekly_rub=7000)

@@ -32,6 +32,24 @@ BULK_ACTIONS = {"pause", "resume", "set_budget", "archive", "unarchive", "delete
 BULK_LIMIT = 500
 UPDATE_BATCH = 10  # campaigns.update — не более 10 кампаний за вызов
 ADD_BATCH = 1000  # adgroups/keywords/ads.add — до 1000 объектов за вызов
+# Поля update_campaign_settings словами — для журнала, отката и ИИ.
+SETTINGS_LABELS = {
+    "name": "название",
+    "start_date": "дата начала",
+    "end_date": "дата окончания",
+    "daily_budget_rub": "дневной бюджет",
+    "strategy": "стратегия",
+    "negative_keywords": "минус-фразы",
+    "excluded_sites": "запрещённые площадки",
+    "schedule": "расписание",
+    "consider_working_weekends": "рабочие выходные",
+    "counter_ids": "счётчики",
+    "priority_goals": "ключевые цели",
+    "attribution_model": "атрибуция",
+    "settings": "опции",
+    "tracking_params": "параметры ссылок",
+    "client_info": "информация о клиенте",
+}
 
 # --- Доступ к API ------------------------------------------------------------------------------
 

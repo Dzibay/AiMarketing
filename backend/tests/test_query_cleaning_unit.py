@@ -300,6 +300,14 @@ def test_describe_step_without_db():
     assert describe_step(0, {"op": "keywords_recreate", "args": {"items": items}}).endswith("и ещё 2")
     assert describe_step(0, {"op": "campaign_update", "args": {"name": "Старое"}}) == "Вернуть название кампании: «Старое»"
     assert describe_step(0, {"op": "mystery"}) == "mystery"
+    ad = {"op": "ad_update", "args": {"ad_row_id": 1, "href": "https://a.ru", "extras": {"sitelink_set_id": 5}}}
+    assert describe_step(0, ad) == "Вернуть объявлению ссылку, быстрые ссылки"
+
+
+def test_undo_preview_counts_same_steps():
+    from app.undo import _counted
+
+    assert _counted(["Вернуть ссылку", "Вернуть настройки", "Вернуть ссылку"]) == ["Вернуть ссылку (×2)", "Вернуть настройки"]
 
 
 def test_effective_level_falls_back_to_campaign_without_groups():
