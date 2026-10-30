@@ -387,7 +387,8 @@ def test_new_campaign_goes_by_stages(db, monkeypatch):
     [group] = build["groups"]
     assert group["name"] == "Окна ПВХ" and [(k["text"], k["value"]) for k in group["keywords"]] == [("купить окна пвх", "12 000")]
     assert [(t["text"], t["pending"]) for t in group["titles"]] == [("Окна от завода", True), ("Окна за 1 день", True)]
-    assert [t["text"] for t in group["texts"]] == ["Замер в день заказа"]  # снятое галочкой не показываем
+    # Снятое галочкой в ждущей таблице — на доске без галочки, в счёт этапа не идёт.
+    assert [(t["text"], t["checked"]) for t in group["texts"]] == [("Замер в день заказа", True), ("Скидка 10%", False)]
     assert [n["text"] for n in build["negatives"]] == ["бесплатно"] and build["draft"] is None
 
     ai_agent.decide_items(user, _pending(user, chat, "propose_items")["id"], rows=[1, 2, 3])
@@ -451,6 +452,129 @@ def test_new_campaign_goes_by_stages(db, monkeypatch):
     with pytest.raises(YandexError) as err:
         ai_agent._p_add_negatives(ctx, {"campaign_row_id": s["search"], "phrases": ["бесплатно", "своими руками"]})
     assert "«своими руками»" in err.value.message
+
+
+def test_board_edits(db, monkeypatch):
+    s = _seed(db)
+    user, chat = s["user"], s["chat"]
+    created = []
+    monkeypatch.setattr(
+        actions, "create_campaign", lambda user_id, **kw: created.append(kw) or {"campaign": {"id": 99}, "status": "ok"}
+    )
+    with pytest.raises(YandexError):  # сборки ещё нет
+        ai_agent.edit_board(user, chat, [{"op": "add", "kind": "negative", "text": "даром"}])
+    _start(user, chat, "Новая кампания на окна", monkeypatch, _call("propose_items", {"stage": "goals", "rows": [
+        {"cells": ["Что рекламируем", "Окна ПВХ"]},
+    ]}))
+    ai_agent.decide_items(user, _pending(user, chat, "propose_items")["id"], rows=[1])
+    _turn(user, chat, monkeypatch, _call("propose_items", {"stage": "analysis", "rows": [{"cells": ["Окна ПВХ"]}]}, "c2"))
+    ai_agent.decide_items(user, _pending(user, chat, "propose_items")["id"], rows=[1])
+    _turn(user, chat, monkeypatch, _call("propose_items", {"stage": "keywords", "rows": [
+        {"section": "Окна ПВХ", "cells": ["купить окна пвх", "12 000"]},
+        {"section": "Окна ПВХ", "cells": ["окна дешево", "900"]},
+        {"section": "Минус-фразы", "kind": "negative", "cells": ["бесплатно"]},
+    ]}, "c3"))
+    table = _pending(user, chat, "propose_items")
+
+    # Ждущая таблица: правка и добавление — в самой таблице, отдельной записи нет.
+    out = ai_agent.edit_board(user, chat, [
+        {"op": "edit", "kind": "keyword", "group": "Окна ПВХ", "text": "окна дешево", "to": "окна недорого"},
+        {"op": "add", "kind": "keyword", "group": "Окна ПВХ", "text": "окна в рассрочку"},
+    ])
+    rows = _pending(user, chat, "propose_items")["args"]["rows"]
+    assert [(r["n"], r["cells"][0], r.get("edited_from"), r.get("added")) for r in rows] == [
+        (1, "купить окна пвх", None, None), (2, "окна недорого", "окна дешево", None),
+        (3, "бесплатно", None, None), (4, "окна в рассрочку", None, True),
+    ]
+    [group] = out["build"]["groups"]
+    assert [(k["text"], k["pending"], k["own"]) for k in group["keywords"]] == [
+        ("купить окна пвх", True, False), ("окна недорого", True, True), ("окна в рассрочку", True, True),
+    ]
+    assert not [a for a in out["actions"] if a["tool"] == "board_edit"]
+    with pytest.raises(YandexError) as err:  # предложенное ИИ не удаляют — снимают галочку
+        ai_agent.edit_board(user, chat, [{"op": "remove", "kind": "keyword", "group": "Окна ПВХ", "text": "купить окна пвх"}])
+    assert "снимите с неё галочку" in err.value.message
+    with pytest.raises(YandexError):  # всё или ничего: вторая правка не прошла — первой тоже нет
+        ai_agent.edit_board(user, chat, [
+            {"op": "add", "kind": "negative", "text": "даром"},
+            {"op": "add", "kind": "keyword", "group": "Окна ПВХ", "text": "окна недорого"},
+        ])
+    assert len(_pending(user, chat, "propose_items")["args"]["rows"]) == 4
+
+    ai_agent.decide_items(user, table["id"], rows=[1, 2, 3, 4])
+    fake, _ = _turn(user, chat, monkeypatch, _call("propose_items", {"stage": "ads", "rows": [
+        {"section": "Окна ПВХ", "kind": "title", "cells": ["Окна от завода"]},
+        {"section": "Окна ПВХ", "kind": "text", "cells": ["Замер в день заказа"]},
+    ]}, "c4"))
+    reply = json.loads(fake.calls[0][-1]["content"])
+    assert reply["edited_by_user"] == [
+        "поправил фраза (группа «Окна ПВХ»): «окна дешево» → «окна недорого»",
+        "добавил фраза «окна в рассрочку» (группа «Окна ПВХ»)",
+    ]
+    assert "сам поправил" in reply["note"]
+
+    # Согласованное — отдельной записью «правки на доске»; переименование меняет и ждущую таблицу.
+    ai_agent.edit_board(user, chat, [{"op": "rename_group", "group": "Окна ПВХ", "to": "Окна"}])
+    out = ai_agent.edit_board(user, chat, [
+        {"op": "edit", "kind": "keyword", "group": "Окна", "text": "окна недорого", "to": "окна недорого москва"},
+    ])
+    assert {r["section"] for r in _pending(user, chat, "propose_items")["args"]["rows"]} == {"Окна"}
+    assert [g["name"] for g in out["build"]["groups"]] == ["Окна"]
+    assert [k["text"] for k in out["build"]["groups"][0]["keywords"]] == [
+        "купить окна пвх", "окна недорого москва", "окна в рассрочку",
+    ]
+    [edits] = [a for a in out["actions"] if a["tool"] == "board_edit"]  # одна запись на одно место в чате
+    assert edits["status"] == "done" and edits["summary"] == (
+        "переименовал группу «Окна ПВХ» в «Окна»; поправил фразу в группе «Окна»: «окна недорого» → «окна недорого москва»"
+    )
+    history = ai_agent._history(chat)
+    note = next(m for m in history if m["role"] == "user" and m["content"].startswith("[Правки на доске]"))
+    assert "- переименовал группу «Окна ПВХ» в «Окна»" in note["content"]
+    assert history.index(note) == len(history) - 1  # после последнего сообщения, на котором правили
+
+    ai_agent.decide_items(user, _pending(user, chat, "propose_items")["id"], rows=[1, 2])
+    fake, _ = _turn(user, chat, monkeypatch, _call("propose_items", {"stage": "settings", "rows": [
+        {"kind": "setting", "cells": ["Бюджет", "500 ₽/день"]},
+    ]}, "c5"))
+    assert any(m["role"] == "user" and m["content"].startswith("[Правки на доске]") for m in fake.calls[0])
+    ai_agent.decide_items(user, _pending(user, chat, "propose_items")["id"], rows=[1])
+
+    # Вписанное на доске согласовано маркетологом — ИИ может его взять.
+    spec = {"account_id": s["acc"], "spec": {"name": "Окна", "negative_keywords": ["бесплатно"], "groups": [
+        {"name": "Окна", "keywords": ["купить окна пвх", "окна недорого москва", "окна в рассрочку"],
+         "ad": {"titles": ["Окна от завода"], "texts": ["Замер в день заказа"], "href": "https://shop.ru"}},
+    ]}}
+    _, out = _turn(user, chat, monkeypatch, _call("create_campaign", spec, "c6"))
+    assert out["status"] == "waiting"
+    card = _pending(user, chat, "create_campaign")
+
+    # Черновик ждёт решения: правка меняет и его, и он заново проходит проверку.
+    out = ai_agent.edit_board(user, chat, [
+        {"op": "edit", "kind": "title", "group": "Окна", "text": "Окна от завода", "to": "Окна прямо от завода"},
+    ])
+    card = _pending(user, chat, "create_campaign")
+    assert card["args"]["spec"]["groups"][0]["ad"]["titles"] == ["Окна прямо от завода"]
+    assert [t["text"] for t in out["build"]["groups"][0]["titles"]] == ["Окна прямо от завода"]
+    assert any(i["text"] == "Окна прямо от завода" for i in card["items"])
+    with pytest.raises(YandexError) as err:
+        ai_agent.edit_board(user, chat, [{"op": "remove", "kind": "text", "group": "Окна", "text": "Замер в день заказа"}])
+    assert "Правка не прошла проверку черновика" in err.value.message
+    assert _pending(user, chat, "create_campaign")["args"] == card["args"]
+
+    # Пока ИИ отвечает — ждать; после создания черновика доска не правится.
+    with db.connection() as conn:
+        conn.execute("UPDATE ai_chats SET status = 'running', updated_at = NOW() WHERE id = %s", (chat,))
+    with pytest.raises(YandexError) as err:
+        ai_agent.edit_board(user, chat, [{"op": "add", "kind": "negative", "text": "даром"}])
+    assert err.value.code == "busy"
+    with db.connection() as conn:
+        conn.execute("UPDATE ai_chats SET status = 'idle' WHERE id = %s", (chat,))
+    ai_agent.decide_action(user, card["id"], approve=True)
+    _turn(user, chat, monkeypatch, _text("Черновик создан."))
+    assert created[0]["spec"]["groups"][0]["ad"]["titles"] == ["Окна прямо от завода"]
+    with pytest.raises(YandexError) as err:
+        ai_agent.edit_board(user, chat, [{"op": "add", "kind": "negative", "text": "даром"}])
+    assert "Черновик уже создаётся или создан" in err.value.message
 
 
 def test_items_table_rejected_and_decide_all_with_exclude(db, monkeypatch):

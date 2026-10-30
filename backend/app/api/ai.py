@@ -73,6 +73,11 @@ class ItemsBody(BaseModel):
     comment: str = ""
 
 
+class BoardBody(BaseModel):
+    # Правки на доске сборки: [{op, kind, group, text, to, to_group}].
+    ops: list[dict] = []
+
+
 class ReviewBody(BaseModel):
     # Пусто — общий разбор пространства; текст карточки сигнала — разбор по ней.
     prompt: str = ""
@@ -217,6 +222,12 @@ def chat_delete(chat_id: int, user_id: int = Depends(require_web_user)) -> dict:
 @router.post("/ai/chats/{chat_id}/messages")
 def chat_message(chat_id: int, body: MessageBody, user_id: int = Depends(require_web_user)) -> dict:
     return _call(ai_agent.post_message, user_id, chat_id, body.text)
+
+
+@router.post("/ai/chats/{chat_id}/board")
+def chat_board(chat_id: int, body: BoardBody, user_id: int = Depends(require_web_user)) -> dict:
+    """Правки маркетолога на доске сборки новой кампании; ответ — чат целиком."""
+    return _call(ai_agent.edit_board, user_id, chat_id, body.ops)
 
 
 @router.post("/ai/chats/{chat_id}/decide-all")

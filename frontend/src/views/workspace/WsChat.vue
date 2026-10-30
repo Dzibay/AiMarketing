@@ -1,6 +1,6 @@
 <template>
-  <div class="chat" :class="{ 'chat--build': build }">
-    <aside class="chat__side panel">
+  <div class="chat" :class="build ? ['chat--board', `is-tab-${tab}`, { 'is-chats-open': chatsOpen }] : null">
+    <aside class="chat__side panel" aria-label="Чаты пространства">
       <button class="btn btn--accent chat__new" type="button" :disabled="sending" @click="newChat">Новый чат</button>
       <p v-if="chatsError" class="empty">{{ chatsError }}</p>
       <p v-else-if="!chats.length" class="hint">Чатов пока нет.</p>
@@ -30,8 +30,8 @@
           <p class="hint">{{ accessText }}</p>
         </div>
         <div class="row-actions">
-          <button v-if="build" class="btn chat__build-toggle" type="button" @click="buildOpen = true">
-            Сборка кампании
+          <button v-if="build" class="btn btn--ghost chat__chats-toggle" type="button" @click="chatsOpen = true">
+            Чаты
           </button>
           <button
             v-if="!isFirst"
@@ -55,6 +55,15 @@
         </div>
       </header>
 
+      <div v-if="build" class="seg seg--sm chat__tabs" role="tablist" aria-label="Чат или доска кампании">
+        <button type="button" role="tab" :class="{ active: tab === 'chat' }" :aria-selected="tab === 'chat'" @click="tab = 'chat'">
+          Чат
+        </button>
+        <button type="button" role="tab" :class="{ active: tab === 'board' }" :aria-selected="tab === 'board'" @click="tab = 'board'">
+          Доска<span v-if="boardWaiting" class="ws-tabs__badge">{{ boardWaiting }}</span>
+        </button>
+      </div>
+
       <p v-if="!aiConfigured" class="notice notice--warn">
         ИИ не подключён. Укажите провайдера и ключ в
         <RouterLink :to="{ path: '/cabinet/settings', hash: '#ai' }">настройках аккаунта</RouterLink> — подойдёт
@@ -69,9 +78,9 @@
           <h3>Чем помочь с «{{ ws.name }}»?</h3>
           <p v-if="isFirst" class="hint">
             Кампаний здесь пока нет, поэтому разбирать нечего. ИИ соберёт первую по этапам — цели, анализ спроса,
-            группы и фразы, объявления, настройки — и каждый этап покажет вам таблицей на согласование. Рядом с чатом
-            будет видно, как собирается кампания, с предпросмотром объявлений. Любое изменение в Директе он сначала
-            покажет вам.
+            группы и фразы, объявления, настройки. Рядом с чатом появится доска кампании: на ней вы согласуете
+            этапы, поправите фразы, заголовки и тексты и увидите объявление в выдаче. Любое изменение в Директе ИИ
+            сначала покажет вам.
           </p>
           <p v-else class="hint">
             ИИ видит статистику, кампании, ключевые фразы, объявления и поисковые запросы этого пространства. Любое
@@ -136,6 +145,10 @@
             <div class="msg__bubble">{{ item.content }}</div>
           </div>
 
+          <p v-else-if="item.role === 'note'" class="chat-note">
+            <span aria-hidden="true">✎</span> Правки на доске: {{ item.content }}
+          </p>
+
           <div v-else class="msg msg--ai">
             <div v-if="item.content" class="msg__bubble md" v-html="renderMarkdown(item.content)" />
 
@@ -152,8 +165,13 @@
             </div>
 
             <template v-for="a in item.asks" :key="a.key">
+              <div v-if="a.plaque" class="board-plaque" :class="`is-${a.status}`" :data-action="a.id">
+                <span>{{ a.plaque }}</span>
+                <small v-if="a.result?.comment">Комментарий: {{ a.result.comment }}</small>
+                <button class="ai-check__link" type="button" @click="toBoard(a.id)">К доске</button>
+              </div>
               <AiPlanCard
-                v-if="a.tool === 'propose_plan'"
+                v-else-if="a.tool === 'propose_plan'"
                 :action="a"
                 :progress="planProgress(a)"
                 :disabled="deciding || status === 'running'"
@@ -175,56 +193,62 @@
               />
             </template>
 
-            <div v-for="a in item.writes" :key="a.key" class="action-card" :class="`is-${a.status}`" :data-action="a.id">
-              <div class="action-card__head">
-                <strong>{{ a.label }}</strong>
-                <span class="chip" :class="STATUS_CHIPS[a.status]">{{ STATUS_LABELS[a.status] || a.status }}</span>
-                <span v-if="a.plan_step" class="chip">шаг {{ a.plan_step }} плана</span>
-                <span v-if="a.auto" class="chip">без согласования</span>
+            <template v-for="a in item.writes" :key="a.key">
+              <div v-if="a.plaque" class="board-plaque" :class="`is-${a.status}`" :data-action="a.id">
+                <span>{{ a.plaque }}</span>
+                <button class="ai-check__link" type="button" @click="toBoard(a.id)">К доске</button>
               </div>
-              <p class="action-card__summary">{{ a.summary }}</p>
-              <AiChanges v-if="a.changes?.length" :changes="a.changes" />
-              <div v-if="a.status === 'pending' && a.picks" class="ai-picks">
-                <p class="hint">Снимите галочки с того, что не нужно, — этого не будет в действии.</p>
-                <AiCheckTable
-                  v-model:off="excluded[a.id]"
-                  :columns="a.picks.columns"
-                  :rows="a.picks.rows"
-                  :groups="a.picks.groups"
-                  :disabled="deciding"
-                />
+              <div v-else class="action-card" :class="`is-${a.status}`" :data-action="a.id">
+                <div class="action-card__head">
+                  <strong>{{ a.label }}</strong>
+                  <span class="chip" :class="STATUS_CHIPS[a.status]">{{ STATUS_LABELS[a.status] || a.status }}</span>
+                  <span v-if="a.plan_step" class="chip">шаг {{ a.plan_step }} плана</span>
+                  <span v-if="a.auto" class="chip">без согласования</span>
+                </div>
+                <p class="action-card__summary">{{ a.summary }}</p>
+                <AiChanges v-if="a.changes?.length" :changes="a.changes" />
+                <div v-if="a.status === 'pending' && a.picks" class="ai-picks">
+                  <p class="hint">Снимите галочки с того, что не нужно, — этого не будет в действии.</p>
+                  <AiCheckTable
+                    v-model:off="excluded[a.id]"
+                    :columns="a.picks.columns"
+                    :rows="a.picks.rows"
+                    :groups="a.picks.groups"
+                    :disabled="deciding"
+                  />
+                </div>
+                <p v-if="a.removed?.length" class="hint ai-removed">
+                  Снято перед выполнением ({{ a.removed.length }}):
+                  <s v-for="(r, i) in a.removed.slice(0, 12)" :key="i">{{ r.section ? `${r.section}: ${r.text}` : r.text }}</s>
+                  <span v-if="a.removed.length > 12">и ещё {{ a.removed.length - 12 }}</span>
+                </p>
+                <p v-if="a.reason" class="hint">Зачем: {{ a.reason }}</p>
+                <p v-if="a.categories?.length" class="action-card__cats">
+                  <span v-for="c in a.categories" :key="c.id" class="chip">{{ c.label }}</span>
+                </p>
+                <details v-if="hasArgs(a.argsShown)" class="action-card__details">
+                  <summary>Параметры</summary>
+                  <pre>{{ pretty(a.argsShown) }}</pre>
+                </details>
+                <p v-if="a.status === 'error' && a.error" class="tone-bad">{{ a.error }}</p>
+                <details v-if="a.status === 'done' && a.result != null" class="action-card__details">
+                  <summary>Результат</summary>
+                  <pre>{{ pretty(a.result) }}</pre>
+                </details>
+                <p v-if="a.status === 'rejected' && a.error" class="hint">{{ a.error }}</p>
+                <div v-if="a.status === 'pending' && a.id" class="action-card__buttons">
+                  <button class="btn btn--accent" type="button" :disabled="deciding || allOff(a)" @click="decide(a, true)">
+                    {{ offCount(a) ? `Выполнить без снятых (${offCount(a)})` : 'Выполнить' }}
+                  </button>
+                  <button class="btn btn--ghost" type="button" :disabled="deciding" @click="decide(a, false)">Отклонить</button>
+                  <span v-if="allOff(a)" class="hint">Сняты все строки — отклоните действие</span>
+                  <label v-if="a.categories?.length && !a.categories.some((c) => c.id === 'destructive')" class="check-row">
+                    <input v-model="remember[a.id]" type="checkbox" />
+                    <span>Больше не спрашивать для «{{ a.categories.map((c) => c.label).join('», «') }}»</span>
+                  </label>
+                </div>
               </div>
-              <p v-if="a.removed?.length" class="hint ai-removed">
-                Снято перед выполнением ({{ a.removed.length }}):
-                <s v-for="(r, i) in a.removed.slice(0, 12)" :key="i">{{ r.section ? `${r.section}: ${r.text}` : r.text }}</s>
-                <span v-if="a.removed.length > 12">и ещё {{ a.removed.length - 12 }}</span>
-              </p>
-              <p v-if="a.reason" class="hint">Зачем: {{ a.reason }}</p>
-              <p v-if="a.categories?.length" class="action-card__cats">
-                <span v-for="c in a.categories" :key="c.id" class="chip">{{ c.label }}</span>
-              </p>
-              <details v-if="hasArgs(a.argsShown)" class="action-card__details">
-                <summary>Параметры</summary>
-                <pre>{{ pretty(a.argsShown) }}</pre>
-              </details>
-              <p v-if="a.status === 'error' && a.error" class="tone-bad">{{ a.error }}</p>
-              <details v-if="a.status === 'done' && a.result != null" class="action-card__details">
-                <summary>Результат</summary>
-                <pre>{{ pretty(a.result) }}</pre>
-              </details>
-              <p v-if="a.status === 'rejected' && a.error" class="hint">{{ a.error }}</p>
-              <div v-if="a.status === 'pending' && a.id" class="action-card__buttons">
-                <button class="btn btn--accent" type="button" :disabled="deciding || allOff(a)" @click="decide(a, true)">
-                  {{ offCount(a) ? `Выполнить без снятых (${offCount(a)})` : 'Выполнить' }}
-                </button>
-                <button class="btn btn--ghost" type="button" :disabled="deciding" @click="decide(a, false)">Отклонить</button>
-                <span v-if="allOff(a)" class="hint">Сняты все строки — отклоните действие</span>
-                <label v-if="a.categories?.length && !a.categories.some((c) => c.id === 'destructive')" class="check-row">
-                  <input v-model="remember[a.id]" type="checkbox" />
-                  <span>Больше не спрашивать для «{{ a.categories.map((c) => c.label).join('», «') }}»</span>
-                </label>
-              </div>
-            </div>
+            </template>
           </div>
         </template>
 
@@ -258,15 +282,19 @@
     </section>
 
     <template v-if="build">
-      <CampaignBuild
+      <CampaignBoard
+        ref="board"
+        class="chat__board"
         :build="build"
+        :actions="actions"
         :site="ws.site || ''"
         :ws-id="ws.id"
-        :open="buildOpen"
-        @close="buildOpen = false"
-        @jump="jumpTo"
+        :disabled="deciding || status === 'running'"
+        :edit="editBoard"
+        @decide="(id, payload) => respond(() => aiApi.items(id, payload))"
+        @draft="(approve) => decide({ id: build.draft.action_id }, approve)"
       />
-      <div v-if="buildOpen" class="build-backdrop" @click="buildOpen = false" />
+      <div v-if="chatsOpen" class="chat-backdrop" @click="chatsOpen = false" />
     </template>
   </div>
 </template>
@@ -284,7 +312,7 @@ import AiCheckTable from './AiCheckTable.vue'
 import AiItemsCard from './AiItemsCard.vue'
 import AiPlanCard from './AiPlanCard.vue'
 import AiQuestionsCard from './AiQuestionsCard.vue'
-import CampaignBuild from './CampaignBuild.vue'
+import CampaignBoard from './CampaignBoard.vue'
 import { useWs } from './context'
 
 const POLL_MS = 1500
@@ -345,9 +373,14 @@ const pendingActions = computed(() => actions.value.filter((a) => a.status === '
 const pendingWrites = computed(() => pendingActions.value.filter((a) => a.kind !== 'ask'))
 const pendingAsks = computed(() => pendingActions.value.filter((a) => a.kind === 'ask'))
 const plans = computed(() => actions.value.filter((a) => a.tool === 'propose_plan'))
-// Сборка новой кампании по этапам — панелью рядом с чатом (на узком экране — по кнопке).
+// Сборка новой кампании — доской на пол-экрана рядом с чатом; таблицы этапов решаются на ней.
 const build = computed(() => (chat.value ? data.value.build || null : null))
-const buildOpen = ref(false)
+const onBoard = computed(() => new Set(build.value?.action_ids || []))
+const boardWaiting = computed(() => pendingActions.value.filter((a) => onBoard.value.has(a.id)).length)
+const board = ref(null)
+// С доской список чатов выезжает по кнопке, а на узком экране чат и доска — вкладками.
+const chatsOpen = ref(false)
+const tab = ref('chat')
 
 const accessText = computed(() => {
   const a = access.value
@@ -360,6 +393,9 @@ const accessText = computed(() => {
 const placeholder = computed(() => {
   if (!aiConfigured.value) return 'Сначала подключите ИИ в настройках аккаунта'
   if (status.value === 'running') return 'ИИ отвечает…'
+  if (pendingActions.value.length && pendingActions.value.every((a) => onBoard.value.has(a.id))) {
+    return 'Решите этап на доске или напишите своими словами'
+  }
   if (pendingAsks.value.length) {
     return pendingWrites.value.length
       ? 'Ответьте в карточке или напишите своими словами; действия, которые ждут решения, будут отклонены'
@@ -413,46 +449,84 @@ const items = computed(() => {
   const results = new Map()
   for (const m of data.value.messages) if (m.role === 'tool') results.set(m.tool_call_id, m.content)
   const byCall = new Map(data.value.actions.map((a) => [a.tool_call_id, a]))
+  // Правки на доске — строкой после сообщения, на котором их сделали.
+  const edits = new Map()
+  for (const a of data.value.actions) {
+    if (a.tool === 'board_edit') edits.set(a.message_id, [...(edits.get(a.message_id) || []), a])
+  }
   const out = []
   for (const m of data.value.messages) {
     if (m.role === 'user') out.push({ key: `m${m.id}`, role: 'user', content: m.content })
-    if (m.role !== 'assistant') continue
-    const reads = []
-    const asks = []
-    const writes = []
-    for (const call of m.tool_calls || []) {
-      const raw = results.get(call.id)
-      // Вопросы без карточки (на всё уже ответили или ошибка в аргументах) — обычный шаг с ответом.
-      if (call.kind === 'ask' && byCall.has(call.id)) {
-        const action = byCall.get(call.id)
-        asks.push({ ...action, key: `a${action.id}` })
-      } else if (call.write) {
-        const action = byCall.get(call.id)
-        if (action) {
-          const { reason: _reason, plan_step: _step, ...argsShown } = action.args || {}
-          writes.push({ ...action, key: `a${action.id}`, argsShown, picks: pickRows(action.items) })
-        } else {
-          // Подготовка не прошла (ошибка в аргументах) — ответ инструмента вместо карточки.
-          writes.push({
-            key: `c${call.id}`,
-            label: call.label,
-            status: raw != null ? 'error' : 'approved',
-            summary: 'Действие не создано',
-            error: raw != null ? toolError(raw) : '',
-            argsShown: call.args,
-          })
-        }
-      } else {
-        const parsed = raw != null ? parseToolResult(raw) : null
-        reads.push({ id: call.id, label: call.label, args: call.args, result: parsed?.text ?? null, failed: parsed?.failed })
-      }
+    if (m.role === 'assistant') {
+      const item = assistantItem(m, results, byCall)
+      if (item) out.push(item)
     }
-    if (m.content || reads.length || asks.length || writes.length) {
-      out.push({ key: `m${m.id}`, role: 'assistant', content: m.content, reads, asks, writes })
-    }
+    for (const e of edits.get(m.id) || []) out.push({ key: `e${e.id}`, role: 'note', content: e.summary })
   }
   return out
 })
+
+/** Ответ ИИ: текст, шаги чтения, вопросы, план, таблицы и карточки действий (решаемое на доске — плашкой). */
+function assistantItem(m, results, byCall) {
+  const reads = []
+  const asks = []
+  const writes = []
+  for (const call of m.tool_calls || []) {
+    const raw = results.get(call.id)
+    // Вопросы без карточки (на всё уже ответили или ошибка в аргументах) — обычный шаг с ответом.
+    if (call.kind === 'ask' && byCall.has(call.id)) {
+      const action = byCall.get(call.id)
+      asks.push({ ...action, key: `a${action.id}`, plaque: plaqueText(action) })
+    } else if (call.write) {
+      const action = byCall.get(call.id)
+      if (action && onBoard.value.has(action.id)) {
+        writes.push({ ...action, key: `a${action.id}`, plaque: plaqueText(action) })
+      } else if (action) {
+        const { reason: _reason, plan_step: _step, ...argsShown } = action.args || {}
+        writes.push({ ...action, key: `a${action.id}`, argsShown, picks: pickRows(action.items) })
+      } else {
+        // Подготовка не прошла (ошибка в аргументах) — ответ инструмента вместо карточки.
+        writes.push({
+          key: `c${call.id}`,
+          label: call.label,
+          status: raw != null ? 'error' : 'approved',
+          summary: 'Действие не создано',
+          error: raw != null ? toolError(raw) : '',
+          argsShown: call.args,
+        })
+      }
+    } else {
+      const parsed = raw != null ? parseToolResult(raw) : null
+      reads.push({ id: call.id, label: call.label, args: call.args, result: parsed?.text ?? null, failed: parsed?.failed })
+    }
+  }
+  if (!m.content && !reads.length && !asks.length && !writes.length) return null
+  return { key: `m${m.id}`, role: 'assistant', content: m.content, reads, asks, writes }
+}
+
+/** Плашка вместо таблицы этапа или карточки создания, которые решаются на доске; '' — карточка в чате. */
+function plaqueText(action) {
+  if (!onBoard.value.has(action.id)) return ''
+  if (action.tool === 'create_campaign') {
+    const name = action.args?.spec?.name ? ` «${action.args.spec.name}»` : ''
+    const texts = {
+      pending: `Черновик${name} на доске ждёт решения`,
+      approved: `Черновик${name} создаётся…`,
+      done: `Черновик${name} создан в Директе`,
+      error: `Черновик${name} не создан: ${action.error || 'ошибка'}`,
+      rejected: `Создание черновика${name} отклонено`,
+    }
+    return texts[action.status] || action.status
+  }
+  const stage = action.args?.stage
+  const label = build.value.stages.find((s) => s.key === stage)?.label || stage
+  if (action.status === 'pending') return `Этап «${label}» на доске ждёт решения`
+  if (action.status === 'done') {
+    const chosen = (action.result?.approved_rows || []).length
+    return `Этап «${label}» согласован на доске: ${chosen} из ${(action.args?.rows || []).length}`
+  }
+  return `Этап «${label}» отклонён`
+}
 
 /** Строки с галочками карточки действия: «вся группа» — галочка раздела, остальное — строки. */
 function pickRows(items) {
@@ -501,16 +575,25 @@ function planProgress(plan) {
   return out
 }
 
-/** Этап из панели сборки — к его таблице или карточке в ленте чата. */
-function jumpTo(actionId) {
-  buildOpen.value = false
-  const el = actionId && scroller.value?.querySelector(`[data-action="${actionId}"]`)
-  if (!el) return
-  el.scrollIntoView({ behavior: 'smooth', block: 'start' })
-  el.classList.remove('is-flash')
-  void el.offsetWidth
-  el.classList.add('is-flash')
-  setTimeout(() => el.classList.remove('is-flash'), 1600)
+/** Из плашки в чате — к разделу доски, где это решается (на узком экране — вкладка «Доска»). */
+async function toBoard(actionId) {
+  tab.value = 'board'
+  await nextTick()
+  board.value?.showAction(actionId)
+}
+
+/** Правки на доске: сервер возвращает чат целиком; false — правка не прошла (тост с причиной). */
+async function editBoard(ops) {
+  const id = chatId.value
+  try {
+    const res = await aiApi.board(id, ops)
+    if (chatId.value === id) data.value = res
+    return true
+  } catch (err) {
+    pushToast(errorText(err), 'error')
+    if (chatId.value === id) loadChat(id, true)
+    return false
+  }
 }
 
 function hasArgs(args) {
@@ -808,7 +891,8 @@ watch(
 
 watch(chatId, (id) => {
   stopPolling()
-  buildOpen.value = false
+  chatsOpen.value = false
+  tab.value = 'chat'
   loadError.value = ''
   if (id) {
     stickToBottom = true

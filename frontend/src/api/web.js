@@ -181,6 +181,8 @@ export const aiApi = {
   plan: (actionId, payload) => post(`/api/web/ai/actions/${actionId}/plan`, payload),
   /** Решение по таблице ИИ: { approve, rows: [номера отмеченных строк], comment }. */
   items: (actionId, payload) => post(`/api/web/ai/actions/${actionId}/items`, payload),
+  /** Правки на доске сборки: [{ op, kind, group, text, to, to_group }] → чат целиком. */
+  board: (chatId, ops) => post(`/api/web/ai/chats/${chatId}/board`, { ops }),
   /** Чем ИИ может помочь: сигналы считает код без ИИ, бесплатно. */
   signals: (workspaceId) => request(`${WS(workspaceId)}/signals`),
   /** «Разбор»: { prompt?, title?, chat_id? } → { chat, message, job }; без chat_id — новый чат. */

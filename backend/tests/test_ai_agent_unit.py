@@ -465,7 +465,11 @@ def test_campaign_build_only_for_new_campaign_and_latest_one():
     assert ai_agent.campaign_build(first)["draft"]["campaign_row_id"] == 5
     build = ai_agent.campaign_build(first + second)
     assert build["draft"] is None and build["stages"][0]["status"] == "pending" and build["stages"][0]["action_id"] == 4
-    assert [(g["text"], g["value"], g["pending"]) for g in build["goals"]] == [("Что", "Двери", True)]
+    # Ждущая таблица — все строки с галочками; в счёт этапа — только отмеченные.
+    assert [(g["text"], g["value"], g["pending"], g["checked"]) for g in build["goals"]] == [
+        ("Что", "Двери", True, True), ("Гео", "Москва", True, False),
+    ]
+    assert build["stages"][0]["count"] == 1 and build["goals"][0]["action_id"] == 4 and build["goals"][1]["n"] == 2
     assert {st["status"] for st in build["stages"][1:]} == {"todo"}
 
 
@@ -481,9 +485,229 @@ def test_campaign_build_groups_by_section():
         _table(4, "ads", [{"section": "Окна", "kind": "title", "cells": ["Окна от завода"]}]),
     ])
     [group] = build["groups"]
-    assert [(k["text"], k["note"]) for k in group["keywords"]] == [("купить окна", "основная")]  # без повтора
+    # Без повтора: новая таблица предлагает фразу заново — на доске её строка с галочкой.
+    assert [(k["text"], k["note"], k["pending"]) for k in group["keywords"]] == [("купить окна", "", True)]
     assert [t["text"] for t in group["titles"]] == ["Окна от завода"] and group["texts"] == []
     assert [n["text"] for n in build["negatives"]] == ["бесплатно"]
     assert [(st["key"], st["status"]) for st in build["stages"][:4]] == [
         ("goals", "todo"), ("analysis", "done"), ("keywords", "pending"), ("negatives", "done"),
     ]
+
+
+def _edits(action_id, *ops):
+    return {"id": action_id, "tool": "board_edit", "status": "done", "args": {"ops": list(ops)}}
+
+
+def _done_campaign():
+    return [
+        _table(1, "goals", [{"cells": ["Ссылка", "https://okna.ru"]}]),
+        _table(2, "keywords", [
+            {"section": "Окна", "cells": ["купить окна", "9 000"]},
+            {"section": "Окна", "cells": ["окна дешево", "900"]},
+            {"section": "Балконы", "cells": ["остекление балкона", "4 000"]},
+        ]),
+        _table(3, "ads", [
+            {"section": "Окна", "kind": "title", "cells": ["Окна от завода"]},
+            {"section": "Окна", "kind": "text", "cells": ["Замер бесплатно"]},
+            {"section": "Балконы", "kind": "title", "cells": ["Балконы под ключ"]},
+            {"section": "Балконы", "kind": "text", "cells": ["Монтаж за день"]},
+        ]),
+    ]
+
+
+def test_campaign_build_later_decision_wins():
+    build = ai_agent.campaign_build([
+        _table(1, "analysis", [{"cells": ["Окна"]}]),
+        _table(2, "keywords", [
+            {"section": "Окна", "cells": ["купить окна"]}, {"section": "Окна", "cells": ["окна дешево"]},
+        ]),
+        # Новая таблица перенесла фразу в другую группу, а «купить окна» маркетолог в ней снял.
+        _table(3, "keywords", [
+            {"section": "Окна", "cells": ["купить окна"]}, {"section": "Дешёвые окна", "cells": ["окна дешево"]},
+        ], approved=[2]),
+    ])
+    assert [(g["name"], [k["text"] for k in g["keywords"]]) for g in build["groups"]] == [("Дешёвые окна", ["окна дешево"])]
+
+
+def test_campaign_build_applies_board_edits():
+    build = ai_agent.campaign_build(_done_campaign() + [_edits(
+        4,
+        {"op": "edit", "kind": "title", "group": "Окна", "text": "Окна от завода", "to": "Окна от завода в Москве"},
+        {"op": "add", "kind": "keyword", "group": "Окна", "text": "окна пвх"},
+        {"op": "remove", "kind": "keyword", "group": "Окна", "text": "окна дешево"},
+        {"op": "move", "kind": "keyword", "group": "Окна", "text": "купить окна", "to_group": "Балконы"},
+        {"op": "add", "kind": "negative", "group": "", "text": "бесплатно"},
+        {"op": "remove", "kind": "keyword", "group": "Нет такой", "text": "что-то"},  # чего нет — пропускается
+    )])
+    okna, balcony = build["groups"]
+    assert [(k["text"], k["own"]) for k in okna["keywords"]] == [("окна пвх", True)]
+    assert [(t["text"], t["own"], t["action_id"]) for t in okna["titles"]] == [("Окна от завода в Москве", True, 3)]
+    assert [(k["text"], k["value"], k["own"]) for k in balcony["keywords"]] == [
+        ("остекление балкона", "4 000", False), ("купить окна", "9 000", True),
+    ]
+    assert [n["text"] for n in build["negatives"]] == ["бесплатно"]
+
+    # Объединение: фразы — вместе, объявление — той группы, в которую объединили.
+    build = ai_agent.campaign_build(_done_campaign() + [_edits(4, {"op": "rename_group", "group": "Окна", "to": "Балконы"})])
+    [group] = build["groups"]
+    assert group["name"] == "Балконы" and [k["text"] for k in group["keywords"]] == [
+        "остекление балкона", "купить окна", "окна дешево",
+    ]
+    assert [t["text"] for t in group["titles"]] == ["Балконы под ключ"]
+    build = ai_agent.campaign_build(_done_campaign() + [_edits(4, {"op": "rename_group", "group": "Окна", "to": "Окна ПВХ"})])
+    assert [g["name"] for g in build["groups"]] == ["Окна ПВХ", "Балконы"]
+
+
+def test_campaign_build_extras_and_checks():
+    build = ai_agent.campaign_build([
+        _table(1, "goals", [{"cells": ["Что", "Окна"]}]),
+        _table(2, "keywords", [{"section": "Окна", "cells": ["купить окна"]}]),
+        _table(3, "ads", [{"section": "Окна", "kind": "title", "cells": ["Окна от завода"]}]),
+        _table(4, "extras", [
+            {"section": "Ссылка", "cells": ["Посадочная", "https://okna.ru/pvh"]},
+            {"section": "Быстрые ссылки", "cells": ["Цены", "https://okna.ru/price", "Прайс на все окна"]},
+            {"section": "Быстрые ссылки", "cells": ["Доставка", "", "По Москве"], "checked": False},
+            {"cells": ["Уточнения", "Гарантия 5 лет, Монтаж за день"]},
+        ], status="pending"),
+    ])
+    assert [(x["text"], x["href"], x["description"], x["checked"]) for x in build["sitelinks"]] == [
+        ("Цены", "https://okna.ru/price", "Прайс на все окна", True), ("Доставка", "", "По Москве", False),
+    ]
+    assert [(c["text"], c["n"]) for c in build["callouts"]] == [("Гарантия 5 лет", 4), ("Монтаж за день", 4)]
+    assert [(e["text"], e["value"]) for e in build["extras"]] == [("Посадочная", "https://okna.ru/pvh")]
+    checks = {c["key"]: (c["state"], c["note"]) for c in build["checks"]}
+    assert checks["stages"] == ("bad", "не пройдены: Анализ, Настройки")
+    assert checks["ads"] == ("bad", "нужны заголовок и текст: «Окна»")
+    assert checks["link"] == ("ok", "https://okna.ru/pvh")
+    assert checks["negatives"][0] == "warn"
+    assert checks["extras"] == ("ok", "1 быстрая ссылка, 2 уточнения")
+    assert build["ready"] is False
+
+
+def test_campaign_build_checks_ready():
+    rows = _done_campaign() + [
+        _table(4, "analysis", [{"cells": ["Окна"]}]),
+        _table(5, "settings", [{"cells": ["Бюджет", "500 ₽"]}]),
+    ]
+    build = ai_agent.campaign_build(rows, link_template=True)
+    checks = {c["key"]: c["state"] for c in build["checks"]}
+    assert checks == {
+        "stages": "ok", "keywords": "ok", "ads": "ok", "unique": "ok", "link": "ok", "negatives": "warn", "extras": "warn",
+    }
+    assert build["ready"] is True
+    # Одинаковые объявления у групп — Директ так не пропустит.
+    twin = _table(6, "ads", [
+        {"section": "Балконы", "kind": "title", "cells": ["Окна от завода"]},
+        {"section": "Балконы", "kind": "text", "cells": ["Замер бесплатно"]},
+    ])
+    edits = _edits(7, {"op": "remove", "kind": "title", "group": "Балконы", "text": "Балконы под ключ"},
+                   {"op": "remove", "kind": "text", "group": "Балконы", "text": "Монтаж за день"})
+    build = ai_agent.campaign_build(rows + [twin, edits])
+    assert {c["key"]: c["state"] for c in build["checks"]}["unique"] == "bad" and build["ready"] is False
+
+
+def test_campaign_build_from_create_card():
+    spec = {"name": "Окна", "negative_keywords": ["бесплатно"], "groups": [{
+        "name": "Окна", "keywords": ["купить окна", "окна пвх"],
+        "ad": {"titles": ["Окна от завода"], "texts": ["Замер бесплатно"], "href": "https://okna.ru",
+               "extras": {"sitelinks": [{"title": "Цены", "href": "https://okna.ru/p"}], "callouts": ["Гарантия"]}},
+    }]}
+    create = {"id": 5, "tool": "create_campaign", "status": "pending", "args": {"spec": spec}, "summary": "Создать"}
+    edits = _edits(6, {"op": "remove", "kind": "keyword", "group": "Окна", "text": "купить окна"})
+    build = ai_agent.campaign_build(_done_campaign() + [create, edits])
+    [group] = build["groups"]  # карточка — то, что уйдёт в Директ; правки уже в ней
+    assert [(k["text"], k["value"]) for k in group["keywords"]] == [("купить окна", "9 000"), ("окна пвх", "")]
+    assert [x["text"] for x in group["sitelinks"]] == ["Цены"] and [c["text"] for c in group["callouts"]] == ["Гарантия"]
+    assert build["draft"]["status"] == "pending" and build["draft"]["action_id"] == 5
+    assert {c["key"]: c["state"] for c in build["checks"]}["extras"] == "ok"
+    # Не прошла в Директ — снова согласованное и правки.
+    build = ai_agent.campaign_build(_done_campaign() + [{**create, "status": "error", "error": "Директ"}, edits])
+    assert build["draft"]["status"] == "error" and build["draft"]["error"] == "Директ"
+    assert [k["text"] for k in build["groups"][0]["keywords"]] == ["окна дешево"]
+
+
+def test_board_op_checks():
+    with pytest.raises(YandexError):
+        ai_agent._board_op({"op": "drop", "kind": "title", "text": "x"})
+    with pytest.raises(YandexError):
+        ai_agent._board_op({"op": "move", "kind": "title", "group": "Окна", "text": "x", "to_group": "Балконы"})
+    assert ai_agent._board_op({"op": "add", "kind": "negative", "group": "Окна", "text": " -бесплатно "}) == {
+        "op": "add", "group": "", "kind": "negative", "text": "-бесплатно",
+    }
+    build = ai_agent.campaign_build(_done_campaign())
+
+    def check(**raw):
+        op = ai_agent._board_op(raw)
+        ai_agent._board_validate(build, op)
+        return op
+
+    def error(**raw):
+        with pytest.raises(YandexError) as err:
+            check(**raw)
+        return err.value.message
+
+    assert "длиннее 56" in error(op="add", kind="title", group="Окна", text="З" * 57)
+    assert "уже есть в группе «Балконы»" in error(op="add", kind="keyword", group="Окна", text="Остекление балкона")
+    assert "больше 7 слов" in error(op="edit", kind="keyword", group="Окна", text="купить окна", to="a b c d e f g h")
+    assert "уже нет" in error(op="remove", kind="title", group="Окна", text="Нет такого")
+    assert "другую группу" in error(op="move", kind="keyword", group="Окна", text="купить окна", to_group="Окна")
+    assert "Группы «Двери» уже нет" in error(op="rename_group", group="Двери", to="Окна")
+    assert "уже есть в группе «Балконы»" in error(
+        op="edit", kind="keyword", group="Окна", text="купить окна", to="остекление балкона"
+    )
+    assert "«окна дешево» уже есть" in error(op="edit", kind="keyword", group="Окна", text="купить окна", to="окна дешево")
+    # Регистр и знаки — та же строка, это не повтор.
+    check(op="edit", kind="text", group="Окна", text="Замер бесплатно", to="Замер — бесплатно!")
+    op = check(op="rename_group", group="Окна", to="Балконы")
+    assert op["merge"] and ai_agent._board_note(op) == "объединил группу «Окна» с группой «Балконы»"
+    op = check(op="edit", kind="title", group="Окна", text="Окна от завода", to="Окна с завода")
+    assert ai_agent._board_note(op) == "поправил заголовок в группе «Окна»: «Окна от завода» → «Окна с завода»"
+    op = check(op="move", kind="keyword", group="Окна", text="купить окна", to_group="Балконы")
+    assert ai_agent._board_note(op) == "перенёс фразу «купить окна» из группы «Окна» в «Балконы»"
+    assert ai_agent._board_note(check(op="add", kind="negative", text="даром")) == "добавил минус-фразу «даром»"
+    many = ai_agent.campaign_build(_done_campaign() + [_edits(4, *[
+        {"op": "add", "kind": "title", "group": "Окна", "text": f"Окна {i}"} for i in range(6)
+    ])])
+    with pytest.raises(YandexError) as err:
+        ai_agent._board_validate(many, ai_agent._board_op({"op": "add", "kind": "title", "group": "Окна", "text": "Ещё"}))
+    assert "уже 7 заголовков" in err.value.message
+
+
+def test_board_patches_pending_table_and_spec():
+    table = {"id": 7, "tool": "propose_items", "status": "pending", "args": {"stage": "ads", "rows": [
+        {"n": 1, "section": "Окна", "kind": "title", "cells": ["Окна от завода", ""], "checked": True},
+        {"n": 2, "section": "Окна", "kind": "text", "cells": ["Замер бесплатно", ""], "checked": True},
+    ]}}
+    item = {"n": 1}
+    ai_agent._table_row_patch(table, {"op": "edit", "text": "Окна от завода", "to": "Окна с завода"}, item, {})
+    ai_agent._table_row_patch(table, {"op": "edit", "text": "Окна с завода", "to": "Окна прямо с завода"}, item, {})
+    assert table["args"]["rows"][0]["cells"][0] == "Окна прямо с завода"
+    assert table["args"]["rows"][0]["edited_from"] == "Окна от завода"
+    assert ai_agent._table_row_patch(table, {"op": "add", "kind": "title", "group": "Окна", "text": "Окна за день"}, None, {})
+    assert not ai_agent._table_row_patch(table, {"op": "add", "kind": "title", "group": "Двери", "text": "Двери"}, None, {})
+    assert table["args"]["rows"][2] == {
+        "n": 3, "section": "Окна", "kind": "title", "cells": ["Окна за день", ""], "checked": True, "added": True,
+    }
+    with pytest.raises(YandexError) as err:
+        ai_agent._table_row_patch(table, {"op": "remove", "text": "Замер бесплатно"}, {"n": 2}, {})
+    assert "снимите с неё галочку" in err.value.message
+    ai_agent._table_row_patch(table, {"op": "remove", "text": "Окна за день"}, {"n": 3}, {})
+    assert [r["n"] for r in table["args"]["rows"]] == [1, 2]
+    assert ai_agent._edited_rows(table["args"]["rows"]) == [
+        "поправил заголовок (группа «Окна»): «Окна от завода» → «Окна прямо с завода»",
+    ]
+
+    spec = {"negative_keywords": "бесплатно".split(), "groups": [
+        {"name": "Окна", "keywords": ["купить окна", "окна дешево"], "ad": {"title": "Окна от завода", "texts": ["Замер"]}},
+        {"name": "Балконы", "keywords": ["купить балкон"]},
+    ]}
+    ai_agent._spec_patch(spec, {"op": "edit", "kind": "title", "group": "Окна", "text": "окна от завода", "to": "Окна с завода"})
+    ai_agent._spec_patch(spec, {"op": "move", "kind": "keyword", "group": "Окна", "text": "окна дешево", "to_group": "Балконы"})
+    ai_agent._spec_patch(spec, {"op": "add", "kind": "negative", "group": "", "text": "даром"})
+    assert spec["groups"][0]["ad"] == {"titles": ["Окна с завода"], "texts": ["Замер"]}
+    assert spec["groups"][1]["keywords"] == ["купить балкон", "окна дешево"] and spec["negative_keywords"] == ["бесплатно", "даром"]
+    ai_agent._spec_patch(spec, {"op": "rename_group", "group": "Балконы", "to": "Окна", "merge": True})
+    assert [g["name"] for g in spec["groups"]] == ["Окна"]
+    assert spec["groups"][0]["keywords"] == ["купить окна", "купить балкон", "окна дешево"]
+    with pytest.raises(YandexError):
+        ai_agent._spec_patch(spec, {"op": "remove", "kind": "keyword", "group": "Окна", "text": "нет такой"})

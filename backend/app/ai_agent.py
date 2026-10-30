@@ -268,6 +268,8 @@ class Context:
         self.action: dict | None = None
         # Чат, в котором работает модель: новая кампания проверяется по таблицам, согласованным в нём.
         self.chat_id: int | None = None
+        # Правки с доски, которые сейчас сохраняются: согласованы, как и строки таблиц.
+        self.board_ops: list[dict] = []
 
     def account_ids(self) -> set[int]:
         return {int(a["id"]) for a in self.ws.get("accounts") or []}
@@ -1020,7 +1022,11 @@ def _stage_approvals(ctx: Context) -> tuple[set[str], set[str], str]:
     said: list[str] = []
     with pool.connection() as conn:
         cards = conn.execute(
-            "SELECT tool, args, result FROM ai_actions WHERE chat_id = %s AND tool = ANY(%s) AND status = 'done'",
+            """
+            SELECT tool, args, result FROM ai_actions
+            WHERE chat_id = %s AND (tool = ANY(%s) AND status = 'done' OR tool = 'board_edit')
+            ORDER BY id
+            """,
             (ctx.chat_id, list(ASK_TOOLS)),
         ).fetchall()
         said += [
@@ -1029,7 +1035,11 @@ def _stage_approvals(ctx: Context) -> tuple[set[str], set[str], str]:
                 "SELECT content FROM ai_messages WHERE chat_id = %s AND role = 'user'", (ctx.chat_id,)
             ).fetchall()
         ]
+    edits = list(getattr(ctx, "board_ops", None) or [])
     for card in cards:
+        if card["tool"] == "board_edit":
+            edits += (card["args"] or {}).get("ops") or []
+            continue
         result = card["result"] or {}
         said.append(str(result.get("comment") or ""))
         said += [str(a.get("answer") or "") for a in result.get("answers") or [] if isinstance(a, dict)]
@@ -1043,6 +1053,11 @@ def _stage_approvals(ctx: Context) -> tuple[set[str], set[str], str]:
                 # Вид строки не важен: фраза могла быть согласована и в таблице анализа.
                 approved.add(_item_key(row["cells"][0], "keyword"))
                 approved.add(_item_key(row["cells"][0]))
+    # Что маркетолог сам вписал на доске — согласовано им.
+    for op in edits:
+        text = op.get("to") if op.get("op") == "edit" else op.get("text") if op.get("op") == "add" else None
+        if text:
+            approved.update({_item_key(text, "keyword"), _item_key(text, op.get("kind") or ""), _item_key(text)})
     return stages, approved, f" {_item_key(' '.join(said))} "
 
 
@@ -1070,7 +1085,7 @@ def _require_approved(ctx: Context, content: dict[str, list[str]], *, stages: li
     if bad:
         raise YandexError(
             "args",
-            "Этого маркетолог не согласовывал или снял галочку: " + "; ".join(bad) + ". Убери это или покажи "
+            "Этого маркетолог не согласовывал, снял галочку или убрал на доске: " + "; ".join(bad) + ". Убери это или покажи "
             "новой таблицей propose_items и добавляй только после согласования",
         )
 
@@ -3172,6 +3187,9 @@ def _q_items(ctx: Context, args: dict) -> dict:
             continue
         seen.add(key)
         limit = _ITEM_LIMITS.get(kind)
+        if stage == "extras" and kind == "extra":
+            where = section.lower()
+            limit = SITELINK_TITLE_LEN if "быстр" in where else CALLOUT_LEN if "уточнен" in where else None
         if limit and len(cells[0]) > limit:
             too_long.append(f"«{cells[0]}» ({len(cells[0])} > {limit})")
         rows.append(
@@ -3207,6 +3225,7 @@ def _kind(tool: str) -> str:
 
 
 TOOL_LABELS = {
+    "board_edit": "Правки на доске",
     "get_workspace_summary": "Сводка пространства",
     "get_analytics": "Аналитика за период",
     "list_campaigns": "Список кампаний",
@@ -4054,8 +4073,10 @@ def _system_prompt(ctx: Context) -> str:
         "по этапам ниже.",
         "- Новую кампанию собирай строго по этапам. Каждый этап заканчивается таблицей propose_items, и к "
         "следующему переходишь только после её согласования; без согласованных этапов create_campaign вернёт "
-        "ошибку. Маркетолог видит рядом с чатом, как собирается кампания: согласованные цели, группы с фразами "
-        "и объявления, поэтому называй группы (section) одинаково на всех этапах. 1) Цели кампании — сначала "
+        "ошибку. Маркетолог видит рядом с чатом доску сборки — цели, группы с фразами и объявления, "
+        "расширения — и согласует этапы на ней, поэтому называй группы (section) одинаково на всех этапах. На "
+        "доске он может сам поправить фразы, заголовки, тексты и группы: такие правки приходят сообщением "
+        "«[Правки на доске]» и полем edited_by_user в ответе таблицы — дальше бери их в таком виде. 1) Цели кампании — сначала "
         "ask_questions, если чего-то не хватает в брифе, затем propose_items stage=goals строками «что — "
         "значение»: что рекламируем и оффер, гео, бюджет, цель (действие на сайте или цель Метрики), посадочная "
         "ссылка, ограничения. 2) Анализ: похожие кампании пространства (list_campaigns, get_campaign — какие группы, фразы и тексты "
@@ -4066,8 +4087,10 @@ def _system_prompt(ctx: Context) -> str:
         "кампании — там же строками kind=negative с section «Минус-фразы» или отдельной таблицей stage=negatives. "
         "4) Заголовки и тексты — propose_items stage=ads: каждой группе до 7 заголовков (kind=title, до 56 "
         "знаков) и до 3 текстов (kind=text, до 81) под её фразы, section — группа. 5) Ссылка и расширения — "
-        "propose_items stage=extras: ссылка или шаблон пространства, быстрые ссылки, уточнения, у какого "
-        "объявления взять расширения. 6) Настройки — propose_items stage=settings: тип, стратегия, бюджет, "
+        "propose_items stage=extras: ссылка или шаблон пространства; быстрые ссылки — строка на ссылку с "
+        "section «Быстрые ссылки» (текст до 30 знаков, ссылка, описание до 60); уточнения — строка на уточнение "
+        "с section «Уточнения» (до 25 знаков); или у какого объявления взять расширения. В create_campaign "
+        "согласованные быстрые ссылки и уточнения — в ad.extras каждой группы. 6) Настройки — propose_items stage=settings: тип, стратегия, бюджет, "
         "регионы, расписание, цель; допустимые стратегии и цели — get_campaign_options, id регионов — "
         "find_regions. 7) create_campaign — одним вызовом черновик со всеми группами (spec.groups), "
         "только из согласованных строк: снятое галочкой не бери, новое не добавляй без новой таблицы. "
@@ -4282,8 +4305,10 @@ def _action_out(row: dict) -> dict:
     }
 
 
-# Панель «Сборка кампании»: этапы новой кампании и всё согласованное по ним — группы с фразами и
-# объявлениями. Собирается из таблиц propose_items чата; ждущая таблица показывается как предложение.
+# Доска «Сборка кампании»: этапы новой кампании и всё по ним — цели, спрос, группы с фразами и
+# объявлениями, расширения, настройки и проверка готовности. Собирается по порядку из таблиц
+# propose_items чата (ждущая таблица — предложение со всеми строками и галочками) и правок
+# маркетолога на доске (board_edit): более поздняя строка или правка заменяет прежнюю.
 
 BUILD_STAGES = {
     "goals": "Цели",
@@ -4296,24 +4321,320 @@ BUILD_STAGES = {
 }
 _BUILD_OPTIONAL = {"negatives", "extras"}
 _BUILD_STARTS = {"goals", "analysis"}
+_BUILD_REQUIRED = ("goals", "analysis", "keywords", "ads", "settings")
+_BUILD_FACTS = {"goals": "goals", "analysis": "directions", "extras": "extras", "settings": "settings"}
 NO_GROUP = "Без группы"
+SITELINK_TITLE_LEN = 30
+CALLOUT_LEN = 25
+_LINK_RE = re.compile(r"(https?://|www\.)\S+", re.I)
 
 
-def _build_row(row: dict, pending: bool) -> dict:
-    cells = [str(c or "") for c in row.get("cells") or []]
+def _build_item(text: str, value: str = "", note: str = "", **extra) -> dict:
     return {
-        "text": cells[0] if cells else "",
-        "value": cells[1] if len(cells) > 1 else "",
-        "note": " · ".join(c for c in cells[2:] if c),
-        "pending": pending,
+        "text": text,
+        "value": value,
+        "note": note,
+        "pending": False,
+        "checked": True,
+        "action_id": None,
+        "n": None,
+        "own": False,
+        **extra,
     }
 
 
-def campaign_build(actions: list[dict]) -> dict | None:
+def _row_item(row: dict, action: dict, pending: bool) -> dict:
+    cells = [str(c or "") for c in row.get("cells") or []]
+    return _build_item(
+        cells[0] if cells else "",
+        cells[1] if len(cells) > 1 else "",
+        " · ".join(c for c in cells[2:] if c),
+        pending=pending,
+        checked=row.get("checked") is not False if pending else True,
+        action_id=action["id"],
+        n=row.get("n"),
+        own=bool(row.get("added") or row.get("edited_from") or row.get("moved_from")),
+        # Вписана маркетологом в ждущую таблицу — её можно убрать; предложенное ИИ снимают галочкой.
+        added=bool(row.get("added")),
+    )
+
+
+def _extra_links(section: str, row: dict) -> tuple[str, list[dict]]:
+    """Строка этапа «Ссылка и расширения» → ("sitelink" | "callout", [{text, href, description}]); "" — обычная.
+
+    Раздел «Быстрые ссылки» / «Уточнения» — строка на ссылку или уточнение; иначе строка «Быстрые
+    ссылки — Доставка, Гарантия…» делится по запятым.
+    """
+    cells = [str(c or "").strip() for c in row.get("cells") or []]
+    head = (cells[0] if cells else "").lower()
+    where = section.lower()
+    kind = "sitelink" if "быстр" in where else "callout" if "уточнен" in where else ""
+    if kind:
+        rest = [c for c in cells[1:] if c]
+        href = next((c for c in rest if re.match(r"(https?://|www\.|/)", c, re.I)), "")
+        description = next((c for c in rest if c != href), "") if kind == "sitelink" else ""
+        return kind, [{"text": cells[0], "href": href, "description": description}] if cells and cells[0] else []
+    kind = "sitelink" if "быстр" in head else "callout" if "уточнен" in head else ""
+    if not kind or len(cells) < 2:
+        return "", []
+    limit = SITELINK_TITLE_LEN if kind == "sitelink" else CALLOUT_LEN
+    parts = [p.strip() for p in re.split(r"[,;]", cells[1]) if p.strip()]
+    if not parts or any(len(p) > limit for p in parts):
+        return "", []
+    return kind, [{"text": p, "href": "", "description": ""} for p in parts]
+
+
+class _Board:
+    """Состояние доски по ходу чата: строки таблиц и правки маркетолога применяются по порядку."""
+
+    def __init__(self):
+        self.facts: dict[str, dict] = {stage: {} for stage in _BUILD_FACTS}
+        self.groups: dict[str, dict] = {}
+        self.negatives: dict[str, dict] = {}
+        self.links: dict[str, dict] = {"sitelink": {}, "callout": {}}
+        # Частотность фраз из всех таблиц — для карточки создания, даже если фразу потом перенесли.
+        self.values: dict[str, str] = {}
+
+    def group(self, name: str) -> dict:
+        name = name or NO_GROUP
+        if name not in self.groups:
+            self.groups[name] = {"name": name, "keywords": {}, "titles": {}, "texts": {}, "href": ""}
+        return self.groups[name]
+
+    def _drop_keyword(self, key: str, keep: str | None = None) -> None:
+        for name, g in self.groups.items():
+            if name != keep:
+                g["keywords"].pop(key, None)
+
+    def row(self, stage: str, row: dict, action: dict, pending: bool, chosen: bool = True) -> None:
+        """Строка таблицы: согласованная или ждущая — на доску, снятая в решённой таблице — с доски."""
+        cells = row.get("cells") or []
+        text = str(cells[0] if cells else "").strip()
+        if not text:
+            return
+        kind = row.get("kind") or ""
+        section = str(row.get("section") or "").strip()
+        item = _row_item(row, action, pending)
+        if stage in ("keywords", "negatives"):
+            if kind == "negative" or stage == "negatives":
+                key = _item_key(text, "negative")
+                if chosen:
+                    self.negatives[key] = item
+                else:
+                    self.negatives.pop(key, None)
+                return
+            key = _item_key(text, "keyword")
+            if item["value"]:
+                self.values[key] = item["value"]
+            if not chosen:
+                self._drop_keyword(key)
+                return
+            name = section or NO_GROUP
+            self._drop_keyword(key, keep=name)
+            self.group(name)["keywords"][key] = item
+        elif stage == "ads":
+            if kind not in ("title", "text"):
+                return
+            if chosen:
+                self.group(section)[f"{kind}s"][_item_key(text)] = item
+            elif (section or NO_GROUP) in self.groups:
+                self.groups[section or NO_GROUP][f"{kind}s"].pop(_item_key(text), None)
+        elif stage in self.facts:
+            link_kind, links = _extra_links(section, row) if stage == "extras" else ("", [])
+            target = self.links[link_kind] if link_kind else self.facts[stage]
+            for link in links or [{"text": text}]:
+                key = _item_key(link["text"]) if link_kind else f"{_item_key(section)}|{_item_key(text)}"
+                if chosen:
+                    target[key] = {**item, "value": "", "note": "", **link} if link_kind else item
+                else:
+                    target.pop(key, None)
+
+    def _bucket(self, op: dict) -> dict | None:
+        kind = op.get("kind")
+        if kind == "negative":
+            return self.negatives
+        group = self.groups.get(op.get("group") or "")
+        if group is None:
+            return None
+        return group[f"{kind}s"] if kind in ("title", "text") else group["keywords"]
+
+    def op(self, op: dict) -> None:
+        """Правка с доски; чего уже нет (убрали новой таблицей) — пропускается."""
+        if op["op"] == "rename_group":
+            self.rename(op["group"], op["to"])
+            return
+        kind = op["kind"]
+        bucket = self._bucket(op)
+        if bucket is None:
+            return
+        key = _item_key(op["text"], kind)
+        if op["op"] == "add":
+            if kind == "keyword":
+                self._drop_keyword(key, keep=op["group"])
+            bucket.setdefault(key, _build_item(op["text"], own=True))
+        elif op["op"] == "remove":
+            bucket.pop(key, None)
+        elif op["op"] == "edit" and key in bucket:
+            new_key = _item_key(op["to"], kind)
+            items = list(bucket.items())
+            bucket.clear()
+            for k, item in items:
+                if k == key:
+                    bucket[new_key] = {**item, "text": op["to"], "own": True}
+                elif k != new_key:
+                    bucket[k] = item
+        elif op["op"] == "move" and key in bucket:
+            target = self.groups.get(op.get("to_group") or "")
+            if target is not None:
+                target["keywords"][key] = {**bucket.pop(key), "own": True}
+
+    def rename(self, old: str, new: str) -> None:
+        source = self.groups.get(old)
+        if source is None or not new or old == new:
+            return
+        target = self.groups.get(new)
+        if target is None:
+            source["name"] = new
+            self.groups = {(new if name == old else name): g for name, g in self.groups.items()}
+            return
+        for key, item in source["keywords"].items():
+            target["keywords"].setdefault(key, item)
+        if not target["titles"] and not target["texts"]:
+            target["titles"], target["texts"] = source["titles"], source["texts"]
+        target["href"] = target["href"] or source["href"]
+        del self.groups[old]
+
+
+def _spec_board(spec: dict, values: dict[str, str]) -> tuple[list[dict], list[dict]]:
+    """Группы и минус-фразы из карточки создания: это то, что уйдёт в Директ. Частотность — из таблиц."""
+
+    def items(raw, kind: str) -> list[dict]:
+        out = []
+        for v in raw if isinstance(raw, list) else []:
+            text = str(v or "").strip()
+            if text:
+                out.append(_build_item(text, values.get(_item_key(text, kind), "") if kind == "keyword" else ""))
+        return out
+
+    groups = []
+    raw_groups = spec.get("groups") if isinstance(spec.get("groups"), list) else []
+    for g, raw in enumerate(raw_groups):
+        if not isinstance(raw, dict):
+            continue
+        ad = raw.get("ad") if isinstance(raw.get("ad"), dict) else {}
+        extras = ad.get("extras") if isinstance(ad.get("extras"), dict) else {}
+        sitelinks = [
+            {**_build_item(str(s.get("title") or "").strip()), "href": str(s.get("href") or ""),
+             "description": str(s.get("description") or "")}
+            for s in extras.get("sitelinks") or [] if isinstance(s, dict) and str(s.get("title") or "").strip()
+        ]
+        groups.append({
+            "name": str(raw.get("name") or f"Группа {g + 1}").strip(),
+            "keywords": items(raw.get("keywords"), "keyword"),
+            "titles": items(ad.get("titles") if isinstance(ad.get("titles"), list) else [ad.get("title")], "title"),
+            "texts": items(ad.get("texts") if isinstance(ad.get("texts"), list) else [ad.get("text")], "text"),
+            "href": str(ad.get("href") or "").strip(),
+            "sitelinks": sitelinks,
+            "callouts": items(extras.get("callouts"), "callout"),
+            "extras_from_ad": ad.get("extras_from_ad_row_id") not in (None, ""),
+        })
+    return groups, items(spec.get("negative_keywords"), "negative")
+
+
+def _checked(items: list[dict]) -> list[dict]:
+    return [i for i in items if i.get("checked", True)]
+
+
+def _build_checks(build: dict, *, link_template: bool) -> list[dict]:
+    """«Проверка готовности» перед созданием черновика: ok — всё в порядке, warn — можно, но стоит
+    посмотреть, bad — Директ или проверка черновика не пропустят."""
+    checks: list[dict] = []
+
+    def add(key: str, label: str, state: str, note: str = "") -> None:
+        checks.append({"key": key, "label": label, "state": state, "note": note})
+
+    status = {s["key"]: s["status"] for s in build["stages"]}
+    todo = [BUILD_STAGES[k] for k in _BUILD_REQUIRED if status.get(k) not in ("done", "pending")]
+    waiting = [BUILD_STAGES[k] for k in BUILD_STAGES if status.get(k) == "pending"]
+    if todo:
+        add("stages", "Этапы согласованы", "bad", "не пройдены: " + ", ".join(todo))
+    elif waiting:
+        add("stages", "Этапы согласованы", "warn", "ждут решения: " + ", ".join(waiting))
+    else:
+        add("stages", "Этапы согласованы", "ok")
+
+    groups = build["groups"]
+    keywords = {g["name"]: _checked(g["keywords"]) for g in groups}
+    if not groups:
+        add("keywords", "Фразы в группах", "bad", "групп с фразами пока нет")
+    else:
+        empty = [name for name, kws in keywords.items() if not kws]
+        big = [name for name, kws in keywords.items() if len(kws) > 200]
+        total = sum(len(kws) for kws in keywords.values())
+        if empty:
+            add("keywords", "Фразы в группах", "bad", "без фраз: " + _preview([f"«{n}»" for n in empty], 4))
+        elif big:
+            add("keywords", "Фразы в группах", "bad", "больше 200 фраз: " + _preview([f"«{n}»" for n in big], 4))
+        else:
+            add("keywords", "Фразы в группах", "ok",
+                f"{_count(len(groups), 'группа', 'группы', 'групп')}, {_count(total, *_PHRASE_WORDS)}")
+
+        ads = {g["name"]: ([t["text"] for t in _checked(g["titles"])], [t["text"] for t in _checked(g["texts"])]) for g in groups}
+        no_ad = [name for name, (titles, texts) in ads.items() if not titles or not texts]
+        if no_ad:
+            add("ads", "Объявление у каждой группы", "bad",
+                "нужны заголовок и текст: " + _preview([f"«{n}»" for n in no_ad], 4))
+        else:
+            add("ads", "Объявление у каждой группы", "ok")
+        seen: dict[tuple, str] = {}
+        twins: list[str] = []
+        for name, (titles, texts) in ads.items():
+            if not titles or not texts:
+                continue
+            key = (tuple(sorted(_item_key(t) for t in titles)), tuple(sorted(_item_key(t) for t in texts)))
+            if key in seen:
+                twins.append(f"«{seen[key]}» и «{name}»")
+            seen.setdefault(key, name)
+        if twins:
+            add("unique", "Объявления групп разные", "bad", "одинаковые у " + "; ".join(twins[:3]))
+        elif len(seen) > 1:
+            add("unique", "Объявления групп разные", "ok")
+
+    facts = " ".join(f"{f['text']} {f['value']} {f['note']}" for f in _checked(build["goals"] + build["extras"]))
+    if groups and all(g["href"] for g in groups):
+        add("link", "Ссылка на сайт", "ok", "у каждого объявления")
+    elif link_template:
+        add("link", "Ссылка на сайт", "ok", "шаблон ссылки пространства")
+    elif build["draft"] and build["draft"]["status"] in ("pending", "approved", "done"):
+        add("link", "Ссылка на сайт", "bad", "не у всех объявлений есть ссылка")
+    elif _LINK_RE.search(facts):
+        add("link", "Ссылка на сайт", "ok", _LINK_RE.search(facts).group(0))
+    else:
+        add("link", "Ссылка на сайт", "warn", "посадочную ссылку ещё не указали")
+
+    negatives = _checked(build["negatives"])
+    if negatives:
+        add("negatives", "Минус-фразы", "ok", _count(len(negatives), "минус-фраза", "минус-фразы", "минус-фраз"))
+    else:
+        add("negatives", "Минус-фразы", "warn", "минус-фраз нет — будут показы по нецелевым запросам")
+
+    sitelinks = _checked(build["sitelinks"]) or [s for g in groups for s in g.get("sitelinks") or []]
+    callouts = _checked(build["callouts"]) or [c for g in groups for c in g.get("callouts") or []]
+    if sitelinks or callouts or any(g.get("extras_from_ad") for g in groups):
+        parts = [_count(len(sitelinks), "быстрая ссылка", "быстрые ссылки", "быстрых ссылок")] if sitelinks else []
+        parts += [_count(len(callouts), "уточнение", "уточнения", "уточнений")] if callouts else []
+        add("extras", "Быстрые ссылки и уточнения", "ok", ", ".join(parts) or "как у объявления кампании")
+    else:
+        add("extras", "Быстрые ссылки и уточнения", "warn", "без них объявление ниже и заметно хуже")
+    return checks
+
+
+def campaign_build(actions: list[dict], *, link_template: bool = False) -> dict | None:
     """Как собирается новая кампания в чате; None — новую кампанию здесь не собирают.
 
     Сборка начинается таблицей целей или анализа и заканчивается созданным черновиком: после него
-    новая таблица целей или анализа начинает следующую сборку.
+    новая таблица целей или анализа начинает следующую сборку. link_template — у пространства есть
+    шаблон ссылки (для проверки готовности).
     """
     episodes: list[list[dict]] = [[]]
     for action in actions:
@@ -4333,10 +4654,13 @@ def campaign_build(actions: list[dict]) -> dict | None:
 
     status: dict[str, str] = {}
     last_table: dict[str, int] = {}
-    rows: dict[str, list[dict]] = {s: [] for s in BUILD_STAGES}
-    seen: set[tuple] = set()
+    board = _Board()
     for action in episode:
         args = action.get("args") or {}
+        if action["tool"] == "board_edit":
+            for op in args.get("ops") or []:
+                board.op(op)
+            continue
         stage = args.get("stage")
         if action["tool"] != "propose_items" or stage not in BUILD_STAGES:
             continue
@@ -4350,70 +4674,38 @@ def campaign_build(actions: list[dict]) -> dict | None:
             status[stage] = "rejected"
         if state == "done":
             chosen = set((action.get("result") or {}).get("approved_rows") or [])
-            picked = [r for r in args.get("rows") or [] if r.get("n") in chosen]
+            for row in args.get("rows") or []:
+                board.row(stage, row, action, False, row.get("n") in chosen)
         elif state == "pending":
-            picked = [r for r in args.get("rows") or [] if r.get("checked") is not False]
-        else:
-            continue
-        for row in picked:
-            cells = row.get("cells") or []
-            key = (stage, row.get("section") or "", row.get("kind") or "", _item_key(cells[0] if cells else "", row.get("kind") or ""))
-            if key in seen:
-                continue
-            seen.add(key)
-            rows[stage].append({**row, "_pending": state == "pending"})
+            for row in args.get("rows") or []:
+                board.row(stage, row, action, True)
 
-    groups: dict[str, dict] = {}
+    def listed(g: dict) -> dict:
+        return {
+            "name": g["name"],
+            "keywords": list(g["keywords"].values()),
+            "titles": list(g["titles"].values()),
+            "texts": list(g["texts"].values()),
+            "href": g["href"],
+            "sitelinks": None,
+            "callouts": None,
+            "extras_from_ad": False,
+        }
 
-    def group(name: str) -> dict:
-        name = name or NO_GROUP
-        return groups.setdefault(name, {"name": name, "keywords": [], "titles": [], "texts": [], "href": ""})
+    # Группа, из которой всё перенесли или убрали, с доски уходит.
+    groups = [listed(g) for g in board.groups.values() if g["keywords"] or g["titles"] or g["texts"]]
+    negatives = list(board.negatives.values())
 
-    negatives: list[dict] = []
-    for stage in ("keywords", "negatives"):
-        for row in rows[stage]:
-            item = _build_row(row, row["_pending"])
-            if row.get("kind") == "negative" or stage == "negatives":
-                negatives.append(item)
-            else:
-                group(row.get("section") or "")["keywords"].append(item)
-    for row in rows["ads"]:
-        if row.get("kind") in ("title", "text"):
-            group(row.get("section") or "")[f"{row['kind']}s"].append(_build_row(row, row["_pending"]))
-
-    # Карточка создания — это то, что уйдёт в Директ (с учётом снятых в ней галочек): группы берём из неё,
-    # частотность фраз — из таблиц.
+    # Карточка создания (ждёт решения, создаётся или создана) — это то, что уйдёт в Директ: группы
+    # берём из неё. Не прошла в Директ — на доске снова согласованное в таблицах и правки.
     draft = None
     creates = [a for a in episode if a["tool"] == "create_campaign" and a["status"] != "rejected"]
     if creates:
         action = creates[-1]
         spec = (action.get("args") or {}).get("spec")
         spec = spec if isinstance(spec, dict) else {}
-        values = {_item_key(k["text"], "keyword"): k["value"] for g in groups.values() for k in g["keywords"]}
-
-        def items(values_list, kind: str, known: dict | None = None) -> list[dict]:
-            out = []
-            for v in values_list if isinstance(values_list, list) else []:
-                text = str(v or "").strip()
-                if text:
-                    value = (known or {}).get(_item_key(text, kind), "")
-                    out.append({"text": text, "value": value, "note": "", "pending": False})
-            return out
-
-        groups = {}
-        for g, raw in enumerate(spec.get("groups") or [] if isinstance(spec.get("groups"), list) else []):
-            if not isinstance(raw, dict):
-                continue
-            name = str(raw.get("name") or f"Группа {g + 1}").strip()
-            ad = raw.get("ad") if isinstance(raw.get("ad"), dict) else {}
-            groups[name] = {
-                "name": name,
-                "keywords": items(raw.get("keywords"), "keyword", values),
-                "titles": items(ad.get("titles"), "title"),
-                "texts": items(ad.get("texts"), "text"),
-                "href": str(ad.get("href") or "").strip(),
-            }
-        negatives = items(spec.get("negative_keywords"), "negative")
+        if action["status"] in ("pending", "approved", "done"):
+            groups, negatives = _spec_board(spec, board.values)
         result = action.get("result") if isinstance(action.get("result"), dict) else {}
         campaign = result.get("campaign") if isinstance(result.get("campaign"), dict) else {}
         draft = {
@@ -4421,6 +4713,7 @@ def campaign_build(actions: list[dict]) -> dict | None:
             "status": action["status"],
             "name": str(spec.get("name") or "").strip(),
             "summary": action.get("summary") or "",
+            "error": action.get("error") or "",
             "campaign_row_id": campaign.get("id"),
         }
 
@@ -4428,10 +4721,11 @@ def campaign_build(actions: list[dict]) -> dict | None:
     if "negatives" not in status and negatives and "keywords" in status:
         status["negatives"] = "pending" if any(n["pending"] for n in negatives) else "done"
         last_table["negatives"] = last_table["keywords"]
-    counts = {key: len(rows[key]) for key in BUILD_STAGES}
-    counts["keywords"] = sum(len(g["keywords"]) for g in groups.values())
-    counts["negatives"] = len(negatives)
-    counts["ads"] = sum(len(g["titles"]) + len(g["texts"]) for g in groups.values())
+    facts = {out: list(board.facts[stage].values()) for stage, out in _BUILD_FACTS.items()}
+    counts = {stage: len(_checked(facts[out])) for stage, out in _BUILD_FACTS.items()}
+    counts["keywords"] = sum(len(_checked(g["keywords"])) for g in groups)
+    counts["negatives"] = len(_checked(negatives))
+    counts["ads"] = sum(len(_checked(g["titles"])) + len(_checked(g["texts"])) for g in groups)
 
     stages = []
     later_started = False
@@ -4445,16 +4739,417 @@ def campaign_build(actions: list[dict]) -> dict | None:
             {"key": key, "label": BUILD_STAGES[key], "status": state, "count": counts[key], "action_id": last_table.get(key)}
         )
     stages.reverse()
-    return {
+    # Таблицы этапов и карточка создания этой сборки решаются на доске: в чате вместо них — плашка.
+    action_ids = [
+        a["id"] for a in episode
+        if a["tool"] == "propose_items" and (a.get("args") or {}).get("stage") in BUILD_STAGES
+    ] + ([draft["action_id"]] if draft else [])
+    build = {
         "stages": stages,
-        "goals": [_build_row(r, r["_pending"]) for r in rows["goals"]],
-        "directions": [_build_row(r, r["_pending"]) for r in rows["analysis"]],
-        "groups": list(groups.values()),
+        "action_ids": action_ids,
+        **facts,
+        "groups": groups,
         "negatives": negatives,
-        "extras": [_build_row(r, r["_pending"]) for r in rows["extras"]],
-        "settings": [_build_row(r, r["_pending"]) for r in rows["settings"]],
+        "sitelinks": list(board.links["sitelink"].values()),
+        "callouts": list(board.links["callout"].values()),
         "draft": draft,
     }
+    build["checks"] = _build_checks(build, link_template=link_template)
+    build["ready"] = all(c["state"] != "bad" for c in build["checks"])
+    return build
+
+
+# --- Правки маркетолога на доске ----------------------------------------------------------------
+#
+# Строка ждущей таблицы правится в самой таблице (маркетолог согласует уже поправленное); правка
+# согласованного — записью board_edit, её модель получает заметкой «[Правки на доске]». Если карточка
+# создания ждёт решения, правка меняет и её, и черновик заново проходит проверку.
+
+BOARD_OPS = ("edit", "add", "remove", "move", "rename_group")
+MAX_BOARD_OPS = 50
+_BOARD_KINDS = ("keyword", "negative", "title", "text")
+_BOARD_MAX = {"keyword": 200, "title": 7, "text": 3}
+_BOARD_STAGE = {"keyword": "keywords", "negative": "keywords", "title": "ads", "text": "ads"}
+_BOARD_WHAT = {"keyword": "фразу", "negative": "минус-фразу", "title": "заголовок", "text": "текст"}
+_BOARD_LIST = {"keyword": "фраз", "title": "заголовков", "text": "текстов"}
+
+
+def _board_op(raw) -> dict:
+    """Правка с доски → {op, kind, group, text, to, to_group}; ошибка — непонятная правка."""
+    if not isinstance(raw, dict):
+        raise YandexError("args", "Правка — объект {op, kind, group, text}")
+    op = str(raw.get("op") or "").strip()
+    if op not in BOARD_OPS:
+        raise YandexError("args", f"op — одно из {list(BOARD_OPS)}")
+    out = {"op": op, "group": _line(raw.get("group"), 120)}
+    if op == "rename_group":
+        out["to"] = _line(raw.get("to"), 120)
+        if not out["group"] or not out["to"]:
+            raise YandexError("args", "Укажите группу и новое название")
+        return out
+    kind = str(raw.get("kind") or "").strip()
+    if kind not in _BOARD_KINDS:
+        raise YandexError("args", f"kind — одно из {list(_BOARD_KINDS)}")
+    if op == "move" and kind != "keyword":
+        raise YandexError("args", "Переносить между группами можно только фразы")
+    out["kind"] = kind
+    if kind == "negative":
+        out["group"] = ""
+    out["text"] = _line(raw.get("text"), 4096)
+    if not out["text"]:
+        raise YandexError("args", "Пустой текст")
+    if op == "edit":
+        out["to"] = _line(raw.get("to"), 4096)
+        if not out["to"]:
+            raise YandexError("args", "Пустой текст — уберите строку, а не стирайте её")
+    if op == "move":
+        out["to_group"] = _line(raw.get("to_group"), 120)
+    return out
+
+
+def _board_text_problem(kind: str, text: str) -> str:
+    limit = _ITEM_LIMITS.get(kind)
+    if limit and len(text) > limit:
+        return f"«{text}» длиннее {limit} знаков ({len(text)})"
+    if kind in ("keyword", "negative"):
+        words = [w for w in text.split() if not w.startswith("-")] if kind == "keyword" else text.split()
+        if len(words) > 7:
+            return f"«{text}»: больше 7 слов — Директ такую фразу не примет"
+        if not _item_key(text, kind):
+            return f"«{text}»: нет слов"
+    return ""
+
+
+def _board_note(op: dict) -> str:
+    q = lambda s: f"«{s}»"  # noqa: E731
+    if op["op"] == "rename_group":
+        return f"объединил группу {q(op['group'])} с группой {q(op['to'])}" if op.get("merge") else (
+            f"переименовал группу {q(op['group'])} в {q(op['to'])}"
+        )
+    what = _BOARD_WHAT[op["kind"]]
+    where = f" в группе {q(op['group'])}" if op["kind"] != "negative" else ""
+    if op["op"] == "edit":
+        return f"поправил {what}{where}: {q(op['text'])} → {q(op['to'])}"
+    if op["op"] == "add":
+        return f"добавил {what} {q(op['text'])}" + (f" в группу {q(op['group'])}" if op["kind"] != "negative" else "")
+    if op["op"] == "remove":
+        return f"убрал {what} {q(op['text'])}" + (f" из группы {q(op['group'])}" if op["kind"] != "negative" else "")
+    return f"перенёс фразу {q(op['text'])} из группы {q(op['group'])} в {q(op['to_group'])}"
+
+
+def _board_find(build: dict, op: dict) -> tuple[list[dict], dict | None]:
+    """→ (список, где лежит строка правки; сама строка или None)."""
+    if op["kind"] == "negative":
+        bucket = build["negatives"]
+    else:
+        group = next((g for g in build["groups"] if g["name"] == op["group"]), None)
+        if group is None:
+            raise YandexError("args", f"Группы «{op['group']}» уже нет на доске — обновите страницу")
+        bucket = group[f"{op['kind']}s"] if op["kind"] in ("title", "text") else group["keywords"]
+    key = _item_key(op["text"], op["kind"])
+    return bucket, next((i for i in bucket if _item_key(i["text"], op["kind"]) == key), None)
+
+
+def _board_keyword_elsewhere(build: dict, op: dict, text: str) -> None:
+    """Фраза одна на кампанию: в другой группе её быть не должно."""
+    if op["kind"] != "keyword":
+        return
+    key = _item_key(text, "keyword")
+    other = next(
+        (g["name"] for g in build["groups"] if g["name"] != op["group"]
+         for k in g["keywords"] if _item_key(k["text"], "keyword") == key),
+        None,
+    )
+    if other:
+        raise YandexError("args", f"Фраза «{text}» уже есть в группе «{other}» — перенесите её")
+
+
+def _board_validate(build: dict, op: dict) -> dict | None:
+    """Правка допустима на текущей доске → строка, которую она меняет (None для add и rename_group)."""
+    names = [g["name"] for g in build["groups"]]
+    if op["op"] == "rename_group":
+        if op["group"] not in names:
+            raise YandexError("args", f"Группы «{op['group']}» уже нет на доске — обновите страницу")
+        if op["to"] == op["group"]:
+            raise YandexError("args", "Название не изменилось")
+        op["merge"] = op["to"] in names
+        return None
+    kind = op["kind"]
+    bucket, item = _board_find(build, op)
+    if op["op"] == "add":
+        problem = _board_text_problem(kind, op["text"])
+        if problem:
+            raise YandexError("args", problem)
+        if item is not None:
+            raise YandexError("args", f"«{op['text']}» уже есть")
+        _board_keyword_elsewhere(build, op, op["text"])
+        top = _BOARD_MAX.get(kind)
+        if top and len(_checked(bucket)) >= top:
+            raise YandexError("args", f"В группе уже {top} {_BOARD_LIST[kind]} — больше Директ не примет")
+        return None
+    if item is None:
+        raise YandexError("args", f"«{op['text']}» уже нет на доске — обновите страницу")
+    if op["op"] == "edit":
+        problem = _board_text_problem(kind, op["to"])
+        if problem:
+            raise YandexError("args", problem)
+        if op["to"] == item["text"]:
+            raise YandexError("args", "Текст не изменился")
+        key = _item_key(op["to"], kind)
+        if key != _item_key(op["text"], kind):
+            if any(_item_key(i["text"], kind) == key for i in bucket):
+                raise YandexError("args", f"«{op['to']}» уже есть")
+            _board_keyword_elsewhere(build, op, op["to"])
+    if op["op"] == "move":
+        if op["to_group"] not in names or op["to_group"] == op["group"]:
+            raise YandexError("args", "Выберите другую группу с доски")
+        target = next(g for g in build["groups"] if g["name"] == op["to_group"])
+        if len(_checked(target["keywords"])) >= 200:
+            raise YandexError("args", f"В группе «{op['to_group']}» уже 200 фраз")
+    return item
+
+
+def _table_row_patch(table: dict, op: dict, item: dict | None, build: dict) -> bool:
+    """Правка строки ждущей таблицы — в самой таблице. → False, если таблица тут ни при чём."""
+    rows = table["args"]["rows"]
+    if op["op"] == "rename_group":
+        hit = False
+        for row in rows:
+            if (row.get("section") or "") == op["group"]:
+                row["section"] = op["to"]
+                hit = True
+        return hit
+    if op["op"] == "add":
+        same = [
+            r for r in rows
+            if (r.get("kind") == "negative") == (op["kind"] == "negative")
+            and (op["kind"] == "negative" or (r.get("section") or "") == op["group"])
+            and (op["kind"] not in ("title", "text") or r.get("kind") in ("title", "text"))
+        ]
+        if not same:
+            return False
+        width = max(len(r.get("cells") or []) for r in rows) or 1
+        rows.append({
+            "n": max(int(r.get("n") or 0) for r in rows) + 1,
+            "section": same[0].get("section") or "" if op["kind"] == "negative" else op["group"],
+            "kind": op["kind"],
+            "cells": [op["text"]] + [""] * (width - 1),
+            "checked": True,
+            "added": True,
+        })
+        return True
+    row = next((r for r in rows if r.get("n") == item["n"]), None)
+    if row is None:
+        raise YandexError("args", "Строки уже нет в таблице — обновите страницу")
+    if op["op"] == "edit":
+        if not row.get("added") and "edited_from" not in row:
+            row["edited_from"] = row["cells"][0]
+        row["cells"][0] = op["to"]
+    elif op["op"] == "move":
+        if "moved_from" not in row and not row.get("added"):
+            row["moved_from"] = row.get("section") or ""
+        row["section"] = op["to_group"]
+    elif op["op"] == "remove":
+        if not row.get("added"):
+            raise YandexError("args", f"«{op['text']}» предложил ИИ — снимите с неё галочку, и она не войдёт в этап")
+        rows.remove(row)
+    return True
+
+
+def _spec_patch(spec: dict, op: dict) -> None:
+    """Правка с доски — в карточке создания, которая ждёт решения."""
+    groups = spec.get("groups") if isinstance(spec.get("groups"), list) else []
+
+    def find(name: str) -> dict:
+        for g, raw in enumerate(groups):
+            if isinstance(raw, dict) and str(raw.get("name") or f"Группа {g + 1}").strip() == name:
+                return raw
+        raise YandexError("args", f"Группы «{name}» нет в карточке создания — обновите страницу")
+
+    def phrases(group: dict) -> list:
+        if not isinstance(group.get("keywords"), list):
+            group["keywords"] = []
+        return group["keywords"]
+
+    if op["op"] == "rename_group":
+        source = find(op["group"])
+        if not op.get("merge"):
+            source["name"] = op["to"]
+            return
+        target = find(op["to"])
+        have = {_item_key(p, "keyword") for p in phrases(target)}
+        phrases(target).extend(p for p in phrases(source) if _item_key(p, "keyword") not in have)
+        if not isinstance(target.get("ad"), dict) or not target["ad"]:
+            target["ad"] = source.get("ad")
+        groups.remove(source)
+        return
+    kind = op["kind"]
+    if kind == "negative":
+        if not isinstance(spec.get("negative_keywords"), list):
+            spec["negative_keywords"] = []
+        values = spec["negative_keywords"]
+    elif kind == "keyword":
+        values = phrases(find(op["group"]))
+    else:
+        group = find(op["group"])
+        if not isinstance(group.get("ad"), dict):
+            group["ad"] = {}
+        ad = group["ad"]
+        if not isinstance(ad.get(f"{kind}s"), list):
+            ad[f"{kind}s"] = [ad[kind]] if str(ad.get(kind) or "").strip() else []
+        ad.pop(kind, None)
+        values = ad[f"{kind}s"]
+    key = _item_key(op["text"], kind)
+    index = next((i for i, v in enumerate(values) if _item_key(v, kind) == key), None)
+    if op["op"] == "add":
+        values.append(op["text"])
+        return
+    if index is None:
+        raise YandexError("args", f"«{op['text']}» нет в карточке создания — обновите страницу")
+    if op["op"] == "edit":
+        values[index] = op["to"]
+    elif op["op"] == "remove":
+        del values[index]
+    elif op["op"] == "move":
+        phrases(find(op["to_group"])).append(values.pop(index))
+
+
+def edit_board(user_id: int, chat_id: int, ops) -> dict:
+    """Правки маркетолога на доске сборки: всё или ничего. → чат, как get_chat."""
+    if not isinstance(ops, list) or not ops:
+        raise YandexError("args", "Нет правок")
+    if len(ops) > MAX_BOARD_OPS:
+        raise YandexError("args", f"Не больше {MAX_BOARD_OPS} правок за раз")
+    ops = [_board_op(raw) for raw in ops]
+    with pool.connection() as conn:
+        chat = _require_chat(conn, user_id, chat_id)
+        if _chat_out(chat)["status"] == "running":
+            raise YandexError("busy", "ИИ ещё отвечает — дождитесь ответа")
+        actions = conn.execute("SELECT * FROM ai_actions WHERE chat_id = %s ORDER BY id", (chat_id,)).fetchall()
+    ws = require_workspace(user_id, chat["workspace_id"])
+    from app.actions import _ws_link_template
+
+    link_template = bool(_ws_link_template(ws))
+    work = copy.deepcopy([dict(a) for a in actions])
+    original = {a["id"]: a["args"] for a in actions}
+    recorded: list[dict] = []
+    edits = {"id": (actions[-1]["id"] if actions else 0) + 1, "tool": "board_edit", "status": "done", "args": {"ops": recorded}}
+    work.append(edits)
+    patched: set[int] = set()
+    for op in ops:
+        build = campaign_build(work, link_template=link_template)
+        if build is None:
+            raise YandexError("args", "В этом чате не собирают новую кампанию")
+        draft = build["draft"]
+        if draft and draft["status"] in ("approved", "done"):
+            raise YandexError("decided", "Черновик уже создаётся или создан — правьте кампанию в разделе кампаний")
+        item = _board_validate(build, op)
+        op["note"] = _board_note(op)
+        by_id = {a["id"]: a for a in work}
+        record = True
+        if item is not None and item.get("pending"):
+            _table_row_patch(by_id[item["action_id"]], op, item, build)
+            patched.add(item["action_id"])
+            record = False
+        elif op["op"] in ("add", "rename_group"):
+            for table in reversed(work):
+                if table["tool"] != "propose_items" or table["status"] != "pending":
+                    continue
+                stage = table["args"].get("stage")
+                fits = op["op"] == "rename_group" or stage == _BOARD_STAGE[op["kind"]] or (
+                    op["kind"] == "negative" and stage == "negatives"
+                )
+                if fits and _table_row_patch(table, op, None, build):
+                    patched.add(table["id"])
+                    record = op["op"] == "rename_group"
+                    if op["op"] == "add":
+                        break
+        if record and draft and draft["status"] == "pending":
+            create = by_id[draft["action_id"]]
+            create["args"] = dict(create["args"])
+            create["args"]["spec"] = copy.deepcopy(create["args"].get("spec") or {})
+            _spec_patch(create["args"]["spec"], op)
+            patched.add(create["id"])
+        if record:
+            recorded.append(op)
+
+    updates: list[tuple[int, dict, str | None]] = []
+    for action in work:
+        if action["id"] not in patched:
+            continue
+        args, summary = action["args"], None
+        if action["tool"] == "create_campaign":
+            args, summary = _replan_create(user_id, chat, action, recorded)
+        updates.append((action["id"], args, summary))
+
+    with pool.connection() as conn:
+        chat = _require_chat(conn, user_id, chat_id, lock=True)
+        if _chat_out(chat)["status"] == "running":
+            raise YandexError("busy", "ИИ ещё отвечает — дождитесь ответа")
+        for action_id, args, summary in updates:
+            done = conn.execute(
+                """
+                UPDATE ai_actions SET args = %s, summary = COALESCE(%s, summary)
+                WHERE id = %s AND status = 'pending' AND args = %s
+                RETURNING id
+                """,
+                (Jsonb(args), summary, action_id, Jsonb(original[action_id])),
+            ).fetchone()
+            if done is None:
+                raise YandexError("decided", "Пока вы правили, этап уже решён — обновите страницу")
+        if recorded:
+            anchor = conn.execute(
+                "SELECT MAX(id) AS id FROM ai_messages WHERE chat_id = %s", (chat_id,)
+            ).fetchone()["id"]
+            last = conn.execute(
+                "SELECT * FROM ai_actions WHERE chat_id = %s ORDER BY id DESC LIMIT 1", (chat_id,)
+            ).fetchone()
+            if last and last["tool"] == "board_edit" and last["message_id"] == anchor:
+                all_ops = list((last["args"] or {}).get("ops") or []) + recorded
+                conn.execute(
+                    "UPDATE ai_actions SET args = %s, summary = %s, decided_at = NOW() WHERE id = %s",
+                    (Jsonb({"ops": all_ops}), _board_summary(all_ops), last["id"]),
+                )
+            else:
+                conn.execute(
+                    """
+                    INSERT INTO ai_actions
+                        (chat_id, message_id, user_id, tool_call_id, tool, args, summary, category, status, auto, decided_at)
+                    VALUES (%s, %s, %s, '', 'board_edit', %s, %s, '', 'done', FALSE, NOW())
+                    """,
+                    (chat_id, anchor, user_id, Jsonb({"ops": recorded}), _board_summary(recorded)),
+                )
+        conn.execute("UPDATE ai_chats SET updated_at = NOW() WHERE id = %s", (chat_id,))
+    return get_chat(user_id, chat_id)
+
+
+def _board_summary(ops: list[dict]) -> str:
+    notes = [op.get("note") or "" for op in ops]
+    text = "; ".join(n for n in notes if n)
+    return (text[:997] + "…") if len(text) > 1000 else text
+
+
+def _replan_create(user_id: int, chat: dict, action: dict, recorded: list[dict]) -> tuple[dict, str]:
+    """Карточка создания после правок с доски: заново проверка и строки карточки."""
+    args = action["args"]
+    clean = {k: v for k, v in args.items() if k not in ("_diff", "_items", "_removed")}
+    ctx = Context(user_id, chat["workspace_id"])
+    ctx.chat_id = chat["id"]
+    ctx.board_ops = recorded
+    try:
+        plan = _p_create_campaign(ctx, clean)
+    except YandexError as exc:
+        raise YandexError("args", f"Правка не прошла проверку черновика: {exc.message or exc.code}") from exc
+    stored = dict(clean)
+    changes = _changes(ctx, "create_campaign", clean)
+    if changes:
+        stored["_diff"] = changes
+    picks = _picks(ctx, "create_campaign", clean)
+    if picks:
+        stored["_items"] = picks
+    if args.get("_removed"):
+        stored["_removed"] = args["_removed"]
+    return stored, plan.summary[:1000]
 
 
 _CHAT_SELECT = """
@@ -4501,11 +5196,13 @@ def get_chat(user_id: int, chat_id: int) -> dict:
         messages = conn.execute("SELECT * FROM ai_messages WHERE chat_id = %s ORDER BY id", (chat_id,)).fetchall()
         actions = conn.execute("SELECT * FROM ai_actions WHERE chat_id = %s ORDER BY id", (chat_id,)).fetchall()
     ws = require_workspace(user_id, chat["workspace_id"])
+    from app.actions import _ws_link_template
+
     return {
         "chat": _chat_out(chat),
         "messages": [_message_out(m) for m in messages],
         "actions": [_action_out(a) for a in actions],
-        "build": campaign_build(actions),
+        "build": campaign_build(actions, link_template=bool(_ws_link_template(ws))),
         "access": normalize_ai_access(ws.get("ai_access")),
         "ai": {"configured": ai.get_settings(user_id)["configured"]},
     }
@@ -4995,6 +5692,26 @@ def _numbers(values, allowed: list[int]) -> list[int]:
 
 
 _ITEM_PREFIX = {"negative": "минус-фраза", "title": "заголовок", "text": "текст"}
+_EDITED_NOTE = "Маркетолог сам поправил эти строки на доске — бери их в таком виде"
+
+
+def _edited_rows(rows: list[dict]) -> list[str]:
+    """Строки таблицы, которые маркетолог поправил на доске, — для ответа модели."""
+    out: list[str] = []
+    for row in rows:
+        what = _ITEM_PREFIX.get(row.get("kind") or "", "фраза" if row.get("kind") == "keyword" else "строка")
+        text = row["cells"][0]
+        where = f" (группа «{row['section']}»)" if row.get("section") else ""
+        if row.get("added"):
+            out.append(f"добавил {what} «{text}»{where}")
+            continue
+        if row.get("edited_from"):
+            out.append(f"поправил {what}{where}: «{row['edited_from']}» → «{text}»")
+        if "moved_from" in row:
+            out.append(
+                f"перенёс {what} «{text}» из группы «{row['moved_from'] or NO_GROUP}» в «{row.get('section') or NO_GROUP}»"
+            )
+    return out
 
 
 def _items_brief(rows: list[dict]) -> dict[str, list[str]]:
@@ -5031,6 +5748,10 @@ def decide_items(user_id: int, action_id: int, *, rows=None, comment: str = "", 
         }
         if comment:
             reply["comment"] = comment
+        edited = _edited_rows(table)
+        if edited:
+            reply["edited_by_user"] = edited
+            reply["note"] += f". {_EDITED_NOTE}"
         updated, left = _close_interactive(
             user_id,
             row,
@@ -5060,6 +5781,10 @@ def decide_items(user_id: int, action_id: int, *, rows=None, comment: str = "", 
         }
         if removed:
             reply["removed"] = _items_brief(removed)
+        edited = _edited_rows(table)
+        if edited:
+            reply["edited_by_user"] = edited
+            reply["note"] += f". {_EDITED_NOTE}"
         updated, left = _close_interactive(user_id, row, status="done", result=result, error="", reply=reply)
     job = _submit(user_id, row["chat_id"], f"i{action_id}") if not left else None
     return {"action": _action_out(updated), "pending": left, "job": public_job(job) if job else None}
@@ -5068,12 +5793,37 @@ def decide_items(user_id: int, action_id: int, *, rows=None, comment: str = "", 
 # --- Ход агента ---------------------------------------------------------------------------------
 
 
+_BOARD_HISTORY = (
+    "[Правки на доске] Маркетолог сам поправил сборку кампании на доске:\n{notes}\nДальше бери группы, фразы и "
+    "тексты с этими правками; убранное не возвращай без новой причины."
+)
+
+
 def _history(chat_id: int) -> list[dict]:
     with pool.connection() as conn:
         rows = conn.execute(
             "SELECT * FROM ai_messages WHERE chat_id = %s ORDER BY id DESC LIMIT 400", (chat_id,)
         ).fetchall()
+        edits = conn.execute(
+            "SELECT message_id, args FROM ai_actions WHERE chat_id = %s AND tool = 'board_edit' ORDER BY id",
+            (chat_id,),
+        ).fetchall()
     rows.reverse()
+    # Правки с доски — сообщением после того, на котором маркетолог их сделал.
+    notes = [
+        (e["message_id"], [op.get("note") or "" for op in (e["args"] or {}).get("ops") or [] if op.get("note")])
+        for e in edits
+    ]
+    notes = [(anchor, lines) for anchor, lines in notes if lines]
+
+    def board_notes(upto: int | None) -> list[dict]:
+        lines: list[str] = []
+        while notes and (upto is None or notes[0][0] <= upto):
+            lines += notes.pop(0)[1]
+        if not lines:
+            return []
+        return [{"role": "user", "content": _BOARD_HISTORY.format(notes="\n".join(f"- {n}" for n in lines))}]
+
     start = max(0, len(rows) - HISTORY_MESSAGES)
     user_idx = [i for i, r in enumerate(rows) if r["role"] == "user"]
     after = [i for i in user_idx if i >= start]
@@ -5104,12 +5854,14 @@ def _history(chat_id: int) -> list[dict]:
             for c in calls:
                 content = answered.get(c["id"], json.dumps({"ok": False, "error": "нет результата"}, ensure_ascii=False))
                 out.append({"role": "tool", "tool_call_id": c["id"], "content": content})
+            out += board_notes(rows[j - 1]["id"])
             i = j
             continue
         if r["role"] in ("user", "assistant"):
             out.append({"role": r["role"], "content": r["content"]})
+        out += board_notes(r["id"])
         i += 1
-    return out
+    return out + board_notes(None)
 
 
 def _set_status(chat_id: int, status: str, error: str = "") -> None:
