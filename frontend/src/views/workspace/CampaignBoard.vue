@@ -42,7 +42,8 @@
       <template #tools>
         <small v-if="build.groups.length" class="board-section__meta">
           {{ build.groups.length }} {{ plural(build.groups.length, 'группа', 'группы', 'групп') }} · {{ keywordCount }}
-          {{ plural(keywordCount, 'фраза', 'фразы', 'фраз') }}
+          {{ plural(keywordCount, 'фраза', 'фразы', 'фраз') }}<template v-if="audienceCount">
+            · {{ audienceCount }} {{ plural(audienceCount, 'аудитория', 'аудитории', 'аудиторий') }}</template>
         </small>
         <div class="seg board__preview-mode" role="group" aria-label="Предпросмотр">
           <button
@@ -58,7 +59,8 @@
         </div>
       </template>
       <p v-if="!build.groups.length" class="hint">
-        Группы с фразами появятся на этапе «Группы и фразы», объявления к ним — на этапе «Объявления».
+        Группы с фразами появятся на этапе «Группы и фразы», аудитории (ретаргетинг, LAL, интересы и привычки) — на
+        этапе «Аудитории», объявления — на этапе «Объявления».
       </p>
       <BoardGroup
         v-for="g in build.groups"
@@ -225,10 +227,11 @@ const SECTION_OF = {
   keywords: 'groups',
   ads: 'groups',
   negatives: 'negatives',
+  audiences: 'groups',
   extras: 'extras',
   settings: 'settings',
 }
-const SHORT = { keywords: 'фразы', ads: 'объявления' }
+const SHORT = { keywords: 'фразы', audiences: 'аудитории', ads: 'объявления' }
 const STATUS = {
   done: 'согласовано',
   pending: 'ждёт решения',
@@ -291,6 +294,7 @@ const draftStage = computed(() => {
 
 const groupNames = computed(() => props.build.groups.map((g) => g.name))
 const keywordCount = computed(() => props.build.groups.reduce((n, g) => n + g.keywords.filter(isOn).length, 0))
+const audienceCount = computed(() => props.build.groups.reduce((n, g) => n + (g.audiences || []).filter(isOn).length, 0))
 const adsStarted = computed(() => props.build.stages.some((s) => s.key === 'ads' && s.status !== 'todo'))
 
 // Раздел, о котором сейчас речь: последняя ждущая таблица или карточка создания.

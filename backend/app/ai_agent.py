@@ -16,7 +16,7 @@ from datetime import date, datetime, timedelta, timezone
 
 from psycopg.types.json import Jsonb
 
-from app import ai, experiments
+from app import ai, audiences, experiments
 from app.actions import BULK_ACTIONS, SETTINGS_LABELS, campaign_options
 from app.brief import brief_filled, normalize_brief
 from app.clock import today_msk
@@ -809,6 +809,110 @@ def _t_ad_images(ctx: Context, args: dict) -> dict:
     return out
 
 
+AUDIENCE_LISTS_MAX = 40
+
+
+def _audience_account(ctx: Context, args: dict) -> dict:
+    """Кабинет для аудиторий: account_id или единственный кабинет пространства."""
+    if args.get("account_id") not in (None, ""):
+        return ctx.require_account(_int(args, "account_id"))
+    accounts = ctx.ws.get("accounts") or []
+    if len(accounts) == 1:
+        return accounts[0]
+    if not accounts:
+        raise YandexError("args", "К пространству не подключён кабинет Директа")
+    raise YandexError("args", "Укажи account_id — кабинет, в котором будет кампания")
+
+
+def _t_audiences(ctx: Context, args: dict) -> dict:
+    account = _audience_account(ctx, args)
+    token, login = audiences.account_access(ctx.user_id, int(account["id"]))
+    goals = _goal_names(ctx)
+    query = str(args.get("query") or "").strip()
+    catalog = audiences.interest_catalog(token)
+    interest_names = {k: v["name"] for k, v in catalog.items()}
+    out: dict = {
+        "account_id": int(account["id"]),
+        "goals": [{"goal_id": g, "name": n} for g, n in goals.items()],
+    }
+    try:
+        lists = [i for i in audiences.account_lists(token, login) if audiences.can_target(i)]
+    except YandexError as exc:
+        lists, out["lists_error"] = [], exc.message or exc.code
+    if query:
+        words = audiences._norm(query).split()
+        lists = [i for i in lists if all(w in audiences._norm(i["name"]) for w in words)]
+    lists.sort(key=lambda i: -i["id"])
+    out["lists_total"] = len(lists)
+    out["lists"] = [
+        {
+            "list_id": i["id"],
+            "name": i["name"],
+            "kind": "интересы" if i["type"] == "AUDIENCE" else "LAL" if i["lal"] else "ретаргетинг и сегменты",
+            "rules": audiences.list_text(i, goals=goals, interests=interest_names),
+        }
+        for i in lists[:AUDIENCE_LISTS_MAX]
+    ]
+    if not catalog:
+        out["interests_error"] = "Справочник интересов Директа сейчас недоступен — попробуй позже"
+    elif query:
+        out["interests"] = [
+            {"interest_id": i["id"], "name": i["name"], "path": i["path"], "description": i["description"][:200]}
+            for i in audiences.find_interests(catalog, query)
+        ]
+    else:
+        out["interest_sections"] = audiences.interest_roots(catalog)
+    rights = audiences.account_rights(ctx.user_id, int(account["id"]))
+    # Приложение Аудиторий не задано на сервере — новых LAL нет вовсе, только готовые условия.
+    if rights["enabled"]:
+        out["lookalike"] = {"available": rights["rights"]}
+        if rights["rights"]:
+            try:
+                segments = audiences.list_segments(audiences.audience_token(rights))
+            except YandexError as exc:
+                if exc.code in ("audience-scope", "audience-config"):
+                    out["lookalike"] = {"available": False, "why": exc.message or audiences.rights_text(rights["login"])}
+                else:
+                    out["lookalike"]["segments_error"] = exc.message or exc.code
+            else:
+                segments.sort(key=lambda s: -int(s["id"]))
+                out["lookalike"]["segments"] = [
+                    {"segment_id": int(s["id"]), "name": str(s.get("name") or ""), "what": audiences.segment_text(s)}
+                    for s in segments[:AUDIENCE_LISTS_MAX]
+                ]
+        else:
+            out["lookalike"]["why"] = audiences.rights_text(rights["login"])
+    new_lal = "lookalike" in out
+    notes = [
+        "Аудитории предлагай таблицей propose_items stage=audiences: строка — аудитория, section — группа, "
+        "audience — объект: {type: retargeting, goal_ids, exclude_goal_ids, days} (или rules [{operator ANY|ALL|NONE, "
+        "goal_ids, days}]) — цели из goals; {type: list, list_id} — готовое условие из lists; {type: interests, "
+        "interest_ids} — интересы (только в сетях)" + ("; {type: lookalike, source, similarity} — новый LAL." if new_lal else "."),
+        (
+            "LAL (похожие на покупателей): готовое условие кабинета с kind LAL или новый LAL {type: lookalike, source: "
+            "{goal_id} — похожие на выполнивших цель из goals | {segment_id} — на свой сегмент Аудиторий из "
+            "lookalike.segments (например, список клиентов из CRM) | {counter_id} — на посетителей сайта, similarity 1–5 "
+            "(по умолчанию 3: больше — ближе к источнику, но меньше охват)}. Новый LAL создастся в Яндекс Аудиториях "
+            "вместе с кампанией и будет готов через несколько часов — до этого Директ может не дать нацелить на него "
+            "группу. "
+            if new_lal
+            else "LAL (похожие на покупателей): только готовое условие кабинета с kind LAL из lists — новые LAL "
+            "на сервисе не подключены, type lookalike не предлагай. "
+        )
+        + audiences.LAL_NOTE
+        + ".",
+        "Интересы ищи по query: «путешествия», «ремонт», «автомобили».",
+    ]
+    if new_lal and not out["lookalike"]["available"]:
+        notes.insert(2, "Новый LAL сейчас не создать: " + out["lookalike"]["why"] + ". Скажи об этом маркетологу, если LAL нужен")
+    if not goals:
+        notes.insert(0, "У проекта нет целей Метрики — ретаргетинг по целям недоступен, только готовые условия и интересы")
+    if out["lists_total"] > AUDIENCE_LISTS_MAX:
+        notes.append(f"Условий больше {AUDIENCE_LISTS_MAX} — показаны новые; остальные ищи по query")
+    out["notes"] = notes
+    return out
+
+
 READ_TOOLS = {
     "get_workspace_summary": _t_summary,
     "get_analytics": _t_analytics,
@@ -824,6 +928,7 @@ READ_TOOLS = {
     "get_campaign_history": _t_history,
     "remember_fact": _t_remember,
     "find_regions": _t_regions,
+    "get_audiences": _t_audiences,
     "get_wordstat": _t_wordstat,
     "get_experiments": _t_experiments,
     "get_headline_stats": _t_headlines,
@@ -978,9 +1083,9 @@ def _x_add_negatives(ctx: Context, args: dict) -> dict:
 # --- Новая кампания по этапам ------------------------------------------------------------------
 #
 # Новую кампанию модель собирает по этапам, и каждый маркетолог согласует таблицей propose_items:
-# цели → анализ → ключи и группы → заголовки и тексты → настройки. create_campaign с группами не
-# пройдёт, пока этапы не согласованы, а фразы, минус-фразы, заголовки и тексты в ней — только из
-# согласованных строк или из слов самого маркетолога. То же для фраз и объявлений, которые потом
+# цели → анализ → ключи и группы → (аудитории) → заголовки и тексты → настройки. create_campaign с
+# группами не пройдёт, пока этапы не согласованы, а фразы, минус-фразы, заголовки, тексты и аудитории в
+# ней — только из согласованных строк (фразы и тексты — ещё и из слов самого маркетолога). То же для фраз и объявлений, которые потом
 # добавляются в кампанию, созданную в этом чате.
 
 ITEM_STAGES = {
@@ -988,17 +1093,19 @@ ITEM_STAGES = {
     "analysis": "Анализ",
     "keywords": "Ключи и группы",
     "negatives": "Минус-фразы",
+    "audiences": "Аудитории",
     "ads": "Заголовки и тексты",
     "extras": "Ссылка и расширения",
     "settings": "Настройки",
     "other": "На согласование",
 }
-ITEM_KINDS = ("goal", "direction", "keyword", "negative", "title", "text", "extra", "setting", "other")
+ITEM_KINDS = ("goal", "direction", "keyword", "negative", "audience", "title", "text", "extra", "setting", "other")
 _STAGE_KINDS = {
     "goals": "goal",
     "analysis": "direction",
     "keywords": "keyword",
     "negatives": "negative",
+    "audiences": "audience",
     "extras": "extra",
     "settings": "setting",
 }
@@ -1090,6 +1197,80 @@ def _require_approved(ctx: Context, content: dict[str, list[str]], *, stages: li
         )
 
 
+def _audience_approvals(ctx: Context) -> list[dict]:
+    """Аудитории, согласованные в этом чате: [{sign, name, group}] — по таблицам этапа «Аудитории» и
+    правкам на доске."""
+    with pool.connection() as conn:
+        cards = conn.execute(
+            """
+            SELECT tool, args, result FROM ai_actions
+            WHERE chat_id = %s AND (tool = 'propose_items' AND status = 'done' OR tool = 'board_edit')
+            ORDER BY id
+            """,
+            (ctx.chat_id,),
+        ).fetchall()
+    return _approved_audiences(cards, getattr(ctx, "board_ops", None) or [])
+
+
+def _approved_audiences(cards: list[dict], board_ops: list[dict]) -> list[dict]:
+    """Таблицы и правки доски по порядку (board_ops — правка, которая применяется сейчас) → [{sign, name,
+    group}]. Более поздняя строка той же аудитории в той же группе заменяет прежнюю."""
+    out: list[dict] = []
+
+    def drop(name: str, group: str) -> None:
+        out[:] = [a for a in out if not (a["name"] == name and a["group"] == group)]
+
+    def edit(op: dict) -> None:
+        if op.get("op") == "rename_group" and op.get("to"):
+            for item in out:
+                if item["group"] == op.get("group"):
+                    item["group"] = op["to"]
+        elif op.get("op") == "remove" and op.get("kind") == "audience":
+            drop(_item_key(op.get("text")), op.get("group") or "")
+
+    for card in cards:
+        args = card["args"] or {}
+        if card["tool"] == "board_edit":
+            for op in args.get("ops") or []:
+                edit(op)
+            continue
+        if args.get("stage") != "audiences":
+            continue
+        chosen = set((card["result"] or {}).get("approved_rows") or [])
+        for row in args.get("rows") or []:
+            if not isinstance(row.get("audience"), dict) or not row.get("cells"):
+                continue
+            name, group = _item_key(row["cells"][0]), row.get("section") or ""
+            drop(name, group)
+            if row.get("n") in chosen:
+                out.append({"sign": audiences.audience_signature(row["audience"]), "name": name, "group": group})
+    for op in board_ops:
+        edit(op)
+    return out
+
+
+def _require_audiences(ctx: Context, items: list[tuple[str, dict]]) -> None:
+    """Аудитории новой кампании — только согласованные таблицей этапа «Аудитории» и в своих группах."""
+    if ctx.chat_id is None or not items:
+        return
+    approved = _audience_approvals(ctx)
+    bad: list[str] = []
+    for group, aud in items:
+        same = [a for a in approved if a["sign"] == audiences.audience_signature(aud)]
+        if any(a["group"] == group for a in same):
+            continue
+        if same:
+            bad.append(f"«{aud['name']}» согласована для группы «{same[0]['group']}», а не «{group}»")
+        else:
+            bad.append(f"«{aud['name']}» (группа «{group}»)")
+    if bad:
+        raise YandexError(
+            "args",
+            "Этих аудиторий маркетолог не согласовывал, снял галочку или убрал на доске: " + "; ".join(bad[:5])
+            + (f" и ещё {len(bad) - 5}" if len(bad) > 5 else "") + ". Бери объекты audience из согласованной таблицы stage=audiences или покажи новую таблицу",
+        )
+
+
 def _made_here(ctx: Context, campaign_row_id: int) -> bool:
     """Кампания создана create_campaign в этом чате — в неё добавляется только согласованное."""
     if ctx.chat_id is None:
@@ -1127,6 +1308,38 @@ def _group_ad(ctx: Context, ad, name: str, account_id: int) -> tuple[list[str], 
     return titles, texts
 
 
+def _spec_audiences(group: dict, name: str) -> list[dict]:
+    """Аудитории группы новой кампании — проверенные, без повторов."""
+    raw = group.get("audiences")
+    if raw in (None, "", []):
+        return []
+    if not isinstance(raw, list):
+        raise YandexError("args", f"Группа «{name}»: audiences — список аудиторий")
+    if len(raw) > audiences.MAX_PER_GROUP:
+        raise YandexError("args", f"Группа «{name}»: не больше {audiences.MAX_PER_GROUP} аудиторий")
+    out: list[dict] = []
+    for item in raw:
+        aud = audiences.clean_audience(item)
+        if any(audiences.audience_signature(a) == audiences.audience_signature(aud) for a in out):
+            raise YandexError("args", f"Группа «{name}»: аудитория «{aud['name']}» повторяется")
+        out.append(aud)
+    return out
+
+
+def _spec_network(ctx: Context, spec: dict) -> bool | None:
+    """Показывается ли новая кампания в сетях; None — стратегию не разобрать (её проверит создание)."""
+    from app import actions
+
+    strategy = dict(spec.get("strategy") or {}) if isinstance(spec.get("strategy"), dict) else {}
+    if ctx.ws.get("goal_id") and not strategy.get("goal_id"):
+        strategy["goal_id"] = ctx.ws["goal_id"]
+    try:
+        bidding, _manual = actions.build_bidding_strategy(strategy, str(spec.get("type") or "TEXT_CAMPAIGN").upper())
+    except YandexError:
+        return None
+    return actions.strategy_from_api(bidding)["network"] != "SERVING_OFF"
+
+
 def _p_create_campaign(ctx: Context, args: dict) -> Plan:
     from app import actions
 
@@ -1144,17 +1357,24 @@ def _p_create_campaign(ctx: Context, args: dict) -> Plan:
     }
     names: list[str] = []
     ads: dict[tuple, str] = {}
+    group_audiences: list[tuple[str, dict]] = []
+    bare: list[str] = []
     href_default = bool(actions._ws_link_template(ctx.ws))
     for index, group in enumerate(groups):
         name = str(group.get("name") or f"Группа {index + 1}").strip()
         if name in names:
             raise YandexError("args", f"Две группы называются «{name}» — назови их по-разному")
         names.append(name)
+        phrases = []
         if group.get("keywords") not in (None, "", []):
             phrases = actions._phrases(group.get("keywords"))
             if len(phrases) > 200:
                 raise YandexError("args", f"Группа «{name}»: больше 200 фраз — раздели её на несколько групп")
             content["keyword"] += phrases
+        mine = _spec_audiences(group, name)
+        group_audiences += [(name, aud) for aud in mine]
+        if mine and not phrases:
+            bare.append(name)
         variants = _group_ad(ctx, group.get("ad"), name, int(account["id"]))
         if variants is None:
             continue
@@ -1168,11 +1388,25 @@ def _p_create_campaign(ctx: Context, args: dict) -> Plan:
         ads[key] = name
         content["title"] += variants[0]
         content["text"] += variants[1]
+    if group_audiences and _spec_network(ctx, spec) is False:
+        interests = [f"«{a['name']}»" for _, a in group_audiences if a["type"] == "interests"]
+        if interests:
+            raise YandexError(
+                "args", f"Интересы работают только в сетях, а сети в стратегии выключены: {_preview(interests, 4)} — "
+                "включи сети или убери интересы",
+            )
+        if bare:
+            raise YandexError(
+                "args", f"Группы без фраз показываются только в сетях по аудитории, а сети выключены: "
+                f"{_preview([f'«{n}»' for n in bare], 4)} — включи сети или добавь фразы",
+            )
     if groups:
         stages = [
-            "goals", "analysis", *(["keywords"] if content["keyword"] else []), *(["ads"] if ads else []), "settings",
+            "goals", "analysis", *(["keywords"] if content["keyword"] else []),
+            *(["audiences"] if group_audiences else []), *(["ads"] if ads else []), "settings",
         ]
         _require_approved(ctx, {k: v for k, v in content.items() if v}, stages=stages)
+        _require_audiences(ctx, group_audiences)
 
     details = []
     strategy = spec.get("strategy") or {}
@@ -1186,6 +1420,7 @@ def _p_create_campaign(ctx: Context, args: dict) -> Plan:
         details.append(
             f"{_count(len(groups), 'группа', 'группы', 'групп')}, {_count(len(content['keyword']), *_PHRASE_WORDS)}, "
             f"{_count(len(ads), 'объявление', 'объявления', 'объявлений')}"
+            + (f", {_count(len(group_audiences), 'аудитория', 'аудитории', 'аудиторий')}" if group_audiences else "")
         )
     extra = f" ({', '.join(details)})" if details else ""
     return Plan(
@@ -2379,11 +2614,12 @@ def _d_create_campaign(ctx: Context, args: dict) -> list[dict]:
     strategy = dict(spec.get("strategy") or {}) if isinstance(spec.get("strategy"), dict) else {}
     if ctx.ws.get("goal_id") and not strategy.get("goal_id"):
         strategy["goal_id"] = ctx.ws["goal_id"]
-    manual, weekly = None, False
+    manual, weekly, flat = None, False, {}
     try:
         bidding, manual = actions.build_bidding_strategy(strategy, ctype)
         weekly = bool(actions.manual_weekly_limit(bidding))
-        out.append(_ch("Стратегия", "—", _strategy_text(actions.strategy_from_api(bidding), names)))
+        flat = actions.strategy_from_api(bidding)
+        out.append(_ch("Стратегия", "—", _strategy_text(flat, names)))
     except YandexError as exc:
         out.append(_ch("Стратегия", "—", _fail(exc)))
     if spec.get("daily_budget_rub") not in (None, "", 0):
@@ -2401,7 +2637,12 @@ def _d_create_campaign(ctx: Context, args: dict) -> list[dict]:
         name = str(group.get("name") or f"Группа {index + 1}").strip()[:255] or f"Группа {index + 1}"
         phrases = actions._phrases(group.get("keywords"))[:200]
         regions = [int(r) for r in group.get("region_ids") or [] if str(r).lstrip("-").isdigit()] or [225]
-        parts = [_count(len(phrases), *_PHRASE_WORDS), geo.region_label(regions, regions_all)]
+        try:
+            mine = _spec_audiences(group, name)
+        except YandexError:
+            mine = []
+        reach = "без фраз — показ в сетях по аудитории" if mine and not phrases else _count(len(phrases), *_PHRASE_WORDS)
+        parts = [reach, geo.region_label(regions, regions_all)]
         ad = group.get("ad") if isinstance(group.get("ad"), dict) else {}
         titles = _variants(ad, "titles") or ([ad["title"]] if ad.get("title") else [])
         texts = _variants(ad, "texts") or ([ad["text"]] if ad.get("text") else [])
@@ -2414,9 +2655,24 @@ def _d_create_campaign(ctx: Context, args: dict) -> list[dict]:
         else:
             parts.append("без объявления")
         out.append(_ch(f"Группа «{name}»", "нет", " · ".join(parts)))
+        if mine:
+            out.append(_ch(f"Аудитории «{name}»", "нет", _audiences_text(mine, phrases, flat)))
         if titles and texts:
             out += [dict(r, what=f"{r['what']} «{name}»") for r in _extras_rows(ctx, ad)]
     return out
+
+
+def _audiences_text(items: list[dict], phrases: list[str], flat: dict) -> str:
+    """Аудитории группы для карточки создания: что это и как они меняют показы."""
+    text = "; ".join(f"{a['name']} ({audiences.TYPE_LABELS[a['type']]})" for a in items)
+    narrowing = [a for a in items if a["type"] != "interests"]
+    if phrases and narrowing and flat.get("search") not in (None, "", "SERVING_OFF"):
+        text += " · на поиске фразы группы покажутся только этой аудитории"
+    if phrases and flat.get("network") not in (None, "", "SERVING_OFF"):
+        text += " · в сетях — и по фразам, и по аудитории"
+    if any(a["type"] == "lookalike" for a in items):
+        text += " · новый LAL создастся в Яндекс Аудиториях, Директ примет его, когда сегмент будет готов (от двух часов)"
+    return text
 
 
 def _d_duplicate(ctx: Context, args: dict) -> list[dict]:
@@ -2931,6 +3187,10 @@ def _k_create_campaign(ctx: Context, args: dict) -> list[dict]:
         if len(groups) > 1:
             out.append(_pick(base, f"Вся группа «{name}»", name, "group"))
         out += _list_picks(group, "keywords", name, "keyword", f"{base}.")
+        for i, aud in enumerate(group.get("audiences") if isinstance(group.get("audiences"), list) else []):
+            if isinstance(aud, dict) and str(aud.get("name") or "").strip():
+                label = audiences.TYPE_LABELS.get(str(aud.get("type") or ""), "аудитория")
+                out.append(_pick(f"{base}.audiences.{i}", aud["name"], name, "audience", label))
         ad = group.get("ad")
         if isinstance(ad, dict):
             out += _list_picks(ad, "titles", name, "title", f"{base}.ad.")
@@ -3142,12 +3402,101 @@ _ITEM_COLUMNS = {
     "analysis": ["Направление", "Показов в месяц", "Откуда", "Комментарий"],
     "keywords": ["Фраза", "Показов в месяц", "Комментарий"],
     "negatives": ["Минус-фраза", "Почему"],
+    "audiences": ["Аудитория", "Что внутри", "Почему"],
     "ads": ["Вариант", "Комментарий"],
     "extras": ["Что", "Значение"],
     "settings": ["Настройка", "Значение", "Почему"],
     "other": ["Что", "Комментарий"],
 }
 _ITEM_LIMITS = {"title": 56, "text": 81}
+
+
+def _audience_rows(ctx: Context, args: dict, rows: list[dict]) -> None:
+    """Строки этапа «Аудитории»: проверка по целям проекта, условиям кабинета и справочнику интересов;
+    «Что внутри» пишет код — по сути аудитории, а не со слов модели."""
+    goals = _goal_names(ctx)
+    seen: set[tuple] = set()
+    for row in rows:
+        aud = row["audience"]
+        sign = (row["section"], audiences.audience_signature(aud))
+        if sign in seen:
+            raise YandexError("args", f"«{aud['name']}»: такая аудитория в группе «{row['section']}» уже есть")
+        seen.add(sign)
+        stray = [g for g in audiences.goal_ids(aud) if g not in goals]
+        if stray:
+            raise YandexError(
+                "args",
+                f"«{aud['name']}»: целей {', '.join(map(str, stray))} нет в проекте — цели бери из get_audiences"
+                if goals else "У проекта нет целей Метрики — ретаргетинг по целям не настроить",
+            )
+    kinds = {r["audience"]["type"] for r in rows}
+    lists: dict[int, dict] = {}
+    catalog: dict[int, dict] = {}
+    segments: dict[int, dict] = {}
+    segments_known = False  # список сегментов Аудиторий получен — пустой тоже ответ
+    if kinds & {"list", "interests", "lookalike"}:
+        account_id = int(_audience_account(ctx, args)["id"])
+        token, login = audiences.account_access(ctx.user_id, account_id)
+        if "list" in kinds:
+            try:
+                lists = {i["id"]: i for i in audiences.account_lists(token, login)}
+            except YandexError:
+                lists = {}  # Директ не ответил — условия проверятся при создании кампании
+        if "interests" in kinds:
+            catalog = audiences.interest_catalog(token)
+        if "lookalike" in kinds:
+            # Без Аудиторий у логина новый LAL не создать — не предлагаем то, что не выйдет.
+            rights = audiences.account_rights(ctx.user_id, account_id)
+            if not rights["enabled"]:
+                raise YandexError("args", audiences.DISABLED_TEXT)
+            if not rights["rights"]:
+                raise YandexError("audience-scope", audiences.rights_text(rights["login"]))
+            if any(r["audience"]["type"] == "lookalike" and r["audience"]["source"]["kind"] == "segment" for r in rows):
+                try:
+                    segments = {int(s["id"]): s for s in audiences.list_segments(audiences.audience_token(rights))}
+                    segments_known = True
+                except YandexError as exc:
+                    if exc.code == "audience-config":
+                        raise
+                    if exc.code == "audience-scope":
+                        raise YandexError("audience-scope", audiences.rights_text(rights["login"])) from exc
+                    segments = {}  # Аудитории не ответили — сегмент проверится при создании кампании
+    names = {k: v["name"] for k, v in catalog.items()}
+    segment_names = {k: str(v.get("name") or k) for k, v in segments.items()}
+    for row in rows:
+        aud = row["audience"]
+        if aud["type"] == "list" and lists:
+            item = lists.get(aud["list_id"])
+            if item is None:
+                raise YandexError("args", f"«{aud['name']}»: условия №{aud['list_id']} нет в кабинете — бери из get_audiences")
+            if not audiences.can_target(item):
+                raise YandexError("args", f"«{aud['name']}»: условие «{item['name']}» не годится для показа")
+        if aud["type"] == "interests" and catalog:
+            unknown = [k for k in aud["interest_ids"] if k not in catalog]
+            if unknown:
+                raise YandexError("args", f"«{aud['name']}»: интересов {unknown} нет в справочнике — ищи в get_audiences")
+        if aud["type"] == "lookalike" and aud["source"]["kind"] == "segment" and segments_known:
+            seg = segments.get(aud["source"]["id"])
+            if seg is None:
+                raise YandexError(
+                    "args", f"«{aud['name']}»: сегмента Аудиторий №{aud['source']['id']} нет — бери из get_audiences lookalike.segments"
+                )
+            if seg.get("status") in audiences.SEGMENT_FAILED:
+                raise YandexError("args", f"«{aud['name']}»: сегмент «{seg.get('name')}» не обработан — LAL из него не построить")
+        text = audiences.summary(aud, goals=goals, interests=names, lists=lists, segments=segment_names)
+        cells = row["cells"]
+        if len(cells) >= 3:
+            cells[1] = text
+        else:
+            cells.insert(1, text)
+        if lists.get(aud.get("list_id"), {}).get("lal"):
+            row["lal"] = True
+        if aud["type"] == "lookalike":
+            row["lal"] = True
+            row["lookalike"] = {
+                "source": audiences.source_text(aud["source"], goals=goals, segments=segment_names),
+                "similarity": aud["similarity"],
+            }
 
 
 def _q_items(ctx: Context, args: dict) -> dict:
@@ -3177,7 +3526,7 @@ def _q_items(ctx: Context, args: dict) -> dict:
         if not cells or not cells[0]:
             continue
         kind = str(item.get("kind") or "").strip().lower()
-        if kind not in ITEM_KINDS:
+        if kind not in ITEM_KINDS or (kind == "audience") != (stage == "audiences"):
             if stage == "ads":
                 raise YandexError("args", f"«{cells[0]}»: в таблице ads у строки kind — title или text")
             kind = _STAGE_KINDS.get(stage, "other")
@@ -3186,6 +3535,14 @@ def _q_items(ctx: Context, args: dict) -> dict:
         if key in seen:
             continue
         seen.add(key)
+        audience = None
+        if kind == "audience":
+            if not section:
+                raise YandexError(
+                    "args", f"«{cells[0]}»: section — группа аудитории (для отдельной группы — её новое название)"
+                )
+            audience = audiences.clean_audience(item.get("audience"), name=cells[0])
+            cells[0] = audience["name"]
         limit = _ITEM_LIMITS.get(kind)
         if stage == "extras" and kind == "extra":
             where = section.lower()
@@ -3195,6 +3552,10 @@ def _q_items(ctx: Context, args: dict) -> dict:
         rows.append(
             {"n": len(rows) + 1, "section": section, "kind": kind, "cells": cells, "checked": _bool(item, "checked", True)}
         )
+        if audience is not None:
+            rows[-1]["audience"] = audience
+    if stage == "audiences" and rows:
+        _audience_rows(ctx, args, rows)
     if too_long:
         raise YandexError("args", "Длиннее предела Директа, сократи: " + _preview(too_long, 5))
     if not rows:
@@ -3240,6 +3601,7 @@ TOOL_LABELS = {
     "get_campaign_history": "Кампания по дням",
     "remember_fact": "Запоминаю ответ",
     "find_regions": "Поиск регионов",
+    "get_audiences": "Аудитории и интересы",
     "get_wordstat": "Вордстат",
     "get_experiments": "Эксперименты",
     "get_headline_stats": "Статистика заголовков",
@@ -3424,6 +3786,17 @@ TOOLS = [
         ["query"],
     ),
     _fn(
+        "get_audiences",
+        "Из чего собрать аудитории групп новой кампании: цели проекта для ретаргетинга, готовые условия кабинета "
+        "(в том числе LAL — похожие на покупателей), интересы Директа («поведение и привычки») и источники нового "
+        "LAL из Яндекс Аудиторий (lookalike: можно ли и свои сегменты; нет ключа — новые LAL на сервисе не "
+        "подключены). С query — поиск интересов и условий по словам.",
+        {
+            "account_id": {**_ID, "description": "кабинет кампании; можно не давать, если кабинет один"},
+            "query": {"type": "string", "description": "слова для поиска интересов и условий, напр. «путешествия»"},
+        },
+    ),
+    _fn(
         "get_wordstat",
         "Вордстат за 30 дней: по каждой исходной фразе — запросы с ней и похожие запросы с числом показов в месяц. "
         "Для подбора и расширения ключевых фраз. Платный запрос на каждую фразу, квота 100 в час — бери 1–5 "
@@ -3543,8 +3916,9 @@ TOOLS = [
                 "type": "string",
                 "enum": list(ITEM_STAGES),
                 "description": "этап: goals — цели кампании (что рекламируем, оффер, гео, бюджет, цель, посадочная), "
-                "analysis — направления/группы, keywords — фразы по группам, negatives — минус-фразы, ads — "
-                "заголовки и тексты, extras — ссылка и расширения, settings — настройки",
+                "analysis — направления/группы, keywords — фразы по группам, negatives — минус-фразы, audiences — "
+                "аудитории групп (ретаргетинг, LAL, интересы), ads — заголовки и тексты, extras — ссылка и "
+                "расширения, settings — настройки",
             },
             "title": {"type": "string", "description": "заголовок таблицы"},
             "intro": {"type": "string", "description": "1–3 предложения: на чём основано и что согласовать"},
@@ -3562,10 +3936,19 @@ TOOLS = [
                         "kind": {"type": "string", "enum": list(ITEM_KINDS), "description": "в stage=ads обязательно: title или text"},
                         "cells": {"type": "array", "items": {"type": "string"}, "description": "ячейки по колонкам"},
                         "checked": {"type": "boolean", "description": "отмечена сразу (по умолчанию да)"},
+                        "audience": {
+                            "type": "object",
+                            "description": "только в stage=audiences: {type: retargeting, goal_ids, exclude_goal_ids, "
+                            "days} | {type: list, list_id} | {type: interests, interest_ids} | {type: lookalike, "
+                            "source: {goal_id} | {segment_id} | {counter_id}, similarity 1–5} (только если "
+                            "get_audiences вернул lookalike); cells — [название, "
+                            "почему], «Что внутри» код напишет сам",
+                        },
                     },
                     "required": ["cells"],
                 },
             },
+            "account_id": {**_ID, "description": "stage=audiences: кабинет кампании, если их несколько"},
         },
         ["stage", "rows"],
     ),
@@ -3603,10 +3986,13 @@ TOOLS = [
         "(TEXT_CAMPAIGN|UNIFIED_CAMPAIGN), name, start_date, end_date, strategy {search, network, параметры}, "
         "daily_budget_rub (только ручные ставки), negative_keywords [], excluded_sites [], schedule, "
         "attribution_model, priority_goals, tracking_params, groups [{name, region_ids, keywords [] (до 200), "
-        "bid_rub, ad {titles (до 7), texts (до 3), href, extras или extras_from_ad_row_id}}] (до 20 групп): "
+        "bid_rub, ad {titles (до 7), texts (до 3), href, extras или extras_from_ad_row_id}, audiences [] — "
+        "согласованные аудитории группы объектами audience из таблицы stage=audiences}] (до 20 групп; группа без "
+        "фраз — только по аудитории, показы лишь в сетях): "
         "объявление комбинаторное, второго заголовка в нём нет; href можно не давать, если в пространстве есть "
         "шаблон ссылки. Кампания с группами создаётся только после согласованных таблиц propose_items по этапам "
-        "(цели, анализ, ключи и группы, заголовки и тексты, настройки) и только из согласованных строк. "
+        "(цели, анализ, ключи и группы, аудитории, если они есть, заголовки и тексты, настройки) и только из "
+        "согласованных строк. "
         "Счётчик пространства подставится сам.",
         {"account_id": _ID, "spec": {"type": "object"}, **_REASON},
         ["account_id", "spec"],
@@ -4006,6 +4392,23 @@ FIRST_CAMPAIGN_RULE = (
 )
 
 
+def _lal_prompt() -> str:
+    """LAL в этапе аудиторий: новый — только когда на сервере задано приложение Яндекс Аудиторий."""
+    if not audiences.enabled():
+        return (
+            "LAL — только готовое условие кабинета с kind LAL из get_audiences: создавать новые LAL на сервисе не "
+            "подключено, type lookalike не предлагай. Директ сейчас может не дать добавить LAL в группу."
+        )
+    return (
+        "LAL — готовое условие кабинета с kind LAL или новый LAL {type: lookalike, source "
+        "{goal_id | segment_id | counter_id}, similarity 1–5}, например «Похожие на тех, кто оставил заявку» от цели "
+        "заявки; новый можно, только если get_audiences вернул lookalike.available, иначе передай маркетологу, что "
+        "логину надо подключить Яндекс Аудитории («Аккаунты» → «Подключить Аудитории»). Предупреди, что новый LAL "
+        "создастся вместе с кампанией и будет готов через несколько часов, а Директ сейчас может не дать добавить "
+        "LAL в группу."
+    )
+
+
 def _system_prompt(ctx: Context) -> str:
     ws = ctx.ws
     access = ctx.access
@@ -4075,7 +4478,7 @@ def _system_prompt(ctx: Context) -> str:
         "следующему переходишь только после её согласования; без согласованных этапов create_campaign вернёт "
         "ошибку. Маркетолог видит рядом с чатом доску сборки — цели, группы с фразами и объявления, "
         "расширения — и согласует этапы на ней, поэтому называй группы (section) одинаково на всех этапах. На "
-        "доске он может сам поправить фразы, заголовки, тексты и группы: такие правки приходят сообщением "
+        "доске он может сам поправить фразы, заголовки, тексты и группы и убрать аудитории: такие правки приходят сообщением "
         "«[Правки на доске]» и полем edited_by_user в ответе таблицы — дальше бери их в таком виде. 1) Цели кампании — сначала "
         "ask_questions, если чего-то не хватает в брифе, затем propose_items stage=goals строками «что — "
         "значение»: что рекламируем и оффер, гео, бюджет, цель (действие на сайте или цель Метрики), посадочная "
@@ -4085,16 +4488,27 @@ def _system_prompt(ctx: Context) -> str:
         "они станут группами (направление, показов в месяц, откуда идея). 3) Ключи и группы — propose_items "
         "stage=keywords: фразы согласованных направлений с частотой из get_wordstat, section — группа; минус-фразы "
         "кампании — там же строками kind=negative с section «Минус-фразы» или отдельной таблицей stage=negatives. "
-        "4) Заголовки и тексты — propose_items stage=ads: каждой группе до 7 заголовков (kind=title, до 56 "
-        "знаков) и до 3 текстов (kind=text, до 81) под её фразы, section — группа. 5) Ссылка и расширения — "
+        "4) Аудитории — когда они помогут цели: get_audiences (цели проекта, готовые условия кабинета, "
+        "интересы), затем propose_items stage=audiences: строка — аудитория, cells [название, почему], audience — "
+        "объект («Что внутри» код напишет сам), section — группа. Ретаргетинг — по целям проекта: кто выполнил "
+        "цель (goal_ids) и, если нужно, кто не выполнил другую (exclude_goal_ids), например «оставили заявку, но "
+        "не оплатили» за 30 дней. " + _lal_prompt() + " Интересы («поведение и привычки») "
+        "работают только в сетях — обычно в группы с фразами, расширяют охват в сетях. Где разместить, решай сам "
+        "и объясни в «Почему»: если кампания в сетях, ретаргетинг и LAL — отдельной группой без фраз (section — "
+        "её новое название, объявление для неё — на этапе заголовков); на поиске условие в группе с фразами "
+        "сужает показы этих фраз до аудитории — так делай, только если это и нужно. Если сети выключены, "
+        "интересы и группы без фраз не предлагай. В create_campaign аудитории — в groups[].audiences объектами "
+        "audience из согласованных строк. "
+        "5) Заголовки и тексты — propose_items stage=ads: каждой группе до 7 заголовков (kind=title, до 56 "
+        "знаков) и до 3 текстов (kind=text, до 81) под её фразы, section — группа. 6) Ссылка и расширения — "
         "propose_items stage=extras: ссылка или шаблон пространства; быстрые ссылки — строка на ссылку с "
         "section «Быстрые ссылки» (текст до 30 знаков, ссылка, описание до 60); уточнения — строка на уточнение "
         "с section «Уточнения» (до 25 знаков); или у какого объявления взять расширения. В create_campaign "
-        "согласованные быстрые ссылки и уточнения — в ad.extras каждой группы. 6) Настройки — propose_items stage=settings: тип, стратегия, бюджет, "
+        "согласованные быстрые ссылки и уточнения — в ad.extras каждой группы. 7) Настройки — propose_items stage=settings: тип, стратегия, бюджет, "
         "регионы, расписание, цель; допустимые стратегии и цели — get_campaign_options, id регионов — "
-        "find_regions. 7) create_campaign — одним вызовом черновик со всеми группами (spec.groups), "
+        "find_regions. 8) create_campaign — одним вызовом черновик со всеми группами (spec.groups), "
         "только из согласованных строк: снятое галочкой не бери, новое не добавляй без новой таблицы. "
-        "8) На модерацию — только после отдельного согласия (moderate_campaign). Если Вордстат не подключён или "
+        "9) На модерацию — только после отдельного согласия (moderate_campaign). Если Вордстат не подключён или "
         "упёрся в квоту, скажи об этом, строй направления и фразы из брифа, сайта и запросов других кампаний, а "
         "частоты не выдумывай — в таблице так и пиши «нет данных».",
         "- Затухшую кампанию, если причина не в балансе, модерации или настройке, которую проще поправить, "
@@ -4315,11 +4729,12 @@ BUILD_STAGES = {
     "analysis": "Анализ",
     "keywords": "Группы и фразы",
     "negatives": "Минус-фразы",
+    "audiences": "Аудитории",
     "ads": "Объявления",
     "extras": "Ссылка и расширения",
     "settings": "Настройки",
 }
-_BUILD_OPTIONAL = {"negatives", "extras"}
+_BUILD_OPTIONAL = {"negatives", "audiences", "extras"}
 _BUILD_STARTS = {"goals", "analysis"}
 _BUILD_REQUIRED = ("goals", "analysis", "keywords", "ads", "settings")
 _BUILD_FACTS = {"goals": "goals", "analysis": "directions", "extras": "extras", "settings": "settings"}
@@ -4398,7 +4813,7 @@ class _Board:
     def group(self, name: str) -> dict:
         name = name or NO_GROUP
         if name not in self.groups:
-            self.groups[name] = {"name": name, "keywords": {}, "titles": {}, "texts": {}, "href": ""}
+            self.groups[name] = {"name": name, "keywords": {}, "titles": {}, "texts": {}, "audiences": {}, "href": ""}
         return self.groups[name]
 
     def _drop_keyword(self, key: str, keep: str | None = None) -> None:
@@ -4432,6 +4847,19 @@ class _Board:
             name = section or NO_GROUP
             self._drop_keyword(key, keep=name)
             self.group(name)["keywords"][key] = item
+        elif stage == "audiences":
+            if not isinstance(row.get("audience"), dict):
+                return
+            key = _item_key(text)
+            if chosen:
+                self.group(section)["audiences"][key] = {
+                    **item,
+                    "type": row["audience"].get("type") or "",
+                    "lal": bool(row.get("lal")),
+                    "lookalike": row.get("lookalike"),
+                }
+            elif (section or NO_GROUP) in self.groups:
+                self.groups[section or NO_GROUP]["audiences"].pop(key, None)
         elif stage == "ads":
             if kind not in ("title", "text"):
                 return
@@ -4456,7 +4884,7 @@ class _Board:
         group = self.groups.get(op.get("group") or "")
         if group is None:
             return None
-        return group[f"{kind}s"] if kind in ("title", "text") else group["keywords"]
+        return group[f"{kind}s"] if kind in ("title", "text", "audience") else group["keywords"]
 
     def op(self, op: dict) -> None:
         """Правка с доски; чего уже нет (убрали новой таблицей) — пропускается."""
@@ -4499,14 +4927,42 @@ class _Board:
             return
         for key, item in source["keywords"].items():
             target["keywords"].setdefault(key, item)
+        for key, item in source["audiences"].items():
+            target["audiences"].setdefault(key, item)
         if not target["titles"] and not target["texts"]:
             target["titles"], target["texts"] = source["titles"], source["texts"]
         target["href"] = target["href"] or source["href"]
         del self.groups[old]
 
 
-def _spec_board(spec: dict, values: dict[str, str]) -> tuple[list[dict], list[dict]]:
-    """Группы и минус-фразы из карточки создания: это то, что уйдёт в Директ. Частотность — из таблиц."""
+def _spec_board(spec: dict, values: dict[str, str], known: dict[str, dict] | None = None) -> tuple[list[dict], list[dict]]:
+    """Группы и минус-фразы из карточки создания: это то, что уйдёт в Директ. Частотность фраз и суть
+    аудиторий (known — строки таблиц по названию) — из таблиц."""
+    known = known or {}
+
+    def group_audiences(raw) -> list[dict]:
+        out = []
+        for aud in raw if isinstance(raw, list) else []:
+            try:
+                clean = audiences.clean_audience(aud)
+            except YandexError:
+                continue
+            seen = known.get(_item_key(clean["name"])) or {}
+            value = seen.get("value") or audiences.describe(clean)
+            lookalike = seen.get("lookalike")
+            if clean["type"] == "lookalike" and not lookalike:
+                lookalike = {"source": audiences.source_text(clean["source"]), "similarity": clean["similarity"]}
+            out.append(
+                _build_item(
+                    clean["name"],
+                    value,
+                    seen.get("note") or "",
+                    type=clean["type"],
+                    lal=bool(seen.get("lal")) or clean["type"] == "lookalike",
+                    lookalike=lookalike,
+                )
+            )
+        return out
 
     def items(raw, kind: str) -> list[dict]:
         out = []
@@ -4533,6 +4989,7 @@ def _spec_board(spec: dict, values: dict[str, str]) -> tuple[list[dict], list[di
             "keywords": items(raw.get("keywords"), "keyword"),
             "titles": items(ad.get("titles") if isinstance(ad.get("titles"), list) else [ad.get("title")], "title"),
             "texts": items(ad.get("texts") if isinstance(ad.get("texts"), list) else [ad.get("text")], "text"),
+            "audiences": group_audiences(raw.get("audiences")),
             "href": str(ad.get("href") or "").strip(),
             "sitelinks": sitelinks,
             "callouts": items(extras.get("callouts"), "callout"),
@@ -4565,10 +5022,13 @@ def _build_checks(build: dict, *, link_template: bool) -> list[dict]:
 
     groups = build["groups"]
     keywords = {g["name"]: _checked(g["keywords"]) for g in groups}
+    targeted = {g["name"]: _checked(g.get("audiences") or []) for g in groups}
     if not groups:
         add("keywords", "Фразы в группах", "bad", "групп с фразами пока нет")
     else:
-        empty = [name for name, kws in keywords.items() if not kws]
+        # Группа без фраз, но с аудиторией — показы в сетях по аудитории, это не ошибка.
+        empty = [name for name, kws in keywords.items() if not kws and not targeted[name]]
+        by_audience = [name for name, kws in keywords.items() if not kws and targeted[name]]
         big = [name for name, kws in keywords.items() if len(kws) > 200]
         total = sum(len(kws) for kws in keywords.values())
         if empty:
@@ -4576,8 +5036,10 @@ def _build_checks(build: dict, *, link_template: bool) -> list[dict]:
         elif big:
             add("keywords", "Фразы в группах", "bad", "больше 200 фраз: " + _preview([f"«{n}»" for n in big], 4))
         else:
-            add("keywords", "Фразы в группах", "ok",
-                f"{_count(len(groups), 'группа', 'группы', 'групп')}, {_count(total, *_PHRASE_WORDS)}")
+            note = f"{_count(len(groups), 'группа', 'группы', 'групп')}, {_count(total, *_PHRASE_WORDS)}"
+            if by_audience:
+                note += f"; по аудитории без фраз: {_preview([f'«{n}»' for n in by_audience], 3)}"
+            add("keywords", "Фразы в группах", "ok", note)
 
         ads = {g["name"]: ([t["text"] for t in _checked(g["titles"])], [t["text"] for t in _checked(g["texts"])]) for g in groups}
         no_ad = [name for name, (titles, texts) in ads.items() if not titles or not texts]
@@ -4611,6 +5073,18 @@ def _build_checks(build: dict, *, link_template: bool) -> list[dict]:
         add("link", "Ссылка на сайт", "ok", _LINK_RE.search(facts).group(0))
     else:
         add("link", "Ссылка на сайт", "warn", "посадочную ссылку ещё не указали")
+
+    chosen = [a for g in groups for a in _checked(g.get("audiences") or [])]
+    if chosen:
+        note = (
+            f"{_count(len(chosen), 'аудитория', 'аудитории', 'аудиторий')} в "
+            f"{_count(sum(1 for items in targeted.values() if _checked(items)), 'группе', 'группах', 'группах')}"
+        )
+        lal = [f"«{a['text']}»" for a in chosen if a.get("lal")]
+        if lal:
+            add("audiences", "Аудитории", "warn", f"{note}; LAL {_preview(lal, 3)} — {audiences.LAL_NOTE}")
+        else:
+            add("audiences", "Аудитории", "ok", note)
 
     negatives = _checked(build["negatives"])
     if negatives:
@@ -4686,6 +5160,7 @@ def campaign_build(actions: list[dict], *, link_template: bool = False) -> dict 
             "keywords": list(g["keywords"].values()),
             "titles": list(g["titles"].values()),
             "texts": list(g["texts"].values()),
+            "audiences": list(g["audiences"].values()),
             "href": g["href"],
             "sitelinks": None,
             "callouts": None,
@@ -4693,7 +5168,7 @@ def campaign_build(actions: list[dict], *, link_template: bool = False) -> dict 
         }
 
     # Группа, из которой всё перенесли или убрали, с доски уходит.
-    groups = [listed(g) for g in board.groups.values() if g["keywords"] or g["titles"] or g["texts"]]
+    groups = [listed(g) for g in board.groups.values() if g["keywords"] or g["titles"] or g["texts"] or g["audiences"]]
     negatives = list(board.negatives.values())
 
     # Карточка создания (ждёт решения, создаётся или создана) — это то, что уйдёт в Директ: группы
@@ -4705,7 +5180,8 @@ def campaign_build(actions: list[dict], *, link_template: bool = False) -> dict 
         spec = (action.get("args") or {}).get("spec")
         spec = spec if isinstance(spec, dict) else {}
         if action["status"] in ("pending", "approved", "done"):
-            groups, negatives = _spec_board(spec, board.values)
+            known = {k: i for g in board.groups.values() for k, i in g["audiences"].items()}
+            groups, negatives = _spec_board(spec, board.values, known)
         result = action.get("result") if isinstance(action.get("result"), dict) else {}
         campaign = result.get("campaign") if isinstance(result.get("campaign"), dict) else {}
         draft = {
@@ -4726,6 +5202,7 @@ def campaign_build(actions: list[dict], *, link_template: bool = False) -> dict 
     counts["keywords"] = sum(len(_checked(g["keywords"])) for g in groups)
     counts["negatives"] = len(_checked(negatives))
     counts["ads"] = sum(len(_checked(g["titles"])) + len(_checked(g["texts"])) for g in groups)
+    counts["audiences"] = sum(len(_checked(g["audiences"])) for g in groups)
 
     stages = []
     later_started = False
@@ -4767,10 +5244,10 @@ def campaign_build(actions: list[dict], *, link_template: bool = False) -> dict 
 
 BOARD_OPS = ("edit", "add", "remove", "move", "rename_group")
 MAX_BOARD_OPS = 50
-_BOARD_KINDS = ("keyword", "negative", "title", "text")
+_BOARD_KINDS = ("keyword", "negative", "title", "text", "audience")
 _BOARD_MAX = {"keyword": 200, "title": 7, "text": 3}
-_BOARD_STAGE = {"keyword": "keywords", "negative": "keywords", "title": "ads", "text": "ads"}
-_BOARD_WHAT = {"keyword": "фразу", "negative": "минус-фразу", "title": "заголовок", "text": "текст"}
+_BOARD_STAGE = {"keyword": "keywords", "negative": "keywords", "title": "ads", "text": "ads", "audience": "audiences"}
+_BOARD_WHAT = {"keyword": "фразу", "negative": "минус-фразу", "title": "заголовок", "text": "текст", "audience": "аудиторию"}
 _BOARD_LIST = {"keyword": "фраз", "title": "заголовков", "text": "текстов"}
 
 
@@ -4792,6 +5269,8 @@ def _board_op(raw) -> dict:
         raise YandexError("args", f"kind — одно из {list(_BOARD_KINDS)}")
     if op == "move" and kind != "keyword":
         raise YandexError("args", "Переносить между группами можно только фразы")
+    if kind == "audience" and op != "remove":
+        raise YandexError("args", "Аудиторию на доске можно только убрать — новую предложит ИИ в чате")
     out["kind"] = kind
     if kind == "negative":
         out["group"] = ""
@@ -4845,7 +5324,7 @@ def _board_find(build: dict, op: dict) -> tuple[list[dict], dict | None]:
         group = next((g for g in build["groups"] if g["name"] == op["group"]), None)
         if group is None:
             raise YandexError("args", f"Группы «{op['group']}» уже нет на доске — обновите страницу")
-        bucket = group[f"{op['kind']}s"] if op["kind"] in ("title", "text") else group["keywords"]
+        bucket = group[f"{op['kind']}s"] if op["kind"] in ("title", "text", "audience") else group["keywords"]
     key = _item_key(op["text"], op["kind"])
     return bucket, next((i for i in bucket if _item_key(i["text"], op["kind"]) == key), None)
 
@@ -4984,6 +5463,15 @@ def _spec_patch(spec: dict, op: dict) -> None:
         groups.remove(source)
         return
     kind = op["kind"]
+    if kind == "audience":
+        group = find(op["group"])
+        items = group.get("audiences") if isinstance(group.get("audiences"), list) else []
+        key = _item_key(op["text"])
+        left = [a for a in items if not (isinstance(a, dict) and _item_key(a.get("name")) == key)]
+        if len(left) == len(items):
+            raise YandexError("args", f"«{op['text']}» нет в карточке создания — обновите страницу")
+        group["audiences"] = left
+        return
     if kind == "negative":
         if not isinstance(spec.get("negative_keywords"), list):
             spec["negative_keywords"] = []
@@ -5720,6 +6208,9 @@ def _items_brief(rows: list[dict]) -> dict[str, list[str]]:
     for row in rows:
         if row["kind"] in ("keyword", "negative", "title", "text"):
             text = row["cells"][0]
+        elif row.get("audience"):
+            # Аудиторию модель переносит в create_campaign как есть — объект целиком.
+            text = f"аудитория «{row['cells'][0]}» ({row['cells'][1]}): audience={json.dumps(row['audience'], ensure_ascii=False)}"
         else:
             text = " — ".join(c for c in row["cells"] if c)
         if row["kind"] in _ITEM_PREFIX:

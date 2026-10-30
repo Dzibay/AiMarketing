@@ -120,8 +120,22 @@
                   Директ
                 </label>
               </div>
+              <small v-if="needsAudience(c)" class="hint">
+                Подключите Яндекс Аудитории, чтобы ИИ создавал новые LAL (похожих на покупателей). Войдите тем же
+                логином @{{ c.yandex_login || c.yandex_uid }}.
+              </small>
+              <small v-else-if="me.audience_oauth && c.audience" class="hint">Яндекс Аудитории подключены.</small>
             </div>
             <div class="row-actions">
+              <YandexConnectButton
+                v-if="needsAudience(c)"
+                purpose="audience"
+                :connection-id="c.id"
+                label="Подключить Аудитории"
+                variant="ghost"
+                :wide="false"
+                return-to="/cabinet/accounts"
+              />
               <button class="btn btn--ghost" type="button" :disabled="busyId === c.id" @click="syncConnection(c)">
                 {{ busyId === c.id ? 'Синхронизируем…' : 'Обновить' }}
               </button>
@@ -385,6 +399,11 @@ function workspaceFor(counter) {
 
 function syncClass(status) {
   return { 'is-ok': status === 'ok', 'is-error': status === 'error' || status === 'partial' }
+}
+
+// Яндекс Аудитории (новые LAL из чата ИИ) — отдельное приложение; не задано на сервере — кнопки нет.
+function needsAudience(c) {
+  return Boolean(me.value.audience_oauth && c.use_direct && !c.sandbox && !c.audience)
 }
 
 function textMatch(values, query) {

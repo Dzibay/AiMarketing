@@ -25,6 +25,8 @@ const props = defineProps({
   variant: { type: String, default: 'yandex' },
   // Куда вернуться после подключения (по умолчанию — обзор кабинета).
   returnTo: { type: String, default: '' },
+  // purpose="audience": логин, которому подключают Яндекс Аудитории.
+  connectionId: { type: Number, default: null },
 })
 
 const busy = ref(false)
@@ -32,7 +34,7 @@ const busy = ref(false)
 async function connect() {
   busy.value = true
   try {
-    const data = await webApi.yandexStart(props.purpose, props.mode)
+    const data = await webApi.yandexStart(props.purpose, props.mode, props.connectionId)
     if (!data?.url) throw new Error('url')
     setOAuthReturn(props.returnTo)
     window.location.href = data.url

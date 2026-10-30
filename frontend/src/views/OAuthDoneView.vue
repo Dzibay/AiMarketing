@@ -6,7 +6,7 @@
         <div class="auth-card">
           <h1>{{ title }}</h1>
           <p class="sub">{{ text }}</p>
-          <RouterLink v-if="failed" class="btn btn--wide btn--accent" to="/login">Ко входу</RouterLink>
+          <RouterLink v-if="failed" class="btn btn--wide btn--accent" :to="back.to">{{ back.label }}</RouterLink>
         </div>
       </div>
     </main>
@@ -38,6 +38,12 @@ const text = computed(() => {
   if (!failed.value) return 'Открываем кабинет…'
   return ERRORS[errorCode.value] || 'Попробуйте подключить Яндекс ещё раз.'
 })
+// Аудитории подключают уже вошедшему — назад к логинам, а не ко входу.
+const back = computed(() =>
+  errorCode.value.startsWith('audience')
+    ? { to: '/cabinet/accounts', label: 'К аккаунтам' }
+    : { to: '/login', label: 'Ко входу' },
+)
 
 onMounted(async () => {
   const code = String(route.query.code || '')

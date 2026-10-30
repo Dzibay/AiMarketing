@@ -15,7 +15,8 @@
       </form>
       <template v-else>
         <strong>{{ group.name }}</strong>
-        <small>{{ onKeywords }} {{ plural(onKeywords, 'фраза', 'фразы', 'фраз') }}</small>
+        <small v-if="onKeywords || !onAudiences">{{ onKeywords }} {{ plural(onKeywords, 'фраза', 'фразы', 'фраз') }}</small>
+        <small v-else>по аудитории, без фраз</small>
         <span class="board-group__tools">
           <button class="ai-check__link" type="button" :disabled="board.disabled.value" @click="startRename">
             Переименовать
@@ -108,6 +109,8 @@
       <button v-if="fresh.trim()" class="btn btn--xs" type="submit" :disabled="board.disabled.value">Добавить</button>
     </form>
 
+    <BoardAudiences v-if="audiences.length" :items="audiences" :group="group.name" :keywords="onKeywords" />
+
     <div v-if="hasAd" class="board-group__ad" :class="{ 'is-both': preview === 'both' }">
       <div class="board-group__lines">
         <BoardLines :items="group.titles" kind="title" :group="group.name" />
@@ -151,12 +154,13 @@
 <script setup>
 /**
  * Группа на доске: фразы (галочки ждущей таблицы, выбор → перенести, изменить, убрать; новая фраза),
- * заголовки и тексты с правкой и предпросмотр объявления на компьютере и телефоне.
+ * аудитории, заголовки и тексты с правкой и предпросмотр объявления на компьютере и телефоне.
  */
 import { computed, inject, nextTick, ref, watch } from 'vue'
 import { askConfirm } from '../../composables/useConfirm'
 import { plural } from '../../utils/format'
 import AdPreview from './AdPreview.vue'
+import BoardAudiences from './BoardAudiences.vue'
 import BoardLines from './BoardLines.vue'
 
 const props = defineProps({
@@ -190,6 +194,8 @@ const nameField = ref(null)
 const others = computed(() => props.names.filter((n) => n !== props.group.name))
 const shown = computed(() => (expanded.value ? props.group.keywords : props.group.keywords.slice(0, KEYWORDS_SHOWN)))
 const onKeywords = computed(() => props.group.keywords.filter(board.isOn).length)
+const audiences = computed(() => props.group.audiences || [])
+const onAudiences = computed(() => audiences.value.filter(board.isOn).length)
 const canRename = computed(() => {
   const value = name.value.trim()
   return !!value && value !== props.group.name && !others.value.includes(value) && !board.disabled.value

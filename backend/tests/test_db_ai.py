@@ -380,9 +380,9 @@ def test_new_campaign_goes_by_stages(db, monkeypatch):
     build = ai_agent.get_chat(user, chat)["build"]
     assert [(st["key"], st["status"]) for st in build["stages"]] == [
         ("goals", "done"), ("analysis", "done"), ("keywords", "done"), ("negatives", "done"),
-        ("ads", "pending"), ("extras", "todo"), ("settings", "todo"),
+        ("audiences", "skipped"), ("ads", "pending"), ("extras", "todo"), ("settings", "todo"),
     ]
-    assert [st["count"] for st in build["stages"][2:5]] == [1, 1, 3]  # минус-фраза из таблицы ключей — своим этапом
+    assert [st["count"] for st in build["stages"][2:6]] == [1, 1, 0, 3]  # минус-фраза из таблицы ключей — своим этапом
     assert [d["text"] for d in build["directions"]] == ["Окна ПВХ"]
     [group] = build["groups"]
     assert group["name"] == "Окна ПВХ" and [(k["text"], k["value"]) for k in group["keywords"]] == [("купить окна пвх", "12 000")]

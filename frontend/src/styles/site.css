@@ -6131,6 +6131,57 @@ button.board-chips__text:disabled {
   flex: 1;
 }
 
+/* Аудитории группы: название с меткой типа, «что внутри» и почему. */
+.board-auds__row {
+  align-items: flex-start;
+}
+
+.board-auds__row > input,
+.board-auds__row > .board-lines__ok,
+.board-auds__row > .board-x {
+  margin-top: 0.15rem;
+}
+
+.board-auds__body {
+  display: grid;
+  flex: 1;
+  gap: 0.15rem;
+  min-width: 0;
+}
+
+.board-auds__name {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem 0.4rem;
+}
+
+.board-auds__name strong {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.board-auds__name .chip {
+  padding: 0.05rem 0.45rem;
+  font-size: 0.7rem;
+}
+
+.board-auds__what,
+.board-auds__why {
+  color: var(--muted);
+  font-size: 0.76rem;
+  overflow-wrap: anywhere;
+}
+
+.board-auds__what {
+  color: var(--ink-2);
+}
+
+.board-auds__reach {
+  margin: 0;
+  font-size: 0.76rem;
+}
+
 .board-checks li {
   display: grid;
   grid-template-columns: 20px minmax(0, 1fr);

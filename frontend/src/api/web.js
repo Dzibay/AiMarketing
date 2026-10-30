@@ -203,9 +203,12 @@ export const webApi = {
   register: (payload) => request('/api/web/register', { method: 'POST', body: JSON.stringify(payload) }),
   login: (payload) => request('/api/web/login', { method: 'POST', body: JSON.stringify(payload) }),
   me: () => request('/api/web/me'),
-  yandexStart: (purpose = 'login', mode = '') =>
+  // purpose=audience — второе приложение (Яндекс Аудитории) логину connectionId.
+  yandexStart: (purpose = 'login', mode = '', connectionId = null) =>
     request(
-      `/api/web/yandex/start?purpose=${encodeURIComponent(purpose)}${mode ? `&mode=${encodeURIComponent(mode)}` : ''}`,
+      `/api/web/yandex/start?purpose=${encodeURIComponent(purpose)}${mode ? `&mode=${encodeURIComponent(mode)}` : ''}${
+        connectionId ? `&connection_id=${encodeURIComponent(connectionId)}` : ''
+      }`,
     ),
   syncConnection: (id, onProgress) => runJob(`/api/web/connections/${id}/sync`, undefined, onProgress),
   patchConnection: (id, payload) =>
@@ -382,6 +385,8 @@ export const ERRORS = {
   blocked: 'Доступ заблокирован.',
   unauthorized: 'Нужно войти заново.',
   'yandex-config': 'Подключение Яндекса ещё не настроено на сервере.',
+  'audience-config': 'Яндекс Аудитории не подключены на сервере.',
+  'audience-login': 'Войдите тем же логином Яндекса, что и у подключения, — Аудитории привязываются к нему.',
   'base-url': 'Не задан адрес сайта для OAuth.',
   yandex: 'Яндекс не подтвердил доступ. Попробуйте снова.',
   state: 'Сессия или ссылка устарела. Попробуйте ещё раз.',

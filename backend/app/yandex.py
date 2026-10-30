@@ -14,7 +14,7 @@ from app.config import settings
 from app.db import pool
 from app.settings_store import public_base_url
 from app.token_crypto import decrypt_token, encrypt_token
-from app.users import UsersError, upsert_yandex_user
+from app.users import UsersError, get_user, upsert_yandex_user
 
 log = logging.getLogger("app.yandex")
 
@@ -25,6 +25,8 @@ METRIKA_COUNTERS = "https://api-metrika.yandex.net/management/v1/counters"
 
 # Режим входа «подключить»: что берём из этого логина.
 OAUTH_MODES = ("", "metrika", "direct", "sandbox")
+# login / connect — основное приложение (вход, Метрика, Директ); audience — второе, Яндекс Аудитории.
+OAUTH_PURPOSES = ("login", "connect", "audience")
 
 # Коды API Директа, которые повтор не исправит: заявка на доступ, права, логин без Директа.
 DIRECT_DENIED_CODES = frozenset({54, 58, 513, 3000, 3001})
@@ -106,6 +108,24 @@ def yandex_configured() -> bool:
     return bool(settings.yandex_client_id and settings.yandex_client_secret and settings.token_encrypt_secret)
 
 
+def audience_configured() -> bool:
+    """Задано второе приложение — Яндекс Аудитории (новые LAL). Нет — функции просто нет."""
+    return bool(
+        settings.yandex_audience_client_id and settings.yandex_audience_client_secret and settings.token_encrypt_secret
+    )
+
+
+def _client(audience: bool = False) -> tuple[str, str]:
+    """(client_id, client_secret) основного приложения или приложения Аудиторий."""
+    if audience:
+        if not audience_configured():
+            raise YandexError("audience-config")
+        return settings.yandex_audience_client_id, settings.yandex_audience_client_secret
+    if not yandex_configured():
+        raise YandexError("yandex-config")
+    return settings.yandex_client_id, settings.yandex_client_secret
+
+
 def callback_url() -> str:
     base = public_base_url()
     if not base:
@@ -118,24 +138,36 @@ def _purge_expired_states() -> None:
         conn.execute("DELETE FROM oauth_states WHERE expires_at < NOW()")
 
 
-def create_oauth_state(*, purpose: str, user_id: int | None = None, mode: str = "") -> str:
-    if purpose not in ("login", "connect"):
+def create_oauth_state(
+    *, purpose: str, user_id: int | None = None, mode: str = "", connection_id: int | None = None
+) -> str:
+    """purpose: login / connect — основное приложение; audience — Аудитории логина connection_id."""
+    if purpose not in OAUTH_PURPOSES:
         raise YandexError("purpose")
-    if mode not in OAUTH_MODES:
+    if mode not in OAUTH_MODES or (mode and purpose == "audience"):
         raise YandexError("mode")
     if mode == "sandbox":
         raise YandexError("sandbox", direct_api.SANDBOX_CLOSED)
-    if purpose == "connect" and user_id is None:
+    if purpose in ("connect", "audience") and user_id is None:
         raise YandexError("unauthorized")
+    if purpose == "audience" and connection_id is None:
+        raise YandexError("not-found")
     _purge_expired_states()
     state = secrets.token_urlsafe(24)
     with pool.connection() as conn:
         conn.execute(
             """
-            INSERT INTO oauth_states (state, user_id, purpose, mode, expires_at)
-            VALUES (%s, %s, %s, %s, %s)
+            INSERT INTO oauth_states (state, user_id, purpose, mode, connection_id, expires_at)
+            VALUES (%s, %s, %s, %s, %s, %s)
             """,
-            (state, user_id, purpose, mode, datetime.now(timezone.utc) + timedelta(minutes=15)),
+            (
+                state,
+                user_id,
+                purpose,
+                mode,
+                connection_id if purpose == "audience" else None,
+                datetime.now(timezone.utc) + timedelta(minutes=15),
+            ),
         )
     return state
 
@@ -148,7 +180,7 @@ def consume_oauth_state(state: str) -> dict:
             """
             DELETE FROM oauth_states
             WHERE state = %s AND expires_at >= NOW()
-            RETURNING state, user_id, purpose, mode
+            RETURNING state, user_id, purpose, mode, connection_id
             """,
             (state,),
         ).fetchone()
@@ -157,35 +189,60 @@ def consume_oauth_state(state: str) -> dict:
     return row
 
 
-def build_authorize_url(state: str) -> str:
-    if not yandex_configured():
-        raise YandexError("yandex-config")
+def build_authorize_url(state: str, *, audience: bool = False, login_hint: str = "") -> str:
+    client_id, _secret = _client(audience)
     params = {
         "response_type": "code",
-        "client_id": settings.yandex_client_id,
+        "client_id": client_id,
         "redirect_uri": callback_url(),
-        "scope": settings.yandex_oauth_scopes,
+        "scope": settings.yandex_audience_scopes if audience else settings.yandex_oauth_scopes,
         "state": state,
         "force_confirm": "yes",
     }
+    if login_hint:
+        params["login_hint"] = login_hint
     return f"{YANDEX_AUTHORIZE}?{urlencode(params)}"
 
 
-def start_oauth(*, purpose: str, user_id: int | None = None, mode: str = "") -> str:
+def start_oauth(
+    *, purpose: str, user_id: int | None = None, mode: str = "", connection_id: int | None = None
+) -> str:
+    if purpose == "audience":
+        _client(audience=True)
+        if user_id is None:
+            raise YandexError("unauthorized")
+        row = _audience_connection(user_id, connection_id)
+        state = create_oauth_state(purpose=purpose, user_id=user_id, connection_id=row["id"])
+        return build_authorize_url(state, audience=True, login_hint=row["yandex_login"] or "")
     state = create_oauth_state(purpose=purpose, user_id=user_id, mode=mode)
     return build_authorize_url(state)
 
 
-def exchange_code(code: str) -> dict:
+def _audience_connection(user_id: int, connection_id: int | None) -> dict:
+    """Логин, которому подключают Аудитории: свой и не песочница."""
+    if connection_id is None:
+        raise YandexError("not-found")
+    with pool.connection() as conn:
+        row = conn.execute(
+            "SELECT id, yandex_uid, yandex_login, sandbox FROM yandex_connections WHERE id = %s AND user_id = %s",
+            (connection_id, user_id),
+        ).fetchone()
+    if row is None:
+        raise YandexError("not-found")
+    if row["sandbox"]:
+        raise YandexError("sandbox", "У песочницы Директа нет Яндекс Аудиторий")
+    return row
+
+
+def exchange_code(code: str, *, audience: bool = False) -> dict:
     if not code:
         raise YandexError("code")
-    if not yandex_configured():
-        raise YandexError("yandex-config")
+    client_id, client_secret = _client(audience)
     data = {
         "grant_type": "authorization_code",
         "code": code,
-        "client_id": settings.yandex_client_id,
-        "client_secret": settings.yandex_client_secret,
+        "client_id": client_id,
+        "client_secret": client_secret,
     }
     try:
         with httpx.Client(timeout=30.0) as client:
@@ -200,16 +257,15 @@ def exchange_code(code: str) -> dict:
     return payload
 
 
-def refresh_access_token(refresh_token: str) -> dict:
+def refresh_access_token(refresh_token: str, *, audience: bool = False) -> dict:
     if not refresh_token:
         raise YandexError("token-expired")
-    if not yandex_configured():
-        raise YandexError("yandex-config")
+    client_id, client_secret = _client(audience)
     data = {
         "grant_type": "refresh_token",
         "refresh_token": refresh_token,
-        "client_id": settings.yandex_client_id,
-        "client_secret": settings.yandex_client_secret,
+        "client_id": client_id,
+        "client_secret": client_secret,
     }
     try:
         with httpx.Client(timeout=30.0) as client:
@@ -407,6 +463,65 @@ def get_connection_access_token(connection_id: int, user_id: int | None = None) 
     return direct_api.AccessToken(payload["access_token"], sandbox)
 
 
+def save_audience_token(connection_id: int, token_payload: dict) -> None:
+    """Токен второго приложения — у того же подключения; повторный вход заменяет его."""
+    refresh = token_payload.get("refresh_token") or ""
+    scopes = token_payload.get("scope") or settings.yandex_audience_scopes
+    with pool.connection() as conn:
+        conn.execute(
+            """
+            UPDATE yandex_connections
+            SET audience_token_enc = %s,
+                audience_refresh_enc = CASE WHEN %s <> '' THEN %s ELSE audience_refresh_enc END,
+                audience_expires_at = %s,
+                audience_scopes = %s,
+                updated_at = NOW()
+            WHERE id = %s
+            """,
+            (
+                encrypt_token(token_payload["access_token"]),
+                refresh,
+                encrypt_token(refresh) if refresh else "",
+                _expires_at(token_payload),
+                scopes,
+                connection_id,
+            ),
+        )
+
+
+def get_audience_access_token(connection_id: int, user_id: int | None = None) -> str:
+    """Валидный токен Яндекс Аудиторий логина; нет или отозван — YandexError audience-scope."""
+    if not audience_configured():
+        raise YandexError("audience-config")
+    sql = "SELECT audience_token_enc, audience_refresh_enc, audience_expires_at FROM yandex_connections WHERE id = %s"
+    params: tuple = (connection_id,)
+    if user_id is not None:
+        sql += " AND user_id = %s"
+        params = (connection_id, user_id)
+    with pool.connection() as conn:
+        row = conn.execute(sql, params).fetchone()
+    if row is None:
+        raise YandexError("not-found")
+    if not row["audience_token_enc"]:
+        raise YandexError("audience-scope")
+    expires = row.get("audience_expires_at")
+    if expires is None:
+        return decrypt_token(row["audience_token_enc"])
+    if expires.tzinfo is None:
+        expires = expires.replace(tzinfo=timezone.utc)
+    if expires > datetime.now(timezone.utc) + timedelta(minutes=5):
+        return decrypt_token(row["audience_token_enc"])
+    refresh = decrypt_token(row["audience_refresh_enc"]) if row.get("audience_refresh_enc") else ""
+    try:
+        payload = refresh_access_token(refresh, audience=True)
+    except YandexError as exc:
+        if exc.code == "token-expired":
+            raise YandexError("audience-scope") from exc
+        raise
+    save_audience_token(connection_id, payload)
+    return payload["access_token"]
+
+
 def set_connection_sync_status(
     connection_id: int,
     *,
@@ -433,7 +548,7 @@ def list_connections(user_id: int) -> list[dict]:
             """
             SELECT c.id, c.yandex_uid, c.yandex_login, c.display_name, c.scopes, c.expires_at,
                    c.last_sync_at, c.last_sync_status, c.last_sync_error, c.created_at, c.updated_at,
-                   c.use_metrika, c.use_direct, c.sandbox,
+                   c.use_metrika, c.use_direct, c.sandbox, c.audience_token_enc <> '' AS audience,
                    (SELECT COUNT(*) FROM metrika_counters m WHERE m.connection_id = c.id) AS counters,
                    (SELECT COUNT(*) FROM direct_accounts d WHERE d.connection_id = c.id) AS accounts,
                    (SELECT COUNT(*) FROM direct_campaigns dc
@@ -455,6 +570,7 @@ def list_connections(user_id: int) -> list[dict]:
             "use_metrika": row["use_metrika"],
             "use_direct": row["use_direct"],
             "sandbox": row["sandbox"],
+            "audience": bool(row["audience"]),
             "counters": int(row["counters"] or 0),
             "accounts": int(row["accounts"] or 0),
             "campaigns": int(row["campaigns"] or 0),
@@ -888,8 +1004,28 @@ def set_direct_enabled(user_id: int, item_id: int, enabled: bool) -> dict:
     return _direct_out(row)
 
 
-def complete_oauth(*, code: str, state: str) -> tuple[dict, dict]:
+def _complete_audience(oauth_state: dict, code: str) -> dict:
+    """Аудитории подключены тому логину, у которого нажали кнопку: другой логин — отказ."""
+    user_id = oauth_state.get("user_id")
+    if user_id is None:
+        raise YandexError("unauthorized")
+    row = _audience_connection(user_id, oauth_state.get("connection_id"))
+    token_payload = exchange_code(code, audience=True)
+    # login.yandex.ru/info отдаёт id и логин с токеном любого сервиса.
+    profile = fetch_yandex_profile(token_payload["access_token"])
+    if profile["uid"] != str(row["yandex_uid"]):
+        raise YandexError("audience-login")
+    save_audience_token(row["id"], token_payload)
+    user = get_user(user_id)
+    if user is None:
+        raise YandexError("unauthorized")
+    return user
+
+
+def complete_oauth(*, code: str, state: str) -> tuple[dict, dict | None]:
     oauth_state = consume_oauth_state(state)
+    if oauth_state["purpose"] == "audience":
+        return _complete_audience(oauth_state, code), None
     token_payload = exchange_code(code)
     access = token_payload["access_token"]
     profile = fetch_yandex_profile(access)

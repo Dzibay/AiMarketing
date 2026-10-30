@@ -89,7 +89,9 @@ from app.web_auth import make_session, require_web_user, verify_session
 from app.workspaces import ensure_workspaces, list_workspaces
 from app.yandex import (
     OAUTH_MODES,
+    OAUTH_PURPOSES,
     YandexError,
+    audience_configured,
     get_connection_access_token,
     complete_oauth,
     delete_connection,
@@ -379,6 +381,7 @@ def _frontend_oauth_redirect(*, code: str = "", error: str = "") -> RedirectResp
 def web_config() -> dict:
     return {
         "yandex_oauth": yandex_configured(),
+        "audience_oauth": audience_configured(),
         "privacy_url": privacy_url() or "/privacy",
         "consent_url": consent_url() or "/consent",
         "offer_url": offer_url() or "/offer",
@@ -449,6 +452,8 @@ def web_me(user_id: int = Depends(require_web_user)) -> dict:
         "metrika": list_metrika(user_id),
         "direct": list_direct(user_id),
         "workspaces": list_workspaces(user_id),
+        # Второе приложение (Яндекс Аудитории) задано — в «Аккаунтах» есть «Подключить Аудитории».
+        "audience_oauth": audience_configured(),
     }
 
 
@@ -456,23 +461,26 @@ def web_me(user_id: int = Depends(require_web_user)) -> dict:
 def web_yandex_start(
     purpose: str = "login",
     mode: str = "",
+    connection_id: int | None = None,
     authorization: str = Header(default=""),
 ) -> dict:
-    """mode: "" — Метрика и Директ, "metrika" / "direct" — одна роль, "sandbox" — песочница Директа."""
+    """mode: "" — Метрика и Директ, "metrika" / "direct" — одна роль, "sandbox" — песочница Директа.
+
+    purpose=audience — второе приложение: Яндекс Аудитории логину connection_id."""
     purpose = (purpose or "login").strip().lower()
-    if purpose not in ("login", "connect"):
+    if purpose not in OAUTH_PURPOSES:
         raise HTTPException(status_code=400, detail="purpose")
     mode = (mode or "").strip().lower()
     if mode not in OAUTH_MODES or (mode and purpose != "connect"):
         raise HTTPException(status_code=400, detail="mode")
     user_id: int | None = None
-    if purpose == "connect":
+    if purpose in ("connect", "audience"):
         scheme, _, token = authorization.partition(" ")
         user_id = verify_session(token) if scheme.lower() == "bearer" else None
         if user_id is None:
             raise HTTPException(status_code=401, detail="unauthorized")
     try:
-        url = start_oauth(purpose=purpose, user_id=user_id, mode=mode)
+        url = start_oauth(purpose=purpose, user_id=user_id, mode=mode, connection_id=connection_id)
     except YandexError as exc:
         raise _http(exc) from exc
     return {"url": url}

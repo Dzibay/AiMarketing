@@ -12,7 +12,7 @@ from urllib.parse import urlsplit
 import httpx
 from psycopg.types.json import Jsonb
 
-from app import direct_api, links
+from app import audiences, direct_api, links
 from app.clock import today_msk
 from app.db import pool
 from app.direct_sync import (
@@ -540,10 +540,11 @@ def create_campaign(user_id: int, *, account_id: int, spec: dict, workspace_id: 
     Новая кампания в выбранном кабинете (черновик). spec — см. campaign_options():
     type, name, start_date, end_date, strategy{search, network, параметры}, daily_budget_rub,
     negative_keywords, excluded_sites, schedule, settings{}, attribution_model, counter_ids,
-    priority_goals[{goal_id, value_rub}], tracking_params и необязательная первая группа
-    group{name, region_ids, keywords, bid_rub, ad{title, title2, text, href}}.
+    priority_goals[{goal_id, value_rub}], tracking_params и группы
+    groups[{name, region_ids, keywords, bid_rub, ad{title, title2, text, href}, audiences[]}]
+    (аудитории — см. app.audiences; группа может быть только по аудитории, без фраз).
     """
-    from app.workspaces import attach_campaign, require_workspace
+    from app.workspaces import attach_campaign, require_workspace, workspace_goals
 
     ctype = str(spec.get("type") or "TEXT_CAMPAIGN").upper()
     if ctype not in CAMPAIGN_TYPES:
@@ -608,12 +609,23 @@ def create_campaign(user_id: int, *, account_id: int, spec: dict, workspace_id: 
         block["TrackingParams"] = tracking[:1024]
     body[_TYPE_BLOCK[ctype]] = block
 
+    groups = spec_groups(spec)
+    flat = strategy_from_api(bidding)
     token = get_connection_access_token(account["connection_id"], user_id)
+    # Аудитории проверяем до создания: неверная цель или условие не должны оставить полкампании.
+    allowed = {int(g["goal_id"]) for g in workspace_goals(user_id, int(ws["id"]))} if ws else None
+    audience_ctx = audiences.prepare(
+        token,
+        account["client_login"],
+        groups,
+        network=flat["network"] != "SERVING_OFF",
+        allowed_goals=allowed or None,
+        rights=audiences.account_rights(user_id, account_id),
+    )
     result = _call_campaigns(token, account["client_login"], "add", {"Campaigns": [body]})
     campaign_id = _added_id(result)
     warnings = [text for _i, text in direct_api.item_warnings(result, "AddResults")]
 
-    flat = strategy_from_api(bidding)
     row = insert_campaign_local(
         user_id,
         account_id,
@@ -636,11 +648,21 @@ def create_campaign(user_id: int, *, account_id: int, spec: dict, workspace_id: 
     _update_local(row["id"], {"tracking_params": block.get("TrackingParams") or ""})
 
     groups_out: list[dict] = []
-    for index, group in enumerate(spec_groups(spec)):
+    for index, group in enumerate(groups):
         try:
             # Группы, фразы и объявления — часть создания кампании, отдельных записей в журнале не нужно.
             with journal_quiet():
-                group_out = _create_group(user_id, row["id"], group, manual=manual, n=index + 1)
+                group_out = _create_group(
+                    user_id,
+                    row["id"],
+                    group,
+                    manual=manual,
+                    n=index + 1,
+                    audiences_ctx=audience_ctx,
+                    audiences_list=audience_ctx["groups"][index],
+                    token=token,
+                    client_login=account["client_login"],
+                )
             warnings.extend(group_out.pop("warnings", []))
             groups_out.append(group_out)
         except YandexError as exc:
@@ -694,7 +716,18 @@ def spec_groups(spec: dict) -> list[dict]:
     return raw
 
 
-def _create_group(user_id: int, campaign_row_id: int, group: dict, *, manual: bool, n: int = 1) -> dict:
+def _create_group(
+    user_id: int,
+    campaign_row_id: int,
+    group: dict,
+    *,
+    manual: bool,
+    n: int = 1,
+    audiences_ctx: dict | None = None,
+    audiences_list: list[dict] | None = None,
+    token=None,
+    client_login: str | None = None,
+) -> dict:
     from app.adgroups import create_adgroup
     from app.ads import create_text_ad
     from app.keywords import create_keywords
@@ -723,6 +756,19 @@ def _create_group(user_id: int, campaign_row_id: int, group: dict, *, manual: bo
                 warnings.append(f"Не добавлено фраз: {res['errors']}{reason}")
         except YandexError as exc:
             warnings.append(f"Фразы не добавлены: {exc.message or exc.code}")
+    if audiences_list and audiences_ctx is not None:
+        res = audiences.attach(
+            token,
+            client_login,
+            int(adgroup["adgroup_id"]),
+            audiences_list,
+            audiences_ctx,
+            bid_rub=group.get("bid_rub") if manual else None,
+        )
+        out["audiences"] = res["attached"]
+        warnings.extend(res["warnings"])
+        if not out["keywords"] and not res["attached"]:
+            warnings.append(f"Группа «{adgroup['name']}» осталась без фраз и аудиторий — показов не будет, пока их не добавить")
     ad = dict(group.get("ad") or {})
     template = links.campaign_template(user_id, campaign_row_id)
     if not ad.get("href") and template:

@@ -33,8 +33,15 @@ class Settings(BaseSettings):
 
     yandex_client_id: str = ""
     yandex_client_secret: str = ""
-    # Скоупы одним запросом: вход + Метрика + Директ.
+    # Скоупы одним запросом: вход + Метрика + Директ. Каждое право должно быть отмечено в приложении на
+    # oauth.yandex.ru, иначе Яндекс откажет на странице входа. Приложение для авторизации держит не больше
+    # трёх групп прав (login, metrika, direct уже три), поэтому Аудитории — отдельным приложением ниже.
     yandex_oauth_scopes: str = "login:info login:email metrika:read direct:api"
+    # Второе приложение — только Яндекс Аудитории (новые LAL из ИИ-чата). Не задано — новых LAL нет,
+    # остальное работает как обычно.
+    yandex_audience_client_id: str = ""
+    yandex_audience_client_secret: str = ""
+    yandex_audience_scopes: str = "audience:read audience:write"
 
     # Fernet-ключ или любая длинная строка — из неё выводится ключ.
     token_encrypt_secret: str = ""
