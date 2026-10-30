@@ -97,6 +97,7 @@ const props = defineProps({
 const emit = defineEmits(['update:off'])
 
 const KINDS = {
+  goal: 'цель',
   direction: 'направление',
   keyword: 'фраза',
   negative: 'минус-фраза',

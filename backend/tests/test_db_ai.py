@@ -336,17 +336,28 @@ def test_new_campaign_goes_by_stages(db, monkeypatch):
     fake, out = _start(
         user, chat, "Сделай новую кампанию на окна", monkeypatch,
         _call("create_campaign", spec(["купить окна пвх"], ["Окна от завода"])),
-        _call("propose_items", {"stage": "analysis", "rows": [{"cells": ["Окна ПВХ", "12 000"]}, {"cells": ["Двери", "5 000"]}]}, "c2"),
+        _call("propose_items", {"stage": "goals", "rows": [
+            {"cells": ["Что рекламируем", "Окна ПВХ"]}, {"cells": ["Гео", "Москва"]},
+        ]}, "c2"),
     )
     error = json.loads(fake.calls[1][-1]["content"])["error"]
-    assert "Ещё не согласовано: Анализ, Ключи и группы, Заголовки и тексты, Настройки" in error
+    assert "Ещё не согласовано: Цели кампании, Анализ, Ключи и группы, Заголовки и тексты, Настройки" in error
     assert out["status"] == "waiting"
     table = _pending(user, chat, "propose_items")
-    assert table["kind"] == "ask" and table["summary"] == "Анализ" and len(table["args"]["rows"]) == 2
+    assert table["kind"] == "ask" and table["summary"] == "Цели кампании" and len(table["args"]["rows"]) == 2
+    assert table["args"]["rows"][0]["kind"] == "goal"
     with pytest.raises(YandexError):  # таблица решается только своей кнопкой
         ai_agent.decide_action(user, table["id"], approve=True)
+    build = ai_agent.get_chat(user, chat)["build"]
+    assert build["stages"][0] == {"key": "goals", "label": "Цели", "status": "pending", "count": 2, "action_id": table["id"]}
+    assert [g["pending"] for g in build["goals"]] == [True, True] and build["groups"] == []
 
-    # Анализ: «Двери» сняты галочкой.
+    # Цели согласованы, анализ: «Двери» сняты галочкой.
+    ai_agent.decide_items(user, table["id"], rows=[1, 2])
+    _turn(user, chat, monkeypatch, _call("propose_items", {"stage": "analysis", "rows": [
+        {"cells": ["Окна ПВХ", "12 000"]}, {"cells": ["Двери", "5 000"]},
+    ]}, "c2a"))
+    table = _pending(user, chat, "propose_items")
     decided = ai_agent.decide_items(user, table["id"], rows=[1])
     assert decided["action"]["result"]["removed_rows"] == [2] and decided["job"]["kind"] == "ai_chat"
     fake, out = _turn(user, chat, monkeypatch, _call("propose_items", {"stage": "keywords", "rows": [
@@ -362,7 +373,23 @@ def test_new_campaign_goes_by_stages(db, monkeypatch):
         {"section": "Окна ПВХ", "kind": "title", "cells": ["Окна от завода"]},
         {"section": "Окна ПВХ", "kind": "title", "cells": ["Окна за 1 день"]},
         {"section": "Окна ПВХ", "kind": "text", "cells": ["Замер в день заказа"]},
+        {"section": "Окна ПВХ", "kind": "text", "cells": ["Скидка 10%"], "checked": False},
     ]}, "c4"))
+
+    # Панель сборки: согласованное по этапам, предложенные заголовки — пока со своей пометкой.
+    build = ai_agent.get_chat(user, chat)["build"]
+    assert [(st["key"], st["status"]) for st in build["stages"]] == [
+        ("goals", "done"), ("analysis", "done"), ("keywords", "done"), ("negatives", "done"),
+        ("ads", "pending"), ("extras", "todo"), ("settings", "todo"),
+    ]
+    assert [st["count"] for st in build["stages"][2:5]] == [1, 1, 3]  # минус-фраза из таблицы ключей — своим этапом
+    assert [d["text"] for d in build["directions"]] == ["Окна ПВХ"]
+    [group] = build["groups"]
+    assert group["name"] == "Окна ПВХ" and [(k["text"], k["value"]) for k in group["keywords"]] == [("купить окна пвх", "12 000")]
+    assert [(t["text"], t["pending"]) for t in group["titles"]] == [("Окна от завода", True), ("Окна за 1 день", True)]
+    assert [t["text"] for t in group["texts"]] == ["Замер в день заказа"]  # снятое галочкой не показываем
+    assert [n["text"] for n in build["negatives"]] == ["бесплатно"] and build["draft"] is None
+
     ai_agent.decide_items(user, _pending(user, chat, "propose_items")["id"], rows=[1, 2, 3])
     _turn(user, chat, monkeypatch, _call("propose_items", {"stage": "settings", "columns": ["Настройка", "Значение"], "rows": [
         {"kind": "setting", "cells": ["Бюджет", "500 ₽/день"]},
@@ -407,6 +434,14 @@ def test_new_campaign_goes_by_stages(db, monkeypatch):
     done = [a for a in ai_agent.get_chat(user, chat)["actions"] if a["id"] == card["id"]][0]
     assert done["status"] == "done" and [r["text"] for r in done["removed"]] == ["окна в рассрочку", "Окна за 1 день"]
     assert "1 фраза" in done["summary"]
+
+    # После создания панель показывает то, что ушло в Директ, без снятого в карточке.
+    build = ai_agent.get_chat(user, chat)["build"]
+    assert build["draft"]["status"] == "done" and build["draft"]["campaign_row_id"] == 99 and build["draft"]["name"] == "Окна"
+    [group] = build["groups"]
+    assert [(k["text"], k["value"]) for k in group["keywords"]] == [("купить окна пвх", "12 000")]
+    assert [t["text"] for t in group["titles"]] == ["Окна от завода"] and group["href"] == "https://shop.ru"
+    assert all(st["status"] in ("done", "skipped") for st in build["stages"])
 
     # В созданную здесь кампанию — тоже только согласованное.
     with db.connection() as conn:
@@ -471,8 +506,8 @@ def test_first_campaign_in_empty_workspace(db, monkeypatch):
         _call("list_campaigns", {}),
         _call("get_signals", {}, "c2"),
         _call("get_wordstat", {"phrases": ["купить диван"], "region_ids": [213]}, "c3"),
-        _call("propose_items", {"stage": "analysis", "rows": [
-            {"cells": ["Диваны прямые", "—"]}, {"cells": ["Угловые диваны", "—"]},
+        _call("propose_items", {"stage": "goals", "rows": [
+            {"cells": ["Что рекламируем", "Прямые и угловые диваны"]}, {"cells": ["Бюджет", "3500 ₽/неделя"]},
         ]}, "c4"),
     )
     prompt = fake.calls[0][0]["content"]
@@ -487,6 +522,7 @@ def test_first_campaign_in_empty_workspace(db, monkeypatch):
     # Дальше — те же согласуемые этапы, что и для любой новой кампании.
     ai_agent.decide_items(user, _pending(user, chat, "propose_items")["id"], rows=[1, 2])
     stages = [
+        ("analysis", [{"cells": ["Диваны прямые", "—"]}, {"cells": ["Угловые диваны", "—"]}]),
         ("keywords", [
             {"section": "Прямые", "cells": ["купить диван", "—"]},
             {"section": "Прямые", "cells": ["диван прямой цена", "—"]},

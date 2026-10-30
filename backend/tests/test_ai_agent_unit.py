@@ -440,3 +440,50 @@ def test_keywords_card_counts_only_new(monkeypatch):
     )
     args = {"adgroup_row_id": 5, "phrases": ["Окна ПВХ"], "bid_rub": 12}
     assert ai_agent._p_add_keywords(GroupContext(), args).summary == "Фразы в группу «Окна»: +0 — фраза уже есть"
+
+
+def _table(action_id, stage, rows, status="done", approved=None):
+    rows = [{"n": i + 1, "section": "", "kind": "", "checked": True, **r} for i, r in enumerate(rows)]
+    result = {"approved_rows": approved if approved is not None else [r["n"] for r in rows]} if status == "done" else None
+    return {"id": action_id, "tool": "propose_items", "status": status, "args": {"stage": stage, "rows": rows}, "result": result}
+
+
+def test_campaign_build_only_for_new_campaign_and_latest_one():
+    chat_only = [{"id": 1, "tool": "ask_questions", "status": "done", "args": {}, "result": {}}]
+    assert ai_agent.campaign_build(chat_only) is None
+    assert ai_agent.campaign_build([_table(1, "ads", [{"kind": "title", "cells": ["Окна"]}])]) is None
+
+    first = [
+        _table(1, "goals", [{"cells": ["Что", "Окна"]}]),
+        {"id": 2, "tool": "create_campaign", "status": "done", "summary": "Окна",
+         "args": {"spec": {"name": "Окна", "groups": []}}, "result": {"campaign": {"id": 5}}},
+    ]
+    second = [
+        _table(3, "goals", [{"cells": ["Что", "Двери"]}], status="rejected"),
+        _table(4, "goals", [{"cells": ["Что", "Двери"]}, {"cells": ["Гео", "Москва"], "checked": False}], status="pending"),
+    ]
+    assert ai_agent.campaign_build(first)["draft"]["campaign_row_id"] == 5
+    build = ai_agent.campaign_build(first + second)
+    assert build["draft"] is None and build["stages"][0]["status"] == "pending" and build["stages"][0]["action_id"] == 4
+    assert [(g["text"], g["value"], g["pending"]) for g in build["goals"]] == [("Что", "Двери", True)]
+    assert {st["status"] for st in build["stages"][1:]} == {"todo"}
+
+
+def test_campaign_build_groups_by_section():
+    build = ai_agent.campaign_build([
+        _table(1, "analysis", [{"cells": ["Окна", "12 000"]}]),
+        _table(2, "keywords", [
+            {"section": "Окна", "cells": ["купить окна", "9 000", "основная"]},
+            {"section": "Окна", "cells": ["окна дешево", "900"]},
+            {"section": "", "kind": "negative", "cells": ["бесплатно"]},
+        ], approved=[1, 3]),
+        _table(3, "keywords", [{"section": "Окна", "cells": ["купить окна", "9 000"]}], status="pending"),
+        _table(4, "ads", [{"section": "Окна", "kind": "title", "cells": ["Окна от завода"]}]),
+    ])
+    [group] = build["groups"]
+    assert [(k["text"], k["note"]) for k in group["keywords"]] == [("купить окна", "основная")]  # без повтора
+    assert [t["text"] for t in group["titles"]] == ["Окна от завода"] and group["texts"] == []
+    assert [n["text"] for n in build["negatives"]] == ["бесплатно"]
+    assert [(st["key"], st["status"]) for st in build["stages"][:4]] == [
+        ("goals", "todo"), ("analysis", "done"), ("keywords", "pending"), ("negatives", "done"),
+    ]

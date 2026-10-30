@@ -227,9 +227,9 @@ def test_create_campaign_needs_stages(approvals):
     approvals.rows = APPROVED
     with pytest.raises(YandexError) as err:
         ai_agent._p_create_campaign(FakeContext(), {"account_id": 3, "spec": _spec()})
-    assert "Анализ" in err.value.message and "propose_items" in err.value.message
+    assert "Цели кампании, Анализ" in err.value.message and "propose_items" in err.value.message
 
-    approvals.stages = {"analysis", "keywords", "ads", "settings"}
+    approvals.stages = {"goals", "analysis", "keywords", "ads", "settings"}
     plan = ai_agent._p_create_campaign(FakeContext(), {"account_id": 3, "spec": _spec()})
     assert plan.summary == (
         "Создать кампанию «Окна — поиск» в кабинете acc-a (стратегия HIGHEST_POSITION, бюджет 500 ₽/день, "
@@ -238,7 +238,7 @@ def test_create_campaign_needs_stages(approvals):
 
 
 def test_create_campaign_only_approved_rows(approvals):
-    approvals.stages = {"analysis", "keywords", "ads", "settings"}
+    approvals.stages = {"goals", "analysis", "keywords", "ads", "settings"}
     approvals.rows = [r for r in APPROVED if r != "Окна за 1 день"]
     with pytest.raises(YandexError) as err:
         ai_agent._p_create_campaign(FakeContext(), {"account_id": 3, "spec": _spec()})
@@ -264,14 +264,14 @@ def test_create_campaign_without_groups_needs_no_stages(approvals):
     ],
 )
 def test_create_campaign_refuses_bad_groups(approvals, groups, text):
-    approvals.stages = {"analysis", "keywords", "ads", "settings"}
+    approvals.stages = {"goals", "analysis", "keywords", "ads", "settings"}
     with pytest.raises(YandexError) as err:
         ai_agent._p_create_campaign(FakeContext(), {"account_id": 3, "spec": _spec(groups=groups)})
     assert text in err.value.message
 
 
 def test_create_campaign_href_from_template(approvals):
-    approvals.stages = {"analysis", "ads", "settings"}
+    approvals.stages = {"goals", "analysis", "ads", "settings"}
     approvals.rows = ["З", "Т"]
     ws = {"url_template": "https://okna.ru/?ref=direct"}
     spec = _spec(negative_keywords=[], groups=[{"name": "А", "ad": {"titles": ["З"], "texts": ["Т"]}}])

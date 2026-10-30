@@ -976,12 +976,13 @@ def _x_add_negatives(ctx: Context, args: dict) -> dict:
 # --- Новая кампания по этапам ------------------------------------------------------------------
 #
 # Новую кампанию модель собирает по этапам, и каждый маркетолог согласует таблицей propose_items:
-# анализ → ключи и группы → заголовки и тексты → настройки. create_campaign с группами не пройдёт,
-# пока этапы не согласованы, а фразы, минус-фразы, заголовки и тексты в ней — только из согласованных
-# строк или из слов самого маркетолога. То же для фраз и объявлений, которые потом добавляются в
-# кампанию, созданную в этом чате.
+# цели → анализ → ключи и группы → заголовки и тексты → настройки. create_campaign с группами не
+# пройдёт, пока этапы не согласованы, а фразы, минус-фразы, заголовки и тексты в ней — только из
+# согласованных строк или из слов самого маркетолога. То же для фраз и объявлений, которые потом
+# добавляются в кампанию, созданную в этом чате.
 
 ITEM_STAGES = {
+    "goals": "Цели кампании",
     "analysis": "Анализ",
     "keywords": "Ключи и группы",
     "negatives": "Минус-фразы",
@@ -990,8 +991,15 @@ ITEM_STAGES = {
     "settings": "Настройки",
     "other": "На согласование",
 }
-ITEM_KINDS = ("direction", "keyword", "negative", "title", "text", "extra", "setting", "other")
-_STAGE_KINDS = {"analysis": "direction", "keywords": "keyword", "negatives": "negative", "extras": "extra", "settings": "setting"}
+ITEM_KINDS = ("goal", "direction", "keyword", "negative", "title", "text", "extra", "setting", "other")
+_STAGE_KINDS = {
+    "goals": "goal",
+    "analysis": "direction",
+    "keywords": "keyword",
+    "negatives": "negative",
+    "extras": "extra",
+    "settings": "setting",
+}
 _CONTENT_WORDS = {"keyword": "фразы", "negative": "минус-фразы", "title": "заголовки", "text": "тексты"}
 
 
@@ -1146,7 +1154,9 @@ def _p_create_campaign(ctx: Context, args: dict) -> Plan:
         content["title"] += variants[0]
         content["text"] += variants[1]
     if groups:
-        stages = ["analysis", *(["keywords"] if content["keyword"] else []), *(["ads"] if ads else []), "settings"]
+        stages = [
+            "goals", "analysis", *(["keywords"] if content["keyword"] else []), *(["ads"] if ads else []), "settings",
+        ]
         _require_approved(ctx, {k: v for k, v in content.items() if v}, stages=stages)
 
     details = []
@@ -3113,6 +3123,7 @@ def _q_plan(ctx: Context, args: dict) -> dict:
 MAX_ITEM_ROWS = 200
 MAX_ITEM_COLUMNS = 5
 _ITEM_COLUMNS = {
+    "goals": ["Что", "Значение", "Комментарий"],
     "analysis": ["Направление", "Показов в месяц", "Откуда", "Комментарий"],
     "keywords": ["Фраза", "Показов в месяц", "Комментарий"],
     "negatives": ["Минус-фраза", "Почему"],
@@ -3512,8 +3523,9 @@ TOOLS = [
             "stage": {
                 "type": "string",
                 "enum": list(ITEM_STAGES),
-                "description": "этап: analysis — направления/группы, keywords — фразы по группам, negatives — "
-                "минус-фразы, ads — заголовки и тексты, extras — ссылка и расширения, settings — настройки",
+                "description": "этап: goals — цели кампании (что рекламируем, оффер, гео, бюджет, цель, посадочная), "
+                "analysis — направления/группы, keywords — фразы по группам, negatives — минус-фразы, ads — "
+                "заголовки и тексты, extras — ссылка и расширения, settings — настройки",
             },
             "title": {"type": "string", "description": "заголовок таблицы"},
             "intro": {"type": "string", "description": "1–3 предложения: на чём основано и что согласовать"},
@@ -3575,7 +3587,7 @@ TOOLS = [
         "bid_rub, ad {titles (до 7), texts (до 3), href, extras или extras_from_ad_row_id}}] (до 20 групп): "
         "объявление комбинаторное, второго заголовка в нём нет; href можно не давать, если в пространстве есть "
         "шаблон ссылки. Кампания с группами создаётся только после согласованных таблиц propose_items по этапам "
-        "(анализ, ключи и группы, заголовки и тексты, настройки) и только из согласованных строк. "
+        "(цели, анализ, ключи и группы, заголовки и тексты, настройки) и только из согласованных строк. "
         "Счётчик пространства подставится сам.",
         {"account_id": _ID, "spec": {"type": "object"}, **_REASON},
         ["account_id", "spec"],
@@ -4042,8 +4054,11 @@ def _system_prompt(ctx: Context) -> str:
         "по этапам ниже.",
         "- Новую кампанию собирай строго по этапам. Каждый этап заканчивается таблицей propose_items, и к "
         "следующему переходишь только после её согласования; без согласованных этапов create_campaign вернёт "
-        "ошибку. 1) Бриф — ask_questions, если чего-то не хватает: продукт и оффер, гео, бюджет, цель, ссылка. "
-        "2) Анализ: похожие кампании пространства (list_campaigns, get_campaign — какие группы, фразы и тексты "
+        "ошибку. Маркетолог видит рядом с чатом, как собирается кампания: согласованные цели, группы с фразами "
+        "и объявления, поэтому называй группы (section) одинаково на всех этапах. 1) Цели кампании — сначала "
+        "ask_questions, если чего-то не хватает в брифе, затем propose_items stage=goals строками «что — "
+        "значение»: что рекламируем и оффер, гео, бюджет, цель (действие на сайте или цель Метрики), посадочная "
+        "ссылка, ограничения. 2) Анализ: похожие кампании пространства (list_campaigns, get_campaign — какие группы, фразы и тексты "
         "приносили конверсии), get_search_queries с with_conversions, get_wordstat по 1–5 главным фразам с "
         "регионами кампании. Короткий отчёт с цифрами таблицей, затем propose_items stage=analysis — направления, "
         "они станут группами (направление, показов в месяц, откуда идея). 3) Ключи и группы — propose_items "
@@ -4267,6 +4282,181 @@ def _action_out(row: dict) -> dict:
     }
 
 
+# Панель «Сборка кампании»: этапы новой кампании и всё согласованное по ним — группы с фразами и
+# объявлениями. Собирается из таблиц propose_items чата; ждущая таблица показывается как предложение.
+
+BUILD_STAGES = {
+    "goals": "Цели",
+    "analysis": "Анализ",
+    "keywords": "Группы и фразы",
+    "negatives": "Минус-фразы",
+    "ads": "Объявления",
+    "extras": "Ссылка и расширения",
+    "settings": "Настройки",
+}
+_BUILD_OPTIONAL = {"negatives", "extras"}
+_BUILD_STARTS = {"goals", "analysis"}
+NO_GROUP = "Без группы"
+
+
+def _build_row(row: dict, pending: bool) -> dict:
+    cells = [str(c or "") for c in row.get("cells") or []]
+    return {
+        "text": cells[0] if cells else "",
+        "value": cells[1] if len(cells) > 1 else "",
+        "note": " · ".join(c for c in cells[2:] if c),
+        "pending": pending,
+    }
+
+
+def campaign_build(actions: list[dict]) -> dict | None:
+    """Как собирается новая кампания в чате; None — новую кампанию здесь не собирают.
+
+    Сборка начинается таблицей целей или анализа и заканчивается созданным черновиком: после него
+    новая таблица целей или анализа начинает следующую сборку.
+    """
+    episodes: list[list[dict]] = [[]]
+    for action in actions:
+        episodes[-1].append(action)
+        if action["tool"] == "create_campaign" and action["status"] == "done":
+            episodes.append([])
+    episode = next(
+        (
+            ep
+            for ep in reversed(episodes)
+            if any(a["tool"] == "propose_items" and (a.get("args") or {}).get("stage") in _BUILD_STARTS for a in ep)
+        ),
+        None,
+    )
+    if episode is None:
+        return None
+
+    status: dict[str, str] = {}
+    last_table: dict[str, int] = {}
+    rows: dict[str, list[dict]] = {s: [] for s in BUILD_STAGES}
+    seen: set[tuple] = set()
+    for action in episode:
+        args = action.get("args") or {}
+        stage = args.get("stage")
+        if action["tool"] != "propose_items" or stage not in BUILD_STAGES:
+            continue
+        last_table[stage] = action["id"]
+        state = action["status"]
+        if state == "pending":
+            status[stage] = "pending"
+        elif state == "done" and status.get(stage) != "pending":
+            status[stage] = "done"
+        elif stage not in status:
+            status[stage] = "rejected"
+        if state == "done":
+            chosen = set((action.get("result") or {}).get("approved_rows") or [])
+            picked = [r for r in args.get("rows") or [] if r.get("n") in chosen]
+        elif state == "pending":
+            picked = [r for r in args.get("rows") or [] if r.get("checked") is not False]
+        else:
+            continue
+        for row in picked:
+            cells = row.get("cells") or []
+            key = (stage, row.get("section") or "", row.get("kind") or "", _item_key(cells[0] if cells else "", row.get("kind") or ""))
+            if key in seen:
+                continue
+            seen.add(key)
+            rows[stage].append({**row, "_pending": state == "pending"})
+
+    groups: dict[str, dict] = {}
+
+    def group(name: str) -> dict:
+        name = name or NO_GROUP
+        return groups.setdefault(name, {"name": name, "keywords": [], "titles": [], "texts": [], "href": ""})
+
+    negatives: list[dict] = []
+    for stage in ("keywords", "negatives"):
+        for row in rows[stage]:
+            item = _build_row(row, row["_pending"])
+            if row.get("kind") == "negative" or stage == "negatives":
+                negatives.append(item)
+            else:
+                group(row.get("section") or "")["keywords"].append(item)
+    for row in rows["ads"]:
+        if row.get("kind") in ("title", "text"):
+            group(row.get("section") or "")[f"{row['kind']}s"].append(_build_row(row, row["_pending"]))
+
+    # Карточка создания — это то, что уйдёт в Директ (с учётом снятых в ней галочек): группы берём из неё,
+    # частотность фраз — из таблиц.
+    draft = None
+    creates = [a for a in episode if a["tool"] == "create_campaign" and a["status"] != "rejected"]
+    if creates:
+        action = creates[-1]
+        spec = (action.get("args") or {}).get("spec")
+        spec = spec if isinstance(spec, dict) else {}
+        values = {_item_key(k["text"], "keyword"): k["value"] for g in groups.values() for k in g["keywords"]}
+
+        def items(values_list, kind: str, known: dict | None = None) -> list[dict]:
+            out = []
+            for v in values_list if isinstance(values_list, list) else []:
+                text = str(v or "").strip()
+                if text:
+                    value = (known or {}).get(_item_key(text, kind), "")
+                    out.append({"text": text, "value": value, "note": "", "pending": False})
+            return out
+
+        groups = {}
+        for g, raw in enumerate(spec.get("groups") or [] if isinstance(spec.get("groups"), list) else []):
+            if not isinstance(raw, dict):
+                continue
+            name = str(raw.get("name") or f"Группа {g + 1}").strip()
+            ad = raw.get("ad") if isinstance(raw.get("ad"), dict) else {}
+            groups[name] = {
+                "name": name,
+                "keywords": items(raw.get("keywords"), "keyword", values),
+                "titles": items(ad.get("titles"), "title"),
+                "texts": items(ad.get("texts"), "text"),
+                "href": str(ad.get("href") or "").strip(),
+            }
+        negatives = items(spec.get("negative_keywords"), "negative")
+        result = action.get("result") if isinstance(action.get("result"), dict) else {}
+        campaign = result.get("campaign") if isinstance(result.get("campaign"), dict) else {}
+        draft = {
+            "action_id": action["id"],
+            "status": action["status"],
+            "name": str(spec.get("name") or "").strip(),
+            "summary": action.get("summary") or "",
+            "campaign_row_id": campaign.get("id"),
+        }
+
+    # Минус-фразы часто приходят строками таблицы ключей — тогда этап закрыт вместе с ней.
+    if "negatives" not in status and negatives and "keywords" in status:
+        status["negatives"] = "pending" if any(n["pending"] for n in negatives) else "done"
+        last_table["negatives"] = last_table["keywords"]
+    counts = {key: len(rows[key]) for key in BUILD_STAGES}
+    counts["keywords"] = sum(len(g["keywords"]) for g in groups.values())
+    counts["negatives"] = len(negatives)
+    counts["ads"] = sum(len(g["titles"]) + len(g["texts"]) for g in groups.values())
+
+    stages = []
+    later_started = False
+    for key in reversed(BUILD_STAGES):
+        state = status.get(key)
+        if state is None:
+            state = "skipped" if key in _BUILD_OPTIONAL and later_started else "todo"
+        else:
+            later_started = True
+        stages.append(
+            {"key": key, "label": BUILD_STAGES[key], "status": state, "count": counts[key], "action_id": last_table.get(key)}
+        )
+    stages.reverse()
+    return {
+        "stages": stages,
+        "goals": [_build_row(r, r["_pending"]) for r in rows["goals"]],
+        "directions": [_build_row(r, r["_pending"]) for r in rows["analysis"]],
+        "groups": list(groups.values()),
+        "negatives": negatives,
+        "extras": [_build_row(r, r["_pending"]) for r in rows["extras"]],
+        "settings": [_build_row(r, r["_pending"]) for r in rows["settings"]],
+        "draft": draft,
+    }
+
+
 _CHAT_SELECT = """
     SELECT ch.*,
            (SELECT COUNT(*) FROM ai_actions a WHERE a.chat_id = ch.id AND a.status = 'pending') AS pending_actions
@@ -4315,6 +4505,7 @@ def get_chat(user_id: int, chat_id: int) -> dict:
         "chat": _chat_out(chat),
         "messages": [_message_out(m) for m in messages],
         "actions": [_action_out(a) for a in actions],
+        "build": campaign_build(actions),
         "access": normalize_ai_access(ws.get("ai_access")),
         "ai": {"configured": ai.get_settings(user_id)["configured"]},
     }

@@ -1,5 +1,5 @@
 <template>
-  <div class="chat">
+  <div class="chat" :class="{ 'chat--build': build }">
     <aside class="chat__side panel">
       <button class="btn btn--accent chat__new" type="button" :disabled="sending" @click="newChat">Новый чат</button>
       <p v-if="chatsError" class="empty">{{ chatsError }}</p>
@@ -30,6 +30,9 @@
           <p class="hint">{{ accessText }}</p>
         </div>
         <div class="row-actions">
+          <button v-if="build" class="btn chat__build-toggle" type="button" @click="buildOpen = true">
+            Сборка кампании
+          </button>
           <button
             v-if="!isFirst"
             class="btn"
@@ -65,9 +68,10 @@
         <div v-else-if="!items.length" class="chat__intro">
           <h3>Чем помочь с «{{ ws.name }}»?</h3>
           <p v-if="isFirst" class="hint">
-            Кампаний здесь пока нет, поэтому разбирать нечего. ИИ соберёт первую по этапам — анализ, ключевые фразы,
-            заголовки и объявления, настройки — и каждый этап покажет вам таблицей на согласование. Любое изменение в
-            Директе он сначала покажет вам.
+            Кампаний здесь пока нет, поэтому разбирать нечего. ИИ соберёт первую по этапам — цели, анализ спроса,
+            группы и фразы, объявления, настройки — и каждый этап покажет вам таблицей на согласование. Рядом с чатом
+            будет видно, как собирается кампания, с предпросмотром объявлений. Любое изменение в Директе он сначала
+            покажет вам.
           </p>
           <p v-else class="hint">
             ИИ видит статистику, кампании, ключевые фразы, объявления и поисковые запросы этого пространства. Любое
@@ -157,7 +161,9 @@
               />
               <AiItemsCard
                 v-else-if="a.tool === 'propose_items'"
+                :data-action="a.id"
                 :action="a"
+                :site="ws.site || ''"
                 :disabled="deciding || status === 'running'"
                 @submit="respond(() => aiApi.items(a.id, $event))"
               />
@@ -169,7 +175,7 @@
               />
             </template>
 
-            <div v-for="a in item.writes" :key="a.key" class="action-card" :class="`is-${a.status}`">
+            <div v-for="a in item.writes" :key="a.key" class="action-card" :class="`is-${a.status}`" :data-action="a.id">
               <div class="action-card__head">
                 <strong>{{ a.label }}</strong>
                 <span class="chip" :class="STATUS_CHIPS[a.status]">{{ STATUS_LABELS[a.status] || a.status }}</span>
@@ -250,6 +256,18 @@
         </button>
       </form>
     </section>
+
+    <template v-if="build">
+      <CampaignBuild
+        :build="build"
+        :site="ws.site || ''"
+        :ws-id="ws.id"
+        :open="buildOpen"
+        @close="buildOpen = false"
+        @jump="jumpTo"
+      />
+      <div v-if="buildOpen" class="build-backdrop" @click="buildOpen = false" />
+    </template>
   </div>
 </template>
 
@@ -266,6 +284,7 @@ import AiCheckTable from './AiCheckTable.vue'
 import AiItemsCard from './AiItemsCard.vue'
 import AiPlanCard from './AiPlanCard.vue'
 import AiQuestionsCard from './AiQuestionsCard.vue'
+import CampaignBuild from './CampaignBuild.vue'
 import { useWs } from './context'
 
 const POLL_MS = 1500
@@ -326,6 +345,9 @@ const pendingActions = computed(() => actions.value.filter((a) => a.status === '
 const pendingWrites = computed(() => pendingActions.value.filter((a) => a.kind !== 'ask'))
 const pendingAsks = computed(() => pendingActions.value.filter((a) => a.kind === 'ask'))
 const plans = computed(() => actions.value.filter((a) => a.tool === 'propose_plan'))
+// Сборка новой кампании по этапам — панелью рядом с чатом (на узком экране — по кнопке).
+const build = computed(() => (chat.value ? data.value.build || null : null))
+const buildOpen = ref(false)
 
 const accessText = computed(() => {
   const a = access.value
@@ -477,6 +499,18 @@ function planProgress(plan) {
     })
   }
   return out
+}
+
+/** Этап из панели сборки — к его таблице или карточке в ленте чата. */
+function jumpTo(actionId) {
+  buildOpen.value = false
+  const el = actionId && scroller.value?.querySelector(`[data-action="${actionId}"]`)
+  if (!el) return
+  el.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  el.classList.remove('is-flash')
+  void el.offsetWidth
+  el.classList.add('is-flash')
+  setTimeout(() => el.classList.remove('is-flash'), 1600)
 }
 
 function hasArgs(args) {
@@ -774,6 +808,7 @@ watch(
 
 watch(chatId, (id) => {
   stopPolling()
+  buildOpen.value = false
   loadError.value = ''
   if (id) {
     stickToBottom = true

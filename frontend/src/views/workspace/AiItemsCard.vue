@@ -18,6 +18,16 @@
       @update:off="off = $event"
     />
 
+    <div v-if="pending && previews.length" class="ai-items__previews">
+      <p class="ai-items__previews-head">Так объявления увидят в поиске — меняются вместе с галочками</p>
+      <div class="ai-items__preview-grid">
+        <div v-for="p in previews" :key="p.section" class="ai-items__preview">
+          <small v-if="p.section">{{ p.section }}</small>
+          <AdPreview :titles="p.titles" :texts="p.texts" :site="site" />
+        </div>
+      </div>
+    </div>
+
     <template v-if="pending">
       <textarea
         v-model="comment"
@@ -47,15 +57,19 @@
 <script setup>
 /** Таблица ИИ на согласование (propose_items): строки с галочками, снятое ИИ не использует. */
 import { computed, ref } from 'vue'
+import AdPreview from './AdPreview.vue'
 import AiCheckTable from './AiCheckTable.vue'
 
 const props = defineProps({
   action: { type: Object, required: true },
   disabled: { type: Boolean, default: false },
+  // Сайт пространства — домен в предпросмотре объявлений.
+  site: { type: String, default: '' },
 })
 const emit = defineEmits(['submit'])
 
 const STAGES = {
+  goals: 'цели кампании',
   analysis: 'анализ',
   keywords: 'ключи и группы',
   negatives: 'минус-фразы',
@@ -78,6 +92,19 @@ const rows = computed(() =>
 const off = ref((args.value.rows || []).filter((r) => r.checked === false).map((r) => r.n))
 const comment = ref('')
 const chosen = computed(() => rows.value.filter((r) => !off.value.includes(r.id)).map((r) => r.id))
+
+// Этап объявлений: по группе — отмеченные заголовки и тексты в виде объявления.
+const previews = computed(() => {
+  if (args.value.stage !== 'ads') return []
+  const bySection = new Map()
+  for (const r of rows.value) {
+    if ((r.kind !== 'title' && r.kind !== 'text') || off.value.includes(r.id)) continue
+    const name = r.section || ''
+    if (!bySection.has(name)) bySection.set(name, { section: name, titles: [], texts: [] })
+    bySection.get(name)[`${r.kind}s`].push(r.cells[0] || '')
+  }
+  return [...bySection.values()]
+})
 
 // Согласованная таблица: снятые строки зачёркнуты. Отклонённую видно по статусу карточки.
 const decidedOff = computed(() => {
