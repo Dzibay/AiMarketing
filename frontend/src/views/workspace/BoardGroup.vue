@@ -115,6 +115,7 @@
       <div class="board-group__lines">
         <BoardLines :items="group.titles" kind="title" :group="group.name" />
         <BoardLines :items="group.texts" kind="text" :group="group.name" />
+        <BoardImages :items="images" :group="group.name" />
       </div>
       <div class="board-group__previews">
         <figure v-if="preview !== 'mobile'" class="board-group__preview">
@@ -127,6 +128,7 @@
             :pending="adPending"
             :sitelinks="links"
             :callouts="notes"
+            :images="imageUrls"
           />
         </figure>
         <figure v-if="preview !== 'desktop'" class="board-group__preview board-group__preview--mobile">
@@ -140,6 +142,7 @@
             :pending="adPending"
             :sitelinks="links"
             :callouts="notes"
+            :images="imageUrls"
           />
         </figure>
       </div>
@@ -154,13 +157,14 @@
 <script setup>
 /**
  * Группа на доске: фразы (галочки ждущей таблицы, выбор → перенести, изменить, убрать; новая фраза),
- * аудитории, заголовки и тексты с правкой и предпросмотр объявления на компьютере и телефоне.
+ * аудитории, заголовки и тексты с правкой, картинки и предпросмотр объявления на компьютере и телефоне.
  */
 import { computed, inject, nextTick, ref, watch } from 'vue'
 import { askConfirm } from '../../composables/useConfirm'
 import { plural } from '../../utils/format'
 import AdPreview from './AdPreview.vue'
 import BoardAudiences from './BoardAudiences.vue'
+import BoardImages from './BoardImages.vue'
 import BoardLines from './BoardLines.vue'
 
 const props = defineProps({
@@ -201,10 +205,14 @@ const canRename = computed(() => {
   return !!value && value !== props.group.name && !others.value.includes(value) && !board.disabled.value
 })
 
-const hasAd = computed(() => props.adsStarted || props.group.titles.length > 0 || props.group.texts.length > 0)
+const images = computed(() => props.group.images || [])
+const hasAd = computed(
+  () => props.adsStarted || props.group.titles.length > 0 || props.group.texts.length > 0 || images.value.length > 0,
+)
 const titles = computed(() => props.group.titles.filter(board.isOn).map((t) => t.text))
 const texts = computed(() => props.group.texts.filter(board.isOn).map((t) => t.text))
-const adPending = computed(() => [...props.group.titles, ...props.group.texts].some((t) => t.pending))
+const imageUrls = computed(() => images.value.filter(board.isOn).map((i) => i.preview_url).filter(Boolean))
+const adPending = computed(() => [...props.group.titles, ...props.group.texts, ...images.value].some((t) => t.pending))
 const links = computed(() => (props.group.sitelinks ?? props.sitelinks).filter(board.isOn))
 const notes = computed(() => (props.group.callouts ?? props.callouts).filter(board.isOn).map((c) => c.text))
 

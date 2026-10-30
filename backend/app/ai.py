@@ -45,6 +45,8 @@ TASKS = {
     "placements": {"label": "Разбор площадок РСЯ", "tier": "fast"},
     "ads": {"label": "Тексты объявлений", "tier": "smart"},
     "test": {"label": "Проверка подключения", "tier": "smart"},
+    # Картинки рисует свой провайдер (image_gen); здесь — только подпись в расходе.
+    "images": {"label": "Картинки объявлений", "tier": "smart"},
 }
 # Проверку подключения лимит не останавливает: иначе после исчерпания не проверить новый ключ.
 UNLIMITED_TASKS = {"test"}
@@ -95,7 +97,7 @@ def _public(row: dict | None) -> dict:
         "configured": configured,
         "updated_at": row["updated_at"].isoformat() if row.get("updated_at") else None,
         "providers": [{"id": k, "label": v["label"], "default_model": v["default_model"]} for k, v in PROVIDERS.items()],
-        "tasks": [{"id": k, "label": v["label"], "tier": v["tier"]} for k, v in TASKS.items() if k != "test"],
+        "tasks": [{"id": k, "label": v["label"], "tier": v["tier"]} for k, v in TASKS.items() if k not in ("test", "images")],
         "default_base_url": OPENAI_BASE,
     }
 

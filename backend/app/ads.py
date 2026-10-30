@@ -720,6 +720,65 @@ def campaign_images(user_id: int, campaign_row_id: int, *, limit: int = 30) -> d
     }
 
 
+def workspace_images(user_id: int, campaign_row_ids: list[int], *, account_id: int | None = None, limit: int = 40) -> dict:
+    """Картинки из объявлений кампаний пространства — чтобы взять их в новую кампанию.
+
+    → {"items": [{hash, account_id, preview_url, campaigns: [название…], ads}], "more"}; account_id — только этот кабинет.
+    Чаще используемые — первыми. Превью — из библиотеки кабинета; картинку, которой там уже нет, пропускаем.
+    """
+    if not campaign_row_ids:
+        return {"items": [], "more": False}
+    with pool.connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT h.value AS hash, ad.account_id, COUNT(*) AS ads,
+                   array_agg(DISTINCT c.name) AS campaigns
+            FROM direct_ads ad
+            JOIN direct_adgroups g ON g.id = ad.adgroup_row_id
+            JOIN direct_campaigns c ON c.id = g.campaign_row_id
+            CROSS JOIN LATERAL jsonb_array_elements_text(ad.image_hashes) AS h(value)
+            WHERE ad.user_id = %s AND g.campaign_row_id = ANY(%s)
+              AND (%s::bigint IS NULL OR ad.account_id = %s::bigint)
+            GROUP BY h.value, ad.account_id
+            ORDER BY COUNT(*) DESC, h.value
+            LIMIT %s
+            """,
+            (user_id, list(campaign_row_ids), account_id, account_id, limit + 1),
+        ).fetchall()
+        accounts = {
+            int(r["id"]): r
+            for r in conn.execute(
+                "SELECT id, connection_id, client_login, enabled FROM direct_accounts WHERE user_id = %s AND id = ANY(%s)",
+                (user_id, list({int(r["account_id"]) for r in rows})),
+            ).fetchall()
+        }
+    more = len(rows) > limit
+    rows = rows[:limit]
+    previews: dict[int, dict[str, str]] = {}
+    for acc_id in {int(r["account_id"]) for r in rows}:
+        account = accounts.get(acc_id)
+        if not account or not account.get("enabled"):
+            continue
+        hashes = [r["hash"] for r in rows if int(r["account_id"]) == acc_id]
+        try:
+            token = get_connection_access_token(account["connection_id"], user_id)
+            previews[acc_id] = ad_extras.image_previews(token, account["client_login"], hashes)
+        except YandexError:
+            log.warning("workspace_images: previews failed for account %s", acc_id)
+    items = [
+        {
+            "hash": r["hash"],
+            "account_id": int(r["account_id"]),
+            "preview_url": previews[int(r["account_id"])][r["hash"]],
+            "campaigns": sorted(n for n in (r["campaigns"] or []) if n),
+            "ads": int(r["ads"]),
+        }
+        for r in rows
+        if previews.get(int(r["account_id"]), {}).get(r["hash"])
+    ]
+    return {"items": items, "more": more}
+
+
 def _ad_row(user_id: int, ad_row_id: int) -> dict:
     with pool.connection() as conn:
         row = conn.execute(

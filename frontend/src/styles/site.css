@@ -5184,6 +5184,31 @@ body.has-modal {
   margin: 0;
 }
 
+.ad-preview__body,
+.ad-preview__copy {
+  display: grid;
+  gap: 0.2rem;
+  min-width: 0;
+}
+
+.ad-preview__body.has-image {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 0.6rem;
+}
+
+.ad-preview__image {
+  width: 72px;
+  height: 72px;
+  border-radius: 8px;
+  object-fit: cover;
+}
+
+.ad-preview--mobile .ad-preview__image {
+  width: 60px;
+  height: 60px;
+}
+
 .ad-preview__top {
   display: flex;
   align-items: center;
@@ -6180,6 +6205,218 @@ button.board-chips__text:disabled {
 .board-auds__reach {
   margin: 0;
   font-size: 0.76rem;
+}
+
+/* Картинки группы: превью с подписью и «убрать»; загрузить, взять из кампаний, сгенерировать. */
+.board-imgs {
+  gap: 0.4rem;
+}
+
+.board-imgs__list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.board-imgs__item {
+  position: relative;
+  display: grid;
+  gap: 0.2rem;
+  width: 96px;
+  padding: 0.25rem;
+  border: 1px solid var(--line-2);
+  border-radius: 12px;
+  background: var(--surface);
+  font-size: 0.72rem;
+}
+
+.board-imgs__item.is-pending {
+  border: 1px dashed color-mix(in srgb, var(--c-amber) 70%, transparent);
+  background: var(--warn-soft);
+}
+
+.board-imgs__item.is-own {
+  border-color: var(--accent);
+}
+
+.board-imgs__item img,
+.board-imgs__none {
+  display: block;
+  width: 100%;
+  aspect-ratio: 1;
+  border-radius: 8px;
+  background: var(--surface-2);
+  object-fit: cover;
+}
+
+.board-imgs__none {
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+  text-align: center;
+}
+
+.board-imgs__name {
+  overflow: hidden;
+  color: var(--ink-2);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.board-imgs__item > input {
+  position: absolute;
+  top: 7px;
+  left: 7px;
+}
+
+.board-imgs__item > .board-x {
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  background: var(--surface);
+}
+
+.board-imgs__tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.78rem;
+}
+
+.board-imgs__tools label.btn {
+  cursor: pointer;
+}
+
+.board-imgs__tools label.btn.is-disabled {
+  opacity: 0.5;
+  pointer-events: none;
+}
+
+.board-imgs__panel {
+  display: grid;
+  gap: 0.5rem;
+  padding: 0.55rem;
+  border: 1px solid var(--line-2);
+  border-radius: 12px;
+  background: var(--surface);
+}
+
+.board-imgs__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(84px, 1fr));
+  gap: 0.4rem;
+  max-height: 260px;
+  overflow: auto;
+}
+
+.board-imgs__choice {
+  appearance: none;
+  display: grid;
+  gap: 0.15rem;
+  min-width: 0;
+  padding: 0.2rem;
+  border: 2px solid transparent;
+  border-radius: 10px;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  font-size: 0.7rem;
+  text-align: left;
+  cursor: pointer;
+}
+
+.board-imgs__choice.is-on {
+  border-color: var(--accent);
+  background: var(--accent-soft, transparent);
+}
+
+.board-imgs__choice:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.board-imgs__choice img {
+  display: block;
+  width: 100%;
+  aspect-ratio: 1;
+  border-radius: 7px;
+  object-fit: cover;
+}
+
+.board-imgs__choice small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ai-items__images {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
+  gap: 0.5rem;
+  margin: 0.25rem 0 0.6rem;
+}
+
+.ai-items__image {
+  display: grid;
+  gap: 0.2rem;
+  margin: 0;
+  min-width: 0;
+  font-size: 0.74rem;
+}
+
+.ai-items__image small {
+  display: block;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ai-items__image-pick {
+  appearance: none;
+  padding: 0;
+  border: 2px solid var(--accent);
+  border-radius: 10px;
+  background: var(--surface-2);
+  overflow: hidden;
+  cursor: pointer;
+}
+
+.ai-items__image-pick:disabled {
+  cursor: default;
+}
+
+.ai-items__image-pick img,
+.ai-items__image-none {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  aspect-ratio: 1;
+  color: var(--muted);
+  object-fit: cover;
+}
+
+.ai-items__image.is-off {
+  opacity: 0.5;
+}
+
+.ai-items__image.is-off .ai-items__image-pick {
+  border-color: transparent;
+}
+
+.ai-items__image.is-off figcaption {
+  text-decoration: line-through;
+}
+
+.image-gen-sample {
+  display: block;
+  width: 160px;
+  margin-top: 0.6rem;
+  border-radius: 12px;
 }
 
 .board-checks li {

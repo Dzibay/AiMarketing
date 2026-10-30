@@ -3,7 +3,7 @@
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
-from app import ai, ai_agent, experiments, insights, wordstat, workspaces
+from app import ai, ai_agent, experiments, image_gen, insights, wordstat, workspaces
 from app.api.web import _http
 from app.web_auth import require_web_user
 from app.yandex import YandexError
@@ -147,6 +147,55 @@ def wordstat_settings_put(body: WordstatSettingsBody, user_id: int = Depends(req
 @router.post("/ai/wordstat/test")
 def wordstat_settings_test(user_id: int = Depends(require_web_user)) -> dict:
     return _call(wordstat.check_connection, user_id)
+
+
+class ImageGenSettingsBody(BaseModel):
+    provider: str = "openai"
+    base_url: str = ""
+    model: str = ""
+    folder_id: str = ""
+    # None — оставить сохранённый ключ, "" — удалить.
+    api_key: str | None = None
+    # Не передана — как была; null — не считать. ₽ за картинку.
+    price_rub: float | None = None
+
+
+@router.get("/ai/image-gen")
+def image_gen_settings_get(user_id: int = Depends(require_web_user)) -> dict:
+    return image_gen.get_settings(user_id)
+
+
+@router.put("/ai/image-gen")
+def image_gen_settings_put(body: ImageGenSettingsBody, user_id: int = Depends(require_web_user)) -> dict:
+    data = body.model_dump()
+    if "price_rub" not in body.model_fields_set:
+        data.pop("price_rub")
+    return _call(image_gen.save_settings, user_id, **data)
+
+
+@router.post("/ai/image-gen/test")
+def image_gen_settings_test(user_id: int = Depends(require_web_user)) -> dict:
+    """Одна настоящая картинка — платно, по цене провайдера."""
+    return _call(image_gen.check_connection, user_id)
+
+
+class ImageGenerateBody(BaseModel):
+    account_id: int
+    prompt: str
+    count: int = 1
+
+
+@router.get("/workspaces/{workspace_id}/ad-images")
+def workspace_ad_images(workspace_id: int, account_id: int | None = None, user_id: int = Depends(require_web_user)) -> dict:
+    """Картинки из объявлений кампаний пространства — взять в новую кампанию."""
+    return _call(ai_agent.workspace_images, user_id, workspace_id, account_id=account_id)
+
+
+@router.post("/workspaces/{workspace_id}/ad-images/generate")
+def workspace_generate_images(workspace_id: int, body: ImageGenerateBody, user_id: int = Depends(require_web_user)) -> dict:
+    """Генерация по API из настроек → библиотека кабинета: [{hash, preview_url, account_id}]."""
+    return _call(ai_agent.generate_images, user_id, workspace_id, account_id=body.account_id, prompt=body.prompt,
+                 count=body.count)
 
 
 @router.get("/ai/usage")

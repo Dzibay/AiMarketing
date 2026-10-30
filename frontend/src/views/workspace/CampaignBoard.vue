@@ -43,7 +43,8 @@
         <small v-if="build.groups.length" class="board-section__meta">
           {{ build.groups.length }} {{ plural(build.groups.length, 'группа', 'группы', 'групп') }} · {{ keywordCount }}
           {{ plural(keywordCount, 'фраза', 'фразы', 'фраз') }}<template v-if="audienceCount">
-            · {{ audienceCount }} {{ plural(audienceCount, 'аудитория', 'аудитории', 'аудиторий') }}</template>
+            · {{ audienceCount }} {{ plural(audienceCount, 'аудитория', 'аудитории', 'аудиторий') }}</template><template v-if="imageCount">
+            · {{ imageCount }} {{ plural(imageCount, 'картинка', 'картинки', 'картинок') }}</template>
         </small>
         <div class="seg board__preview-mode" role="group" aria-label="Предпросмотр">
           <button
@@ -60,7 +61,7 @@
       </template>
       <p v-if="!build.groups.length" class="hint">
         Группы с фразами появятся на этапе «Группы и фразы», аудитории (ретаргетинг, LAL, интересы и привычки) — на
-        этапе «Аудитории», объявления — на этапе «Объявления».
+        этапе «Аудитории», объявления — на этапе «Объявления», картинки — на этапе «Картинки».
       </p>
       <BoardGroup
         v-for="g in build.groups"
@@ -199,11 +200,12 @@
 <script setup>
 /**
  * Доска сборки новой кампании рядом с чатом: разделы по этапам сверху вниз, галочки и решения по
- * ждущим таблицам, правки маркетолога (фразы, группы, заголовки и тексты), предпросмотр и проверка
+ * ждущим таблицам, правки маркетолога (фразы, группы, заголовки, тексты и картинки), предпросмотр и проверка
  * готовности. Данные — build из get_chat; правки уходят через edit(ops) и возвращают чат целиком.
  */
 import { computed, nextTick, onMounted, provide, reactive, ref, watch } from 'vue'
 import { RouterLink } from 'vue-router'
+import { aiApi } from '../../api/web'
 import { plural } from '../../utils/format'
 import BoardFacts from './BoardFacts.vue'
 import BoardGroup from './BoardGroup.vue'
@@ -218,6 +220,8 @@ const props = defineProps({
   disabled: { type: Boolean, default: false },
   // async (ops) => true, если правка прошла.
   edit: { type: Function, required: true },
+  // Генерация картинок подключена в настройках.
+  imageGen: { type: Boolean, default: false },
 })
 const emit = defineEmits(['decide', 'draft'])
 
@@ -228,10 +232,11 @@ const SECTION_OF = {
   ads: 'groups',
   negatives: 'negatives',
   audiences: 'groups',
+  images: 'groups',
   extras: 'extras',
   settings: 'settings',
 }
-const SHORT = { keywords: 'фразы', audiences: 'аудитории', ads: 'объявления' }
+const SHORT = { keywords: 'фразы', audiences: 'аудитории', ads: 'объявления', images: 'картинки' }
 const STATUS = {
   done: 'согласовано',
   pending: 'ждёт решения',
@@ -295,6 +300,7 @@ const draftStage = computed(() => {
 const groupNames = computed(() => props.build.groups.map((g) => g.name))
 const keywordCount = computed(() => props.build.groups.reduce((n, g) => n + g.keywords.filter(isOn).length, 0))
 const audienceCount = computed(() => props.build.groups.reduce((n, g) => n + (g.audiences || []).filter(isOn).length, 0))
+const imageCount = computed(() => props.build.groups.reduce((n, g) => n + (g.images || []).filter(isOn).length, 0))
 const adsStarted = computed(() => props.build.stages.some((s) => s.key === 'ads' && s.status !== 'todo'))
 
 // Раздел, о котором сейчас речь: последняя ждущая таблица или карточка создания.
@@ -366,6 +372,8 @@ async function remove(kind, group, items) {
   const ops = []
   for (const item of items) {
     if (item.pending && !item.added) setOn(item, false)
+    // Картинка — по хэшу; подпись — для заметки ИИ.
+    else if (kind === 'image') ops.push({ op: 'remove', kind, group, text: item.hash, name: item.text })
     else ops.push({ op: 'remove', kind, group, text: item.text })
   }
   return ops.length ? edit(ops) : true
@@ -380,7 +388,33 @@ function decide(id, payload) {
   emit('decide', id, payload)
 }
 
-provide('board', { isOn, toggle, remove, edit, disabled, offOf, setOff, decide })
+// Картинки: кабинет кампании (или выбранный, пока ИИ его не назвал), библиотека кампаний — один раз на доску.
+const chosenAccount = ref(null)
+let libraryLoad = null
+
+function library() {
+  libraryLoad ??= aiApi.wsImages(props.wsId).then(
+    (r) => r.items || [],
+    (err) => {
+      libraryLoad = null
+      throw err
+    },
+  )
+  return libraryLoad
+}
+
+const images = {
+  wsId: () => props.wsId,
+  account: computed(() => props.build.account_id ?? chosenAccount.value),
+  accounts: computed(() => props.build.accounts || []),
+  chooseAccount: (id) => {
+    chosenAccount.value = id
+  },
+  canGenerate: computed(() => props.imageGen),
+  library,
+}
+
+provide('board', { isOn, toggle, remove, edit, disabled, offOf, setOff, decide, images })
 
 /** Прокрутить доску к разделу и подсветить его. На узком экране доска не прокручивается сама — страницу. */
 function show(section, smooth = true) {

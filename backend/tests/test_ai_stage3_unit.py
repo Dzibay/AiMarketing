@@ -926,6 +926,7 @@ def test_experiment_tools_registered():
 
 def test_prompt_lists_running_experiments(monkeypatch):
     monkeypatch.setattr(ai_agent, "memory_examples", lambda ws_id, limit: {})
+    monkeypatch.setattr(ai_agent, "_image_gen_ready", lambda ctx: False)
     monkeypatch.setattr(ai_agent, "_running_experiments", lambda ctx: [])
     quiet = ai_agent._system_prompt(FakeContext())
     for name in ("start_experiment", "get_experiments", "finish_experiment", "success_criteria"):

@@ -144,6 +144,7 @@ def test_every_tool_has_schema_and_label():
 def no_memory(monkeypatch):
     monkeypatch.setattr(ai_agent, "memory_examples", lambda ws_id, limit: {})
     monkeypatch.setattr(ai_agent, "_running_experiments", lambda ctx: [])
+    monkeypatch.setattr(ai_agent, "_image_gen_ready", lambda ctx: False)
 
 
 def test_prompt_offers_scheme_hypothesis_until_marketer_confirms(no_memory):

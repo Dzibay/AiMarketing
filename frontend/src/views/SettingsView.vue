@@ -188,6 +188,84 @@
         </p>
       </section>
 
+      <section class="panel" id="image-gen">
+        <div class="panel__head">
+          <h2>Генерация картинок</h2>
+          <span class="chip" :class="imageGen.configured && !imageGen.check_error ? '' : 'chip--warning'">
+            {{ imageGenChip }}
+          </span>
+        </div>
+        <p class="hint">
+          Когда ассистент собирает новую кампанию, он спрашивает, откуда взять картинки для объявлений: из других
+          кампаний, загрузить свои или нарисовать по описанию. Последнее работает через этот API. Необязательно.
+        </p>
+        <button v-if="!imageGenOpen" class="btn btn--ghost" type="button" @click="igExpanded = true">Подключить</button>
+        <form v-if="imageGenOpen" class="form-grid" @submit.prevent="saveImageGen">
+          <div v-field class="field">
+            <label>Провайдер</label>
+            <select v-model="igForm.provider">
+              <option v-for="p in imageGen.providers" :key="p.id" :value="p.id">{{ p.label }}</option>
+            </select>
+          </div>
+          <div v-field class="field">
+            <label>Модель</label>
+            <input v-model.trim="igForm.model" type="text" :placeholder="igDefaultModel" autocomplete="off" />
+          </div>
+          <div v-if="igForm.provider === 'openai'" v-field class="field field--wide">
+            <label>Адрес API</label>
+            <input v-model.trim="igForm.base_url" type="url" :placeholder="imageGen.default_base_url" autocomplete="off" />
+            <small class="field-hint">
+              OpenAI (gpt-image-1, dall-e-3) или совместимый сервис с /images/generations. Пусто —
+              {{ imageGen.default_base_url }}.
+            </small>
+          </div>
+          <div v-else v-field class="field field--wide">
+            <label>Каталог Yandex Cloud (folder_id)</label>
+            <input v-model.trim="igForm.folder_id" type="text" placeholder="b1g…" autocomplete="off" required />
+            <small class="field-hint">Ключ — API-ключ сервисного аккаунта с ролью ai.imageGeneration.user.</small>
+          </div>
+          <div v-field class="field field--wide">
+            <label>API-ключ</label>
+            <input
+              v-model="igForm.api_key"
+              type="password"
+              autocomplete="new-password"
+              :placeholder="imageGen.has_key ? `Сохранён ${imageGen.key_hint} — оставьте пустым, чтобы не менять` : 'Вставьте ключ'"
+            />
+          </div>
+          <div v-field class="field">
+            <label>Цена картинки, ₽</label>
+            <input v-model="igForm.price_rub" type="number" min="0" step="any" inputmode="decimal" placeholder="не задано" />
+            <small class="field-hint">Из тарифа провайдера: расход попадёт в «Расход ИИ» и в месячный лимит.</small>
+          </div>
+          <p class="field-hint">Картинки квадратные, {{ imageGen.size }} — такие Директ берёт в объявления.</p>
+          <div class="form-actions">
+            <button class="btn btn--accent" type="submit" :disabled="igBusy">Сохранить</button>
+            <button class="btn btn--ghost" type="button" :disabled="igBusy || !imageGen.configured" @click="testImageGen">
+              {{ igBusy && igTesting ? 'Рисуем…' : 'Проверить' }}
+            </button>
+            <button
+              v-if="imageGen.has_key"
+              class="btn btn--ghost btn--danger"
+              type="button"
+              :disabled="igBusy"
+              @click="deleteImageGenKey"
+            >
+              Удалить ключ
+            </button>
+          </div>
+        </form>
+        <p v-if="igTest" class="sync-status" :class="igTest.ok ? 'is-ok' : 'is-error'">
+          <template v-if="igTest.ok">Работает · {{ igTest.model }} нарисовал пробную картинку</template>
+          <template v-else>{{ igTest.error }}</template>
+        </p>
+        <p v-else-if="imageGen.checked_at" class="sync-status" :class="imageGen.check_error ? 'is-error' : 'is-ok'">
+          Проверено {{ formatDateTime(imageGen.checked_at) }} ·
+          {{ imageGen.check_error || 'работает' }}
+        </p>
+        <img v-if="igTest?.image" class="image-gen-sample" :src="igTest.image" alt="Пробная картинка" />
+      </section>
+
       <section v-if="usage && (ai.configured || usage.months.length > 1 || usage.total.calls)" class="panel" id="ai-usage">
         <div class="panel__head">
           <h2>Расход ИИ</h2>
@@ -385,6 +463,11 @@ const wordstat = ref({ configured: false, source: '', has_key: false, key_hint: 
 const wsForm = reactive({ folder_id: '', api_key: '' })
 const wsBusy = ref(false)
 const wsTest = ref(null)
+const imageGen = ref({ configured: false, providers: [], default_base_url: '', has_key: false, key_hint: '', size: '1024x1024' })
+const igForm = reactive({ provider: 'openai', model: '', base_url: '', folder_id: '', api_key: '', price_rub: '' })
+const igBusy = ref(false)
+const igTesting = ref(false)
+const igTest = ref(null)
 const usage = ref(null)
 const usageBusy = ref(false)
 const telegram = ref({ configured: false, linked: false })
@@ -595,6 +678,86 @@ async function testWordstat() {
   }
 }
 
+// Генерация картинок, как и Вордстат, нужна не всем — форма свёрнута, пока не подключена.
+const igExpanded = ref(false)
+const imageGenOpen = computed(() => igExpanded.value || imageGen.value.configured || imageGen.value.has_key)
+const igDefaultModel = computed(
+  () => imageGen.value.providers.find((p) => p.id === igForm.provider)?.default_model || '',
+)
+const imageGenChip = computed(() => {
+  const g = imageGen.value
+  if (!g.configured) return 'не подключена'
+  return g.check_error ? 'ошибка проверки' : 'подключена'
+})
+
+function fillImageGen(data) {
+  imageGen.value = data
+  igForm.provider = data.provider || 'openai'
+  igForm.model = data.model || ''
+  igForm.base_url = data.base_url || ''
+  igForm.folder_id = data.folder_id || ''
+  igForm.price_rub = data.price_rub ?? ''
+  igForm.api_key = ''
+}
+
+async function saveImageGen() {
+  igBusy.value = true
+  igTest.value = null
+  try {
+    const apiKey = igForm.api_key.trim()
+    fillImageGen(
+      await aiApi.saveImageGen({
+        provider: igForm.provider,
+        model: igForm.model,
+        base_url: igForm.provider === 'openai' ? igForm.base_url : '',
+        folder_id: igForm.provider === 'yandexart' ? igForm.folder_id : '',
+        api_key: apiKey || null,
+        price_rub: money(igForm.price_rub),
+      }),
+    )
+    // Проверка рисует настоящую картинку за деньги — сами не запускаем.
+    pushToast(imageGen.value.configured ? 'Генерация картинок сохранена — проверьте её' : 'Сохранено — осталось указать ключ')
+  } catch (err) {
+    pushToast(errorText(err), 'error')
+  } finally {
+    igBusy.value = false
+  }
+}
+
+async function deleteImageGenKey() {
+  if (!await askConfirm('Удалить ключ генерации картинок? Ассистент не сможет рисовать картинки для объявлений.')) return
+  igBusy.value = true
+  try {
+    const g = imageGen.value
+    fillImageGen(
+      await aiApi.saveImageGen({ provider: g.provider, model: g.model, base_url: g.base_url, folder_id: g.folder_id, api_key: '' }),
+    )
+    igTest.value = null
+    pushToast('Ключ генерации картинок удалён')
+  } catch (err) {
+    pushToast(errorText(err), 'error')
+  } finally {
+    igBusy.value = false
+  }
+}
+
+async function testImageGen() {
+  if (!await askConfirm('Проверка рисует одну настоящую картинку — она стоит как обычная по тарифу провайдера. Проверить?')) return
+  igBusy.value = true
+  igTesting.value = true
+  try {
+    const res = await aiApi.testImageGen()
+    igTest.value = { ok: true, model: res.model, image: res.image }
+    if (usage.value?.current) loadUsage()
+  } catch (err) {
+    igTest.value = { ok: false, error: errorText(err) }
+  } finally {
+    igBusy.value = false
+    igTesting.value = false
+    aiApi.imageGen().then((data) => { imageGen.value = data }).catch(() => {})
+  }
+}
+
 async function loadTelegram() {
   try {
     telegram.value = await webApi.telegramStatus()
@@ -700,16 +863,18 @@ async function changePassword() {
 
 onMounted(async () => {
   try {
-    const [me, aiSettings, wordstatSettings] = await Promise.all([
+    const [me, aiSettings, wordstatSettings, imageGenSettings] = await Promise.all([
       webApi.me(),
       aiApi.settings(),
       aiApi.wordstat(),
+      aiApi.imageGen(),
       loadTelegram(),
       loadUsage(),
     ])
     user.value = me.user
     fillAiForm(aiSettings)
     fillWordstat(wordstatSettings)
+    fillImageGen(imageGenSettings)
   } catch (err) {
     pushToast(errorText(err), 'error')
   } finally {

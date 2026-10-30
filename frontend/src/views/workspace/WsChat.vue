@@ -188,6 +188,7 @@
               <AiQuestionsCard
                 v-else
                 :action="a"
+                :caps="caps"
                 :disabled="deciding || status === 'running'"
                 @submit="respond(() => aiApi.answer(a.id, $event))"
               />
@@ -289,6 +290,7 @@
         :actions="actions"
         :site="ws.site || ''"
         :ws-id="ws.id"
+        :image-gen="caps.image_gen"
         :disabled="deciding || status === 'running'"
         :edit="editBoard"
         @decide="(id, payload) => respond(() => aiApi.items(id, payload))"
@@ -375,6 +377,8 @@ const pendingAsks = computed(() => pendingActions.value.filter((a) => a.kind ===
 const plans = computed(() => actions.value.filter((a) => a.tool === 'propose_plan'))
 // Сборка новой кампании — доской на пол-экрана рядом с чатом; таблицы этапов решаются на ней.
 const build = computed(() => (chat.value ? data.value.build || null : null))
+// Что подключено у маркетолога: варианты ответа, которым это нужно, без него не выбрать.
+const caps = computed(() => ({ image_gen: !!data.value?.image_gen?.configured }))
 const onBoard = computed(() => new Set(build.value?.action_ids || []))
 const boardWaiting = computed(() => pendingActions.value.filter((a) => onBoard.value.has(a.id)).length)
 const board = ref(null)

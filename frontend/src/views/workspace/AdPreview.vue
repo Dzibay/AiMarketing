@@ -5,8 +5,13 @@
       <span class="ad-preview__domain">{{ domain }}</span>
       <span class="ad-preview__label">Реклама</span>
     </div>
-    <p class="ad-preview__title">{{ title || 'Заголовок появится на этапе объявлений' }}</p>
-    <p class="ad-preview__text">{{ text || 'Текст объявления появится на этапе объявлений' }}</p>
+    <div class="ad-preview__body" :class="{ 'has-image': image }">
+      <div class="ad-preview__copy">
+        <p class="ad-preview__title">{{ title || 'Заголовок появится на этапе объявлений' }}</p>
+        <p class="ad-preview__text">{{ text || 'Текст объявления появится на этапе объявлений' }}</p>
+      </div>
+      <img v-if="image" class="ad-preview__image" :src="image" alt="" loading="lazy" />
+    </div>
     <p v-if="callouts.length" class="ad-preview__callouts">{{ callouts.slice(0, mobile ? 3 : 4).join(' · ') }}</p>
     <ul v-if="links.length" class="ad-preview__links">
       <li v-for="(l, i) in links" :key="i" :title="l.description || l.href">{{ l.text }}</li>
@@ -26,7 +31,7 @@
 <script setup>
 /**
  * Как объявление увидят в поиске Яндекса — на компьютере или телефоне. Объявление комбинаторное: Директ
- * сам сочетает заголовки и тексты, поэтому листаем варианты.
+ * сам сочетает заголовки, тексты и картинки, поэтому листаем варианты.
  */
 import { computed, ref, watch } from 'vue'
 import { plural } from '../../utils/format'
@@ -41,6 +46,8 @@ const props = defineProps({
   // Быстрые ссылки [{ text, href, description }] и уточнения (строки).
   sitelinks: { type: Array, default: () => [] },
   callouts: { type: Array, default: () => [] },
+  // Адреса картинок группы: Директ показывает их рядом с текстом — листаются вместе с вариантами.
+  images: { type: Array, default: () => [] },
   mobile: { type: Boolean, default: false },
 })
 
@@ -50,6 +57,7 @@ const title = computed(() => props.titles[index.value % Math.max(props.titles.le
 const text = computed(
   () => props.texts[Math.floor(index.value / Math.max(props.titles.length, 1)) % Math.max(props.texts.length, 1)] || '',
 )
+const image = computed(() => (props.images.length ? props.images[index.value % props.images.length] : ''))
 const domain = computed(() => hostOf(props.href) || hostOf(props.site) || 'ваш-сайт.ru')
 // В выдаче на компьютере — до четырёх ссылок строкой, на телефоне — кнопками.
 const links = computed(() => props.sitelinks.slice(0, 4))

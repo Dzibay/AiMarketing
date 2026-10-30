@@ -16,7 +16,7 @@ from datetime import date, datetime, timedelta, timezone
 
 from psycopg.types.json import Jsonb
 
-from app import ai, audiences, experiments
+from app import ai, audiences, experiments, image_gen
 from app.actions import BULK_ACTIONS, SETTINGS_LABELS, campaign_options
 from app.brief import brief_filled, normalize_brief
 from app.clock import today_msk
@@ -28,6 +28,7 @@ from app.workspaces import (
     SCHEME_FACT,
     fact_key,
     get_workspace,
+    list_workspace_accounts,
     normalize_ai_access,
     normalize_ai_facts,
     remember_ai_facts,
@@ -799,6 +800,8 @@ def _t_ad_extras(ctx: Context, args: dict) -> dict:
 def _t_ad_images(ctx: Context, args: dict) -> dict:
     from app.ads import campaign_images
 
+    if args.get("campaign_row_id") in (None, ""):
+        return _workspace_images(ctx, args)
     cid = _int(args, "campaign_row_id")
     ctx.campaign(cid)
     out = campaign_images(ctx.user_id, cid)
@@ -807,6 +810,136 @@ def _t_ad_images(ctx: Context, args: dict) -> dict:
         "кампании (ads — в скольких); library — остальные картинки кабинета"
     )
     return out
+
+
+# Картинки новой кампании: откуда их брать, маркетолог выбирает в ask_questions с key image_source.
+IMAGE_SOURCE_KEY = "image_source"
+IMAGE_SOURCES = {
+    "campaigns": "Взять из других кампаний",
+    "upload": "Загружу свои",
+    "generate": "Сгенерировать по описанию",
+    "none": "Без картинок",
+}
+# Вариант ответа → что для него должно быть подключено; без этого в карточке его не выбрать.
+IMAGE_SOURCE_NEEDS = {IMAGE_SOURCES["generate"]: "image_gen"}
+_NEED_TEXT = {"image_gen": image_gen.NOT_CONFIGURED}
+MAX_GROUP_IMAGES = 5
+_IMAGE_HASH_RE = re.compile(r"[A-Za-z0-9_-]{1,64}")
+_GENERATE_RE = re.compile(r"сгенер|генерац|генерир|нарис|нейросет", re.I)
+
+
+def _workspace_images(ctx: Context, args: dict) -> dict:
+    from app.ads import workspace_images as found_images
+
+    account_id = None
+    if args.get("account_id") not in (None, ""):
+        account_id = int(ctx.require_account(_int(args, "account_id"))["id"])
+    found = found_images(ctx.user_id, workspace_campaign_row_ids(ctx.user_id, ctx.ws_id), account_id=account_id)
+    return {
+        "images": [{k: v for k, v in i.items() if k != "preview_url"} for i in found["items"]],
+        "more": found["more"],
+        "hint": (
+            "Картинки из объявлений кампаний пространства, чаще используемые — первыми. Самих картинок ты не "
+            "видишь — выбирай по кампаниям, где они стоят. Предлагай таблицей propose_items stage=images: строка — "
+            "картинка, image {hash, account_id}, section — группа, cells [название, откуда, почему]; в группе до "
+            f"{MAX_GROUP_IMAGES}. Картинку из другого кабинета сервис скопирует сам"
+        ),
+    }
+
+
+def _wants_generation(ctx: Context) -> bool:
+    """Генерация платная: только если маркетолог сам её выбрал — ответом на вопрос или словами в чате."""
+    if ctx.chat_id is None:
+        return True
+    with pool.connection() as conn:
+        said = [
+            m["content"] or ""
+            for m in conn.execute(
+                "SELECT content FROM ai_messages WHERE chat_id = %s AND role = 'user'", (ctx.chat_id,)
+            ).fetchall()
+        ]
+        cards = conn.execute(
+            "SELECT result FROM ai_actions WHERE chat_id = %s AND tool = 'ask_questions' AND status = 'done'",
+            (ctx.chat_id,),
+        ).fetchall()
+    for card in cards:
+        result = card["result"] or {}
+        said.append(str(result.get("comment") or ""))
+        said += [str(a.get("answer") or "") for a in result.get("answers") or [] if isinstance(a, dict)]
+    return any(_GENERATE_RE.search(text) for text in said)
+
+
+def _generate_into(user_id: int, workspace_id: int, account_id: int, prompt, count, *, name: str) -> dict:
+    """Картинки по описанию → библиотека кабинета: {images: [{hash, preview_url, account_id}], errors, model}."""
+    try:
+        count = int(count) if count not in (None, "") else 1
+    except (TypeError, ValueError):
+        raise YandexError("args", "count — число картинок") from None
+    # Доступ к кабинету — до генерации: картинки платные, загрузить их должно быть куда.
+    token, login = audiences.account_access(user_id, account_id)
+    result = image_gen.generate(user_id, str(prompt or ""), count=count, workspace_id=workspace_id)
+    uploaded, errors = image_gen.upload(token, login, result["images"], name=name)
+    errors = result["errors"] + errors
+    if not uploaded:
+        raise YandexError("direct", "Директ не принял сгенерированные картинки: " + (errors[0] if errors else "без ответа"))
+    return {"images": [{**i, "account_id": account_id} for i in uploaded], "errors": errors, "model": result["model"]}
+
+
+def _t_generate_images(ctx: Context, args: dict) -> dict:
+    if not image_gen.is_configured(ctx.user_id):
+        raise YandexError(
+            "image-not-configured",
+            image_gen.NOT_CONFIGURED + " — предложи взять картинки из других кампаний или загрузить свои",
+        )
+    if not _wants_generation(ctx):
+        raise YandexError(
+            "args",
+            "Генерация платная — сначала спроси маркетолога, откуда брать картинки (ask_questions с key "
+            f"{IMAGE_SOURCE_KEY}), и генерируй, только если он выбрал генерацию",
+        )
+    account_id = int(_audience_account(ctx, args)["id"])
+    group = _line(args.get("group"), 120)
+    count = args.get("count") if args.get("count") not in (None, "") else 2
+    out = _generate_into(ctx.user_id, ctx.ws_id, account_id, args.get("prompt"), count, name=group or "ИИ")
+    return {
+        "account_id": account_id,
+        "images": [{"hash": i["hash"], "account_id": account_id} for i in out["images"]],
+        "errors": out["errors"],
+        "hint": (
+            "Картинки уже в библиотеке кабинета. Покажи их маркетологу таблицей propose_items stage=images "
+            "(image {hash, account_id}, section — группа, cells [название, «сгенерирована», почему]) — он увидит "
+            "превью и отберёт"
+        ),
+    }
+
+
+def _workspace_account(user_id: int, workspace_id: int, account_id) -> int:
+    try:
+        account_id = int(account_id)
+    except (TypeError, ValueError):
+        raise YandexError("args", "Укажите кабинет") from None
+    if account_id not in {int(a["id"]) for a in list_workspace_accounts(user_id, workspace_id)}:
+        raise YandexError("scope", "Кабинет не подключён к этому пространству")
+    return account_id
+
+
+def workspace_images(user_id: int, workspace_id: int, *, account_id=None) -> dict:
+    """Картинки кампаний пространства для доски: {items: [{hash, account_id, preview_url, campaigns, ads}], more}."""
+    from app.ads import workspace_images as found_images
+
+    require_workspace(user_id, workspace_id)
+    if account_id not in (None, ""):
+        account_id = _workspace_account(user_id, workspace_id, account_id)
+    else:
+        account_id = None
+    return found_images(user_id, workspace_campaign_row_ids(user_id, workspace_id), account_id=account_id)
+
+
+def generate_images(user_id: int, workspace_id: int, *, account_id, prompt, count=1) -> dict:
+    """Кнопка «Сгенерировать» на доске: картинки по описанию маркетолога — сразу в библиотеку кабинета."""
+    require_workspace(user_id, workspace_id)
+    account_id = _workspace_account(user_id, workspace_id, account_id)
+    return _generate_into(user_id, workspace_id, account_id, prompt, count, name="ИИ")
 
 
 AUDIENCE_LISTS_MAX = 40
@@ -936,6 +1069,7 @@ READ_TOOLS = {
     "check_links": _t_links,
     "get_ad_extras": _t_ad_extras,
     "list_ad_images": _t_ad_images,
+    "generate_images": _t_generate_images,
 }
 
 
@@ -1083,7 +1217,7 @@ def _x_add_negatives(ctx: Context, args: dict) -> dict:
 # --- Новая кампания по этапам ------------------------------------------------------------------
 #
 # Новую кампанию модель собирает по этапам, и каждый маркетолог согласует таблицей propose_items:
-# цели → анализ → ключи и группы → (аудитории) → заголовки и тексты → настройки. create_campaign с
+# цели → анализ → ключи и группы → (аудитории) → заголовки и тексты → (картинки) → настройки. create_campaign с
 # группами не пройдёт, пока этапы не согласованы, а фразы, минус-фразы, заголовки, тексты и аудитории в
 # ней — только из согласованных строк (фразы и тексты — ещё и из слов самого маркетолога). То же для фраз и объявлений, которые потом
 # добавляются в кампанию, созданную в этом чате.
@@ -1095,17 +1229,21 @@ ITEM_STAGES = {
     "negatives": "Минус-фразы",
     "audiences": "Аудитории",
     "ads": "Заголовки и тексты",
+    "images": "Картинки",
     "extras": "Ссылка и расширения",
     "settings": "Настройки",
     "other": "На согласование",
 }
-ITEM_KINDS = ("goal", "direction", "keyword", "negative", "audience", "title", "text", "extra", "setting", "other")
+ITEM_KINDS = (
+    "goal", "direction", "keyword", "negative", "audience", "title", "text", "image", "extra", "setting", "other",
+)
 _STAGE_KINDS = {
     "goals": "goal",
     "analysis": "direction",
     "keywords": "keyword",
     "negatives": "negative",
     "audiences": "audience",
+    "images": "image",
     "extras": "extra",
     "settings": "setting",
 }
@@ -1197,11 +1335,10 @@ def _require_approved(ctx: Context, content: dict[str, list[str]], *, stages: li
         )
 
 
-def _audience_approvals(ctx: Context) -> list[dict]:
-    """Аудитории, согласованные в этом чате: [{sign, name, group}] — по таблицам этапа «Аудитории» и
-    правкам на доске."""
+def _item_cards(ctx: Context) -> list[dict]:
+    """Решённые таблицы и правки доски этого чата — по порядку."""
     with pool.connection() as conn:
-        cards = conn.execute(
+        return conn.execute(
             """
             SELECT tool, args, result FROM ai_actions
             WHERE chat_id = %s AND (tool = 'propose_items' AND status = 'done' OR tool = 'board_edit')
@@ -1209,7 +1346,12 @@ def _audience_approvals(ctx: Context) -> list[dict]:
             """,
             (ctx.chat_id,),
         ).fetchall()
-    return _approved_audiences(cards, getattr(ctx, "board_ops", None) or [])
+
+
+def _audience_approvals(ctx: Context) -> list[dict]:
+    """Аудитории, согласованные в этом чате: [{sign, name, group}] — по таблицам этапа «Аудитории» и
+    правкам на доске."""
+    return _approved_audiences(_item_cards(ctx), getattr(ctx, "board_ops", None) or [])
 
 
 def _approved_audiences(cards: list[dict], board_ops: list[dict]) -> list[dict]:
@@ -1268,6 +1410,74 @@ def _require_audiences(ctx: Context, items: list[tuple[str, dict]]) -> None:
             "args",
             "Этих аудиторий маркетолог не согласовывал, снял галочку или убрал на доске: " + "; ".join(bad[:5])
             + (f" и ещё {len(bad) - 5}" if len(bad) > 5 else "") + ". Бери объекты audience из согласованной таблицы stage=audiences или покажи новую таблицу",
+        )
+
+
+def _image_approvals(ctx: Context) -> list[dict]:
+    """Картинки, согласованные в этом чате: [{hash, account_id, group}]."""
+    return _approved_images(_item_cards(ctx), getattr(ctx, "board_ops", None) or [])
+
+
+def _approved_images(cards: list[dict], board_ops: list[dict]) -> list[dict]:
+    """Таблицы этапа «Картинки» и правки доски по порядку → [{hash, account_id, group}]. Картинку, которую
+    маркетолог сам добавил на доске (загрузил, взял из кампаний, сгенерировал), он этим и согласовал."""
+    out: list[dict] = []
+
+    def drop(image_hash: str, group: str) -> None:
+        out[:] = [i for i in out if not (i["hash"] == image_hash and i["group"] == group)]
+
+    def edit(op: dict) -> None:
+        if op.get("op") == "rename_group" and op.get("to"):
+            for item in out:
+                if item["group"] == op.get("group"):
+                    item["group"] = op["to"]
+        elif op.get("kind") == "image" and op.get("op") in ("add", "remove"):
+            drop(op.get("text") or "", op.get("group") or "")
+            if op["op"] == "add":
+                image = op.get("image") if isinstance(op.get("image"), dict) else {}
+                out.append({"hash": op.get("text") or "", "account_id": image.get("account_id"), "group": op.get("group") or ""})
+
+    for card in cards:
+        args = card["args"] or {}
+        if card["tool"] == "board_edit":
+            for op in args.get("ops") or []:
+                edit(op)
+            continue
+        if args.get("stage") != "images":
+            continue
+        chosen = set((card["result"] or {}).get("approved_rows") or [])
+        for row in args.get("rows") or []:
+            image = row.get("image")
+            if not isinstance(image, dict) or not image.get("hash"):
+                continue
+            group = row.get("section") or ""
+            drop(image["hash"], group)
+            if row.get("n") in chosen:
+                out.append({"hash": image["hash"], "account_id": image.get("account_id"), "group": group})
+    for op in board_ops:
+        edit(op)
+    return out
+
+
+def _require_images(ctx: Context, items: list[tuple[str, str]]) -> None:
+    """Картинки новой кампании — только согласованные (таблицей этапа «Картинки» или на доске) и в своих группах."""
+    if ctx.chat_id is None or not items:
+        return
+    approved = _image_approvals(ctx)
+    bad: list[str] = []
+    for group, image_hash in items:
+        groups = [i["group"] for i in approved if i["hash"] == image_hash]
+        if group in groups:
+            continue
+        bad.append(
+            f"{image_hash} согласована для группы «{groups[0]}», а не «{group}»" if groups else f"{image_hash} (группа «{group}»)"
+        )
+    if bad:
+        raise YandexError(
+            "args",
+            "Этих картинок маркетолог не согласовывал, снял галочку или убрал на доске: " + "; ".join(bad[:5])
+            + (f" и ещё {len(bad) - 5}" if len(bad) > 5 else "") + ". Бери хэши из согласованной таблицы "
+            "stage=images и правок на доске или покажи новую таблицу",
         )
 
 
@@ -1358,6 +1568,7 @@ def _p_create_campaign(ctx: Context, args: dict) -> Plan:
     names: list[str] = []
     ads: dict[tuple, str] = {}
     group_audiences: list[tuple[str, dict]] = []
+    group_images: list[tuple[str, str]] = []
     bare: list[str] = []
     href_default = bool(actions._ws_link_template(ctx.ws))
     for index, group in enumerate(groups):
@@ -1378,6 +1589,9 @@ def _p_create_campaign(ctx: Context, args: dict) -> Plan:
         variants = _group_ad(ctx, group.get("ad"), name, int(account["id"]))
         if variants is None:
             continue
+        extras = group["ad"].get("extras")
+        if isinstance(extras, dict) and isinstance(extras.get("image_hashes"), list):
+            group_images += [(name, str(h).strip()) for h in extras["image_hashes"] if str(h or "").strip()]
         if not str(group["ad"].get("href") or "").strip() and not href_default:
             raise YandexError("args", f"Группа «{name}»: укажи href объявления — шаблона ссылки в пространстве нет")
         key = (tuple(sorted(variants[0])), tuple(sorted(variants[1])))
@@ -1407,6 +1621,7 @@ def _p_create_campaign(ctx: Context, args: dict) -> Plan:
         ]
         _require_approved(ctx, {k: v for k, v in content.items() if v}, stages=stages)
         _require_audiences(ctx, group_audiences)
+        _require_images(ctx, group_images)
 
     details = []
     strategy = spec.get("strategy") or {}
@@ -1421,6 +1636,7 @@ def _p_create_campaign(ctx: Context, args: dict) -> Plan:
             f"{_count(len(groups), 'группа', 'группы', 'групп')}, {_count(len(content['keyword']), *_PHRASE_WORDS)}, "
             f"{_count(len(ads), 'объявление', 'объявления', 'объявлений')}"
             + (f", {_count(len(group_audiences), 'аудитория', 'аудитории', 'аудиторий')}" if group_audiences else "")
+            + (f", {_count(len(group_images), 'картинка', 'картинки', 'картинок')}" if group_images else "")
         )
     extra = f" ({', '.join(details)})" if details else ""
     return Plan(
@@ -1444,7 +1660,63 @@ def _x_create_campaign(ctx: Context, args: dict) -> dict:
             ad.pop("extras_from_ad_row_id", None)
     spec["groups"] = groups
     spec.pop("group", None)
-    return create_campaign(ctx.user_id, account_id=account_id, spec=spec, workspace_id=ctx.ws_id)
+    warnings = _bring_images(ctx, groups, account_id)
+    out = create_campaign(ctx.user_id, account_id=account_id, spec=spec, workspace_id=ctx.ws_id)
+    if warnings:
+        out["warnings"] = warnings + list(out.get("warnings") or [])
+    return out
+
+
+def _bring_images(ctx: Context, groups: list[dict], account_id: int) -> list[str]:
+    """Картинки групп — в библиотеку кабинета новой кампании: взятые из другого кабинета пространства
+    копируются, хэши заменяются; каких нет нигде — убираются. → предупреждения."""
+    from app import ad_extras
+    from app.actions import _copy_images
+
+    def image_lists():
+        for group in groups:
+            ad = group.get("ad")
+            extras = ad.get("extras") if isinstance(ad, dict) else None
+            if isinstance(extras, dict) and isinstance(extras.get("image_hashes"), list) and extras["image_hashes"]:
+                yield extras
+
+    wanted = {str(h) for extras in image_lists() for h in extras["image_hashes"]}
+    if not wanted:
+        return []
+    token, login = audiences.account_access(ctx.user_id, account_id)
+    try:
+        here = set(ad_extras.image_previews(token, login, sorted(wanted)))
+    except YandexError:
+        return []  # библиотека не ответила — картинки проверит создание объявлений
+    missing = wanted - here
+    if not missing:
+        return []
+    sources: dict[int, set[str]] = {}
+    if ctx.chat_id is not None:
+        for item in _image_approvals(ctx):
+            try:
+                src = int(item.get("account_id"))
+            except (TypeError, ValueError):
+                continue
+            if item["hash"] in missing and src != account_id and src in ctx.account_ids():
+                sources.setdefault(src, set()).add(item["hash"])
+    warnings: list[str] = []
+    mapping: dict[str, str] = {}
+    for src, hashes in sources.items():
+        src_token, src_login = audiences.account_access(ctx.user_id, src)
+        mapping.update(_copy_images(src_token, src_login, token, login, hashes - set(mapping), warnings))
+    lost = missing - set(mapping)
+    for extras in list(image_lists()):
+        extras["image_hashes"] = [mapping.get(h, h) for h in extras["image_hashes"] if h not in lost]
+        if not extras["image_hashes"]:
+            extras.pop("image_hashes")
+    orphans = lost - {h for hashes in sources.values() for h in hashes}
+    if orphans:
+        warnings.append(
+            "Нет в библиотеке кабинета, объявления выйдут без них: "
+            + _count(len(orphans), "картинка", "картинки", "картинок")
+        )
+    return warnings
 
 
 def _p_duplicate(ctx: Context, args: dict) -> Plan:
@@ -3334,6 +3606,21 @@ def _q_questions(ctx: Context, args: dict) -> dict:
         key = fact_key(item.get("key"))
         if key in keys:
             key = ""  # два вопроса с одним key — запомним только первый
+        if key == IMAGE_SOURCE_KEY:
+            # Варианты — наши: генерацию нельзя выбрать, пока она не подключена (needs). Ответ — на эту кампанию.
+            keys.add(key)
+            questions.append(
+                {
+                    "n": len(questions) + 1,
+                    "key": key,
+                    "question": text,
+                    "options": list(IMAGE_SOURCES.values()),
+                    "multiple": True,
+                    "remember": False,
+                    "needs": dict(IMAGE_SOURCE_NEEDS),
+                }
+            )
+            continue
         if key in known:
             answered.append({"key": key, "question": known[key]["question"] or text, "answer": known[key]["answer"]})
             continue
@@ -3404,6 +3691,7 @@ _ITEM_COLUMNS = {
     "negatives": ["Минус-фраза", "Почему"],
     "audiences": ["Аудитория", "Что внутри", "Почему"],
     "ads": ["Вариант", "Комментарий"],
+    "images": ["Картинка", "Откуда", "Почему"],
     "extras": ["Что", "Значение"],
     "settings": ["Настройка", "Значение", "Почему"],
     "other": ["Что", "Комментарий"],
@@ -3499,6 +3787,65 @@ def _audience_rows(ctx: Context, args: dict, rows: list[dict]) -> None:
             }
 
 
+def _clean_image_ref(raw, name: str = "") -> dict:
+    """image строки этапа «Картинки» → {hash, account_id}; account_id None — кабинет кампании."""
+    if isinstance(raw, str):
+        raw = {"hash": raw}
+    if not isinstance(raw, dict):
+        raise YandexError("args", f"«{name}»: image — объект {{hash, account_id}} из list_ad_images или generate_images")
+    image_hash = str(raw.get("hash") or "").strip()
+    if not _IMAGE_HASH_RE.fullmatch(image_hash):
+        raise YandexError("args", f"«{name}»: image.hash — хэш картинки из list_ad_images или generate_images")
+    try:
+        account_id = int(raw["account_id"]) if raw.get("account_id") not in (None, "") else None
+    except (TypeError, ValueError):
+        raise YandexError("args", f"«{name}»: image.account_id — число") from None
+    return {"hash": image_hash, "account_id": account_id}
+
+
+def _image_rows(ctx: Context, args: dict, rows: list[dict]) -> int:
+    """Строки этапа «Картинки»: картинка есть в библиотеке своего кабинета (превью — таблице и доске), в
+    группе не больше 5 отмеченных. → кабинет кампании."""
+    from app import ad_extras
+
+    default = None
+    for row in rows:
+        image = row["image"]
+        if image["account_id"] is None:
+            if default is None:
+                default = int(_audience_account(ctx, args)["id"])
+            image["account_id"] = default
+        ctx.require_account(image["account_id"])
+    previews: dict[int, dict[str, str]] = {}
+    for account_id in sorted({r["image"]["account_id"] for r in rows}):
+        hashes = sorted({r["image"]["hash"] for r in rows if r["image"]["account_id"] == account_id})
+        try:
+            token, login = audiences.account_access(ctx.user_id, account_id)
+            previews[account_id] = ad_extras.image_previews(token, login, hashes)
+        except YandexError:
+            continue  # Директ не ответил — картинки проверит создание кампании
+        missing = [h for h in hashes if h not in previews[account_id]]
+        if missing:
+            raise YandexError(
+                "args",
+                f"Картинок {_preview(missing, 5)} нет в библиотеке кабинета {account_id} — бери хэши из "
+                "list_ad_images или generate_images",
+            )
+    per_group: dict[str, int] = {}
+    for row in rows:
+        url = previews.get(row["image"]["account_id"], {}).get(row["image"]["hash"])
+        if url:
+            row["image"]["preview_url"] = url
+        if row["checked"]:
+            per_group[row["section"]] = per_group.get(row["section"], 0) + 1
+    over = [f"«{g}»" for g, n in per_group.items() if n > MAX_GROUP_IMAGES]
+    if over:
+        raise YandexError(
+            "args", f"В группе до {MAX_GROUP_IMAGES} картинок: {_preview(over, 4)} — лишние отметь checked: false"
+        )
+    return default if default is not None else rows[0]["image"]["account_id"]
+
+
 def _q_items(ctx: Context, args: dict) -> dict:
     """propose_items → таблица на согласование: строки с галочками, маркетолог снимает лишние."""
     stage = str(args.get("stage") or "other").strip().lower()
@@ -3526,12 +3873,21 @@ def _q_items(ctx: Context, args: dict) -> dict:
         if not cells or not cells[0]:
             continue
         kind = str(item.get("kind") or "").strip().lower()
-        if kind not in ITEM_KINDS or (kind == "audience") != (stage == "audiences"):
+        if (
+            kind not in ITEM_KINDS
+            or (kind == "audience") != (stage == "audiences")
+            or (kind == "image") != (stage == "images")
+        ):
             if stage == "ads":
                 raise YandexError("args", f"«{cells[0]}»: в таблице ads у строки kind — title или text")
             kind = _STAGE_KINDS.get(stage, "other")
         section = _line(item.get("section") or item.get("group"), 120)
-        key = (section, kind, _item_key(cells[0], kind))
+        image = None
+        if kind == "image":
+            if not section:
+                raise YandexError("args", f"«{cells[0]}»: section — группа, в объявление которой картинка")
+            image = _clean_image_ref(item.get("image"), cells[0])
+        key = (section, kind, image["hash"] if image else _item_key(cells[0], kind))
         if key in seen:
             continue
         seen.add(key)
@@ -3554,8 +3910,11 @@ def _q_items(ctx: Context, args: dict) -> dict:
         )
         if audience is not None:
             rows[-1]["audience"] = audience
+        if image is not None:
+            rows[-1]["image"] = image
     if stage == "audiences" and rows:
         _audience_rows(ctx, args, rows)
+    image_account = _image_rows(ctx, args, rows) if stage == "images" and rows else None
     if too_long:
         raise YandexError("args", "Длиннее предела Директа, сократи: " + _preview(too_long, 5))
     if not rows:
@@ -3573,6 +3932,7 @@ def _q_items(ctx: Context, args: dict) -> dict:
         "intro": _para(args.get("intro"), 1500),
         "columns": columns,
         "rows": rows,
+        **({"account_id": image_account} if image_account else {}),
     }
 
 
@@ -3608,7 +3968,8 @@ TOOL_LABELS = {
     "get_slices": "Срезы статистики",
     "check_links": "Проверка ссылок",
     "get_ad_extras": "Расширения объявления",
-    "list_ad_images": "Картинки кабинета",
+    "list_ad_images": "Картинки объявлений",
+    "generate_images": "Генерация картинок",
     "ask_questions": "Вопросы перед работой",
     "propose_plan": "План работ",
     "propose_items": "Таблица на согласование",
@@ -3852,10 +4213,35 @@ TOOLS = [
     ),
     _fn(
         "list_ad_images",
-        "Картинки для объявлений: какие уже стоят в объявлениях кампании и сколько раз, и что ещё есть в "
-        "библиотеке кабинета. Хэш — для extras.image_hashes.",
-        {"campaign_row_id": _ID},
-        ["campaign_row_id"],
+        "Картинки для объявлений. С campaign_row_id — какие уже стоят в объявлениях кампании и сколько раз, и "
+        "что ещё есть в библиотеке кабинета. Без него — картинки из объявлений всех кампаний пространства (для "
+        "новой кампании). Хэш — для extras.image_hashes.",
+        {
+            "campaign_row_id": {**_ID, "description": "кампания; без неё — все кампании пространства"},
+            "account_id": {**_ID, "description": "без campaign_row_id: только этот кабинет"},
+        },
+    ),
+    _fn(
+        "generate_images",
+        "Сгенерировать картинки для объявлений по описанию — через API генерации маркетолога, платно. Только если "
+        f"он сам выбрал генерацию (ask_questions с key {IMAGE_SOURCE_KEY}). Картинки сразу ложатся в библиотеку "
+        "кабинета; дальше покажи их таблицей propose_items stage=images.",
+        {
+            "prompt": {
+                "type": "string",
+                "description": "что на картинке: предмет, сцена, стиль, свет — под оффер группы; без надписей, "
+                "логотипов и рамок",
+            },
+            "count": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": image_gen.COUNT_MAX,
+                "description": "сколько вариантов, по умолчанию 2",
+            },
+            "group": {"type": "string", "description": "группа, для которой картинки"},
+            "account_id": {**_ID, "description": "кабинет кампании, если их несколько"},
+        },
+        ["prompt"],
     ),
     _fn(
         "ask_questions",
@@ -3908,7 +4294,8 @@ TOOLS = [
     _fn(
         "propose_items",
         "Таблица на согласование: строки с галочками, маркетолог снимет лишние и согласует остальное. Для всего, "
-        "что выбирают списком: направления и группы, фразы, минус-фразы, заголовки, тексты, расширения, настройки. "
+        "что выбирают списком: направления и группы, фразы, минус-фразы, заголовки, тексты, картинки, "
+        "расширения, настройки. "
         "Ответ придёт результатом вызова: approved — согласованные строки, removed — снятые; используй только "
         "согласованные. До ответа следующий этап не начинай.",
         {
@@ -3917,8 +4304,8 @@ TOOLS = [
                 "enum": list(ITEM_STAGES),
                 "description": "этап: goals — цели кампании (что рекламируем, оффер, гео, бюджет, цель, посадочная), "
                 "analysis — направления/группы, keywords — фразы по группам, negatives — минус-фразы, audiences — "
-                "аудитории групп (ретаргетинг, LAL, интересы), ads — заголовки и тексты, extras — ссылка и "
-                "расширения, settings — настройки",
+                "аудитории групп (ретаргетинг, LAL, интересы), ads — заголовки и тексты, images — картинки "
+                "объявлений, extras — ссылка и расширения, settings — настройки",
             },
             "title": {"type": "string", "description": "заголовок таблицы"},
             "intro": {"type": "string", "description": "1–3 предложения: на чём основано и что согласовать"},
@@ -3944,11 +4331,16 @@ TOOLS = [
                             "get_audiences вернул lookalike); cells — [название, "
                             "почему], «Что внутри» код напишет сам",
                         },
+                        "image": {
+                            "type": "object",
+                            "description": "только в stage=images: {hash, account_id} из list_ad_images или "
+                            "generate_images; section — группа, cells — [название, откуда, почему]",
+                        },
                     },
                     "required": ["cells"],
                 },
             },
-            "account_id": {**_ID, "description": "stage=audiences: кабинет кампании, если их несколько"},
+            "account_id": {**_ID, "description": "stage=audiences и images: кабинет кампании, если их несколько"},
         },
         ["stage", "rows"],
     ),
@@ -3986,7 +4378,8 @@ TOOLS = [
         "(TEXT_CAMPAIGN|UNIFIED_CAMPAIGN), name, start_date, end_date, strategy {search, network, параметры}, "
         "daily_budget_rub (только ручные ставки), negative_keywords [], excluded_sites [], schedule, "
         "attribution_model, priority_goals, tracking_params, groups [{name, region_ids, keywords [] (до 200), "
-        "bid_rub, ad {titles (до 7), texts (до 3), href, extras или extras_from_ad_row_id}, audiences [] — "
+        "bid_rub, ad {titles (до 7), texts (до 3), href, extras {sitelinks, callouts, image_hashes — согласованные "
+        "картинки группы, до 5} или extras_from_ad_row_id}, audiences [] — "
         "согласованные аудитории группы объектами audience из таблицы stage=audiences}] (до 20 групп; группа без "
         "фраз — только по аудитории, показы лишь в сетях): "
         "объявление комбинаторное, второго заголовка в нём нет; href можно не давать, если в пространстве есть "
@@ -4409,6 +4802,10 @@ def _lal_prompt() -> str:
     )
 
 
+def _image_gen_ready(ctx: Context) -> bool:
+    return image_gen.is_configured(ctx.user_id)
+
+
 def _system_prompt(ctx: Context) -> str:
     ws = ctx.ws
     access = ctx.access
@@ -4476,9 +4873,10 @@ def _system_prompt(ctx: Context) -> str:
         "по этапам ниже.",
         "- Новую кампанию собирай строго по этапам. Каждый этап заканчивается таблицей propose_items, и к "
         "следующему переходишь только после её согласования; без согласованных этапов create_campaign вернёт "
-        "ошибку. Маркетолог видит рядом с чатом доску сборки — цели, группы с фразами и объявления, "
-        "расширения — и согласует этапы на ней, поэтому называй группы (section) одинаково на всех этапах. На "
-        "доске он может сам поправить фразы, заголовки, тексты и группы и убрать аудитории: такие правки приходят сообщением "
+        "ошибку. Маркетолог видит рядом с чатом доску сборки — цели, группы с фразами, объявлениями и "
+        "картинками, расширения — и согласует этапы на ней, поэтому называй группы (section) одинаково на всех "
+        "этапах. На доске он может сам поправить фразы, заголовки, тексты и группы, убрать аудитории, добавить и "
+        "убрать картинки: такие правки приходят сообщением "
         "«[Правки на доске]» и полем edited_by_user в ответе таблицы — дальше бери их в таком виде. 1) Цели кампании — сначала "
         "ask_questions, если чего-то не хватает в брифе, затем propose_items stage=goals строками «что — "
         "значение»: что рекламируем и оффер, гео, бюджет, цель (действие на сайте или цель Метрики), посадочная "
@@ -4500,15 +4898,24 @@ def _system_prompt(ctx: Context) -> str:
         "интересы и группы без фраз не предлагай. В create_campaign аудитории — в groups[].audiences объектами "
         "audience из согласованных строк. "
         "5) Заголовки и тексты — propose_items stage=ads: каждой группе до 7 заголовков (kind=title, до 56 "
-        "знаков) и до 3 текстов (kind=text, до 81) под её фразы, section — группа. 6) Ссылка и расширения — "
+        "знаков) и до 3 текстов (kind=text, до 81) под её фразы, section — группа. 6) Картинки — сначала "
+        f"ask_questions с key {IMAGE_SOURCE_KEY}: откуда брать картинки (варианты подставит сервис, можно выбрать "
+        "несколько). «Взять из других кампаний» — list_ad_images без campaign_row_id, затем propose_items "
+        "stage=images: строка — картинка, image {hash, account_id}, section — группа, cells [название, откуда, "
+        "почему]; самих картинок ты не видишь — выбирай по кампаниям, где они стоят, маркетолог увидит превью. "
+        "«Загружу свои» — попроси загрузить их кнопкой «Загрузить» в группах на доске и написать, когда готово: "
+        "загруженное приходит правками на доске и уже согласовано, таблица не нужна. «Сгенерировать по "
+        "описанию» — generate_images по каждой группе (сцена под её оффер, без надписей и логотипов), затем "
+        "таблица stage=images. «Без картинок» — этап пропусти. В группе до 5 картинок; в create_campaign "
+        "согласованные хэши — в ad.extras.image_hashes своей группы. 7) Ссылка и расширения — "
         "propose_items stage=extras: ссылка или шаблон пространства; быстрые ссылки — строка на ссылку с "
         "section «Быстрые ссылки» (текст до 30 знаков, ссылка, описание до 60); уточнения — строка на уточнение "
         "с section «Уточнения» (до 25 знаков); или у какого объявления взять расширения. В create_campaign "
-        "согласованные быстрые ссылки и уточнения — в ad.extras каждой группы. 7) Настройки — propose_items stage=settings: тип, стратегия, бюджет, "
+        "согласованные быстрые ссылки и уточнения — в ad.extras каждой группы. 8) Настройки — propose_items stage=settings: тип, стратегия, бюджет, "
         "регионы, расписание, цель; допустимые стратегии и цели — get_campaign_options, id регионов — "
-        "find_regions. 8) create_campaign — одним вызовом черновик со всеми группами (spec.groups), "
+        "find_regions. 9) create_campaign — одним вызовом черновик со всеми группами (spec.groups), "
         "только из согласованных строк: снятое галочкой не бери, новое не добавляй без новой таблицы. "
-        "9) На модерацию — только после отдельного согласия (moderate_campaign). Если Вордстат не подключён или "
+        "10) На модерацию — только после отдельного согласия (moderate_campaign). Если Вордстат не подключён или "
         "упёрся в квоту, скажи об этом, строй направления и фразы из брифа, сайта и запросов других кампаний, а "
         "частоты не выдумывай — в таблице так и пиши «нет данных».",
         "- Затухшую кампанию, если причина не в балансе, модерации или настройке, которую проще поправить, "
@@ -4586,6 +4993,11 @@ def _system_prompt(ctx: Context) -> str:
     first = not ws.get("campaigns_count")
     if first:
         lines.append(FIRST_CAMPAIGN_RULE)
+    if not _image_gen_ready(ctx):
+        lines.append(
+            "- Генерация картинок не подключена: generate_images не вызывай; в вопросе image_source этот вариант "
+            "маркетолог выбрать не сможет (подключают его в Настройки → Генерация картинок)."
+        )
     if not first and not any(f["key"] == SCHEME_FACT for f in facts):
         lines.append(
             "- Механика конверсий за 0 ₽ ещё не разобрана. Гипотеза для проверки, не факт: кампания платит за "
@@ -4731,10 +5143,11 @@ BUILD_STAGES = {
     "negatives": "Минус-фразы",
     "audiences": "Аудитории",
     "ads": "Объявления",
+    "images": "Картинки",
     "extras": "Ссылка и расширения",
     "settings": "Настройки",
 }
-_BUILD_OPTIONAL = {"negatives", "audiences", "extras"}
+_BUILD_OPTIONAL = {"negatives", "audiences", "images", "extras"}
 _BUILD_STARTS = {"goals", "analysis"}
 _BUILD_REQUIRED = ("goals", "analysis", "keywords", "ads", "settings")
 _BUILD_FACTS = {"goals": "goals", "analysis": "directions", "extras": "extras", "settings": "settings"}
@@ -4813,7 +5226,9 @@ class _Board:
     def group(self, name: str) -> dict:
         name = name or NO_GROUP
         if name not in self.groups:
-            self.groups[name] = {"name": name, "keywords": {}, "titles": {}, "texts": {}, "audiences": {}, "href": ""}
+            self.groups[name] = {
+                "name": name, "keywords": {}, "titles": {}, "texts": {}, "audiences": {}, "images": {}, "href": "",
+            }
         return self.groups[name]
 
     def _drop_keyword(self, key: str, keep: str | None = None) -> None:
@@ -4867,6 +5282,19 @@ class _Board:
                 self.group(section)[f"{kind}s"][_item_key(text)] = item
             elif (section or NO_GROUP) in self.groups:
                 self.groups[section or NO_GROUP][f"{kind}s"].pop(_item_key(text), None)
+        elif stage == "images":
+            image = row.get("image")
+            if not isinstance(image, dict) or not image.get("hash"):
+                return
+            if chosen:
+                self.group(section)["images"][image["hash"]] = {
+                    **item,
+                    "hash": image["hash"],
+                    "account_id": image.get("account_id"),
+                    "preview_url": image.get("preview_url") or "",
+                }
+            elif (section or NO_GROUP) in self.groups:
+                self.groups[section or NO_GROUP]["images"].pop(image["hash"], None)
         elif stage in self.facts:
             link_kind, links = _extra_links(section, row) if stage == "extras" else ("", [])
             target = self.links[link_kind] if link_kind else self.facts[stage]
@@ -4884,7 +5312,7 @@ class _Board:
         group = self.groups.get(op.get("group") or "")
         if group is None:
             return None
-        return group[f"{kind}s"] if kind in ("title", "text", "audience") else group["keywords"]
+        return group[f"{kind}s"] if kind in ("title", "text", "audience", "image") else group["keywords"]
 
     def op(self, op: dict) -> None:
         """Правка с доски; чего уже нет (убрали новой таблицей) — пропускается."""
@@ -4895,8 +5323,14 @@ class _Board:
         bucket = self._bucket(op)
         if bucket is None:
             return
-        key = _item_key(op["text"], kind)
-        if op["op"] == "add":
+        key = op["text"] if kind == "image" else _item_key(op["text"], kind)
+        if op["op"] == "add" and kind == "image":
+            image = op.get("image") if isinstance(op.get("image"), dict) else {}
+            bucket.setdefault(key, _build_item(
+                op.get("name") or "Картинка", "добавил маркетолог", own=True, hash=key,
+                account_id=image.get("account_id"), preview_url=image.get("preview_url") or "",
+            ))
+        elif op["op"] == "add":
             if kind == "keyword":
                 self._drop_keyword(key, keep=op["group"])
             bucket.setdefault(key, _build_item(op["text"], own=True))
@@ -4929,16 +5363,40 @@ class _Board:
             target["keywords"].setdefault(key, item)
         for key, item in source["audiences"].items():
             target["audiences"].setdefault(key, item)
+        for key, item in source["images"].items():
+            target["images"].setdefault(key, item)
         if not target["titles"] and not target["texts"]:
             target["titles"], target["texts"] = source["titles"], source["texts"]
         target["href"] = target["href"] or source["href"]
         del self.groups[old]
 
 
-def _spec_board(spec: dict, values: dict[str, str], known: dict[str, dict] | None = None) -> tuple[list[dict], list[dict]]:
-    """Группы и минус-фразы из карточки создания: это то, что уйдёт в Директ. Частотность фраз и суть
-    аудиторий (known — строки таблиц по названию) — из таблиц."""
+def _spec_board(
+    spec: dict, values: dict[str, str], known: dict[str, dict] | None = None, known_images: dict[str, dict] | None = None
+) -> tuple[list[dict], list[dict]]:
+    """Группы и минус-фразы из карточки создания: это то, что уйдёт в Директ. Частотность фраз, суть
+    аудиторий (known — строки таблиц по названию) и превью картинок (known_images — по хэшу) — из таблиц."""
     known = known or {}
+    known_images = known_images or {}
+
+    def group_images(raw) -> list[dict]:
+        out = []
+        for value in raw if isinstance(raw, list) else []:
+            image_hash = str(value or "").strip()
+            if not image_hash or any(i["hash"] == image_hash for i in out):
+                continue
+            seen = known_images.get(image_hash) or {}
+            out.append(
+                _build_item(
+                    seen.get("text") or "Картинка",
+                    seen.get("value") or "",
+                    seen.get("note") or "",
+                    hash=image_hash,
+                    account_id=seen.get("account_id"),
+                    preview_url=seen.get("preview_url") or "",
+                )
+            )
+        return out
 
     def group_audiences(raw) -> list[dict]:
         out = []
@@ -4990,6 +5448,7 @@ def _spec_board(spec: dict, values: dict[str, str], known: dict[str, dict] | Non
             "titles": items(ad.get("titles") if isinstance(ad.get("titles"), list) else [ad.get("title")], "title"),
             "texts": items(ad.get("texts") if isinstance(ad.get("texts"), list) else [ad.get("text")], "text"),
             "audiences": group_audiences(raw.get("audiences")),
+            "images": group_images(extras.get("image_hashes")),
             "href": str(ad.get("href") or "").strip(),
             "sitelinks": sitelinks,
             "callouts": items(extras.get("callouts"), "callout"),
@@ -5086,6 +5545,21 @@ def _build_checks(build: dict, *, link_template: bool) -> list[dict]:
         else:
             add("audiences", "Аудитории", "ok", note)
 
+    images = {g["name"]: _checked(g.get("images") or []) for g in groups}
+    if groups and status.get("images") != "skipped":
+        crowded = [f"«{name}»" for name, items in images.items() if len(items) > MAX_GROUP_IMAGES]
+        plain = [f"«{g['name']}»" for g in groups if not images[g["name"]] and not g.get("extras_from_ad")]
+        total = sum(len(items) for items in images.values())
+        note = _count(total, "картинка", "картинки", "картинок")
+        if crowded:
+            add("images", "Картинки", "bad", f"больше {MAX_GROUP_IMAGES} в группе: " + _preview(crowded, 3))
+        elif not total and plain:
+            add("images", "Картинки", "warn", "картинок нет — в сетях объявление без картинки получает меньше показов")
+        elif plain:
+            add("images", "Картинки", "warn", f"{note}; без картинок: {_preview(plain, 3)}")
+        else:
+            add("images", "Картинки", "ok", note if total else "как у объявления кампании")
+
     negatives = _checked(build["negatives"])
     if negatives:
         add("negatives", "Минус-фразы", "ok", _count(len(negatives), "минус-фраза", "минус-фразы", "минус-фраз"))
@@ -5161,6 +5635,7 @@ def campaign_build(actions: list[dict], *, link_template: bool = False) -> dict 
             "titles": list(g["titles"].values()),
             "texts": list(g["texts"].values()),
             "audiences": list(g["audiences"].values()),
+            "images": list(g["images"].values()),
             "href": g["href"],
             "sitelinks": None,
             "callouts": None,
@@ -5168,7 +5643,10 @@ def campaign_build(actions: list[dict], *, link_template: bool = False) -> dict 
         }
 
     # Группа, из которой всё перенесли или убрали, с доски уходит.
-    groups = [listed(g) for g in board.groups.values() if g["keywords"] or g["titles"] or g["texts"] or g["audiences"]]
+    groups = [
+        listed(g) for g in board.groups.values()
+        if g["keywords"] or g["titles"] or g["texts"] or g["audiences"] or g["images"]
+    ]
     negatives = list(board.negatives.values())
 
     # Карточка создания (ждёт решения, создаётся или создана) — это то, что уйдёт в Директ: группы
@@ -5181,7 +5659,8 @@ def campaign_build(actions: list[dict], *, link_template: bool = False) -> dict 
         spec = spec if isinstance(spec, dict) else {}
         if action["status"] in ("pending", "approved", "done"):
             known = {k: i for g in board.groups.values() for k, i in g["audiences"].items()}
-            groups, negatives = _spec_board(spec, board.values, known)
+            known_images = {k: i for g in board.groups.values() for k, i in g["images"].items()}
+            groups, negatives = _spec_board(spec, board.values, known, known_images)
         result = action.get("result") if isinstance(action.get("result"), dict) else {}
         campaign = result.get("campaign") if isinstance(result.get("campaign"), dict) else {}
         draft = {
@@ -5197,12 +5676,16 @@ def campaign_build(actions: list[dict], *, link_template: bool = False) -> dict 
     if "negatives" not in status and negatives and "keywords" in status:
         status["negatives"] = "pending" if any(n["pending"] for n in negatives) else "done"
         last_table["negatives"] = last_table["keywords"]
+    # Картинки, которые маркетолог сам добавил на доске, — этап пройден и без таблицы.
+    if "images" not in status and any(g.get("images") for g in groups):
+        status["images"] = "done"
     facts = {out: list(board.facts[stage].values()) for stage, out in _BUILD_FACTS.items()}
     counts = {stage: len(_checked(facts[out])) for stage, out in _BUILD_FACTS.items()}
     counts["keywords"] = sum(len(_checked(g["keywords"])) for g in groups)
     counts["negatives"] = len(_checked(negatives))
     counts["ads"] = sum(len(_checked(g["titles"])) + len(_checked(g["texts"])) for g in groups)
     counts["audiences"] = sum(len(_checked(g["audiences"])) for g in groups)
+    counts["images"] = sum(len(_checked(g.get("images") or [])) for g in groups)
 
     stages = []
     later_started = False
@@ -5230,10 +5713,28 @@ def campaign_build(actions: list[dict], *, link_template: bool = False) -> dict 
         "sitelinks": list(board.links["sitelink"].values()),
         "callouts": list(board.links["callout"].values()),
         "draft": draft,
+        "account_id": _build_account(episode, groups),
     }
     build["checks"] = _build_checks(build, link_template=link_template)
     build["ready"] = all(c["state"] != "bad" for c in build["checks"])
     return build
+
+
+def _build_account(episode: list[dict], groups: list[dict]) -> int | None:
+    """Кабинет новой кампании — для картинок, которые маркетолог добавляет на доске."""
+    found = None
+    for action in episode:
+        args = action.get("args") or {}
+        if action.get("status") == "rejected":
+            continue
+        if action["tool"] in ("propose_items", "create_campaign") and args.get("account_id") not in (None, ""):
+            try:
+                found = int(args["account_id"])
+            except (TypeError, ValueError):
+                continue
+    if found is None:
+        found = next((int(i["account_id"]) for g in groups for i in g.get("images") or [] if i.get("account_id")), None)
+    return found
 
 
 # --- Правки маркетолога на доске ----------------------------------------------------------------
@@ -5244,11 +5745,17 @@ def campaign_build(actions: list[dict], *, link_template: bool = False) -> dict 
 
 BOARD_OPS = ("edit", "add", "remove", "move", "rename_group")
 MAX_BOARD_OPS = 50
-_BOARD_KINDS = ("keyword", "negative", "title", "text", "audience")
-_BOARD_MAX = {"keyword": 200, "title": 7, "text": 3}
-_BOARD_STAGE = {"keyword": "keywords", "negative": "keywords", "title": "ads", "text": "ads", "audience": "audiences"}
-_BOARD_WHAT = {"keyword": "фразу", "negative": "минус-фразу", "title": "заголовок", "text": "текст", "audience": "аудиторию"}
-_BOARD_LIST = {"keyword": "фраз", "title": "заголовков", "text": "текстов"}
+_BOARD_KINDS = ("keyword", "negative", "title", "text", "audience", "image")
+_BOARD_MAX = {"keyword": 200, "title": 7, "text": 3, "image": MAX_GROUP_IMAGES}
+_BOARD_STAGE = {
+    "keyword": "keywords", "negative": "keywords", "title": "ads", "text": "ads", "audience": "audiences",
+    "image": "images",
+}
+_BOARD_WHAT = {
+    "keyword": "фразу", "negative": "минус-фразу", "title": "заголовок", "text": "текст", "audience": "аудиторию",
+    "image": "картинку",
+}
+_BOARD_LIST = {"keyword": "фраз", "title": "заголовков", "text": "текстов", "image": "картинок"}
 
 
 def _board_op(raw) -> dict:
@@ -5271,6 +5778,21 @@ def _board_op(raw) -> dict:
         raise YandexError("args", "Переносить между группами можно только фразы")
     if kind == "audience" and op != "remove":
         raise YandexError("args", "Аудиторию на доске можно только убрать — новую предложит ИИ в чате")
+    if kind == "image":
+        # Картинка — по хэшу в библиотеке кабинета; name — подпись на доске и в заметке для ИИ.
+        if op not in ("add", "remove"):
+            raise YandexError("args", "Картинку на доске можно только добавить или убрать")
+        out["kind"] = kind
+        out["text"] = str(raw.get("text") or raw.get("hash") or "").strip()
+        if not _IMAGE_HASH_RE.fullmatch(out["text"]):
+            raise YandexError("args", "Нет хэша картинки")
+        out["name"] = _line(raw.get("name"), 120) or "Картинка"
+        if op == "add":
+            try:
+                out["image"] = {"account_id": int(raw.get("account_id"))}
+            except (TypeError, ValueError):
+                raise YandexError("args", "Укажите кабинет картинки") from None
+        return out
     out["kind"] = kind
     if kind == "negative":
         out["group"] = ""
@@ -5305,6 +5827,9 @@ def _board_note(op: dict) -> str:
         return f"объединил группу {q(op['group'])} с группой {q(op['to'])}" if op.get("merge") else (
             f"переименовал группу {q(op['group'])} в {q(op['to'])}"
         )
+    if op["kind"] == "image":
+        verb, where = ("добавил", "в группу") if op["op"] == "add" else ("убрал", "из группы")
+        return f"{verb} картинку {q(op.get('name') or 'Картинка')} {where} {q(op['group'])}: image_hash {op['text']}"
     what = _BOARD_WHAT[op["kind"]]
     where = f" в группе {q(op['group'])}" if op["kind"] != "negative" else ""
     if op["op"] == "edit":
@@ -5324,7 +5849,9 @@ def _board_find(build: dict, op: dict) -> tuple[list[dict], dict | None]:
         group = next((g for g in build["groups"] if g["name"] == op["group"]), None)
         if group is None:
             raise YandexError("args", f"Группы «{op['group']}» уже нет на доске — обновите страницу")
-        bucket = group[f"{op['kind']}s"] if op["kind"] in ("title", "text", "audience") else group["keywords"]
+        bucket = group[f"{op['kind']}s"] if op["kind"] in ("title", "text", "audience", "image") else group["keywords"]
+    if op["kind"] == "image":
+        return bucket, next((i for i in bucket if i.get("hash") == op["text"]), None)
     key = _item_key(op["text"], op["kind"])
     return bucket, next((i for i in bucket if _item_key(i["text"], op["kind"]) == key), None)
 
@@ -5360,7 +5887,7 @@ def _board_validate(build: dict, op: dict) -> dict | None:
         if problem:
             raise YandexError("args", problem)
         if item is not None:
-            raise YandexError("args", f"«{op['text']}» уже есть")
+            raise YandexError("args", "Эта картинка в группе уже есть" if kind == "image" else f"«{op['text']}» уже есть")
         _board_keyword_elsewhere(build, op, op["text"])
         top = _BOARD_MAX.get(kind)
         if top and len(_checked(bucket)) >= top:
@@ -5408,14 +5935,17 @@ def _table_row_patch(table: dict, op: dict, item: dict | None, build: dict) -> b
         if not same:
             return False
         width = max(len(r.get("cells") or []) for r in rows) or 1
+        cells = ([op["name"], "добавил маркетолог"] if op["kind"] == "image" else [op["text"]])[:width]
         rows.append({
             "n": max(int(r.get("n") or 0) for r in rows) + 1,
             "section": same[0].get("section") or "" if op["kind"] == "negative" else op["group"],
             "kind": op["kind"],
-            "cells": [op["text"]] + [""] * (width - 1),
+            "cells": cells + [""] * (width - len(cells)),
             "checked": True,
             "added": True,
         })
+        if op["kind"] == "image":
+            rows[-1]["image"] = {"hash": op["text"], **op["image"]}
         return True
     row = next((r for r in rows if r.get("n") == item["n"]), None)
     if row is None:
@@ -5430,7 +5960,8 @@ def _table_row_patch(table: dict, op: dict, item: dict | None, build: dict) -> b
         row["section"] = op["to_group"]
     elif op["op"] == "remove":
         if not row.get("added"):
-            raise YandexError("args", f"«{op['text']}» предложил ИИ — снимите с неё галочку, и она не войдёт в этап")
+            what = f"Картинку «{op.get('name') or row['cells'][0]}»" if op.get("kind") == "image" else f"«{op['text']}»"
+            raise YandexError("args", f"{what} предложил ИИ — снимите с неё галочку, и она не войдёт в этап")
         rows.remove(row)
     return True
 
@@ -5463,6 +5994,25 @@ def _spec_patch(spec: dict, op: dict) -> None:
         groups.remove(source)
         return
     kind = op["kind"]
+    if kind == "image":
+        group = find(op["group"])
+        if not isinstance(group.get("ad"), dict):
+            group["ad"] = {}
+        if not isinstance(group["ad"].get("extras"), dict):
+            group["ad"]["extras"] = {}
+        extras = group["ad"]["extras"]
+        hashes = [str(h) for h in extras.get("image_hashes") or []] if isinstance(extras.get("image_hashes"), list) else []
+        if op["op"] == "add":
+            extras["image_hashes"] = [*hashes, op["text"]]
+            return
+        left = [h for h in hashes if h != op["text"]]
+        if len(left) == len(hashes):
+            raise YandexError("args", "Этой картинки нет в карточке создания — обновите страницу")
+        if left:
+            extras["image_hashes"] = left
+        else:
+            extras.pop("image_hashes", None)
+        return
     if kind == "audience":
         group = find(op["group"])
         items = group.get("audiences") if isinstance(group.get("audiences"), list) else []
@@ -5515,6 +6065,7 @@ def edit_board(user_id: int, chat_id: int, ops) -> dict:
             raise YandexError("busy", "ИИ ещё отвечает — дождитесь ответа")
         actions = conn.execute("SELECT * FROM ai_actions WHERE chat_id = %s ORDER BY id", (chat_id,)).fetchall()
     ws = require_workspace(user_id, chat["workspace_id"])
+    _board_images(user_id, chat["workspace_id"], ops)
     from app.actions import _ws_link_template
 
     link_template = bool(_ws_link_template(ws))
@@ -5611,6 +6162,28 @@ def edit_board(user_id: int, chat_id: int, ops) -> dict:
     return get_chat(user_id, chat_id)
 
 
+def _board_images(user_id: int, workspace_id: int, ops: list[dict]) -> None:
+    """Картинки, добавленные на доске: кабинет — из пространства, картинка — в его библиотеке; превью — доске."""
+    from app import ad_extras
+
+    adds = [op for op in ops if op.get("kind") == "image" and op["op"] == "add"]
+    if not adds:
+        return
+    allowed = {int(a["id"]) for a in list_workspace_accounts(user_id, workspace_id)}
+    by_account: dict[int, list[dict]] = {}
+    for op in adds:
+        if op["image"]["account_id"] not in allowed:
+            raise YandexError("scope", "Кабинет картинки не подключён к этому пространству")
+        by_account.setdefault(op["image"]["account_id"], []).append(op)
+    for account_id, items in by_account.items():
+        token, login = audiences.account_access(user_id, account_id)
+        found = ad_extras.image_previews(token, login, sorted({op["text"] for op in items}))
+        for op in items:
+            if op["text"] not in found:
+                raise YandexError("args", f"Картинки «{op['name']}» нет в библиотеке кабинета — загрузите её заново")
+            op["image"]["preview_url"] = found[op["text"]]
+
+
 def _board_summary(ops: list[dict]) -> str:
     notes = [op.get("note") or "" for op in ops]
     text = "; ".join(n for n in notes if n)
@@ -5686,13 +6259,24 @@ def get_chat(user_id: int, chat_id: int) -> dict:
     ws = require_workspace(user_id, chat["workspace_id"])
     from app.actions import _ws_link_template
 
+    build = campaign_build(actions, link_template=bool(_ws_link_template(ws)))
+    if build is not None:
+        # Кабинеты — чтобы доска знала, куда загружать картинки, если кабинет кампании ещё не выбран.
+        accounts = list_workspace_accounts(user_id, chat["workspace_id"])
+        build["accounts"] = [
+            {"id": int(a["id"]), "client_login": a["client_login"], "name": a.get("name") or a["client_login"]}
+            for a in accounts
+        ]
+        if build["account_id"] is None and len(accounts) == 1:
+            build["account_id"] = int(accounts[0]["id"])
     return {
         "chat": _chat_out(chat),
         "messages": [_message_out(m) for m in messages],
         "actions": [_action_out(a) for a in actions],
-        "build": campaign_build(actions, link_template=bool(_ws_link_template(ws))),
+        "build": build,
         "access": normalize_ai_access(ws.get("ai_access")),
         "ai": {"configured": ai.get_settings(user_id)["configured"]},
+        "image_gen": {"configured": image_gen.is_configured(user_id)},
     }
 
 
@@ -6042,10 +6626,11 @@ def _close_interactive(
     return updated, int(left)
 
 
-def _compose_answers(questions: list[dict], answers) -> tuple[list[dict], list[dict]]:
+def _compose_answers(questions: list[dict], answers, caps: set[str] | None = None) -> tuple[list[dict], list[dict]]:
     """Ответы из карточки → ([{question, answer} | {question, skipped}], факты для памяти пространства).
 
-    Ответ — выбранные варианты (только из предложенных) и свой текст через «; ».
+    Ответ — выбранные варианты (только из предложенных) и свой текст через «; ». Вариант с needs выбирается,
+    только если нужное подключено (caps).
     """
     by_n: dict[int, dict] = {}
     for index, item in enumerate(answers if isinstance(answers, list) else []):
@@ -6067,6 +6652,9 @@ def _compose_answers(questions: list[dict], answers) -> tuple[list[dict], list[d
         for option in raw if isinstance(raw, list) else []:
             label = _line(option, 200)
             if label in (question.get("options") or []) and label not in picked:
+                need = (question.get("needs") or {}).get(label)
+                if need and need not in (caps or set()):
+                    raise YandexError("args", f"«{label}» недоступно: {_NEED_TEXT.get(need, 'не подключено')}")
                 picked.append(label)
         if not question.get("multiple"):
             picked = picked[:1]
@@ -6101,7 +6689,10 @@ def answer_questions(user_id: int, action_id: int, *, answers=None, comment: str
             reply=reply,
         )
     else:
-        out, facts = _compose_answers(payload.get("questions") or [], answers)
+        questions = payload.get("questions") or []
+        needs = {n for q in questions for n in (q.get("needs") or {}).values()}
+        caps = {"image_gen"} if "image_gen" in needs and image_gen.is_configured(user_id) else set()
+        out, facts = _compose_answers(questions, answers, caps)
         if not comment and not any("answer" in a for a in out):
             raise YandexError("args", "Ответьте хотя бы на один вопрос или напишите комментарий")
         remembered: list[str] = []

@@ -9,6 +9,27 @@
     </div>
     <p v-if="args.intro" class="ai-ask__lead">{{ args.intro }}</p>
 
+    <div v-if="images.length" class="ai-items__images">
+      <figure v-for="r in images" :key="r.id" class="ai-items__image" :class="{ 'is-off': isOff(r) }">
+        <button
+          type="button"
+          class="ai-items__image-pick"
+          :aria-pressed="!isOff(r)"
+          :aria-label="r.cells[0] || 'Картинка'"
+          :disabled="!pending || disabled"
+          :title="[r.cells[1], r.cells[2]].filter(Boolean).join(' · ')"
+          @click="flip(r)"
+        >
+          <img v-if="r.image?.preview_url" :src="r.image.preview_url" :alt="r.cells[0] || 'Картинка'" loading="lazy" />
+          <span v-else class="ai-items__image-none">нет превью</span>
+        </button>
+        <figcaption>
+          <small v-if="r.section">{{ r.section }}</small>
+          {{ r.cells[0] }}
+        </figcaption>
+      </figure>
+    </div>
+
     <AiCheckTable
       :off="pending ? off : decidedOff"
       :columns="columns"
@@ -73,7 +94,9 @@ const STAGES = {
   analysis: 'анализ',
   keywords: 'ключи и группы',
   negatives: 'минус-фразы',
+  audiences: 'аудитории',
   ads: 'заголовки и тексты',
+  images: 'картинки',
   extras: 'ссылка и расширения',
   settings: 'настройки',
 }
@@ -86,8 +109,10 @@ const pending = computed(() => props.action.status === 'pending')
 const stage = computed(() => STAGES[args.value.stage] || '')
 const columns = computed(() => args.value.columns || [])
 const rows = computed(() =>
-  (args.value.rows || []).map((r) => ({ id: r.n, section: r.section, kind: r.kind, cells: r.cells || [] })),
+  (args.value.rows || []).map((r) => ({ id: r.n, section: r.section, kind: r.kind, cells: r.cells || [], image: r.image })),
 )
+// Этап картинок: превью над таблицей, щелчок — снять или вернуть галочку.
+const images = computed(() => (args.value.stage === 'images' ? rows.value.filter((r) => r.image) : []))
 
 const off = ref((args.value.rows || []).filter((r) => r.checked === false).map((r) => r.n))
 const comment = ref('')
@@ -112,6 +137,14 @@ const decidedOff = computed(() => {
   const approved = result.value.approved_rows || []
   return rows.value.filter((r) => !approved.includes(r.id)).map((r) => r.id)
 })
+
+function isOff(row) {
+  return (pending.value ? off.value : decidedOff.value).includes(row.id)
+}
+
+function flip(row) {
+  off.value = off.value.includes(row.id) ? off.value.filter((n) => n !== row.id) : [...off.value, row.id]
+}
 
 function approve() {
   emit('submit', { approve: true, rows: chosen.value, comment: comment.value.trim() })

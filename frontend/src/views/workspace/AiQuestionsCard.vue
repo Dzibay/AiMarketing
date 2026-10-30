@@ -28,12 +28,16 @@
             :class="{ 'is-on': isPicked(q, o) }"
             :role="q.multiple ? 'checkbox' : 'radio'"
             :aria-checked="isPicked(q, o)"
-            :disabled="disabled"
+            :disabled="disabled || locked(q, o)"
+            :title="locked(q, o) ? NEED_TEXT[q.needs[o]] : undefined"
             @click="toggle(q, o)"
           >
             {{ o }}
           </button>
         </div>
+        <small v-for="need in missing(q)" :key="need" class="hint">
+          {{ NEED_TEXT[need] }} — <RouterLink :to="NEED_LINK[need]">подключить в настройках</RouterLink>
+        </small>
         <input
           v-model="texts[q.n]"
           class="ai-input"
@@ -91,11 +95,24 @@ import { computed, reactive, ref } from 'vue'
 const props = defineProps({
   action: { type: Object, required: true },
   disabled: { type: Boolean, default: false },
+  /** Что подключено у маркетолога ({ image_gen: true }): вариант с needs без этого не выбрать. */
+  caps: { type: Object, default: () => ({}) },
 })
 const emit = defineEmits(['submit'])
 
 const STATUS = { pending: 'ждёт ответа', done: 'отвечено', rejected: 'без ответа' }
 const CHIPS = { pending: 'chip--warning', done: 'chip--ok' }
+const NEED_TEXT = { image_gen: 'Генерация картинок не подключена' }
+const NEED_LINK = { image_gen: '/cabinet/settings#image-gen' }
+
+function locked(q, option) {
+  const need = q.needs?.[option]
+  return !!need && !props.caps[need]
+}
+
+function missing(q) {
+  return [...new Set(Object.values(q.needs || {}))].filter((need) => !props.caps[need])
+}
 
 const args = computed(() => props.action.args || {})
 const questions = computed(() => args.value.questions || [])

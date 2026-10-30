@@ -162,6 +162,11 @@ export const aiApi = {
   wordstat: () => request('/api/web/ai/wordstat'),
   saveWordstat: (payload) => put('/api/web/ai/wordstat', payload),
   testWordstat: () => post('/api/web/ai/wordstat/test'),
+  /** Генерация картинок для объявлений: свой API — OpenAI-совместимый или YandexART. */
+  imageGen: () => request('/api/web/ai/image-gen'),
+  saveImageGen: (payload) => put('/api/web/ai/image-gen', payload),
+  /** Одна настоящая картинка — платно, по тарифу провайдера: { ok, model, image (data URL) }. */
+  testImageGen: () => post('/api/web/ai/image-gen/test'),
   /** Расход за месяц (ГГГГ-ММ, по умолчанию текущий): итог, лимит, по задачам, пространствам и моделям. */
   usage: (month = '') => request(`/api/web/ai/usage${query({ month })}`),
   chats: (workspaceId) => request(`${WS(workspaceId)}/chats`),
@@ -183,6 +188,10 @@ export const aiApi = {
   items: (actionId, payload) => post(`/api/web/ai/actions/${actionId}/items`, payload),
   /** Правки на доске сборки: [{ op, kind, group, text, to, to_group }] → чат целиком. */
   board: (chatId, ops) => post(`/api/web/ai/chats/${chatId}/board`, { ops }),
+  /** Картинки из объявлений кампаний пространства: { items: [{ hash, account_id, preview_url, campaigns, ads }], more }. */
+  wsImages: (workspaceId, accountId = null) => request(`${WS(workspaceId)}/ad-images${query({ account_id: accountId })}`),
+  /** Картинки по описанию → библиотека кабинета: { images: [{ hash, preview_url, account_id }], errors }. */
+  generateImages: (workspaceId, payload) => post(`${WS(workspaceId)}/ad-images/generate`, payload),
   /** Чем ИИ может помочь: сигналы считает код без ИИ, бесплатно. */
   signals: (workspaceId) => request(`${WS(workspaceId)}/signals`),
   /** «Разбор»: { prompt?, title?, chat_id? } → { chat, message, job }; без chat_id — новый чат. */
