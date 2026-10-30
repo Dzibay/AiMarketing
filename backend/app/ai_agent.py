@@ -16,7 +16,7 @@ from datetime import date, datetime, timedelta, timezone
 
 from psycopg.types.json import Jsonb
 
-from app import ai, audiences, experiments, image_gen
+from app import ai, audiences, context_files, experiments, image_gen
 from app.actions import BULK_ACTIONS, SETTINGS_LABELS, campaign_options
 from app.brief import brief_filled, normalize_brief
 from app.clock import today_msk
@@ -4806,6 +4806,15 @@ def _image_gen_ready(ctx: Context) -> bool:
     return image_gen.is_configured(ctx.user_id)
 
 
+def _context_files_block(ctx: Context) -> str:
+    """Файлы контекста пространства для промпта; без них ход не должен падать."""
+    try:
+        return context_files.prompt_block(ctx.ws_id)
+    except Exception:
+        log.warning("Файлы контекста пространства %s не загружены", ctx.ws_id, exc_info=True)
+        return ""
+
+
 def _system_prompt(ctx: Context) -> str:
     ws = ctx.ws
     access = ctx.access
@@ -5036,6 +5045,9 @@ def _system_prompt(ctx: Context) -> str:
         lines += ["", "Решения маркетолога по поисковым запросам (учитывай их в предложениях минус-фраз):", examples]
     if (ws.get("ai_notes") or "").strip():
         lines += ["", "Заметки маркетолога о проекте:", ws["ai_notes"].strip()]
+    files = _context_files_block(ctx)
+    if files:
+        lines += ["", files]
     return "\n".join(lines)
 
 

@@ -123,6 +123,13 @@ export const wsApi = {
   headlineReports: (id) => request(`${WS(id)}/headline-reports`),
   uploadHeadlineReport: (id, payload) => post(`${WS(id)}/headline-reports`, payload),
   deleteHeadlineReport: (id, reportId) => del(`${WS(id)}/headline-reports/${reportId}`),
+  /** Файлы контекста для ИИ: .txt, .md и zip с ними. */
+  contextFiles: (id) => request(`${WS(id)}/context-files`),
+  uploadContextFile: (id, payload) => post(`${WS(id)}/context-files`, payload),
+  setContextFile: (id, fileId, enabled) => patch(`${WS(id)}/context-files/${fileId}`, { enabled }),
+  deleteContextFile: (id, fileId) => del(`${WS(id)}/context-files/${fileId}`),
+  clearContextFiles: (id) => del(`${WS(id)}/context-files`),
+  setContextFilesLimit: (id, limit) => put(`${WS(id)}/context-files/limit`, { limit }),
   campaign: (id, cid) => request(`${WS(id)}/campaigns/${cid}`),
   campaignSettings: (id, cid) => request(`${WS(id)}/campaigns/${cid}/settings`),
   updateCampaignSettings: (id, cid, changes) => patch(`${WS(id)}/campaigns/${cid}/settings`, { changes }),

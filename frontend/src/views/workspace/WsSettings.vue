@@ -81,6 +81,8 @@
 
   <BriefPanel />
 
+  <ContextFilesPanel />
+
   <section class="panel">
     <div class="panel__head">
       <div>
@@ -333,6 +335,7 @@ import { pushToast } from '../../composables/useToasts'
 import { loadWorkspaces, useWorkspaces } from '../../composables/useWorkspaces'
 import { CAMPAIGN_STATES, CAMPAIGN_TYPES, formatDateTime, plural, rub } from '../../utils/format'
 import BriefPanel from './BriefPanel.vue'
+import ContextFilesPanel from './ContextFilesPanel.vue'
 import LinkTemplatePanel from './LinkTemplatePanel.vue'
 import { useWs } from './context'
 

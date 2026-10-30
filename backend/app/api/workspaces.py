@@ -159,6 +159,19 @@ class HeadlineReportBody(BaseModel):
     campaign_row_id: int | None = None
 
 
+class ContextFileBody(BaseModel):
+    filename: str = ""
+    data: str
+
+
+class ContextFilePatchBody(BaseModel):
+    enabled: bool
+
+
+class ContextFilesLimitBody(BaseModel):
+    limit: int
+
+
 class AdsAiItem(BaseModel):
     ad_row_id: int
     net: str = ""
@@ -547,6 +560,72 @@ def ws_headline_delete(workspace_id: int, report_id: int, user_id: int = Depends
     except YandexError as exc:
         raise _http(exc) from exc
     return {"status": "ok"}
+
+
+@router.get("/{workspace_id}/context-files")
+def ws_context_files(workspace_id: int, user_id: int = Depends(require_web_user)) -> dict:
+    """Файлы контекста для ИИ и сколько из них уходит в промпт чата."""
+    from app.context_files import list_files
+
+    try:
+        return list_files(user_id, workspace_id)
+    except YandexError as exc:
+        raise _http(exc) from exc
+
+
+@router.post("/{workspace_id}/context-files")
+def ws_context_upload(workspace_id: int, body: ContextFileBody, user_id: int = Depends(require_web_user)) -> dict:
+    """.txt, .md или zip с ними (base64)."""
+    from app.context_files import upload
+
+    try:
+        return upload(user_id, workspace_id, filename=body.filename, data=body.data)
+    except YandexError as exc:
+        raise _http(exc) from exc
+
+
+@router.put("/{workspace_id}/context-files/limit")
+def ws_context_limit(workspace_id: int, body: ContextFilesLimitBody, user_id: int = Depends(require_web_user)) -> dict:
+    """Сколько символов файлов уходит в промпт чата."""
+    from app.context_files import set_limit
+
+    try:
+        return set_limit(user_id, workspace_id, body.limit)
+    except YandexError as exc:
+        raise _http(exc) from exc
+
+
+@router.patch("/{workspace_id}/context-files/{file_id}")
+def ws_context_patch(
+    workspace_id: int, file_id: int, body: ContextFilePatchBody, user_id: int = Depends(require_web_user)
+) -> dict:
+    from app.context_files import set_enabled
+
+    _ws(user_id, workspace_id)
+    try:
+        return set_enabled(user_id, workspace_id, file_id, body.enabled)
+    except YandexError as exc:
+        raise _http(exc) from exc
+
+
+@router.delete("/{workspace_id}/context-files")
+def ws_context_clear(workspace_id: int, user_id: int = Depends(require_web_user)) -> dict:
+    from app.context_files import delete_file
+
+    try:
+        return delete_file(user_id, workspace_id)
+    except YandexError as exc:
+        raise _http(exc) from exc
+
+
+@router.delete("/{workspace_id}/context-files/{file_id}")
+def ws_context_delete(workspace_id: int, file_id: int, user_id: int = Depends(require_web_user)) -> dict:
+    from app.context_files import delete_file
+
+    try:
+        return delete_file(user_id, workspace_id, file_id)
+    except YandexError as exc:
+        raise _http(exc) from exc
 
 
 @router.post("/{workspace_id}/ads/ai")
