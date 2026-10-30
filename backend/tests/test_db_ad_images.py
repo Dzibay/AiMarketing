@@ -18,6 +18,8 @@ from app.yandex import YandexError
 from tests.dbutil import make_account, make_campaign, make_connection, make_user, make_workspace
 
 JPEG = b"\xff\xd8\xff" + b"0" * 64
+# Заведомо ненастоящий ключ генератора; заголовки собираем из него, а не пишем строкой.
+IMAGE_KEY = "test-image-1234"
 
 
 @pytest.fixture(autouse=True)
@@ -60,7 +62,7 @@ def _ad(db, user, account_id, campaign_row_id, ad_id, hashes):
 def test_settings_keep_key_reset_check_and_yandexart(db):
     user = make_user(db)
     assert image_gen.get_settings(user)["configured"] is False and not image_gen.is_configured(user)
-    saved = image_gen.save_settings(user, provider="openai", api_key="sk-img-abcdef1234", price_rub=4.5)
+    saved = image_gen.save_settings(user, provider="openai", api_key=IMAGE_KEY, price_rub=4.5)
     assert saved["configured"] and saved["key_hint"] == "…1234" and saved["price_rub"] == 4.5
     assert "api_key" not in saved and "api_key_enc" not in saved
     image_gen._remember_check(user, "")
@@ -69,7 +71,7 @@ def test_settings_keep_key_reset_check_and_yandexart(db):
     kept = image_gen.save_settings(user, provider="openai", model="dall-e-3")
     assert kept["checked_at"] is None and kept["has_key"] and kept["price_rub"] == 4.5
     cfg = image_gen.load_config(user, 7)
-    assert (cfg["base_url"], cfg["model"], cfg["headers"]["Authorization"]) == (image_gen.OPENAI_BASE, "dall-e-3", "Bearer sk-img-abcdef1234")
+    assert (cfg["base_url"], cfg["model"], cfg["headers"]["Authorization"]) == (image_gen.OPENAI_BASE, "dall-e-3", f"Bearer {IMAGE_KEY}")
     assert (cfg["task"], cfg["workspace_id"], cfg["price"], cfg["check_host"]) == ("images", 7, 4.5, False)
 
     with pytest.raises(YandexError) as err:
@@ -83,7 +85,7 @@ def test_settings_keep_key_reset_check_and_yandexart(db):
     assert art["configured"] and art["base_url"] == ""
     cfg = image_gen.load_config(user)
     assert cfg["model"] == "art://b1gfolder/aliceai-image-art-3.0" and cfg["model_name"] == "aliceai-image-art-3.0"
-    assert cfg["headers"]["Authorization"] == "Api-Key sk-img-abcdef1234" and cfg["headers"]["OpenAI-Project"] == "b1gfolder"
+    assert cfg["headers"]["Authorization"] == f"Api-Key {IMAGE_KEY}" and cfg["headers"]["OpenAI-Project"] == "b1gfolder"
 
     assert image_gen.save_settings(user, provider="yandexart", folder_id="b1gfolder", api_key="")["configured"] is False
     with pytest.raises(YandexError) as err:
@@ -95,7 +97,7 @@ def test_generated_images_count_in_ai_spend(db, monkeypatch):
     s = _seed(db)
     ai.save_settings(s.user, provider="openai", api_key="sk-test-1234abcd", model="gpt-test", price_in=100, price_out=400,
                      monthly_limit_rub=100)
-    image_gen.save_settings(s.user, provider="openai", api_key="sk-img-1", price_rub=40)
+    image_gen.save_settings(s.user, provider="openai", api_key=IMAGE_KEY, price_rub=40)
     sent = []
 
     def post(url, **kw):
@@ -149,7 +151,7 @@ def test_image_source_answer_needs_connected_generation(db, monkeypatch):
     ctx = SimpleNamespace(chat_id=chat)
     assert ai_agent._wants_generation(ctx) is False
 
-    image_gen.save_settings(s.user, provider="openai", api_key="sk-img-1")
+    image_gen.save_settings(s.user, provider="openai", api_key=IMAGE_KEY)
     assert ai_agent.get_chat(s.user, chat)["image_gen"] == {"configured": True}
     monkeypatch.setattr(ai, "complete", lambda cfg, messages, tools=None: {"content": "Опишите товар", "tool_calls": []})
     ai_agent.answer_questions(s.user, card["id"], answers=pick)
@@ -197,13 +199,13 @@ def test_api_settings_and_board_generation(db, monkeypatch):
     off = client.post(f"/api/web/workspaces/{s.ws}/ad-images/generate", headers=auth, json=body)
     assert off.status_code == 400 and off.json()["detail"]["code"] == "image-not-configured"
 
-    put = client.put("/api/web/ai/image-gen", headers=auth, json={"provider": "openai", "api_key": "sk-img-9876", "price_rub": 3})
+    put = client.put("/api/web/ai/image-gen", headers=auth, json={"provider": "openai", "api_key": IMAGE_KEY, "price_rub": 3})
     assert put.status_code == 200 and put.json()["configured"] and put.json()["price_rub"] == 3.0
     # PUT без цены её не стирает, null — стирает.
     assert client.put("/api/web/ai/image-gen", headers=auth, json={"provider": "openai"}).json()["price_rub"] == 3.0
     assert client.put("/api/web/ai/image-gen", headers=auth, json={"provider": "openai", "price_rub": None}).json()["price_rub"] is None
     got = client.get("/api/web/ai/image-gen", headers=auth).json()
-    assert got["has_key"] and got["key_hint"] == "…9876" and [p["id"] for p in got["providers"]] == ["openai", "yandexart"]
+    assert got["has_key"] and got["key_hint"] == "…1234" and [p["id"] for p in got["providers"]] == ["openai", "yandexart"]
 
     monkeypatch.setattr(yandex_module, "get_connection_access_token", lambda conn_id, user_id: "tok")
     monkeypatch.setattr(image_gen, "_request", lambda cfg, prompt: JPEG)
