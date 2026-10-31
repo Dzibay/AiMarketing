@@ -37,6 +37,7 @@ def library(monkeypatch):
         logins={"acc-a": 3, "acc-b": 4},
         calls=[],
         error=None,
+        homes={},
     )
 
     def previews(token, login, hashes):
@@ -48,6 +49,8 @@ def library(monkeypatch):
 
     monkeypatch.setattr(audiences, "account_access", lambda user_id, account_id: (f"t{account_id}", {3: "acc-a", 4: "acc-b"}[account_id]))
     monkeypatch.setattr(ad_extras, "image_previews", previews)
+    # Где картинка стоит в объявлениях пространства: хэш → {account_id}.
+    monkeypatch.setattr(ai_agent, "_image_homes", lambda ctx, hashes: {h: set(a) for h, a in state.homes.items() if h in hashes})
     return state
 
 
@@ -361,6 +364,64 @@ def test_bring_images_copies_from_other_account(monkeypatch, library):
     assert ai_agent._bring_images(FakeContext(), [{"name": "А", "ad": {"extras": {"image_hashes": ["h1"]}}}], 3) == []
     library.error = "Таймаут"
     assert ai_agent._bring_images(FakeContext(), [{"name": "А", "ad": {"extras": {"image_hashes": ["zz"]}}}], 3) == []
+
+
+def _copying(monkeypatch, mapping):
+    copies = []
+
+    def copy(src_token, src_login, token, login, hashes, warnings):
+        copies.append((src_login, login, sorted(hashes)))
+        return {h: mapping[h] for h in hashes if h in mapping}
+
+    monkeypatch.setattr(actions, "_copy_images", copy)
+    return copies
+
+
+def test_update_ad_copies_images_from_other_account(monkeypatch, library):
+    from app import ads
+
+    # В чате таблицей картинку не согласовывали — но она стоит в объявлении второго кабинета пространства.
+    library.homes = {"x1": {4}}
+    monkeypatch.setattr(ai_agent, "_image_approvals", lambda ctx: [])
+    copies = _copying(monkeypatch, {"x1": "new1"})
+    sent = []
+    monkeypatch.setattr(ads, "update_text_ad", lambda user_id, ad_row_id, **fields: sent.append(fields["extras"]) or {"id": ad_row_id})
+    ctx = FakeContext()
+    ctx.ads = lambda ids: [{"id": 11, "account_id": 3, "type": "RESPONSIVE_AD", "title": "Окна"}]
+
+    out = ai_agent._x_update_ad(ctx, {"ad_row_id": 11, "extras": {"image_hashes": ["h1", "x1", "gone"]}})
+    assert copies == [("acc-b", "acc-a", ["x1"])]
+    assert sent == [{"image_hashes": ["h1", "new1"]}]
+    assert out == {"id": 11, "warnings": ["Нет в библиотеке кабинета, картинки объявления не менялись: 1 картинка"]}
+
+    # Картинка, которой нет нигде, — extras без ключа: ads.update_text_ad картинок объявления не трогает.
+    sent.clear()
+    ai_agent._x_update_ad(ctx, {"ad_row_id": 11, "extras": {"image_hashes": ["gone"], "callouts": ["Гарантия"]}})
+    assert sent == [{"callouts": ["Гарантия"]}]
+    # Правка без картинок кабинет и библиотеку не трогает.
+    library.calls.clear()
+    assert ai_agent._x_update_ad(ctx, {"ad_row_id": 11, "title": "Окна"}) == {"id": 11}
+    assert library.calls == []
+
+
+def test_create_ad_copies_images_from_other_account(monkeypatch, library):
+    from app import ads
+
+    monkeypatch.setattr(ai_agent, "_image_approvals", lambda ctx: [{"hash": "x1", "account_id": 4, "group": "Окна"}])
+    copies = _copying(monkeypatch, {"x1": "new1"})
+    monkeypatch.setattr(ai_agent, "_new_ad", lambda ctx, args: ({"id": 9, "account_id": 3}, "RESPONSIVE_AD", ["Окна"], ["Быстро"]))
+    sent = []
+    monkeypatch.setattr(ads, "create_text_ad", lambda user_id, **fields: sent.append(fields["extras"]) or {"id": 5})
+    out = ai_agent._x_create_ad(FakeContext(), {"href": "https://okna.ru", "extras": {"image_hashes": ["x1"]}})
+    assert copies == [("acc-b", "acc-a", ["x1"])] and sent == [{"image_hashes": ["new1"]}] and out == {"id": 5}
+
+
+def test_update_ads_pass_image_warnings(monkeypatch):
+    pairs = [({"ad_row_id": 11}, {"id": 11, "title": "Окна"}), ({"ad_row_id": 12}, {"id": 12, "title": "Двери"})]
+    monkeypatch.setattr(ai_agent, "_ad_items", lambda ctx, args: pairs)
+    answers = {11: {"id": 11, "warnings": ["нет картинки"]}, 12: {"id": 12}}
+    monkeypatch.setattr(ai_agent, "_x_update_ad", lambda ctx, item: answers[item["ad_row_id"]])
+    assert ai_agent._x_update_ads(FakeContext(), {}) == {"updated": 2, "ads": ["«Окна»", "«Двери»"], "warnings": ["«Окна»: нет картинки"]}
 
 
 # --- Доска ---------------------------------------------------------------------------------------------

@@ -236,6 +236,13 @@ def test_model_error_marks_chat(db, monkeypatch):
     assert ai_agent.run_chat(s["user"], s["chat"])["status"] == "error"
     chat = ai_agent.get_chat(s["user"], s["chat"])["chat"]
     assert chat["status"] == "error" and "ключ" in chat["error"]
+    # След ошибки остаётся в ленте (с размером запроса) и после следующей отправки; в запрос к модели он не идёт.
+    last = ai_agent.get_chat(s["user"], s["chat"])["messages"][-1]
+    assert last["role"] == "error" and last["content"].startswith("Провайдер ИИ отклонил ключ (запрос ≈ ")
+    ai_agent.post_message(s["user"], s["chat"], "Ещё раз")
+    messages = ai_agent.get_chat(s["user"], s["chat"])["messages"]
+    assert [m["role"] for m in messages] == ["user", "error", "user"]
+    assert all(m["role"] != "error" for m in ai_agent._history(s["chat"]))
 
 
 def test_ai_api(db, monkeypatch):

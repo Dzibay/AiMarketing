@@ -354,3 +354,181 @@ def test_action_out_shows_picks_and_removed():
     out = ai_agent._action_out(row)
     assert out["items"] == [{"id": "phrases.0"}] and out["removed"] == [{"text": "б"}]
     assert out["args"] == {"phrases": ["а"]}
+
+
+# --- Согласование комплектов объявлений ---------------------------------------------------------
+
+
+class FakePool:
+    """pool.connection() без БД: карточки (ai_actions) и слова маркетолога (ai_messages)."""
+
+    def __init__(self, cards: list[dict], said: list[str] | None = None):
+        self.cards, self.said = cards, said or []
+
+    def connection(self):
+        return self
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def execute(self, sql, params=None):
+        rows = self.cards if "ai_actions" in sql else [{"content": s} for s in self.said]
+        return SimpleNamespace(fetchall=lambda: rows)
+
+
+def _ads_card(rows: list[dict], approved: list[int], stage: str = "ads") -> dict:
+    return {"tool": "propose_items", "args": {"stage": stage, "rows": rows}, "result": {"approved_rows": approved}}
+
+
+COMBO = {
+    "n": 1, "kind": "other", "checked": True, "section": "Телефон",
+    "cells": [
+        "Android/iPhone · A2",
+        "HAPP на телефоне от 167 ₽;Скачайте HAPP на Android; Ключ HAPP за минуту",
+        "Подписка HAPP от 167 ₽ в месяц.;Android и iPhone: скачайте приложение. Попробуйте 2 дня.",
+    ],
+}
+
+
+def test_ads_combo_row_approves_every_title_and_text(monkeypatch):
+    """Комплект «название / заголовки через ; / описания» согласован целиком, а не только по названию."""
+    monkeypatch.setattr(ai_agent, "pool", FakePool([_ads_card([COMBO], [1])]))
+    ctx = SimpleNamespace(chat_id=5, board_ops=[])
+    stages, approved, _ = ai_agent._stage_approvals(ctx)
+    assert stages == {"ads"}
+    ai_agent._require_approved(ctx, {
+        "title": ["Скачайте HAPP на Android", "Ключ HAPP за минуту", "HAPP на телефоне от 167 ₽"],
+        "text": ["Подписка HAPP от 167 ₽ в месяц.", "Android и iPhone: скачайте приложение. Попробуйте 2 дня."],
+    }, stages=[])
+    with pytest.raises(YandexError) as err:
+        ai_agent._require_approved(ctx, {"title": ["Скачайте HAPP на iPhone"], "text": ["Скидка 50%"]}, stages=[])
+    assert "Скачайте HAPP на iPhone" in err.value.message and "Скидка 50%" in err.value.message
+    assert ai_agent._item_key("Android/iPhone · A2") in approved
+
+
+def test_ads_row_not_checked_is_not_approved(monkeypatch):
+    monkeypatch.setattr(ai_agent, "pool", FakePool([_ads_card([COMBO], [])]))
+    ctx = SimpleNamespace(chat_id=5, board_ops=[])
+    with pytest.raises(YandexError):
+        ai_agent._require_approved(ctx, {"title": ["Ключ HAPP за минуту"]}, stages=[])
+
+
+def test_keywords_table_still_approves_first_cell_only(monkeypatch):
+    """Другие этапы по-прежнему согласуют только первую ячейку: частота и группа не делают фразу согласованной."""
+    row = {"n": 1, "kind": "keyword", "checked": True, "section": "Окна",
+           "cells": ["купить окна", "12 000", "окна пвх дёшево"]}
+    monkeypatch.setattr(ai_agent, "pool", FakePool([_ads_card([row], [1], stage="keywords")]))
+    ctx = SimpleNamespace(chat_id=5, board_ops=[])
+    ai_agent._require_approved(ctx, {"keyword": ["Купить окна"]}, stages=[])
+    with pytest.raises(YandexError):
+        ai_agent._require_approved(ctx, {"keyword": ["окна пвх дёшево"]}, stages=[])
+
+
+def test_ads_glued_texts_get_a_hint():
+    with pytest.raises(YandexError) as err:
+        ai_agent._q_items(FakeContext(), {"stage": "ads", "rows": [
+            {"kind": "text", "section": "Телефон", "cells": ["Первый текст объявления про HAPP | " + "Т" * 60 + " | третий"]},
+        ]})
+    assert "> 81" in err.value.message and "одна строка — один заголовок или текст" in err.value.message
+
+
+# --- Стратегия и ценность целей проверяются до карточки ----------------------------------------
+
+
+@pytest.mark.parametrize("strategy,text", [
+    ({"search": True, "network": True}, "строкой"),
+    ({"search": "ЛУЧШАЯ"}, "PAY_FOR_CONVERSION_MULTIPLE_GOALS"),
+    ({"search": "WB_MAXIMUM_CLICKS"}, "недельный бюджет"),
+])
+def test_create_campaign_plan_checks_strategy(approvals, strategy, text):
+    with pytest.raises(YandexError) as err:
+        ai_agent._p_create_campaign(FakeContext(), {"account_id": 3, "spec": {"name": "Новая", "strategy": strategy}})
+    assert text.lower() in err.value.message.lower()
+
+
+def test_create_campaign_plan_checks_goal_value(approvals):
+    spec = {"name": "Новая", "strategy": {"search": "HIGHEST_POSITION"}, "priority_goals": [{"goal_id": 599}]}
+    with pytest.raises(YandexError) as err:
+        ai_agent._p_create_campaign(FakeContext(), {"account_id": 3, "spec": spec})
+    assert "value_rub" in err.value.message
+    spec["priority_goals"] = [{"goal_id": 599, "value_rub": 0.3}]
+    assert ai_agent._p_create_campaign(FakeContext(), {"account_id": 3, "spec": spec}).summary
+
+
+# --- История запроса и след ошибки -----------------------------------------------------------------
+
+
+class HistoryPool(FakePool):
+    """pool.connection() для _history: сообщения чата (новые первыми, как в запросе), правок доски нет."""
+
+    def __init__(self, rows: list[dict]):
+        super().__init__([])
+        self.rows = rows
+
+    def execute(self, sql, params=None):
+        rows = self.rows if "ai_messages" in sql else []
+        return SimpleNamespace(fetchall=lambda: list(rows))
+
+
+def _msg(id, role, content="", calls=None, call_id="", name=""):
+    return {"id": id, "role": role, "content": content, "tool_calls": calls, "tool_call_id": call_id, "tool_name": name}
+
+
+def test_history_shortens_read_results_of_earlier_turns(monkeypatch):
+    big = "x" * 5000
+    call = lambda call_id, name: {"id": call_id, "name": name, "arguments": "{}"}
+    rows = [
+        _msg(1, "user", "Проверь кампанию"),
+        _msg(2, "assistant", "", [call("a", "get_campaign"), call("b", "propose_items")]),
+        _msg(3, "tool", big, call_id="a", name="get_campaign"),
+        _msg(4, "tool", big, call_id="b", name="propose_items"),
+        _msg(5, "error", "ИИ не ответил за отведённое время (запрос ≈ 90000 токенов, сообщений: 4)"),
+        _msg(6, "user", "Продолжай"),
+        _msg(7, "assistant", "", [call("c", "get_campaign")]),
+        _msg(8, "tool", big, call_id="c", name="get_campaign"),
+    ]
+    monkeypatch.setattr(ai_agent, "pool", HistoryPool(rows[::-1]))
+    history = ai_agent._history(1)
+    tools = {m["tool_call_id"]: m["content"] for m in history if m["role"] == "tool"}
+    assert tools["a"].startswith("x" * ai_agent.OLD_RESULT_CHARS + "…") and "было 5000 символов" in tools["a"]
+    assert tools["b"] == big  # согласования и ответы на вопросы не сокращаются
+    assert tools["c"] == big  # ход в работе — целиком
+    # Строка ошибки — след для людей, модели её не показываем.
+    assert [m["role"] for m in history] == ["user", "assistant", "tool", "tool", "user", "assistant", "tool"]
+
+
+def test_end_with_error_keeps_it_in_the_feed(monkeypatch):
+    seen = []
+    monkeypatch.setattr(ai_agent, "_set_status", lambda chat_id, status, error="": seen.append(("status", status, error)))
+    monkeypatch.setattr(ai_agent, "pool", FakePool([]))
+    monkeypatch.setattr(ai_agent, "_insert_message", lambda conn, chat_id, role, content="", **kw: seen.append((role, content)))
+    assert ai_agent._end_with_error(5, "ИИ не ответил за отведённое время", (95000, 40)) == {"status": "error"}
+    assert ai_agent._end_with_error(5, "ИИ не подключён") == {"status": "error"}
+    assert seen == [
+        ("status", "error", "ИИ не ответил за отведённое время"),
+        ("error", "ИИ не ответил за отведённое время (запрос ≈ 95000 токенов, сообщений: 40)"),
+        ("status", "error", "ИИ не подключён"),
+        ("error", "ИИ не подключён"),
+    ]
+
+
+def test_model_call_timeout_comes_from_config(monkeypatch):
+    import httpx
+
+    from app import ai
+
+    seen = []
+
+    def post(url, **kw):
+        seen.append(kw["timeout"])
+        return httpx.Response(200, json={"choices": [{"message": {"content": "готов"}}]}, request=httpx.Request("POST", url))
+
+    monkeypatch.setattr(ai.httpx, "post", post)
+    cfg = {"base_url": "https://ai.example", "model": "m", "headers": {}, "check_host": False, "limit_rub": None, "user_id": None}
+    ai.complete(cfg, [{"role": "user", "content": "привет"}])
+    ai.complete({**cfg, "timeout": ai_agent.CHAT_TIMEOUT_SECONDS}, [{"role": "user", "content": "привет"}])
+    assert seen == [ai.TIMEOUT_SECONDS, ai_agent.CHAT_TIMEOUT_SECONDS] and seen[1] > seen[0]
+    assert ai.estimate_tokens([{"role": "user", "content": "я" * 250}]) > 100

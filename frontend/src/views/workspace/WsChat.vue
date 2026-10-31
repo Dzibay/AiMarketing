@@ -149,6 +149,8 @@
             <span aria-hidden="true">✎</span> Правки на доске: {{ item.content }}
           </p>
 
+          <p v-else-if="item.role === 'error'" class="notice notice--warn">{{ item.content }}</p>
+
           <div v-else class="msg msg--ai">
             <div v-if="item.content" class="msg__bubble md" v-html="renderMarkdown(item.content)" />
 
@@ -256,7 +258,7 @@
         <div v-if="status === 'running'" class="msg msg--ai">
           <div class="msg__bubble msg__bubble--thinking"><span class="spinner" /> {{ thinkingText }}</div>
         </div>
-        <p v-if="status === 'error' && chat?.error" class="notice notice--warn">{{ chat.error }}</p>
+        <p v-if="status === 'error' && chat?.error && !errorInFeed" class="notice notice--warn">{{ chat.error }}</p>
       </div>
 
       <div v-if="pendingWrites.length > 1" class="chat__pending">
@@ -368,6 +370,11 @@ let stickToBottom = true
 const chatId = computed(() => Number(route.params.chatId) || null)
 const chat = computed(() => (data.value && data.value.chat.id === chatId.value ? data.value.chat : null))
 const status = computed(() => chat.value?.status || 'idle')
+// Ошибка хода уже стоит в ленте последней строкой (с размером запроса) — плашку с тем же текстом не дублируем.
+const errorInFeed = computed(() => {
+  const last = chat.value ? data.value.messages[data.value.messages.length - 1] : null
+  return last?.role === 'error' && !!chat.value.error && last.content.startsWith(chat.value.error)
+})
 const access = computed(() => ws.value.ai_access || { full_access: false, categories: {}, max_change_pct: 30 })
 const actions = computed(() => (chat.value ? data.value.actions : []))
 const pendingActions = computed(() => actions.value.filter((a) => a.status === 'pending'))
@@ -461,6 +468,7 @@ const items = computed(() => {
   const out = []
   for (const m of data.value.messages) {
     if (m.role === 'user') out.push({ key: `m${m.id}`, role: 'user', content: m.content })
+    if (m.role === 'error') out.push({ key: `m${m.id}`, role: 'error', content: m.content })
     if (m.role === 'assistant') {
       const item = assistantItem(m, results, byCall)
       if (item) out.push(item)

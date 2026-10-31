@@ -333,6 +333,14 @@ def check_budget(cfg: dict) -> None:
         )
 
 
+def estimate_tokens(messages: list[dict], tools: list[dict] | None = None) -> int:
+    """Размер запроса в токенах по символам — для сообщений об ошибке, когда ответа с usage нет."""
+    chars = len(json.dumps(messages, ensure_ascii=False))
+    if tools:
+        chars += len(json.dumps(tools, ensure_ascii=False))
+    return math.ceil(chars / CHARS_PER_TOKEN)
+
+
 def _usage(cfg: dict, data: dict, messages: list[dict], tools, content: str, calls: list[dict]) -> dict:
     chars_in = len(json.dumps(messages, ensure_ascii=False))
     if tools:
@@ -424,7 +432,7 @@ def complete(cfg: dict, messages: list[dict], tools: list[dict] | None = None) -
             f"{cfg['base_url']}/chat/completions",
             json=body,
             headers=cfg["headers"],
-            timeout=TIMEOUT_SECONDS,
+            timeout=cfg.get("timeout") or TIMEOUT_SECONDS,
             follow_redirects=False,
         )
     except httpx.TimeoutException as exc:

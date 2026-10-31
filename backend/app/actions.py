@@ -296,6 +296,23 @@ def _auto_block(kind: str, strategy: dict) -> dict:
     return {"BiddingStrategyType": kind, struct: block}
 
 
+def strategy_choices() -> str:
+    """Допустимые значения search и network — в тексте ошибки, чтобы ИИ не гадал, а исправил за один раз."""
+    return (
+        "search — HIGHEST_POSITION (ручные ставки) или автостратегия: " + ", ".join(AUTO_STRATEGIES)
+        + "; network — NETWORK_DEFAULT или SERVING_OFF"
+    )
+
+
+def _strategy_name(value, default: str = "") -> str:
+    """Название стратегии из формы или ИИ: строка в любом регистре; true, число или объект — не название."""
+    if not value:
+        return default
+    if not isinstance(value, str):
+        raise YandexError("strategy", f"Стратегия — строкой, а не {value!r}: {strategy_choices()}")
+    return value.strip().upper() or default
+
+
 def build_bidding_strategy(strategy: dict | None, ctype: str = "TEXT_CAMPAIGN") -> tuple[dict, bool]:
     """Стратегия из формы → BiddingStrategy API и признак ручного управления ставками.
 
@@ -304,8 +321,8 @@ def build_bidding_strategy(strategy: dict | None, ctype: str = "TEXT_CAMPAIGN") 
     """
     strategy = strategy or {}
     unified = ctype == "UNIFIED_CAMPAIGN"
-    search = str(strategy.get("search") or "HIGHEST_POSITION").upper()
-    network = str(strategy.get("network") or "").upper()
+    search = _strategy_name(strategy.get("search"), "HIGHEST_POSITION")
+    network = _strategy_name(strategy.get("network"))
     if network == "MAXIMUM_COVERAGE":
         raise YandexError("strategy", "Ручных ставок в сетях в Директе нет — в сетях работает только автостратегия")
     if search == "HIGHEST_POSITION":
@@ -331,7 +348,7 @@ def build_bidding_strategy(strategy: dict | None, ctype: str = "TEXT_CAMPAIGN") 
         if network in AUTO_STRATEGIES:
             return {"Search": {"BiddingStrategyType": "SERVING_OFF"}, "Network": _auto_block(network, strategy)}, False
         raise YandexError("strategy", "Кампания должна показываться хотя бы на поиске или в сетях")
-    raise YandexError("strategy", "Неизвестная стратегия")
+    raise YandexError("strategy", f"Неизвестная стратегия «{search}»: {strategy_choices()}")
 
 
 def strategy_from_api(bidding: dict | None) -> dict:
@@ -527,7 +544,11 @@ def _priority_goals(values) -> list[dict]:
         except (TypeError, ValueError, OverflowError):
             value = -1
         if value < MIN_GOAL_VALUE_MICROS:
-            raise YandexError("goals", f"Укажите ценность цели {goal_id}: Директ принимает от 0,3 ₽")
+            raise YandexError(
+                "goals",
+                f"Укажите ценность цели {goal_id}: в priority_goals у неё value_rub — ₽ за конверсию, "
+                "Директ принимает от 0,3 ₽",
+            )
         out.append({"GoalId": goal_id, "Value": value})
     return out
 

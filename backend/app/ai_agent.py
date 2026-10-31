@@ -42,6 +42,11 @@ log = logging.getLogger(__name__)
 
 MAX_STEPS = 8
 HISTORY_MESSAGES = 60
+# Ответы чтения из прошлых ходов в запрос идут укороченными: полный вызов с ~100 тыс. токенов не укладывался во
+# время ответа. Нужны данные — модель читает заново; согласования, ответы на вопросы и записи не сокращаются.
+OLD_RESULT_CHARS = 1500
+# Один вызов модели в чате: запросы большие, на обычные 90 с хватает не всегда. Задача шлёт heartbeat — 5 минут запаса.
+CHAT_TIMEOUT_SECONDS = 150
 TOOL_RESULT_LIMIT = 12_000
 MAX_IDS = 100
 MAX_QUESTIONS = 5
@@ -1260,6 +1265,27 @@ def _item_key(text, kind: str = "") -> str:
     return " ".join(re.findall(r"\w+", " ".join(words)))
 
 
+_AD_PARTS = re.compile(r"\s*[;|\n]\s*")
+_AD_SENTENCES = re.compile(r"(?<=[.!?…])\s+")
+
+
+def _ad_row_keys(cells) -> set[str]:
+    """Ключи заголовков и текстов, согласованных строкой этапа «ads». Строка — один заголовок или текст, но
+    модель часто кладёт в неё комплект объявления: заголовки и описания в ячейках через «;», «|» или
+    предложениями подряд. Согласованы и ячейка целиком, и каждая её часть, и предложения подряд."""
+    out: set[str] = set()
+    for cell in cells or []:
+        cell = str(cell or "")
+        out.add(_item_key(cell))
+        for part in _AD_PARTS.split(cell):
+            sentences = [s for s in _AD_SENTENCES.split(part) if s.strip()]
+            for i in range(len(sentences)):
+                for j in range(i + 1, min(len(sentences), i + 4) + 1):
+                    out.add(_item_key(" ".join(sentences[i:j])))
+    out.discard("")
+    return out
+
+
 def _stage_approvals(ctx: Context) -> tuple[set[str], set[str], str]:
     """Что маркетолог согласовал в этом чате: (этапы таблиц, ключи согласованных строк, его собственные слова)."""
     stages: set[str] = set()
@@ -1298,6 +1324,8 @@ def _stage_approvals(ctx: Context) -> tuple[set[str], set[str], str]:
                 # Вид строки не важен: фраза могла быть согласована и в таблице анализа.
                 approved.add(_item_key(row["cells"][0], "keyword"))
                 approved.add(_item_key(row["cells"][0]))
+                if args.get("stage") == "ads":
+                    approved |= _ad_row_keys(row["cells"])
     # Что маркетолог сам вписал на доске — согласовано им.
     for op in edits:
         text = op.get("to") if op.get("op") == "edit" else op.get("text") if op.get("op") == "add" else None
@@ -1550,6 +1578,21 @@ def _spec_network(ctx: Context, spec: dict) -> bool | None:
     return actions.strategy_from_api(bidding)["network"] != "SERVING_OFF"
 
 
+def _check_spec_money(ctx: Context, spec: dict) -> None:
+    """Стратегия и ценность целей — теми же проверками, что у создания, но до карточки: ИИ исправит ошибку сразу,
+    а маркетолог не согласует то, что всё равно упадёт."""
+    from app import actions
+
+    raw = spec.get("strategy")
+    if raw is not None and not isinstance(raw, dict):
+        raise YandexError("args", "strategy — объект {search, network, weekly_budget_rub, ...}")
+    strategy = dict(raw or {})
+    if ctx.ws.get("goal_id") and not strategy.get("goal_id"):
+        strategy["goal_id"] = ctx.ws["goal_id"]
+    actions.build_bidding_strategy(strategy, str(spec.get("type") or "TEXT_CAMPAIGN").upper())
+    actions._priority_goals(spec.get("priority_goals"))
+
+
 def _p_create_campaign(ctx: Context, args: dict) -> Plan:
     from app import actions
 
@@ -1557,6 +1600,7 @@ def _p_create_campaign(ctx: Context, args: dict) -> Plan:
     spec = args.get("spec")
     if not isinstance(spec, dict) or not str(spec.get("name") or "").strip():
         raise YandexError("args", "spec — объект кампании, нужен хотя бы name")
+    _check_spec_money(ctx, spec)
     groups = actions.spec_groups(spec)
     negatives = spec.get("negative_keywords")
     content: dict[str, list[str]] = {
@@ -1670,51 +1714,88 @@ def _x_create_campaign(ctx: Context, args: dict) -> dict:
 def _bring_images(ctx: Context, groups: list[dict], account_id: int) -> list[str]:
     """Картинки групп — в библиотеку кабинета новой кампании: взятые из другого кабинета пространства
     копируются, хэши заменяются; каких нет нигде — убираются. → предупреждения."""
+    extras_list = []
+    for group in groups:
+        ad = group.get("ad")
+        if isinstance(ad, dict) and isinstance(ad.get("extras"), dict):
+            extras_list.append(ad["extras"])
+    return _bring_extras_images(ctx, extras_list, account_id, "объявления выйдут без них")
+
+
+def _image_homes(ctx: Context, hashes: set[str]) -> dict[str, set[int]]:
+    """В каких кабинетах пространства картинка стоит в объявлениях: хэш → {account_id}."""
+    if not hashes:
+        return {}
+    with pool.connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT DISTINCT h.value AS hash, ad.account_id
+            FROM direct_ads ad
+            JOIN direct_adgroups g ON g.id = ad.adgroup_row_id
+            CROSS JOIN LATERAL jsonb_array_elements_text(ad.image_hashes) AS h(value)
+            WHERE ad.user_id = %s AND g.campaign_row_id = ANY(%s) AND h.value = ANY(%s)
+            """,
+            (ctx.user_id, workspace_campaign_row_ids(ctx.user_id, ctx.ws_id), sorted(hashes)),
+        ).fetchall()
+    homes: dict[str, set[int]] = {}
+    for row in rows:
+        homes.setdefault(row["hash"], set()).add(int(row["account_id"]))
+    return homes
+
+
+def _bring_extras_images(ctx: Context, extras_list: list[dict], account_id: int, lost_note: str) -> list[str]:
+    """image_hashes в extras — в библиотеку кабинета account_id: каких там нет, копируются из другого кабинета
+    пространства (согласованные в чате или стоящие в его объявлениях), хэши заменяются на новые; каких нет
+    нигде — убираются (extras без image_hashes картинок объявления не трогает). → предупреждения."""
     from app import ad_extras
     from app.actions import _copy_images
 
-    def image_lists():
-        for group in groups:
-            ad = group.get("ad")
-            extras = ad.get("extras") if isinstance(ad, dict) else None
-            if isinstance(extras, dict) and isinstance(extras.get("image_hashes"), list) and extras["image_hashes"]:
-                yield extras
-
-    wanted = {str(h) for extras in image_lists() for h in extras["image_hashes"]}
+    lists = [e for e in extras_list if isinstance(e, dict) and isinstance(e.get("image_hashes"), list) and e["image_hashes"]]
+    wanted = {str(h) for extras in lists for h in extras["image_hashes"]}
     if not wanted:
         return []
     token, login = audiences.account_access(ctx.user_id, account_id)
     try:
         here = set(ad_extras.image_previews(token, login, sorted(wanted)))
     except YandexError:
-        return []  # библиотека не ответила — картинки проверит создание объявлений
+        return []  # библиотека не ответила — картинки проверит Директ при сохранении объявления
     missing = wanted - here
     if not missing:
         return []
     sources: dict[int, set[str]] = {}
+
+    def source(src, image_hash: str) -> None:
+        try:
+            src = int(src)
+        except (TypeError, ValueError):
+            return
+        if image_hash in missing and src != account_id and src in ctx.account_ids():
+            sources.setdefault(src, set()).add(image_hash)
+
     if ctx.chat_id is not None:
         for item in _image_approvals(ctx):
-            try:
-                src = int(item.get("account_id"))
-            except (TypeError, ValueError):
-                continue
-            if item["hash"] in missing and src != account_id and src in ctx.account_ids():
-                sources.setdefault(src, set()).add(item["hash"])
+            source(item.get("account_id"), item["hash"])
+    # Картинку могли взять из объявления другого кабинета, не согласовывая в чате таблицей.
+    unknown = missing - {h for hashes in sources.values() for h in hashes}
+    for image_hash, accounts in _image_homes(ctx, unknown).items():
+        for src in sorted(accounts):
+            source(src, image_hash)
     warnings: list[str] = []
     mapping: dict[str, str] = {}
     for src, hashes in sources.items():
+        if hashes <= set(mapping):
+            continue
         src_token, src_login = audiences.account_access(ctx.user_id, src)
         mapping.update(_copy_images(src_token, src_login, token, login, hashes - set(mapping), warnings))
     lost = missing - set(mapping)
-    for extras in list(image_lists()):
-        extras["image_hashes"] = [mapping.get(h, h) for h in extras["image_hashes"] if h not in lost]
+    for extras in lists:
+        extras["image_hashes"] = [mapping.get(str(h), h) for h in extras["image_hashes"] if str(h) not in lost]
         if not extras["image_hashes"]:
             extras.pop("image_hashes")
     orphans = lost - {h for hashes in sources.values() for h in hashes}
     if orphans:
         warnings.append(
-            "Нет в библиотеке кабинета, объявления выйдут без них: "
-            + _count(len(orphans), "картинка", "картинки", "картинок")
+            f"Нет в библиотеке кабинета, {lost_note}: " + _count(len(orphans), "картинка", "картинки", "картинок")
         )
     return warnings
 
@@ -2308,15 +2389,18 @@ def _x_create_ad(ctx: Context, args: dict) -> dict:
     from app.ads import create_text_ad
 
     group, ad_type, titles, texts = _new_ad(ctx, args)
-    return create_text_ad(
+    extras = _ad_extras_args(ctx, args, ad_type, group["account_id"], fetch=True)
+    warnings = _bring_extras_images(ctx, [extras] if extras else [], int(group["account_id"]), "объявление выйдет без них")
+    out = create_text_ad(
         ctx.user_id,
         adgroup_row_id=int(group["id"]),
         title2=str(args.get("title2") or ""),
         href=str(args["href"]),
         titles=titles,
         texts=texts,
-        extras=_ad_extras_args(ctx, args, ad_type, group["account_id"], fetch=True),
+        extras=extras,
     )
+    return {**out, "warnings": warnings} if warnings else out
 
 
 _AD_FIELDS = ("title", "title2", "text", "href", "titles", "texts")
@@ -2351,14 +2435,17 @@ def _x_update_ad(ctx: Context, args: dict) -> dict:
     from app.ads import update_text_ad
 
     row = ctx.ads([_int(args, "ad_row_id")])[0]
-    return update_text_ad(
+    extras = _ad_extras_args(ctx, args, row["type"] or "TEXT_AD", row["account_id"], fetch=True)
+    warnings = _bring_extras_images(ctx, [extras] if extras else [], int(row["account_id"]), "картинки объявления не менялись")
+    out = update_text_ad(
         ctx.user_id,
         int(row["id"]),
         **{k: str(args[k]) for k in ("title", "title2", "text", "href") if args.get(k) is not None},
         titles=_variants(args, "titles"),
         texts=_variants(args, "texts"),
-        extras=_ad_extras_args(ctx, args, row["type"] or "TEXT_AD", row["account_id"], fetch=True),
+        extras=extras,
     )
+    return {**out, "warnings": warnings} if warnings else out
 
 
 MAX_BULK_ADS = 30
@@ -2393,16 +2480,17 @@ def _p_update_ads(ctx: Context, args: dict) -> Plan:
 
 
 def _x_update_ads(ctx: Context, args: dict) -> dict:
-    done, failed = [], []
+    done, failed, warnings = [], [], []
     for item, row in _ad_items(ctx, args):
         try:
-            _x_update_ad(ctx, item)
+            out = _x_update_ad(ctx, item)
             done.append(_ad_name(row))
+            warnings += [f"{_ad_name(row)}: {w}" for w in out.get("warnings") or []]
         except YandexError as exc:
             failed.append(f"{_ad_name(row)} — {exc.message or exc.code}")
     if failed:
         raise YandexError("ads", (f"Изменены: {', '.join(done)}; " if done else "") + "не изменены: " + "; ".join(failed))
-    return {"updated": len(done), "ads": done}
+    return {"updated": len(done), "ads": done, **({"warnings": warnings} if warnings else {})}
 
 
 _AD_ACTIONS = {
@@ -3859,6 +3947,7 @@ def _q_items(ctx: Context, args: dict) -> dict:
     rows: list[dict] = []
     seen: set[tuple] = set()
     too_long: list[str] = []
+    glued = False
     for item in raw if isinstance(raw, list) else []:
         if isinstance(item, str):
             item = {"cells": [item]}
@@ -3905,6 +3994,7 @@ def _q_items(ctx: Context, args: dict) -> dict:
             limit = SITELINK_TITLE_LEN if "быстр" in where else CALLOUT_LEN if "уточнен" in where else None
         if limit and len(cells[0]) > limit:
             too_long.append(f"«{cells[0]}» ({len(cells[0])} > {limit})")
+            glued = glued or (stage == "ads" and bool(re.search(r"\s\|\s|;\s", cells[0])))
         rows.append(
             {"n": len(rows) + 1, "section": section, "kind": kind, "cells": cells, "checked": _bool(item, "checked", True)}
         )
@@ -3916,7 +4006,12 @@ def _q_items(ctx: Context, args: dict) -> dict:
         _audience_rows(ctx, args, rows)
     image_account = _image_rows(ctx, args, rows) if stage == "images" and rows else None
     if too_long:
-        raise YandexError("args", "Длиннее предела Директа, сократи: " + _preview(too_long, 5))
+        hint = (
+            ". В ячейке склеено несколько текстов: одна строка — один заголовок или текст, остальные отдельными строками"
+            if glued
+            else ""
+        )
+        raise YandexError("args", "Длиннее предела Директа, сократи: " + _preview(too_long, 5) + hint)
     if not rows:
         raise YandexError("args", "В таблице нет ни одной строки с текстом")
     if len(rows) > MAX_ITEM_ROWS:
@@ -4039,7 +4134,8 @@ _EXTRAS = {
             "image_hashes": {
                 "type": "array",
                 "items": {"type": "string"},
-                "description": "картинки из list_ad_images: у комбинаторного до 5, у текстового одна",
+                "description": "картинки из list_ad_images: у комбинаторного до 5, у текстового одна. Картинку из другого кабинета "
+                "пространства сервис скопирует в кабинет объявления сам",
             },
         },
     },
@@ -4375,9 +4471,12 @@ TOOLS = [
     _fn(
         "create_campaign",
         "Создать кампанию (черновик) в кабинете пространства. Сначала посмотри get_campaign_options. spec: type "
-        "(TEXT_CAMPAIGN|UNIFIED_CAMPAIGN), name, start_date, end_date, strategy {search, network, параметры}, "
+        "(TEXT_CAMPAIGN|UNIFIED_CAMPAIGN), name, start_date, end_date, strategy {search, network, параметры} — "
+        "search строкой: HIGHEST_POSITION (ручные ставки) или автостратегия из get_campaign_options (например "
+        "PAY_FOR_CONVERSION_MULTIPLE_GOALS), network: NETWORK_DEFAULT|SERVING_OFF, "
         "daily_budget_rub (только ручные ставки), negative_keywords [], excluded_sites [], schedule, "
-        "attribution_model, priority_goals, tracking_params, groups [{name, region_ids, keywords [] (до 200), "
+        "attribution_model, priority_goals [{goal_id, value_rub — ценность цели в ₽, от 0,3}], tracking_params, "
+        "groups [{name, region_ids, keywords [] (до 200), "
         "bid_rub, ad {titles (до 7), texts (до 3), href, extras {sitelinks, callouts, image_hashes — согласованные "
         "картинки группы, до 5} или extras_from_ad_row_id}, audiences [] — "
         "согласованные аудитории группы объектами audience из таблицы stage=audiences}] (до 20 групп; группа без "
@@ -4907,7 +5006,8 @@ def _system_prompt(ctx: Context) -> str:
         "интересы и группы без фраз не предлагай. В create_campaign аудитории — в groups[].audiences объектами "
         "audience из согласованных строк. "
         "5) Заголовки и тексты — propose_items stage=ads: каждой группе до 7 заголовков (kind=title, до 56 "
-        "знаков) и до 3 текстов (kind=text, до 81) под её фразы, section — группа. 6) Картинки — сначала "
+        "знаков) и до 3 текстов (kind=text, до 81) под её фразы, section — группа. Одна строка — один заголовок или текст: не склеивай несколько через «;» "
+        "или «|». Несколько объявлений в группе — section «Группа / Объявление 2». 6) Картинки — сначала "
         f"ask_questions с key {IMAGE_SOURCE_KEY}: откуда брать картинки (варианты подставит сервис, можно выбрать "
         "несколько). «Взять из других кампаний» — list_ad_images без campaign_row_id, затем propose_items "
         "stage=images: строка — картинка, image {hash, account_id}, section — группа, cells [название, откуда, "
@@ -6893,6 +6993,12 @@ _BOARD_HISTORY = (
 )
 
 
+def _shorten_result(content: str, limit: int = OLD_RESULT_CHARS) -> str:
+    if len(content) <= limit:
+        return content
+    return f"{content[:limit]}… [сокращено: было {len(content)} символов; нужны данные — вызови инструмент снова]"
+
+
 def _history(chat_id: int) -> list[dict]:
     with pool.connection() as conn:
         rows = conn.execute(
@@ -6923,6 +7029,8 @@ def _history(chat_id: int) -> list[dict]:
     after = [i for i in user_idx if i >= start]
     start = after[0] if after else (user_idx[-1] if user_idx else len(rows))
     rows = rows[start:]
+    # Что было до последней реплики маркетолога — прошлый ход: чтения оттуда укорачиваем.
+    last_user = max((i for i, r in enumerate(rows) if r["role"] == "user"), default=-1)
 
     out: list[dict] = []
     i = 0
@@ -6947,6 +7055,8 @@ def _history(chat_id: int) -> list[dict]:
                 j += 1
             for c in calls:
                 content = answered.get(c["id"], json.dumps({"ok": False, "error": "нет результата"}, ensure_ascii=False))
+                if i < last_user and c["name"] in READ_TOOLS:
+                    content = _shorten_result(content)
                 out.append({"role": "tool", "tool_call_id": c["id"], "content": content})
             out += board_notes(rows[j - 1]["id"])
             i = j
@@ -6964,6 +7074,16 @@ def _set_status(chat_id: int, status: str, error: str = "") -> None:
             "UPDATE ai_chats SET status = %s, error = %s, updated_at = NOW() WHERE id = %s",
             (status, error[:500], chat_id),
         )
+
+
+def _end_with_error(chat_id: int, error: str, request: tuple[int, int] | None = None) -> dict:
+    """Ход оборвался. Плашку чата следующая отправка сбросит, а строка в ленте (role «error») остаётся —
+    по ней видно, что и когда не получилось. request — (токенов в запросе, сообщений в нём)."""
+    _set_status(chat_id, "error", error)
+    note = f"{error} (запрос ≈ {request[0]} токенов, сообщений: {request[1]})" if request else error
+    with pool.connection() as conn:
+        _insert_message(conn, chat_id, "error", note)
+    return {"status": "error"}
 
 
 def _touch(chat_id: int) -> None:
@@ -7126,12 +7246,11 @@ def run_chat(user_id: int, chat_id: int, progress=None) -> dict:
             progress(n, MAX_STEPS, text)
 
     try:
-        cfg = ai.load_config(user_id, "chat", chat["workspace_id"])
+        cfg = {**ai.load_config(user_id, "chat", chat["workspace_id"]), "timeout": CHAT_TIMEOUT_SECONDS}
         ctx = Context(user_id, chat["workspace_id"])
         ctx.chat_id = chat_id
     except YandexError as exc:
-        _set_status(chat_id, "error", exc.message or exc.code)
-        return {"status": "error"}
+        return _end_with_error(chat_id, exc.message or exc.code)
 
     with acting_as("ai"):
         with pool.connection() as conn:
@@ -7156,15 +7275,14 @@ def run_chat(user_id: int, chat_id: int, progress=None) -> dict:
                 break
             step(n, "ИИ думает…")
             _touch(chat_id)
+            request = (ai.estimate_tokens([system, *history], TOOLS), len(history))
             try:
                 reply = ai.complete(cfg, [system, *history], TOOLS)
             except YandexError as exc:
-                _set_status(chat_id, "error", exc.message or exc.code)
-                return {"status": "error"}
+                return _end_with_error(chat_id, exc.message or exc.code, request)
             except Exception:
                 log.exception("ИИ-чат %s", chat_id)
-                _set_status(chat_id, "error", "Сбой при обращении к ИИ")
-                return {"status": "error"}
+                return _end_with_error(chat_id, "Сбой при обращении к ИИ", request)
             calls = [c for c in reply["tool_calls"] if c.get("name")]
             with pool.connection() as conn:
                 message = _insert_message(conn, chat_id, "assistant", reply["content"], tool_calls=calls or None)
