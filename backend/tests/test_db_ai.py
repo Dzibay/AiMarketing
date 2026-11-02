@@ -779,3 +779,18 @@ def test_project_references_api(db, monkeypatch):
     assert sent["message"]["refs"] == [{"id": other_ws, "name": "Блог"}]
     got = client.get(f"/api/web/ai/chats/{s['chat']}", headers=auth).json()
     assert got["messages"][0]["refs"] == [{"id": other_ws, "name": "Блог"}]
+
+
+def test_chat_model_calls_are_streamed(db, monkeypatch):
+    """Ход чата просит ответ потоком: иначе шлюз провайдера рвёт долгий запрос (524)."""
+    s = _seed(db)
+    cfgs = []
+
+    def complete(cfg, messages, tools=None):
+        cfgs.append(cfg)
+        return _text("Готово.")
+
+    monkeypatch.setattr(ai, "complete", complete)
+    ai_agent.post_message(s["user"], s["chat"], "привет")
+    assert ai_agent.run_chat(s["user"], s["chat"])["status"] == "idle"
+    assert cfgs and all(c["stream"] is True and c["timeout"] == ai_agent.CHAT_TIMEOUT_SECONDS for c in cfgs)

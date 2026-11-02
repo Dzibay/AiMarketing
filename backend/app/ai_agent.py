@@ -7439,7 +7439,9 @@ def run_chat(user_id: int, chat_id: int, progress=None) -> dict:
             progress(n, MAX_STEPS, text)
 
     try:
-        cfg = {**ai.load_config(user_id, "chat", chat["workspace_id"]), "timeout": CHAT_TIMEOUT_SECONDS}
+        # Потоком: запрос на десятки тысяч токенов модель читает дольше минуты, и шлюз провайдера рвёт
+        # молчащее соединение (524). timeout здесь — паузы между кусками ответа.
+        cfg = {**ai.load_config(user_id, "chat", chat["workspace_id"]), "timeout": CHAT_TIMEOUT_SECONDS, "stream": True}
         ctx = Context(user_id, chat["workspace_id"])
         ctx.chat_id = chat_id
     except YandexError as exc:

@@ -532,3 +532,95 @@ def test_model_call_timeout_comes_from_config(monkeypatch):
     ai.complete({**cfg, "timeout": ai_agent.CHAT_TIMEOUT_SECONDS}, [{"role": "user", "content": "привет"}])
     assert seen == [ai.TIMEOUT_SECONDS, ai_agent.CHAT_TIMEOUT_SECONDS] and seen[1] > seen[0]
     assert ai.estimate_tokens([{"role": "user", "content": "я" * 250}]) > 100
+
+
+def _stream_provider(monkeypatch, sse: str | None = None, *, status=200, ctype="text/event-stream", body=b""):
+    """Подделка httpx.stream: отдаёт SSE (или ошибку/обычный JSON) и запоминает, что отправили."""
+    from contextlib import contextmanager
+
+    import httpx
+
+    from app import ai
+
+    seen: dict = {}
+
+    @contextmanager
+    def stream(method, url, **kw):
+        seen.update(kw)
+        content = sse.encode() if sse is not None else body
+        yield httpx.Response(status, headers={"content-type": ctype}, content=content, request=httpx.Request(method, url))
+
+    def post(url, **kw):
+        seen["plain"] = kw["json"]
+        return httpx.Response(200, json={"choices": [{"message": {"content": "обычный"}}]}, request=httpx.Request("POST", url))
+
+    monkeypatch.setattr(ai.httpx, "stream", stream)
+    monkeypatch.setattr(ai.httpx, "post", post)
+    return seen
+
+
+STREAM_CFG = {"base_url": "https://ai.example", "model": "m", "headers": {}, "check_host": False, "limit_rub": None,
+              "user_id": None, "stream": True, "timeout": 150}
+
+
+def test_stream_reply_is_assembled_from_chunks(monkeypatch):
+    import json
+
+    import httpx
+
+    from app import ai
+
+    def chunk(**delta):
+        return "data: " + json.dumps({"choices": [{"delta": delta}]}, ensure_ascii=False) + "\n\n"
+
+    sse = (
+        ": keep-alive\n\n"
+        + chunk(content="При")
+        + chunk(content="вет")
+        + chunk(tool_calls=[{"index": 0, "id": "c1", "function": {"name": "list_campaigns", "arguments": ""}}])
+        + chunk(tool_calls=[{"index": 0, "function": {"arguments": '{"state":'}}])
+        + chunk(tool_calls=[{"index": 1, "id": "c2", "function": {"name": "get_workspace_summary", "arguments": "{}"}}])
+        + chunk(tool_calls=[{"index": 0, "function": {"arguments": '"ON"}'}}])
+        + 'data: {"choices": [], "usage": {"prompt_tokens": 1234, "completion_tokens": 56}}\n\n'
+        + "data: [DONE]\n\n"
+    )
+    seen = _stream_provider(monkeypatch, sse)
+    reply = ai.complete(STREAM_CFG, [{"role": "user", "content": "привет"}])
+    assert reply["content"] == "Привет"
+    assert reply["tool_calls"] == [
+        {"id": "c1", "name": "list_campaigns", "arguments": '{"state":"ON"}'},
+        {"id": "c2", "name": "get_workspace_summary", "arguments": "{}"},
+    ]
+    assert (reply["usage"]["tokens_in"], reply["usage"]["tokens_out"], reply["usage"]["estimated"]) == (1234, 56, False)
+    # Шлюз не режет долгий ответ, пока идут куски: просим поток, а timeout — это пауза между кусками.
+    assert seen["json"]["stream"] is True and seen["json"]["stream_options"] == {"include_usage": True}
+    assert isinstance(seen["timeout"], httpx.Timeout) and seen["timeout"].read == 150
+
+
+def test_stream_falls_back_to_plain_json_and_plain_call(monkeypatch):
+    from app import ai
+
+    # Провайдер проигнорировал stream и ответил обычным JSON.
+    _stream_provider(monkeypatch, body=b'{"choices": [{"message": {"content": "json"}}]}', ctype="application/json")
+    assert ai.complete(STREAM_CFG, [{"role": "user", "content": "x"}])["content"] == "json"
+    # Провайдер не знает stream_options — повторяем обычным запросом без потока.
+    seen = _stream_provider(monkeypatch, body=b'{"error": {"message": "Unknown parameter: stream_options"}}', status=400,
+                            ctype="application/json")
+    assert ai.complete(STREAM_CFG, [{"role": "user", "content": "x"}])["content"] == "обычный"
+    assert "stream" not in seen["plain"]
+
+
+def test_stream_errors_are_readable(monkeypatch):
+    from app import ai
+
+    page = b"<!DOCTYPE html>\n<!--[if lt IE 7]> <html class='no-js ie6 oldie' lang='en-US'> <![endif]--><title>524</title>"
+    _stream_provider(monkeypatch, body=page, status=524, ctype="text/html; charset=UTF-8")
+    with pytest.raises(YandexError) as err:
+        ai.complete(STREAM_CFG, [{"role": "user", "content": "x"}])
+    assert err.value.code == "ai-error" and err.value.message.startswith("Ошибка ИИ (524): ")
+    assert "~100 с" in err.value.message and "<" not in err.value.message
+
+    _stream_provider(monkeypatch, 'data: {"error": {"message": "model overloaded"}}\n\n')
+    with pytest.raises(YandexError) as err:
+        ai.complete(STREAM_CFG, [{"role": "user", "content": "x"}])
+    assert err.value.code == "ai-error" and "model overloaded" in err.value.message

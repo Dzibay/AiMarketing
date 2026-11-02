@@ -15,6 +15,7 @@ import json
 import logging
 import math
 import socket
+import time
 from contextlib import contextmanager
 from contextvars import ContextVar
 from datetime import datetime
@@ -36,6 +37,8 @@ PROVIDERS = {
     "yandexgpt": {"label": "YandexGPT", "default_model": "yandexgpt/latest"},
 }
 TIMEOUT_SECONDS = 90
+# Потоковый ответ: timeout вызова — молчание между кусками, а на весь ответ потолок свой.
+STREAM_TOTAL_SECONDS = 600
 
 # Какая модель на какую задачу: smart — основная, fast — «быстрая» из настроек (пусто — та же).
 TASKS = {
@@ -403,10 +406,25 @@ def _record(cfg: dict, usage: dict) -> None:
         log.exception("Не удалось записать расход ИИ")
 
 
+_GATEWAY_TEXT = {
+    502: "шлюз провайдера получил ошибку от модели",
+    503: "провайдер временно недоступен",
+    504: "шлюз провайдера не дождался ответа модели",
+    520: "шлюз провайдера получил от модели неверный ответ",
+    521: "модель за шлюзом провайдера не принимает соединения",
+    522: "шлюз провайдера не смог соединиться с моделью",
+    523: "шлюз провайдера не нашёл путь к модели",
+    524: "шлюз провайдера (обычно Cloudflare) оборвал ожидание: модель отвечала дольше ~100 с",
+}
+
+
 def _error_text(response: httpx.Response) -> str:
     try:
         data = response.json()
     except ValueError:
+        # Страница ошибки шлюза вместо JSON: показываем смысл, а не разметку.
+        if response.text.lstrip()[:15].lower().startswith(("<!doctype", "<html")):
+            return _GATEWAY_TEXT.get(response.status_code, "вместо ответа API пришла html-страница ошибки")
         return response.text[:300]
     err = data.get("error") if isinstance(data, dict) else None
     if isinstance(err, dict):
@@ -416,10 +434,70 @@ def _error_text(response: httpx.Response) -> str:
     return str(data)[:300]
 
 
+def _post_stream(url: str, body: dict, headers: dict, timeout: float) -> tuple[httpx.Response, dict | None]:
+    """chat/completions c stream=true → (ответ, собранное тело в виде обычного ответа).
+
+    Куски идут сразу, поэтому шлюз провайдера (Cloudflare рвёт молчащее соединение на ~100 с) не режет
+    долгий ответ на большой запрос. Тело None — стрима нет: ошибка провайдера или он проигнорировал
+    stream и ответил обычным JSON; тогда его читают как обычно.
+    """
+    body = {**body, "stream": True, "stream_options": {"include_usage": True}}
+    deadline = time.monotonic() + STREAM_TOTAL_SECONDS
+    content: list[str] = []
+    calls: dict[int, dict] = {}
+    usage = None
+    with httpx.stream(
+        "POST", url, json=body, headers=headers, timeout=httpx.Timeout(timeout, connect=30.0), follow_redirects=False
+    ) as response:
+        if response.status_code >= 400 or "text/event-stream" not in response.headers.get("content-type", ""):
+            response.read()
+            return response, None
+        for line in response.iter_lines():
+            if time.monotonic() > deadline:
+                raise httpx.ReadTimeout("ответ идёт дольше предела")
+            if not line.startswith("data:"):
+                continue
+            payload = line[5:].strip()
+            if payload == "[DONE]":
+                break
+            try:
+                chunk = json.loads(payload)
+            except ValueError:
+                continue
+            if not isinstance(chunk, dict):
+                continue
+            if chunk.get("error"):
+                err = chunk["error"]
+                raise YandexError("ai-error", f"Ошибка ИИ: {str(err.get('message') if isinstance(err, dict) else err)[:300]}")
+            if isinstance(chunk.get("usage"), dict):
+                usage = chunk["usage"]
+            for choice in chunk.get("choices") or []:
+                delta = choice.get("delta") or {}
+                if delta.get("content"):
+                    content.append(delta["content"])
+                for part in delta.get("tool_calls") or []:
+                    index = part.get("index")
+                    if index is None:
+                        index = len(calls) if part.get("id") or not calls else len(calls) - 1
+                    slot = calls.setdefault(index, {"id": "", "name": "", "arguments": ""})
+                    fn = part.get("function") or {}
+                    slot["id"] = slot["id"] or part.get("id") or ""
+                    slot["name"] = slot["name"] or fn.get("name") or ""
+                    slot["arguments"] += fn.get("arguments") or ""
+    message = {
+        "content": "".join(content),
+        "tool_calls": [
+            {"id": c["id"], "function": {"name": c["name"], "arguments": c["arguments"]}} for _, c in sorted(calls.items())
+        ],
+    }
+    return response, {"choices": [{"message": message}], "usage": usage}
+
+
 def complete(cfg: dict, messages: list[dict], tools: list[dict] | None = None) -> dict:
     """Один вызов chat/completions → {"content", "tool_calls": [{"id", "name", "arguments"}], "usage"}.
 
     До вызова — проверка месячного лимита, после — запись расхода (cfg["units"] — объектов в пачке).
+    cfg["stream"] — читать ответ потоком (чат: запросы большие, ответ долгий).
     """
     check_budget(cfg)
     if cfg.get("check_host"):
@@ -427,14 +505,14 @@ def complete(cfg: dict, messages: list[dict], tools: list[dict] | None = None) -
     body: dict = {"model": cfg["model"], "messages": messages, "temperature": cfg.get("temperature", 0.3)}
     if tools:
         body["tools"] = tools
+    url = f"{cfg['base_url']}/chat/completions"
+    timeout = cfg.get("timeout") or TIMEOUT_SECONDS
     try:
-        response = httpx.post(
-            f"{cfg['base_url']}/chat/completions",
-            json=body,
-            headers=cfg["headers"],
-            timeout=cfg.get("timeout") or TIMEOUT_SECONDS,
-            follow_redirects=False,
-        )
+        response, data = _post_stream(url, body, cfg["headers"], timeout) if cfg.get("stream") else (None, None)
+        # Провайдер не знает stream / stream_options — спрашиваем обычным способом.
+        if response is None or (response.status_code == 400 and "stream" in response.text.lower()):
+            response = httpx.post(url, json=body, headers=cfg["headers"], timeout=timeout, follow_redirects=False)
+            data = None
     except httpx.TimeoutException as exc:
         raise YandexError("ai-timeout", "ИИ не ответил за отведённое время") from exc
     except httpx.HTTPError as exc:
@@ -446,7 +524,8 @@ def complete(cfg: dict, messages: list[dict], tools: list[dict] | None = None) -
     if response.status_code >= 400:
         raise YandexError("ai-error", f"Ошибка ИИ ({response.status_code}): {_error_text(response)}")
     try:
-        data = response.json()
+        if data is None:
+            data = response.json()
         message = data["choices"][0]["message"]
     except (ValueError, KeyError, IndexError, TypeError) as exc:
         raise YandexError("ai-error", "Непонятный ответ ИИ") from exc
