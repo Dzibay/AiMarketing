@@ -29,6 +29,7 @@ from app.workspaces import (
     fact_key,
     get_workspace,
     list_workspace_accounts,
+    list_workspaces,
     normalize_ai_access,
     normalize_ai_facts,
     remember_ai_facts,
@@ -276,6 +277,19 @@ class Context:
         self.chat_id: int | None = None
         # Правки с доски, которые сейчас сохраняются: согласованы, как и строки таблиц.
         self.board_ops: list[dict] = []
+        # Другие проекты пользователя, которые читали в этом ходу. В них ходят только инструменты чтения.
+        self._projects: dict[int, Context] = {}
+
+    def project(self, project_id: int) -> Context:
+        """Контекст другого проекта пользователя — читать его данные; чужой или несуществующий — ошибка."""
+        if project_id == self.ws_id:
+            return self
+        if project_id not in self._projects:
+            try:
+                self._projects[project_id] = Context(self.user_id, project_id)
+            except YandexError as exc:
+                raise YandexError("not-found", f"Проект {project_id} не найден среди проектов пользователя") from exc
+        return self._projects[project_id]
 
     def account_ids(self) -> set[int]:
         return {int(a["id"]) for a in self.ws.get("accounts") or []}
@@ -1051,7 +1065,99 @@ def _t_audiences(ctx: Context, args: dict) -> dict:
     return out
 
 
+# --- Другие проекты пользователя: только чтение ----------------------------------------------
+
+# Инструменты чтения, которым можно передать project_id: данные берутся из того проекта. Остальные читают только
+# текущий: refresh_search_queries, remember_fact и generate_images что-то пишут или стоят денег, а справочники
+# (регионы, Вордстат, аудитории, картинки, расширения, ссылки) нужны для сборки в текущем пространстве.
+CROSS_PROJECT_TOOLS = (
+    "get_workspace_summary",
+    "get_analytics",
+    "list_campaigns",
+    "get_campaign",
+    "get_campaign_settings",
+    "get_search_queries",
+    "get_structure_tops",
+    "list_recent_actions",
+    "get_signals",
+    "get_campaign_history",
+    "get_experiments",
+    "get_headline_stats",
+    "get_slices",
+)
+MAX_PROJECT_REFS = 5
+PROJECT_NOTES_LIMIT = 3000
+
+
+def _kpi_text(ws: dict) -> str:
+    if ws.get("kpi_type") == "cpa" and ws.get("kpi_target"):
+        return f"CPA не выше {_money(ws['kpi_target'])}"
+    if ws.get("kpi_type") == "drr" and ws.get("kpi_target"):
+        return f"ДРР не выше {ws['kpi_target']:g}%"
+    return "не задан"
+
+
+def _t_projects(ctx: Context, args: dict) -> dict:
+    """Проекты пользователя (кроме архивных) — чтобы найти нужный по названию, сайту или клиенту."""
+    items = [
+        {
+            "project_id": w["id"],
+            "name": w["name"],
+            "site": w["site"],
+            "client": w["client_name"],
+            "campaigns": w["campaigns_count"],
+            **({"current": True} if w["id"] == ctx.ws_id else {}),
+        }
+        for w in list_workspaces(ctx.user_id)
+    ]
+    return {"projects": items}
+
+
+def _t_project(ctx: Context, args: dict) -> dict:
+    """Профиль проекта: цель, KPI, бриф и то, что маркетолог о нём ответил. Статистика — инструменты с project_id."""
+    other = ctx.project(_int(args, "project_id"))
+    ws = other.ws
+    brief = normalize_brief(ws.get("brief"))
+    out: dict = {
+        "project_id": other.ws_id,
+        "name": ws["name"],
+        "site": ws.get("site") or "",
+        "client": ws.get("client_name") or "",
+        "counter_id": ws.get("counter_id"),
+        "goal": ws.get("goal_name") or "",
+        "kpi": _kpi_text(ws),
+        "monthly_budget_rub": ws.get("monthly_budget_rub"),
+        "campaigns": ws.get("campaigns_count") or 0,
+        "accounts": [a["client_login"] for a in ws.get("accounts") or []],
+    }
+    if brief_filled(brief):
+        out["brief"] = {k: v for k, v in brief.items() if v}
+    facts = normalize_ai_facts(ws.get("ai_facts"))
+    if facts:
+        out["answers"] = [{"question": f["question"] or f["key"], "answer": f["answer"]} for f in facts]
+    notes = (ws.get("ai_notes") or "").strip()
+    if notes:
+        out["notes"] = notes[:PROJECT_NOTES_LIMIT]
+    return out
+
+
+def _read(ctx: Context, name: str, args: dict) -> dict:
+    """Инструмент чтения; с project_id — на данных другого проекта, ответ подписан его названием."""
+    raw = args.get("project_id") if name in CROSS_PROJECT_TOOLS else None
+    if raw in (None, ""):
+        return READ_TOOLS[name](ctx, args)
+    other = ctx.project(_int(args, "project_id"))
+    args = {k: v for k, v in args.items() if k != "project_id"}
+    out = READ_TOOLS[name](other, args)
+    if other is ctx:
+        return out
+    # Подпись нужна, чтобы модель не смешала цифры двух проектов в одном ответе.
+    return {"project": {"project_id": other.ws_id, "name": other.ws["name"]}, **out}
+
+
 READ_TOOLS = {
+    "list_projects": _t_projects,
+    "get_project": _t_project,
     "get_workspace_summary": _t_summary,
     "get_analytics": _t_analytics,
     "list_campaigns": _t_campaigns,
@@ -4042,6 +4148,8 @@ def _kind(tool: str) -> str:
 
 TOOL_LABELS = {
     "board_edit": "Правки на доске",
+    "list_projects": "Проекты пользователя",
+    "get_project": "Профиль проекта",
     "get_workspace_summary": "Сводка пространства",
     "get_analytics": "Аналитика за период",
     "list_campaigns": "Список кампаний",
@@ -4156,6 +4264,19 @@ _AD_EDIT = {
 }
 
 TOOLS = [
+    _fn(
+        "list_projects",
+        "Другие проекты (пространства) пользователя: project_id, название, сайт, клиент, число кампаний. Только "
+        "для чтения: когда маркетолог ссылается на другой проект по имени, сравнивает проекты или просит взять "
+        "пример оттуда. Проекты из пометки «Упомянуты проекты» уже с id — список для них не нужен.",
+    ),
+    _fn(
+        "get_project",
+        "Профиль другого проекта пользователя: сайт, клиент, цель, KPI, бюджет, бриф, ответы маркетолога и заметки. "
+        "Цифры и кампании проекта — инструменты чтения с project_id.",
+        {"project_id": {**_ID, "description": "проект из list_projects или из пометки «Упомянуты проекты»"}},
+        ["project_id"],
+    ),
     _fn("get_workspace_summary", "Сводка: расход сегодня, проблемы («где горит»), неделя к неделе, топ кампаний."),
     _fn(
         "get_analytics",
@@ -4841,6 +4962,14 @@ TOOLS = [
     ),
 ]
 
+for _tool in TOOLS:
+    if _tool["function"]["name"] in CROSS_PROJECT_TOOLS:
+        _tool["function"]["parameters"]["properties"]["project_id"] = {
+            **_ID,
+            "description": "другой проект пользователя (list_projects) — прочитать данные оттуда; без него — "
+            "текущее пространство",
+        }
+
 
 def _running_experiments(ctx: Context) -> list[dict]:
     """Идущие эксперименты для системного промпта, с названиями кампаний; без них ход не должен падать."""
@@ -4926,11 +5055,7 @@ def _system_prompt(ctx: Context) -> str:
             + f". Бюджеты и ставки — не более чем на {access['max_change_pct']}% за раз. "
             "Остальное уходит пользователю на согласование: система сама покажет карточку с кнопками."
         )
-    kpi = "не задан"
-    if ws.get("kpi_type") == "cpa" and ws.get("kpi_target"):
-        kpi = f"CPA не выше {_money(ws['kpi_target'])}"
-    elif ws.get("kpi_type") == "drr" and ws.get("kpi_target"):
-        kpi = f"ДРР не выше {ws['kpi_target']:g}%"
+    kpi = _kpi_text(ws)
     accounts = "; ".join(
         f"id {a['id']}: {a['client_login']}" + (" (песочница)" if a.get("sandbox") else "")
         for a in ws.get("accounts") or []
@@ -5096,7 +5221,13 @@ def _system_prompt(ctx: Context) -> str:
         "- Если действие отклонено, не повторяй его без новой просьбы. Если ошибка — объясни её пользователю.",
         "- Если часть согласованного плана не выполнена (ошибка, отклонено, пропущено) или ты её убрал, прямо "
         "скажи, что именно не сделано, — не называй план выполненным.",
-        "- Работай только с кампаниями и кабинетами этого пространства.",
+        "- Менять можно только кампании и кабинеты этого пространства. Другие проекты пользователя — только "
+        "читать: когда маркетолог ссылается на проект (в сообщении есть пометка «Упомянуты проекты»), сравнивает "
+        "проекты или просит взять оттуда пример, читай его инструментами с project_id (get_project — профиль и "
+        "бриф, list_projects — какие проекты есть). id кампаний, групп и объявлений другого проекта работают "
+        "только вместе с его project_id. Цифры разных проектов не смешивай и называй, из какого проекта каждая. "
+        "Действия над кампаниями другого проекта не предлагай — скажи, что их делают в самом проекте; идеи, "
+        "структуру и тексты оттуда можно взять за образец для этого пространства.",
     ]
     facts = normalize_ai_facts(ws.get("ai_facts"))
     first = not ws.get("campaigns_count")
@@ -5204,6 +5335,7 @@ def _message_out(row: dict) -> dict:
         ],
         "tool_call_id": row.get("tool_call_id") or "",
         "tool_name": row.get("tool_name") or "",
+        "refs": row.get("refs") or [],
         "created_at": _iso(row.get("created_at")),
     }
 
@@ -6406,13 +6538,23 @@ def delete_chat(user_id: int, chat_id: int) -> None:
         conn.execute("DELETE FROM ai_chats WHERE id = %s", (chat_id,))
 
 
-def _insert_message(conn, chat_id: int, role: str, content: str = "", *, tool_calls=None, tool_call_id="", tool_name="") -> dict:
+def _insert_message(
+    conn, chat_id: int, role: str, content: str = "", *, tool_calls=None, tool_call_id="", tool_name="", refs=None
+) -> dict:
     return conn.execute(
         """
-        INSERT INTO ai_messages (chat_id, role, content, tool_calls, tool_call_id, tool_name)
-        VALUES (%s, %s, %s, %s, %s, %s) RETURNING *
+        INSERT INTO ai_messages (chat_id, role, content, tool_calls, tool_call_id, tool_name, refs)
+        VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING *
         """,
-        (chat_id, role, content or "", Jsonb(tool_calls) if tool_calls else None, tool_call_id, tool_name),
+        (
+            chat_id,
+            role,
+            content or "",
+            Jsonb(tool_calls) if tool_calls else None,
+            tool_call_id,
+            tool_name,
+            Jsonb(refs) if refs else None,
+        ),
     ).fetchone()
 
 
@@ -6486,7 +6628,44 @@ def _submit(user_id: int, chat_id: int, marker: str) -> dict:
     return submit("ai_chat", user_id, {"chat_id": chat_id, "turn": marker}, priority=PRIORITY_USER, max_attempts=1)
 
 
-def post_message(user_id: int, chat_id: int, text: str) -> dict:
+def _clean_refs(conn, user_id: int, workspace_id: int, refs) -> list[dict]:
+    """Проекты из @-упоминаний сообщения: свои, без повторов и без самого пространства чата.
+
+    Чужой или удалённый проект — ошибка: лучше сказать об этом, чем отправить ИИ ссылку в пустоту.
+    """
+    ids: list[int] = []
+    for raw in refs or []:
+        try:
+            ref_id = int(raw)
+        except (TypeError, ValueError) as exc:
+            raise YandexError("refs", "Проект в сообщении указан неверно") from exc
+        if ref_id != workspace_id and ref_id not in ids:
+            ids.append(ref_id)
+    if len(ids) > MAX_PROJECT_REFS:
+        raise YandexError("too-many-refs", f"В одном сообщении не больше {MAX_PROJECT_REFS} проектов")
+    if not ids:
+        return []
+    names = {
+        r["id"]: r["name"]
+        for r in conn.execute(
+            "SELECT id, name FROM workspaces WHERE user_id = %s AND id = ANY(%s)", (user_id, ids)
+        ).fetchall()
+    }
+    if len(names) != len(ids):
+        raise YandexError("not-found", "Упомянутый проект не найден — обновите страницу")
+    return [{"id": i, "name": names[i]} for i in ids]
+
+
+def _refs_note(refs) -> str:
+    """Пометка к сообщению маркетолога для модели: какие проекты он упомянул и как их читать."""
+    items = "; ".join(f"«{_line(r.get('name'), 120)}» (project_id {r.get('id')})" for r in refs or [])
+    return (
+        f"\n\n[Упомянуты проекты: {items}. Это другие проекты маркетолога: читай их инструментами с project_id, "
+        "менять их нельзя]"
+    )
+
+
+def post_message(user_id: int, chat_id: int, text: str, refs: list[int] | None = None) -> dict:
     from app.jobs import public_job
 
     text = (text or "").strip()
@@ -6500,8 +6679,9 @@ def post_message(user_id: int, chat_id: int, text: str) -> dict:
         chat = _require_chat(conn, user_id, chat_id, lock=True)
         if _chat_out(chat)["status"] == "running":
             raise YandexError("busy", "ИИ ещё отвечает — дождитесь ответа")
+        cleaned = _clean_refs(conn, user_id, chat["workspace_id"], refs)
         _skip_open_actions(conn, chat_id, "Пропущено: пользователь написал новое сообщение", by_message=True)
-        message = _insert_message(conn, chat_id, "user", text)
+        message = _insert_message(conn, chat_id, "user", text, refs=cleaned)
         conn.execute(
             """
             UPDATE ai_chats SET status = 'running', error = '', updated_at = NOW(),
@@ -7062,7 +7242,10 @@ def _history(chat_id: int) -> list[dict]:
             i = j
             continue
         if r["role"] in ("user", "assistant"):
-            out.append({"role": r["role"], "content": r["content"]})
+            content = r["content"]
+            if r["role"] == "user" and r.get("refs"):
+                content += _refs_note(r["refs"])
+            out.append({"role": r["role"], "content": content})
         out += board_notes(r["id"])
         i += 1
     return out + board_notes(None)
@@ -7163,9 +7346,19 @@ def _handle_call(ctx: Context, chat_id: int, message_id: int, call: dict) -> int
         return reply({"ok": False, "error": "Аргументы должны быть JSON-объектом"})
     args = _normalize_call(name, args)
 
+    # Другие проекты — только для чтения: изменить в них нельзя, даже сославшись на project_id.
+    if args.get("project_id") not in (None, "") and name not in CROSS_PROJECT_TOOLS and name != "get_project":
+        return reply(
+            {
+                "ok": False,
+                "error": "project_id есть только у инструментов чтения данных. Менять можно лишь кампании этого "
+                "пространства; для другого проекта скажи маркетологу, что действие нужно сделать в нём самом",
+            }
+        )
+
     if name in READ_TOOLS:
         try:
-            return reply(READ_TOOLS[name](ctx, args))
+            return reply(_read(ctx, name, args))
         except YandexError as exc:
             return reply({"ok": False, "error": exc.message or exc.code})
         except Exception:

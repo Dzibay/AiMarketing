@@ -6552,9 +6552,70 @@ button.board-chips__text:disabled {
   color: var(--muted);
 }
 
+.chat__field {
+  position: relative;
+  min-width: 0;
+}
+
+.chat__send {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+/* @-упоминания: список проектов над полем ввода и чипы в сообщении. */
+.mention-pop {
+  top: auto;
+  right: auto;
+  bottom: calc(100% + 8px);
+  left: 0;
+  width: min(420px, 100%);
+  max-height: 16rem;
+  overflow-y: auto;
+}
+
+.mention-pop__item {
+  justify-content: space-between;
+  gap: 0.8rem;
+}
+
+.mention-pop__item strong,
+.mention-pop__item small {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.mention-pop__item small {
+  flex-shrink: 1;
+  min-width: 0;
+  color: var(--muted);
+}
+
+.mention-pop__item.is-active {
+  background: var(--accent-soft);
+}
+
+.mention {
+  padding: 0.05em 0.5em;
+  border-radius: var(--pill);
+  background: color-mix(in srgb, var(--on-accent) 22%, transparent);
+  color: inherit;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.mention:hover {
+  background: color-mix(in srgb, var(--on-accent) 34%, transparent);
+}
+
 @media (max-width: 640px) {
   .chat__composer {
     grid-template-columns: 1fr;
+  }
+
+  .chat__send .btn {
+    flex: 1;
   }
 
   .seg button {

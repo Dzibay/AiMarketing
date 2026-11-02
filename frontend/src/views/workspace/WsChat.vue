@@ -142,7 +142,7 @@
 
         <template v-for="item in items" :key="item.key">
           <div v-if="item.role === 'user'" class="msg msg--user">
-            <div class="msg__bubble">{{ item.content }}</div>
+            <div class="msg__bubble"><template v-for="(part, i) in mentionParts(item)" :key="i"><RouterLink v-if="part.ref" class="mention" :to="`/w/${part.ref.id}/summary`">{{ part.text }}</RouterLink><template v-else>{{ part.text }}</template></template></div>
           </div>
 
           <p v-else-if="item.role === 'note'" class="chat-note">
@@ -268,19 +268,59 @@
       </div>
 
       <form class="chat__composer" @submit.prevent="send()">
-        <textarea
-          ref="input"
-          v-model="draft"
-          rows="2"
-          maxlength="8000"
-          aria-label="Сообщение ИИ"
-          :disabled="status === 'running' || !aiConfigured"
-          :placeholder="placeholder"
-          @keydown.enter.exact.prevent="send()"
-        />
-        <button class="btn btn--accent" type="submit" :disabled="!canSend">
-          {{ sending ? 'Отправляем…' : 'Отправить' }}
-        </button>
+        <div class="chat__field">
+          <div v-if="picker.open" id="mention-list" class="menu-pop mention-pop" role="listbox" aria-label="Проекты">
+            <button
+              v-for="(w, i) in picker.items"
+              :id="`mention-${w.id}`"
+              :key="w.id"
+              type="button"
+              class="menu-item mention-pop__item"
+              :class="{ 'is-active': i === picker.index }"
+              role="option"
+              :aria-selected="i === picker.index"
+              @mousedown.prevent="pickProject(w)"
+              @mousemove="picker.index = i"
+            >
+              <strong>{{ w.name }}</strong>
+              <small v-if="w.site">{{ w.site }}</small>
+            </button>
+          </div>
+          <textarea
+            ref="input"
+            v-model="draft"
+            rows="2"
+            maxlength="8000"
+            aria-label="Сообщение ИИ"
+            :aria-controls="picker.open ? 'mention-list' : null"
+            :aria-activedescendant="picker.open && picker.items[picker.index] ? `mention-${picker.items[picker.index].id}` : null"
+            :disabled="status === 'running' || !aiConfigured"
+            :placeholder="placeholder"
+            @input="updatePicker"
+            @click="updatePicker"
+            @keyup.left="updatePicker"
+            @keyup.right="updatePicker"
+            @blur="closePicker"
+            @keydown="onKeydown"
+          />
+        </div>
+        <div class="chat__send">
+          <button
+            v-if="otherProjects.length"
+            class="icon-btn"
+            type="button"
+            title="Сослаться на другой проект"
+            aria-label="Сослаться на другой проект"
+            :disabled="status === 'running' || !aiConfigured"
+            @mousedown.prevent
+            @click="insertAt"
+          >
+            <AtSign />
+          </button>
+          <button class="btn btn--accent" type="submit" :disabled="!canSend">
+            {{ sending ? 'Отправляем…' : 'Отправить' }}
+          </button>
+        </div>
       </form>
     </section>
 
@@ -305,10 +345,12 @@
 
 <script setup>
 import { askConfirm, askText } from '../../composables/useConfirm'
+import { AtSign } from '@lucide/vue'
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
 import { aiApi, errorText, wsApi } from '../../api/web'
 import { pushToast } from '../../composables/useToasts'
+import { loadWorkspaces, useWorkspaces } from '../../composables/useWorkspaces'
 import { formatDateTime } from '../../utils/format'
 import { renderMarkdown } from '../../utils/markdown'
 import AiChanges from './AiChanges.vue'
@@ -346,6 +388,7 @@ const STATUS_TONES = { pending: 'tone-warn', done: 'tone-ok', error: 'tone-bad' 
 const route = useRoute()
 const router = useRouter()
 const { ws, patch, reload: reloadWs } = useWs()
+const { workspaces } = useWorkspaces()
 
 const chats = ref([])
 const chatsError = ref('')
@@ -393,6 +436,13 @@ const board = ref(null)
 const chatsOpen = ref(false)
 const tab = ref('chat')
 
+// @-упоминания других проектов: ИИ получает их на чтение. Подставленные из списка помним по id,
+// набранные руками находим по названию в тексте при отправке.
+const mentions = ref([])
+const picker = reactive({ open: false, index: 0, items: [], start: 0, end: 0 })
+const otherProjects = computed(() => workspaces.value.filter((w) => w.id !== ws.value.id && !w.archived))
+loadWorkspaces().catch(() => null)
+
 const accessText = computed(() => {
   const a = access.value
   if (a.full_access) return 'Полный доступ: ИИ выполняет действия без согласования.'
@@ -413,7 +463,8 @@ const placeholder = computed(() => {
       : 'Ответьте в карточке или напишите своими словами'
   }
   if (pendingWrites.value.length) return 'Новое сообщение отклонит действия, которые ждут решения'
-  return 'Задача для ИИ: проанализировать, найти проблемы, создать, поправить… (Enter — отправить, Shift+Enter — новая строка)'
+  const tip = otherProjects.value.length ? ', @ — сослаться на другой проект' : ''
+  return `Задача для ИИ: проанализировать, найти проблемы, создать, поправить… (Enter — отправить, Shift+Enter — новая строка${tip})`
 })
 const canSend = computed(
   () => !!draft.value.trim() && !sending.value && status.value !== 'running' && aiConfigured.value,
@@ -467,7 +518,7 @@ const items = computed(() => {
   }
   const out = []
   for (const m of data.value.messages) {
-    if (m.role === 'user') out.push({ key: `m${m.id}`, role: 'user', content: m.content })
+    if (m.role === 'user') out.push({ key: `m${m.id}`, role: 'user', content: m.content, refs: m.refs || [] })
     if (m.role === 'error') out.push({ key: `m${m.id}`, role: 'error', content: m.content })
     if (m.role === 'assistant') {
       const item = assistantItem(m, results, byCall)
@@ -692,6 +743,110 @@ async function loadChat(id, quiet = false) {
   }
 }
 
+// --- @-упоминания проектов --------------------------------------------------------------------
+
+const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+// @Название в начале строки или после пробела: «me@site.ru» не упоминание.
+const hasMention = (message, name) => new RegExp(`(^|\\s)@${escapeRe(name)}`).test(message)
+
+/** Проекты, на которые ссылается текст сообщения. */
+function usedMentions(message) {
+  const found = new Map()
+  for (const m of mentions.value) if (hasMention(message, m.name)) found.set(m.id, m)
+  const covered = new Set([...found.values()].map((m) => m.name))
+  for (const w of otherProjects.value) {
+    if (!covered.has(w.name) && hasMention(message, w.name)) found.set(w.id, { id: w.id, name: w.name })
+  }
+  return [...found.values()]
+}
+
+/** Текст сообщения кусками: @Проект — ссылкой-чипом на проект, остальное — как есть. */
+function mentionParts(item) {
+  const refs = item.refs || []
+  if (!refs.length) return [{ text: item.content }]
+  const names = [...new Set(refs.map((r) => r.name))].sort((a, b) => b.length - a.length)
+  const re = new RegExp(`(@(?:${names.map(escapeRe).join('|')}))`)
+  return item.content
+    .split(re)
+    .filter(Boolean)
+    .map((text) => {
+      const ref = text.startsWith('@') ? refs.find((r) => `@${r.name}` === text) : null
+      return ref ? { text, ref } : { text }
+    })
+}
+
+function closePicker() {
+  picker.open = false
+}
+
+/** Список проектов, пока перед курсором стоит «@запрос» (в начале строки или после пробела). */
+function updatePicker() {
+  const el = input.value
+  if (!el || !otherProjects.value.length) return closePicker()
+  const caret = el.selectionStart ?? 0
+  const before = el.value.slice(0, caret)
+  const at = before.lastIndexOf('@')
+  if (at === -1 || (at > 0 && !/\s/.test(before[at - 1]))) return closePicker()
+  const query = before.slice(at + 1)
+  if (query.length > 60 || /^\s|\n/.test(query)) return closePicker()
+  const q = query.toLowerCase()
+  const items = otherProjects.value.filter((w) => `${w.name} ${w.site || ''}`.toLowerCase().includes(q))
+  if (!items.length) return closePicker()
+  Object.assign(picker, { open: true, items, start: at, end: caret, index: Math.min(picker.index, items.length - 1) })
+}
+
+function pickProject(w) {
+  const el = input.value
+  const insert = `@${w.name} `
+  draft.value = draft.value.slice(0, picker.start) + insert + draft.value.slice(picker.end)
+  if (!mentions.value.some((m) => m.id === w.id)) mentions.value.push({ id: w.id, name: w.name })
+  const caret = picker.start + insert.length
+  picker.index = 0
+  closePicker()
+  nextTick(() => {
+    el?.focus()
+    el?.setSelectionRange(caret, caret)
+  })
+}
+
+/** Кнопка «@»: ставит @ в курсор и открывает список — для тех, кто не знает про клавишу, и для телефона. */
+function insertAt() {
+  const el = input.value
+  if (!el) return
+  const pos = el.selectionStart ?? draft.value.length
+  const before = draft.value.slice(0, pos)
+  const lead = before && !/\s$/.test(before) ? ' ' : ''
+  draft.value = `${before}${lead}@${draft.value.slice(el.selectionEnd ?? pos)}`
+  const caret = pos + lead.length + 1
+  nextTick(() => {
+    el.focus()
+    el.setSelectionRange(caret, caret)
+    updatePicker()
+  })
+}
+
+function onKeydown(e) {
+  if (picker.open) {
+    const last = picker.items.length - 1
+    if (e.key === 'ArrowDown') picker.index = picker.index >= last ? 0 : picker.index + 1
+    else if (e.key === 'ArrowUp') picker.index = picker.index <= 0 ? last : picker.index - 1
+    else if (e.key === 'Enter' || e.key === 'Tab') pickProject(picker.items[picker.index])
+    else if (e.key === 'Escape') closePicker()
+    else return
+    e.preventDefault()
+    return
+  }
+  if (e.key === 'Enter' && !e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey) {
+    e.preventDefault()
+    send()
+  }
+}
+
+watch(
+  () => picker.index,
+  () => nextTick(() => document.querySelector('.mention-pop__item.is-active')?.scrollIntoView({ block: 'nearest' })),
+)
+
 // --- Действия пользователя --------------------------------------------------------------------
 
 async function send(text) {
@@ -706,8 +861,12 @@ async function send(text) {
       chats.value = [created, ...chats.value]
       await router.replace({ path: `/w/${ws.value.id}/chat/${id}` })
     }
-    await aiApi.send(id, message)
-    if (text == null || text === draft.value) draft.value = ''
+    // Подсказки-стартеры — готовый текст без упоминаний.
+    await aiApi.send(id, message, text == null ? usedMentions(message).map((m) => m.id) : [])
+    if (text == null || text === draft.value) {
+      draft.value = ''
+      mentions.value = []
+    }
     stickToBottom = true
     await loadChat(id)
     loadChats()

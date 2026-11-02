@@ -181,7 +181,8 @@ export const aiApi = {
   chat: (id) => request(`/api/web/ai/chats/${id}`),
   renameChat: (id, title) => patch(`/api/web/ai/chats/${id}`, { title }),
   deleteChat: (id) => del(`/api/web/ai/chats/${id}`),
-  send: (id, text) => post(`/api/web/ai/chats/${id}/messages`, { text }),
+  // refs — id других проектов, упомянутых через @: ИИ читает их, но не меняет.
+  send: (id, text, refs = []) => post(`/api/web/ai/chats/${id}/messages`, { text, refs }),
   /** exclude — id строк, с которых сняли галочки: их в действии не будет. */
   decide: (actionId, approve, remember = false, exclude = []) =>
     post(`/api/web/ai/actions/${actionId}/decide`, { approve, remember, exclude }),

@@ -698,3 +698,84 @@ def test_prompt_with_campaigns_has_no_first_campaign_rule(db, monkeypatch):
     fake, _out = _start(s["user"], s["chat"], "Привет", monkeypatch, _text("Здравствуйте"))
     prompt = fake.calls[0][0]["content"]
     assert "ещё нет ни одной кампании" not in prompt and "Механика конверсий за 0" in prompt
+
+
+def test_project_references_are_read_only(db, monkeypatch):
+    s = _seed(db)
+    user, chat = s["user"], s["chat"]
+    other_ws = next(w["id"] for w in workspaces.list_workspaces(user) if w["name"] == "Блог")
+    stranger = make_user(db, "stranger@example.com")
+    stranger_conn = make_connection(db, stranger, "stranger")
+    stranger_ws = make_workspace(
+        db, stranger, 999, "Чужой", counter_row_id=make_counter(db, stranger, stranger_conn, 999, site="x.ru")
+    )
+
+    # Упоминание: свои проекты без повторов и без самого пространства чата; чужой проект — ошибка.
+    with pytest.raises(YandexError) as err:
+        ai_agent.post_message(user, chat, "Как у @Чужой", refs=[stranger_ws])
+    assert err.value.code == "not-found"
+    assert ai_agent.get_chat(user, chat)["messages"] == []
+
+    fake = FakeModel(
+        _call("get_project", {"project_id": other_ws}, "c1"),
+        _call("list_campaigns", {"project_id": other_ws}, "c2"),
+        _call("get_campaign", {"project_id": other_ws, "campaign_row_id": s["foreign"]}, "c3"),
+        _call("get_campaign", {"project_id": other_ws, "campaign_row_id": s["search"]}, "c4"),
+        _call("get_workspace_summary", {"project_id": stranger_ws}, "c5"),
+        _call("campaigns_action", {"project_id": other_ws, "campaign_row_ids": [s["foreign"]], "action": "pause"}, "c6"),
+        _call("list_projects", {}, "c7"),
+        _text("В «Блоге» одна кампания."),
+    )
+    monkeypatch.setattr(ai, "complete", fake)
+    sent = ai_agent.post_message(user, chat, "Сделай как в @Блог", refs=[other_ws, s["ws"], other_ws])
+    assert sent["message"]["refs"] == [{"id": other_ws, "name": "Блог"}]
+    assert ai_agent.run_chat(user, chat)["status"] == "idle"
+
+    # Модель видит пометку о проекте; в ленте текст остаётся тем, что написал маркетолог.
+    first_user = fake.calls[0][1]
+    assert first_user["content"].startswith("Сделай как в @Блог\n\n[Упомянуты проекты: «Блог» (project_id %d)" % other_ws)
+    assert "Менять можно только кампании и кабинеты этого пространства" in fake.calls[0][0]["content"]
+
+    def result(n: int) -> dict:
+        return json.loads(fake.calls[n][-1]["content"])
+
+    profile = result(1)
+    assert profile["name"] == "Блог" and profile["site"] == "blog.ru" and profile["campaigns"] == 1
+    listed = result(2)
+    assert listed["project"] == {"project_id": other_ws, "name": "Блог"}
+    assert [c["name"] for c in listed["campaigns"]] == ["Блог"]
+    assert result(3)["project"]["name"] == "Блог" and result(3)["campaign"]["name"] == "Блог"
+    # Кампании текущего проекта в другом не видны, чужой пользователь недоступен, запись с project_id невозможна.
+    assert "не входят" in result(4)["error"]
+    assert "не найден" in result(5)["error"]
+    assert "только у инструментов чтения" in result(6)["error"]
+    projects = result(7)["projects"]
+    assert {p["name"] for p in projects} == {"Магазин", "Блог"} and [p["name"] for p in projects if p.get("current")] == ["Магазин"]
+    assert ai_agent.get_chat(user, chat)["actions"] == []
+
+    messages = ai_agent.get_chat(user, chat)["messages"]
+    assert messages[0]["role"] == "user" and messages[0]["content"] == "Сделай как в @Блог"
+    assert messages[0]["refs"] == [{"id": other_ws, "name": "Блог"}]
+    assert all(m["refs"] == [] for m in messages[1:])
+
+    # Следующий ход: пометка остаётся в истории, а без упоминаний её нет.
+    fake2, _ = _start(user, chat, "А теперь без ссылок", monkeypatch, _text("Хорошо."))
+    users = [m["content"] for m in fake2.calls[0] if m["role"] == "user"]
+    assert "Упомянуты проекты" in users[0] and "Упомянуты проекты" not in users[1]
+
+
+def test_project_references_api(db, monkeypatch):
+    s = _seed(db)
+    other_ws = next(w["id"] for w in workspaces.list_workspaces(s["user"]) if w["name"] == "Блог")
+    client = TestClient(app)
+    auth = {"Authorization": f"Bearer {make_session(s['user'])}"}
+    url = f"/api/web/ai/chats/{s['chat']}/messages"
+
+    bad = client.post(url, headers=auth, json={"text": "Как в @Блог", "refs": [other_ws, 987654]})
+    assert bad.status_code == 404
+    assert client.get(f"/api/web/ai/chats/{s['chat']}", headers=auth).json()["messages"] == []
+
+    sent = client.post(url, headers=auth, json={"text": "Как в @Блог", "refs": [other_ws]}).json()
+    assert sent["message"]["refs"] == [{"id": other_ws, "name": "Блог"}]
+    got = client.get(f"/api/web/ai/chats/{s['chat']}", headers=auth).json()
+    assert got["messages"][0]["refs"] == [{"id": other_ws, "name": "Блог"}]

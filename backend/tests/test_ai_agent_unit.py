@@ -712,3 +712,117 @@ def test_board_patches_pending_table_and_spec():
     assert spec["groups"][0]["keywords"] == ["купить окна", "купить балкон", "окна дешево"]
     with pytest.raises(YandexError):
         ai_agent._spec_patch(spec, {"op": "remove", "kind": "keyword", "group": "Окна", "text": "нет такой"})
+
+
+def test_project_id_only_on_read_tools():
+    """project_id — у инструментов чтения данных и get_project; у записи, вопросов и побочных чтений его нет."""
+    with_project = {
+        t["function"]["name"] for t in ai_agent.TOOLS if "project_id" in t["function"]["parameters"]["properties"]
+    }
+    assert with_project == set(ai_agent.CROSS_PROJECT_TOOLS) | {"get_project"}
+    assert set(ai_agent.CROSS_PROJECT_TOOLS) <= set(ai_agent.READ_TOOLS)
+    # Пишут или стоят денег — только в текущем пространстве.
+    for name in ("refresh_search_queries", "remember_fact", "generate_images", "get_wordstat", "check_links"):
+        assert name not in ai_agent.CROSS_PROJECT_TOOLS
+    assert not set(ai_agent.CROSS_PROJECT_TOOLS) & (set(ai_agent.WRITE_TOOLS) | set(ai_agent.ASK_TOOLS))
+    required = next(t for t in ai_agent.TOOLS if t["function"]["name"] == "get_project")["function"]["parameters"]["required"]
+    assert required == ["project_id"]
+
+
+class ProjectsContext(FakeContext):
+    """Контекст с соседним проектом: читать его можно, пространство чата остаётся текущим."""
+
+    def __init__(self):
+        super().__init__()
+        self.other = FakeContext({"name": "Блог"})
+        self.other.ws_id = 9
+
+    def project(self, project_id: int):
+        if project_id == self.ws_id:
+            return self
+        if project_id == self.other.ws_id:
+            return self.other
+        raise YandexError("not-found", f"Проект {project_id} не найден среди проектов пользователя")
+
+
+def test_read_with_project_id_reads_the_other_project(monkeypatch):
+    seen = []
+
+    def read(ctx, args):
+        seen.append((ctx.ws_id, dict(args)))
+        return {"campaigns": [ctx.ws["name"]]}
+
+    monkeypatch.setitem(ai_agent.READ_TOOLS, "list_campaigns", read)
+    ctx = ProjectsContext()
+    # Без project_id и с id текущего — текущее пространство, без подписи.
+    assert ai_agent._read(ctx, "list_campaigns", {}) == {"campaigns": ["Окна"]}
+    assert ai_agent._read(ctx, "list_campaigns", {"project_id": 2, "date_from": "2026-10-01"}) == {"campaigns": ["Окна"]}
+    # С чужим — данные того проекта, подписанные названием, а project_id инструмент не видит.
+    out = ai_agent._read(ctx, "list_campaigns", {"project_id": "9"})
+    assert out == {"project": {"project_id": 9, "name": "Блог"}, "campaigns": ["Блог"]}
+    assert seen[-1] == (9, {})
+    with pytest.raises(YandexError) as err:
+        ai_agent._read(ctx, "list_campaigns", {"project_id": 77})
+    assert "не найден" in err.value.message
+    with pytest.raises(YandexError):
+        ai_agent._read(ctx, "list_campaigns", {"project_id": "abc"})
+
+
+def test_project_profile_is_compact_and_has_no_secrets():
+    ctx = ProjectsContext()
+    ctx.other.ws.update(
+        site="blog.ru", client_name="Агентство", goal_name="Заявка", kpi_type="cpa", kpi_target=500, campaigns_count=3,
+        accounts=[{"client_login": "blog-acc", "id": 4}], ai_notes="Сезон — осень",
+        brief={"product": "Статьи", "geo": "Москва", "not_ours": ["вакансии"], "notes": ""},
+        ai_facts=[{"key": "success", "question": "Что успех?", "answer": "Заявки дешевле 400 ₽"}],
+    )
+    out = ai_agent._t_project(ctx, {"project_id": 9})
+    assert out["name"] == "Блог" and out["site"] == "blog.ru" and out["kpi"] == "CPA не выше 500 ₽"
+    assert out["accounts"] == ["blog-acc"] and out["campaigns"] == 3
+    assert out["brief"] == {"product": "Статьи", "geo": "Москва", "not_ours": ["вакансии"]}
+    assert out["answers"] == [{"question": "Что успех?", "answer": "Заявки дешевле 400 ₽"}]
+    assert out["notes"] == "Сезон — осень"
+    with pytest.raises(YandexError):
+        ai_agent._t_project(ctx, {})
+
+
+def test_refs_note_names_projects_with_ids():
+    note = ai_agent._refs_note([{"id": 9, "name": "Блог"}, {"id": 12, "name": "Магазин\nокон"}])
+    assert note.startswith("\n\n[Упомянуты проекты: «Блог» (project_id 9); «Магазин окон» (project_id 12).")
+    assert "менять их нельзя" in note
+
+
+class RefsConn:
+    """conn.execute(...).fetchall() для _clean_refs: проекты пользователя по id."""
+
+    def __init__(self, projects: dict[int, str]):
+        self.projects = projects
+
+    def execute(self, sql, params):
+        ids = params[1]
+        rows = [{"id": i, "name": n} for i, n in self.projects.items() if i in ids]
+        return SimpleNamespace(fetchall=lambda: rows)
+
+
+def test_clean_refs():
+    conn = RefsConn({9: "Блог", 12: "Магазин"})
+    clean = ai_agent._clean_refs
+    assert clean(conn, 1, 2, None) == [] and clean(conn, 1, 2, []) == []
+    # Сам проект чата и повторы отбрасываются, порядок упоминаний сохраняется.
+    assert clean(conn, 1, 2, [12, 2, 9, "12"]) == [{"id": 12, "name": "Магазин"}, {"id": 9, "name": "Блог"}]
+    assert clean(conn, 1, 2, [2]) == []
+    with pytest.raises(YandexError) as err:
+        clean(conn, 1, 2, [9, 404])
+    assert err.value.code == "not-found"
+    with pytest.raises(YandexError) as err:
+        clean(conn, 1, 2, ["x"])
+    assert err.value.code == "refs"
+    with pytest.raises(YandexError) as err:
+        clean(conn, 1, 2, list(range(100, 100 + ai_agent.MAX_PROJECT_REFS + 1)))
+    assert err.value.code == "too-many-refs"
+
+
+def test_prompt_says_other_projects_are_read_only(no_memory):
+    prompt = ai_agent._system_prompt(FakeContext())
+    assert "Менять можно только кампании и кабинеты этого пространства" in prompt
+    assert "Упомянуты проекты" in prompt and "project_id" in prompt

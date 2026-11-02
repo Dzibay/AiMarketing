@@ -37,6 +37,8 @@ class ChatBody(BaseModel):
 
 class MessageBody(BaseModel):
     text: str
+    # id других проектов пользователя, упомянутых через @: ИИ получит их на чтение.
+    refs: list[int] = []
 
 
 class DecideBody(BaseModel):
@@ -270,7 +272,7 @@ def chat_delete(chat_id: int, user_id: int = Depends(require_web_user)) -> dict:
 
 @router.post("/ai/chats/{chat_id}/messages")
 def chat_message(chat_id: int, body: MessageBody, user_id: int = Depends(require_web_user)) -> dict:
-    return _call(ai_agent.post_message, user_id, chat_id, body.text)
+    return _call(ai_agent.post_message, user_id, chat_id, body.text, refs=body.refs)
 
 
 @router.post("/ai/chats/{chat_id}/board")
