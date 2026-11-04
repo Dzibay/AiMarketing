@@ -16,7 +16,7 @@ from datetime import date, datetime, timedelta, timezone
 
 from psycopg.types.json import Jsonb
 
-from app import ai, audiences, context_files, experiments, image_gen
+from app import ai, ai_bridge, audiences, context_files, experiments, image_gen
 from app.actions import BULK_ACTIONS, SETTINGS_LABELS, campaign_options
 from app.brief import brief_filled, normalize_brief
 from app.clock import today_msk
@@ -5336,6 +5336,7 @@ def _message_out(row: dict) -> dict:
         "tool_call_id": row.get("tool_call_id") or "",
         "tool_name": row.get("tool_name") or "",
         "refs": row.get("refs") or [],
+        "model": row.get("model") or "",
         "created_at": _iso(row.get("created_at")),
     }
 
@@ -6494,6 +6495,20 @@ def _require_chat(conn, user_id: int, chat_id: int, *, lock: bool = False) -> di
     return row
 
 
+def _ai_models(user_id: int) -> dict:
+    """Какими моделями сейчас работает ИИ: чат — основной, разметка, бриф и площадки — быстрой."""
+    s = ai.get_settings(user_id)
+    default = next((p["default_model"] for p in s["providers"] if p["id"] == s["provider"]), "")
+    main = s["model"] or default
+    bridge = ai_bridge.get_settings(user_id)
+    return {
+        "configured": s["configured"],
+        "model": main,
+        "model_fast": s["model_fast"] or main,
+        "bridge": s["provider"] == "openai" and bridge["active"] and bridge["use_chat"],
+    }
+
+
 def get_chat(user_id: int, chat_id: int) -> dict:
     with pool.connection() as conn:
         _require_chat(conn, user_id, chat_id)
@@ -6519,7 +6534,7 @@ def get_chat(user_id: int, chat_id: int) -> dict:
         "actions": [_action_out(a) for a in actions],
         "build": build,
         "access": normalize_ai_access(ws.get("ai_access")),
-        "ai": {"configured": ai.get_settings(user_id)["configured"]},
+        "ai": _ai_models(user_id),
         "image_gen": {"configured": image_gen.is_configured(user_id)},
     }
 
@@ -6539,12 +6554,21 @@ def delete_chat(user_id: int, chat_id: int) -> None:
 
 
 def _insert_message(
-    conn, chat_id: int, role: str, content: str = "", *, tool_calls=None, tool_call_id="", tool_name="", refs=None
+    conn,
+    chat_id: int,
+    role: str,
+    content: str = "",
+    *,
+    tool_calls=None,
+    tool_call_id="",
+    tool_name="",
+    refs=None,
+    model="",
 ) -> dict:
     return conn.execute(
         """
-        INSERT INTO ai_messages (chat_id, role, content, tool_calls, tool_call_id, tool_name, refs)
-        VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING *
+        INSERT INTO ai_messages (chat_id, role, content, tool_calls, tool_call_id, tool_name, refs, model)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING *
         """,
         (
             chat_id,
@@ -6554,6 +6578,7 @@ def _insert_message(
             tool_call_id,
             tool_name,
             Jsonb(refs) if refs else None,
+            model or "",
         ),
     ).fetchone()
 
@@ -7480,7 +7505,9 @@ def run_chat(user_id: int, chat_id: int, progress=None) -> dict:
                 return _end_with_error(chat_id, "Сбой при обращении к ИИ", request)
             calls = [c for c in reply["tool_calls"] if c.get("name")]
             with pool.connection() as conn:
-                message = _insert_message(conn, chat_id, "assistant", reply["content"], tool_calls=calls or None)
+                message = _insert_message(
+                    conn, chat_id, "assistant", reply["content"], tool_calls=calls or None, model=cfg["model_name"]
+                )
             if not calls:
                 break
             waiting = 0

@@ -115,14 +115,17 @@
             </button>
           </div>
         </form>
-        <p v-if="aiTest" class="sync-status" :class="aiTest.ok ? 'is-ok' : 'is-error'">
-          <template v-if="aiTest.ok">Работает<template v-if="aiTest.bridge"> через мост Cloudflare</template> · {{ aiTest.model }} ответил: «{{ aiTest.reply }}»</template>
-          <template v-else>{{ aiTest.error }}</template>
-        </p>
-        <p v-if="aiTest?.fast" class="sync-status" :class="aiTest.fast.error ? 'is-error' : 'is-ok'">
-          <template v-if="aiTest.fast.error">Быстрая модель {{ aiTest.fast.model }}: {{ aiTest.fast.error }}</template>
-          <template v-else>Быстрая · {{ aiTest.fast.model }} ответил: «{{ aiTest.fast.reply }}»</template>
-        </p>
+        <p v-if="aiTest?.error" class="sync-status is-error">{{ aiTest.error }}</p>
+        <template v-else-if="aiTest">
+          <p v-for="m in aiTest.models" :key="m.tier" class="sync-status" :class="m.error ? 'is-error' : 'is-ok'">
+            <b>{{ m.label }}</b> · {{ m.model }}<template v-if="aiTest.bridge"> через мост</template>:
+            <template v-if="m.error">{{ m.error }}</template>
+            <template v-else>
+              ответила «{{ m.reply }}»<template v-if="m.answered_by && m.answered_by !== m.model && m.answered_by !== m.sent">
+                (провайдер: {{ m.answered_by }})</template>
+            </template>
+          </p>
+        </template>
       </section>
 
       <section class="panel" id="bridge">
@@ -836,11 +839,8 @@ async function testAi() {
   try {
     const res = await aiApi.test()
     aiTest.value = {
-      ok: true,
-      model: res.model,
       bridge: !!res.bridge,
-      reply: String(res.reply || '').slice(0, 120),
-      fast: res.fast ? { ...res.fast, reply: String(res.fast.reply || '').slice(0, 120) } : null,
+      models: (res.models || []).map((m) => ({ ...m, reply: String(m.reply || '').slice(0, 120) })),
     }
     if (usage.value?.current) loadUsage()
   } catch (err) {

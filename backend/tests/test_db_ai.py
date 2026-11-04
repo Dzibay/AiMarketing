@@ -794,3 +794,15 @@ def test_chat_model_calls_are_streamed(db, monkeypatch):
     ai_agent.post_message(s["user"], s["chat"], "привет")
     assert ai_agent.run_chat(s["user"], s["chat"])["status"] == "idle"
     assert cfgs and all(c["stream"] is True and c["timeout"] == ai_agent.CHAT_TIMEOUT_SECONDS for c in cfgs)
+
+
+def test_chat_shows_which_model_answers(db, monkeypatch):
+    s = _seed(db)
+    ai.save_settings(s["user"], provider="openai", model="gpt-test", model_fast="gpt-fast")
+    monkeypatch.setattr(ai, "complete", lambda cfg, messages, tools=None: _text("Готово."))
+    ai_agent.post_message(s["user"], s["chat"], "привет")
+    ai_agent.run_chat(s["user"], s["chat"])
+    got = ai_agent.get_chat(s["user"], s["chat"])
+    answer = [m for m in got["messages"] if m["role"] == "assistant"][-1]
+    assert answer["model"] == "gpt-test"
+    assert got["ai"] == {"configured": True, "model": "gpt-test", "model_fast": "gpt-fast", "bridge": False}

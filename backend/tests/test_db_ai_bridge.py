@@ -211,3 +211,22 @@ def test_bridge_api(db):
     assert bad.status_code == 400 and bad.json()["detail"]["code"] == "bridge-incomplete"
     missing = client.post("/api/web/ai/bridge/test", headers=auth)
     assert missing.status_code == 400
+
+
+def test_check_connection_reports_each_model(db, monkeypatch):
+    user = make_user(db)
+    ai.save_settings(user, provider="openai", api_key="sk-ant-test-key", model="claude-opus-5-5", model_fast="claude-haiku-5-5")
+    _worker(user, enabled=True, worker_token="worker-secret-abcdef")
+
+    def complete(cfg, messages, tools=None):
+        if cfg["tier"] == "smart":
+            raise YandexError("ai-error", "Ошибка ИИ через мост Cloudflare (404): model not found")
+        return {"content": "готов", "tool_calls": [], "usage": {}, "model": "claude-haiku-5-5-20261001"}
+
+    monkeypatch.setattr(ai, "complete", complete)
+    checked = ai.check_connection(user)
+    assert not checked["ok"] and checked["bridge"]
+    smart, fast = checked["models"]
+    assert (smart["label"], smart["model"]) == ("Основная", "claude-opus-5-5") and "404" in smart["error"]
+    assert (fast["label"], fast["model"], fast["reply"]) == ("Быстрая", "claude-haiku-5-5", "готов")
+    assert fast["answered_by"] == "claude-haiku-5-5-20261001"

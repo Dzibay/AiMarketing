@@ -182,7 +182,10 @@ def test_monthly_limit_blocks_calls_except_check(db, monkeypatch):
     # Проверка подключения работает и после лимита: ей нужно убедиться, что ключ жив.
     ai.save_settings(user, provider="openai", model="gpt-smart", model_fast="gpt-fast")
     checked = ai.check_connection(user)
-    assert checked["reply"] == "готов" and checked["fast"] == {"model": "gpt-fast", "reply": "готов"}
+    assert checked["ok"] and [(m["label"], m["model"], m["reply"]) for m in checked["models"]] == [
+        ("Основная", "gpt-smart", "готов"),
+        ("Быстрая", "gpt-fast", "готов"),
+    ]
     assert ai.usage_summary(user)["remaining_rub"] < 0
 
 

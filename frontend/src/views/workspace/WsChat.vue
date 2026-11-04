@@ -28,6 +28,7 @@
         <div class="chat__title">
           <h2>{{ chat?.title || 'Новый чат' }}</h2>
           <p class="hint">{{ accessText }}</p>
+          <p v-if="modelText" class="hint chat__model">{{ modelText }}</p>
         </div>
         <div class="row-actions">
           <button v-if="build" class="btn btn--ghost chat__chats-toggle" type="button" @click="chatsOpen = true">
@@ -153,6 +154,7 @@
 
           <div v-else class="msg msg--ai">
             <div v-if="item.content" class="msg__bubble md" v-html="renderMarkdown(item.content)" />
+            <small v-if="item.content && item.model" class="msg__model">{{ item.model }}</small>
 
             <div v-if="item.reads.length" class="chat-steps">
               <details v-for="r in item.reads" :key="r.id" class="chat-step">
@@ -395,6 +397,7 @@ const chatsError = ref('')
 const data = ref(null)
 const loadError = ref('')
 const aiConfigured = ref(true)
+const aiModels = ref(null)
 const draft = ref('')
 const sending = ref(false)
 const reviewing = ref(false)
@@ -449,6 +452,16 @@ const accessText = computed(() => {
   const allowed = (ws.value.ai_categories || []).filter((c) => a.categories?.[c.key]).map((c) => c.label.toLowerCase())
   if (!allowed.length) return 'Каждое изменение в Директе — только после вашего подтверждения.'
   return `Без согласования (до ${a.max_change_pct}%): ${allowed.join('; ')}. Остальное — после подтверждения.`
+})
+
+/** «Отвечает claude-opus-5-5 · разметка и бриф — claude-haiku-5-5 · через мост Cloudflare». */
+const modelText = computed(() => {
+  const m = aiModels.value
+  if (!m?.configured || !m.model) return ''
+  const parts = [`Отвечает ${m.model}`]
+  if (m.model_fast && m.model_fast !== m.model) parts.push(`разметка, бриф и площадки — ${m.model_fast}`)
+  if (m.bridge) parts.push('через мост Cloudflare')
+  return parts.join(' · ')
 })
 
 const placeholder = computed(() => {
@@ -564,7 +577,7 @@ function assistantItem(m, results, byCall) {
     }
   }
   if (!m.content && !reads.length && !asks.length && !writes.length) return null
-  return { key: `m${m.id}`, role: 'assistant', content: m.content, reads, asks, writes }
+  return { key: `m${m.id}`, role: 'assistant', content: m.content, model: m.model || '', reads, asks, writes }
 }
 
 /** Плашка вместо таблицы этапа или карточки создания, которые решаются на доске; '' — карточка в чате. */
@@ -725,6 +738,7 @@ async function loadChat(id, quiet = false) {
     if (chatId.value !== id) return
     data.value = res
     aiConfigured.value = !!res.ai?.configured
+    aiModels.value = res.ai || null
     const count = res.messages.length + res.actions.length
     if (!quiet || count !== prevCount) scrollDown(!quiet)
     if (prevStatus && prevStatus !== res.chat.status) loadChats()

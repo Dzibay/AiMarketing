@@ -4552,6 +4552,20 @@ body.has-modal {
   border: 1px solid var(--line);
 }
 
+.msg__model {
+  display: block;
+  margin: 0.25rem 0 0 0.6rem;
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+
+.chat__title .chat__model {
+  margin-top: 0.15rem;
+  color: var(--muted);
+  font-size: 0.78rem;
+  overflow-wrap: anywhere;
+}
+
 .msg__bubble--thinking {
   display: inline-flex;
   align-items: center;

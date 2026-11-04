@@ -462,6 +462,7 @@ def _post_stream(url: str, body: dict, headers: dict, timeout: float) -> tuple[h
     content: list[str] = []
     calls: dict[int, dict] = {}
     usage = None
+    answered_by = ""
     with httpx.stream(
         "POST", url, json=body, headers=headers, timeout=httpx.Timeout(timeout, connect=30.0), follow_redirects=False
     ) as response:
@@ -485,6 +486,7 @@ def _post_stream(url: str, body: dict, headers: dict, timeout: float) -> tuple[h
             if chunk.get("error"):
                 err = chunk["error"]
                 raise YandexError("ai-error", f"Ошибка ИИ: {str(err.get('message') if isinstance(err, dict) else err)[:300]}")
+            answered_by = answered_by or str(chunk.get("model") or "")
             if isinstance(chunk.get("usage"), dict):
                 usage = chunk["usage"]
             for choice in chunk.get("choices") or []:
@@ -506,7 +508,7 @@ def _post_stream(url: str, body: dict, headers: dict, timeout: float) -> tuple[h
             {"id": c["id"], "function": {"name": c["name"], "arguments": c["arguments"]}} for _, c in sorted(calls.items())
         ],
     }
-    return response, {"choices": [{"message": message}], "usage": usage}
+    return response, {"choices": [{"message": message}], "usage": usage, "model": answered_by}
 
 
 def complete(cfg: dict, messages: list[dict], tools: list[dict] | None = None) -> dict:
@@ -567,7 +569,9 @@ def complete(cfg: dict, messages: list[dict], tools: list[dict] | None = None) -
     content = message.get("content") or ""
     usage = _usage(cfg, data, messages, tools, content, calls)
     _record(cfg, usage)
-    return {"content": content, "tool_calls": calls, "usage": usage}
+    # Какая модель ответила по словам провайдера: бывает точнее настроенной (алиас → версия).
+    answered_by = str(data.get("model") or "") if isinstance(data, dict) else ""
+    return {"content": content, "tool_calls": calls, "usage": usage, "model": answered_by}
 
 
 def parse_json_reply(text: str):
@@ -603,18 +607,27 @@ def complete_json(cfg: dict, messages: list[dict], *, retries: int = 1) -> dict:
 
 
 def check_connection(user_id: int) -> dict:
-    """Пробный вызов основной модели и, если задана отдельно, быстрой."""
+    """Пробный вызов основной модели и, если задана отдельно, быстрой — каждая со своим итогом.
+
+    → {"ok": все ответили, "bridge", "models": [{"tier", "label", "model", "sent", "answered_by", "reply" | "error"}]}.
+    model — как в настройках, sent — что ушло провайдеру (через мост — с префиксом), answered_by — что он вернул.
+    """
     ping = [{"role": "user", "content": "Ответь одним словом: готов"}]
-    cfg = load_config(user_id, task="test")
-    reply = complete(cfg, ping)
-    out = {"ok": True, "model": cfg["model"], "reply": (reply["content"] or "").strip()[:200], "bridge": cfg["bridge"]}
+    smart = load_config(user_id, task="test")
+    cfgs = [("smart", "Основная", smart)]
     fast = load_config(user_id, task="test", tier="fast")
-    if fast["model"] != cfg["model"]:
+    if fast["model"] != smart["model"]:
+        cfgs.append(("fast", "Быстрая", fast))
+    models = []
+    for tier, label, cfg in cfgs:
+        item = {"tier": tier, "label": label, "model": cfg["model_name"], "sent": cfg["model"]}
         try:
-            out["fast"] = {"model": fast["model"], "reply": (complete(fast, ping)["content"] or "").strip()[:200]}
+            reply = complete(cfg, ping)
+            item.update(reply=(reply["content"] or "").strip()[:200], answered_by=reply.get("model") or "")
         except YandexError as exc:
-            out["fast"] = {"model": fast["model"], "error": exc.message or exc.code}
-    return out
+            item["error"] = exc.message or exc.code
+        models.append(item)
+    return {"ok": all("error" not in m for m in models), "bridge": smart["bridge"], "models": models}
 
 
 # --- Сводка и оценка ----------------------------------------------------------------------------
