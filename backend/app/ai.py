@@ -23,6 +23,7 @@ from urllib.parse import urlsplit
 
 import httpx
 
+from app import ai_bridge
 from app.clock import MSK, today_msk
 from app.db import pool
 from app.token_crypto import decrypt_token, encrypt_token
@@ -266,11 +267,18 @@ def load_config(user_id: int, task: str = "chat", workspace_id: int | None = Non
         headers["OpenAI-Project"] = folder
     else:
         base = row.get("base_url") or OPENAI_BASE
+    bridge = ai_bridge.target(user_id, "chat") if provider == "openai" else None
+    if bridge:
+        # Через шлюз Cloudflare: свой адрес API не используется, модель — «провайдер/модель».
+        base = bridge["base_url"]
+        headers.update(bridge["headers"])
+        model = ai_bridge.gateway_model(model)
     return {
         "provider": provider,
         "base_url": base,
         "model": model,
         "headers": headers,
+        "bridge": bool(bridge),
         "temperature": float(row.get("temperature") or 0.3),
         "check_host": base != OPENAI_BASE,
         "user_id": user_id,
@@ -431,6 +439,10 @@ def _error_text(response: httpx.Response) -> str:
         return str(err.get("message") or err)[:300]
     if isinstance(data, dict) and data.get("message"):
         return str(data["message"])[:300]
+    # Ошибки самого шлюза Cloudflare: {"success": false, "errors": [{"code": …, "message": …}]}.
+    errors = data.get("errors") if isinstance(data, dict) else None
+    if isinstance(errors, list) and errors:
+        return "; ".join(str(e.get("message") if isinstance(e, dict) else e) for e in errors)[:300]
     return str(data)[:300]
 
 
@@ -518,11 +530,13 @@ def complete(cfg: dict, messages: list[dict], tools: list[dict] | None = None) -
     except httpx.HTTPError as exc:
         raise YandexError("ai-network", f"Не удалось связаться с ИИ: {exc.__class__.__name__}") from exc
     if response.status_code in (401, 403):
-        raise YandexError("ai-auth", f"Провайдер ИИ отклонил ключ: {_error_text(response)}")
+        who = "Провайдер ИИ или шлюз Cloudflare (ключ провайдера или токен шлюза)" if cfg.get("bridge") else "Провайдер ИИ"
+        raise YandexError("ai-auth", f"{who} отклонил ключ: {_error_text(response)}")
     if response.status_code == 429:
         raise YandexError("ai-limit", f"Лимит запросов к ИИ: {_error_text(response)}")
     if response.status_code >= 400:
-        raise YandexError("ai-error", f"Ошибка ИИ ({response.status_code}): {_error_text(response)}")
+        where = " через мост Cloudflare" if cfg.get("bridge") else ""
+        raise YandexError("ai-error", f"Ошибка ИИ{where} ({response.status_code}): {_error_text(response)}")
     try:
         if data is None:
             data = response.json()
@@ -579,7 +593,7 @@ def check_connection(user_id: int) -> dict:
     ping = [{"role": "user", "content": "Ответь одним словом: готов"}]
     cfg = load_config(user_id, task="test")
     reply = complete(cfg, ping)
-    out = {"ok": True, "model": cfg["model"], "reply": (reply["content"] or "").strip()[:200]}
+    out = {"ok": True, "model": cfg["model"], "reply": (reply["content"] or "").strip()[:200], "bridge": cfg["bridge"]}
     fast = load_config(user_id, task="test", tier="fast")
     if fast["model"] != cfg["model"]:
         try:

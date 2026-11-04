@@ -165,6 +165,9 @@ export const aiApi = {
   settings: () => request('/api/web/ai/settings'),
   saveSettings: (payload) => put('/api/web/ai/settings', payload),
   test: () => post('/api/web/ai/settings/test'),
+  /** Мост Cloudflare AI Gateway: зарубежные модели (Claude, GPT, Gemini) с сервера в РФ — для чата и картинок. */
+  bridge: () => request('/api/web/ai/bridge'),
+  saveBridge: (payload) => put('/api/web/ai/bridge', payload),
   /** Вордстат для ассистента: свой API-ключ Search API Yandex Cloud и каталог. */
   wordstat: () => request('/api/web/ai/wordstat'),
   saveWordstat: (payload) => put('/api/web/ai/wordstat', payload),

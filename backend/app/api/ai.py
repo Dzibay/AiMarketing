@@ -3,7 +3,16 @@
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
-from app import ai, ai_agent, experiments, image_gen, insights, wordstat, workspaces
+from app import (
+    ai,
+    ai_agent,
+    ai_bridge,
+    experiments,
+    image_gen,
+    insights,
+    wordstat,
+    workspaces,
+)
 from app.api.web import _http
 from app.web_auth import require_web_user
 from app.yandex import YandexError
@@ -128,6 +137,26 @@ def ai_settings_put(body: AiSettingsBody, user_id: int = Depends(require_web_use
 @router.post("/ai/settings/test")
 def ai_settings_test(user_id: int = Depends(require_web_user)) -> dict:
     return _call(ai.check_connection, user_id)
+
+
+class BridgeSettingsBody(BaseModel):
+    enabled: bool = False
+    account_id: str = ""
+    gateway_id: str = ""
+    # None — оставить сохранённый токен шлюза, "" — удалить.
+    token: str | None = None
+    use_chat: bool = True
+    use_images: bool = True
+
+
+@router.get("/ai/bridge")
+def bridge_settings_get(user_id: int = Depends(require_web_user)) -> dict:
+    return ai_bridge.get_settings(user_id)
+
+
+@router.put("/ai/bridge")
+def bridge_settings_put(body: BridgeSettingsBody, user_id: int = Depends(require_web_user)) -> dict:
+    return _call(ai_bridge.save_settings, user_id, **body.model_dump())
 
 
 class WordstatSettingsBody(BaseModel):

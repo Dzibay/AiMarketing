@@ -36,7 +36,12 @@
             <label>Модель</label>
             <input v-model.trim="aiForm.model" type="text" :placeholder="defaultModel" autocomplete="off" />
           </div>
-          <div v-if="aiForm.provider === 'openai'" v-field class="field field--wide">
+          <p v-if="aiForm.provider === 'openai' && bridgeChat" class="field-hint field--wide">
+            Запросы идут через <a href="#bridge">мост Cloudflare</a>, адрес API не нужен. Модель — с префиксом провайдера
+            (anthropic/claude-sonnet-5-5, openai/gpt-4o-mini, google-ai-studio/gemini-2.5-flash); без префикса он
+            подставится по имени: claude-… → anthropic, gemini-… → google-ai-studio, остальное → openai.
+          </p>
+          <div v-else-if="aiForm.provider === 'openai'" v-field class="field field--wide">
             <label>Адрес API</label>
             <input v-model.trim="aiForm.base_url" type="url" :placeholder="ai.default_base_url" autocomplete="off" />
             <small class="field-hint">
@@ -112,13 +117,106 @@
           </div>
         </form>
         <p v-if="aiTest" class="sync-status" :class="aiTest.ok ? 'is-ok' : 'is-error'">
-          <template v-if="aiTest.ok">Работает · {{ aiTest.model }} ответил: «{{ aiTest.reply }}»</template>
+          <template v-if="aiTest.ok">Работает<template v-if="aiTest.bridge"> через мост Cloudflare</template> · {{ aiTest.model }} ответил: «{{ aiTest.reply }}»</template>
           <template v-else>{{ aiTest.error }}</template>
         </p>
         <p v-if="aiTest?.fast" class="sync-status" :class="aiTest.fast.error ? 'is-error' : 'is-ok'">
           <template v-if="aiTest.fast.error">Быстрая модель {{ aiTest.fast.model }}: {{ aiTest.fast.error }}</template>
           <template v-else>Быстрая · {{ aiTest.fast.model }} ответил: «{{ aiTest.fast.reply }}»</template>
         </p>
+      </section>
+
+      <section class="panel" id="bridge">
+        <div class="panel__head">
+          <h2>Мост Cloudflare</h2>
+          <span class="chip" :class="bridge.active ? '' : 'chip--warning'">{{ bridgeChip }}</span>
+        </div>
+        <p class="hint">
+          OpenAI, Anthropic (Claude) и Google (Gemini) не принимают запросы с российских серверов. Мост отправляет их
+          через ваш шлюз Cloudflare AI Gateway: Cloudflare получает запрос и передаёт его провайдеру со своих адресов.
+          Ключ провайдера остаётся вашим и указывается в блоках «ИИ-ассистент» и «Генерация картинок». Работает только
+          с провайдером «OpenAI-совместимый», YandexGPT и YandexART ходят напрямую.
+        </p>
+        <button v-if="!bridgeOpen" class="btn btn--ghost" type="button" @click="brExpanded = true">Подключить</button>
+        <form v-if="bridgeOpen" class="form-grid" @submit.prevent="saveBridge()">
+          <label class="check-row field--wide">
+            <input v-model="brForm.enabled" type="checkbox" />
+            Мост включён
+          </label>
+          <div v-field class="field">
+            <label>Account ID</label>
+            <input v-model.trim="brForm.account_id" type="text" placeholder="32 символа: 0–9, a–f" autocomplete="off" />
+          </div>
+          <div v-field class="field">
+            <label>Имя шлюза (Gateway ID)</label>
+            <input v-model.trim="brForm.gateway_id" type="text" placeholder="aimarketing" autocomplete="off" />
+          </div>
+          <div v-field class="field field--wide">
+            <label>Токен шлюза</label>
+            <input
+              v-model="brForm.token"
+              type="password"
+              autocomplete="new-password"
+              :placeholder="bridge.has_token ? `Сохранён ${bridge.token_hint} — оставьте пустым, чтобы не менять` : 'Если включён Authenticated Gateway'"
+            />
+            <small class="field-hint">Заголовок cf-aig-authorization. Пусто — шлюз без авторизации.</small>
+          </div>
+          <div class="field field--wide">
+            <label>Что пускать через мост</label>
+            <label class="check-row"><input v-model="brForm.use_chat" type="checkbox" /> ИИ-ассистент (чат и тексты)</label>
+            <label class="check-row"><input v-model="brForm.use_images" type="checkbox" /> Генерация картинок (OpenAI)</label>
+          </div>
+          <p v-if="bridge.chat_url" class="field-hint field--wide">Адрес чата: {{ bridge.chat_url }}/chat/completions</p>
+          <div class="form-actions">
+            <button class="btn btn--accent" type="submit" :disabled="brBusy">Сохранить</button>
+            <button
+              v-if="bridge.has_token"
+              class="btn btn--ghost btn--danger"
+              type="button"
+              :disabled="brBusy"
+              @click="deleteBridgeToken"
+            >
+              Удалить токен
+            </button>
+          </div>
+        </form>
+        <details class="bridge-guide" :open="!bridge.account_id">
+          <summary>Как создать мост в Cloudflare</summary>
+          <ol>
+            <li>
+              Зарегистрируйтесь на <a href="https://dash.cloudflare.com/sign-up" target="_blank" rel="noopener">dash.cloudflare.com</a>.
+              Бесплатного плана хватает, карта не нужна. Если сайт не открывается из РФ, зайдите через VPN. Он нужен
+              только для настройки, сам мост работает без него.
+            </li>
+            <li>
+              <b>Account ID.</b> После входа он есть в адресной строке: dash.cloudflare.com/<b>&lt;account id&gt;</b>/home.
+              Это 32 символа. Ещё его можно скопировать в меню «⋯» рядом с названием аккаунта (Copy account ID).
+            </li>
+            <li>
+              <b>Шлюз.</b> В меню слева откройте <b>AI → AI Gateway</b>, нажмите <b>Create Gateway</b> и введите имя,
+              например aimarketing. Это имя вставьте в поле «Имя шлюза».
+            </li>
+            <li>
+              <b>Токен.</b> В новых шлюзах авторизация (Authenticated Gateway) включена по умолчанию. Откройте шлюз →
+              <b>Settings</b> → <b>Create authentication token</b> и скопируйте токен в поле «Токен шлюза». Cloudflare
+              показывает токен только один раз. Без токена посторонний, узнавший адрес, сможет тратить ваш шлюз.
+            </li>
+            <li>
+              Включите «Мост включён» и сохраните. В блоке «ИИ-ассистент» выберите «OpenAI-совместимый», вставьте
+              <b>ключ провайдера</b>: для Claude — ключ Anthropic (sk-ant-…) из console.anthropic.com. Укажите модель,
+              например claude-sonnet-5-5. Нажмите «Проверить».
+            </li>
+            <li>
+              Для картинок: в «Генерации картинок» провайдер «OpenAI-совместимый», ключ OpenAI, модель gpt-image-1.
+              Anthropic картинки не рисует.
+            </li>
+          </ol>
+          <p class="field-hint">
+            Если проверка зависает или ответ обрывается, значит, хостинг сервера замедляет соединения с Cloudflare
+            (в РФ так бывает с 2025 года). Помогает только сервер у другого хостинга. Запросы и расходы видны в
+            Cloudflare: AI Gateway → ваш шлюз → Logs.
+          </p>
+        </details>
       </section>
 
       <section class="panel" id="wordstat">
@@ -211,7 +309,10 @@
             <label>Модель</label>
             <input v-model.trim="igForm.model" type="text" :placeholder="igDefaultModel" autocomplete="off" />
           </div>
-          <div v-if="igForm.provider === 'openai'" v-field class="field field--wide">
+          <p v-if="igForm.provider === 'openai' && bridgeImages" class="field-hint field--wide">
+            Запросы идут через <a href="#bridge">мост Cloudflare</a> в OpenAI, адрес API не нужен.
+          </p>
+          <div v-else-if="igForm.provider === 'openai'" v-field class="field field--wide">
             <label>Адрес API</label>
             <input v-model.trim="igForm.base_url" type="url" :placeholder="imageGen.default_base_url" autocomplete="off" />
             <small class="field-hint">
@@ -468,6 +569,9 @@ const igForm = reactive({ provider: 'openai', model: '', base_url: '', folder_id
 const igBusy = ref(false)
 const igTesting = ref(false)
 const igTest = ref(null)
+const bridge = ref({ enabled: false, active: false, account_id: '', gateway_id: '', has_token: false, token_hint: '', use_chat: true, use_images: true, chat_url: '' })
+const brForm = reactive({ enabled: false, account_id: '', gateway_id: '', token: '', use_chat: true, use_images: true })
+const brBusy = ref(false)
 const usage = ref(null)
 const usageBusy = ref(false)
 const telegram = ref({ configured: false, linked: false })
@@ -605,6 +709,7 @@ async function testAi() {
     aiTest.value = {
       ok: true,
       model: res.model,
+      bridge: !!res.bridge,
       reply: String(res.reply || '').slice(0, 120),
       fast: res.fast ? { ...res.fast, reply: String(res.fast.reply || '').slice(0, 120) } : null,
     }
@@ -614,6 +719,57 @@ async function testAi() {
   } finally {
     aiBusy.value = false
   }
+}
+
+// Мост нужен только серверу в РФ с зарубежной моделью — свёрнут, пока не заполнен.
+const brExpanded = ref(false)
+const bridgeOpen = computed(() => brExpanded.value || bridge.value.enabled || !!bridge.value.account_id)
+const bridgeChip = computed(() => {
+  const b = bridge.value
+  if (b.active) return 'включён'
+  return b.account_id ? 'выключен' : 'не подключён'
+})
+const bridgeChat = computed(() => bridge.value.active && bridge.value.use_chat)
+const bridgeImages = computed(() => bridge.value.active && bridge.value.use_images)
+
+function fillBridge(data) {
+  bridge.value = data
+  brForm.enabled = !!data.enabled
+  brForm.account_id = data.account_id || ''
+  brForm.gateway_id = data.gateway_id || ''
+  brForm.use_chat = data.use_chat !== false
+  brForm.use_images = data.use_images !== false
+  brForm.token = ''
+}
+
+/** token: null — оставить сохранённый, '' — удалить. */
+async function saveBridge(token = brForm.token.trim() || null) {
+  brBusy.value = true
+  aiTest.value = null
+  try {
+    fillBridge(
+      await aiApi.saveBridge({
+        enabled: brForm.enabled,
+        account_id: brForm.account_id,
+        gateway_id: brForm.gateway_id,
+        token,
+        use_chat: brForm.use_chat,
+        use_images: brForm.use_images,
+      }),
+    )
+    if (token === '') pushToast('Токен шлюза удалён')
+    else if (bridge.value.active) pushToast('Мост включён — проверьте ИИ кнопкой «Проверить»')
+    else pushToast('Мост сохранён, запросы идут напрямую')
+  } catch (err) {
+    pushToast(errorText(err), 'error')
+  } finally {
+    brBusy.value = false
+  }
+}
+
+async function deleteBridgeToken() {
+  if (!await askConfirm('Удалить токен шлюза? Если в Cloudflare включён Authenticated Gateway, запросы перестанут проходить.')) return
+  await saveBridge('')
 }
 
 // Пока Вордстат не настроен, форма ключа свёрнута: большинству он не нужен.
@@ -863,11 +1019,12 @@ async function changePassword() {
 
 onMounted(async () => {
   try {
-    const [me, aiSettings, wordstatSettings, imageGenSettings] = await Promise.all([
+    const [me, aiSettings, wordstatSettings, imageGenSettings, bridgeSettings] = await Promise.all([
       webApi.me(),
       aiApi.settings(),
       aiApi.wordstat(),
       aiApi.imageGen(),
+      aiApi.bridge(),
       loadTelegram(),
       loadUsage(),
     ])
@@ -875,6 +1032,7 @@ onMounted(async () => {
     fillAiForm(aiSettings)
     fillWordstat(wordstatSettings)
     fillImageGen(imageGenSettings)
+    fillBridge(bridgeSettings)
   } catch (err) {
     pushToast(errorText(err), 'error')
   } finally {

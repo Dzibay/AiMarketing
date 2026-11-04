@@ -21,7 +21,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 import httpx
 
-from app import ai
+from app import ai, ai_bridge
 from app.ad_extras import IMAGE_MAX_BYTES, IMAGE_TYPES
 from app.db import pool
 from app.token_crypto import decrypt_token, encrypt_token
@@ -173,6 +173,10 @@ def load_config(user_id: int, workspace_id: int | None = None) -> dict:
     else:
         base = row.get("base_url") or OPENAI_BASE
         headers = {"Authorization": f"Bearer {key}"}
+    bridge = ai_bridge.target(user_id, "images") if provider == "openai" else None
+    if bridge:
+        base = bridge["base_url"]
+        headers.update(bridge["headers"])
     settings_row = ai._row(user_id) or {}
     return {
         "provider": provider,
@@ -181,6 +185,7 @@ def load_config(user_id: int, workspace_id: int | None = None) -> dict:
         "model_name": model_name,
         "headers": {**headers, "Content-Type": "application/json"},
         "check_host": base not in (OPENAI_BASE, YANDEX_BASE),
+        "bridge": bool(bridge),
         "user_id": user_id,
         "workspace_id": workspace_id,
         "task": "images",
