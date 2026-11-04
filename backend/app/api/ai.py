@@ -141,12 +141,22 @@ def ai_settings_test(user_id: int = Depends(require_web_user)) -> dict:
 
 class BridgeSettingsBody(BaseModel):
     enabled: bool = False
+    # worker — свой Worker в США, gateway — Cloudflare AI Gateway.
+    kind: str = "worker"
     account_id: str = ""
     gateway_id: str = ""
-    # None — оставить сохранённый токен шлюза, "" — удалить.
+    # None — оставить сохранённый токен шлюза / секрет Worker'а, "" — удалить.
     token: str | None = None
+    worker_url: str = ""
+    worker_token: str | None = None
     use_chat: bool = True
     use_images: bool = True
+
+
+class BridgeDeployBody(BaseModel):
+    account_id: str
+    # API-токен Cloudflare (шаблон «Edit Cloudflare Workers») — только на время развёртывания, не хранится.
+    api_token: str
 
 
 @router.get("/ai/bridge")
@@ -157,6 +167,16 @@ def bridge_settings_get(user_id: int = Depends(require_web_user)) -> dict:
 @router.put("/ai/bridge")
 def bridge_settings_put(body: BridgeSettingsBody, user_id: int = Depends(require_web_user)) -> dict:
     return _call(ai_bridge.save_settings, user_id, **body.model_dump())
+
+
+@router.post("/ai/bridge/deploy")
+def bridge_deploy(body: BridgeDeployBody, user_id: int = Depends(require_web_user)) -> dict:
+    return _call(ai_bridge.deploy_worker, user_id, account_id=body.account_id, api_token=body.api_token)
+
+
+@router.post("/ai/bridge/test")
+def bridge_test(user_id: int = Depends(require_web_user)) -> dict:
+    return _call(ai_bridge.check_worker, user_id)
 
 
 class WordstatSettingsBody(BaseModel):

@@ -267,19 +267,23 @@ def load_config(user_id: int, task: str = "chat", workspace_id: int | None = Non
         headers["OpenAI-Project"] = folder
     else:
         base = row.get("base_url") or OPENAI_BASE
-    bridge = ai_bridge.target(user_id, "chat") if provider == "openai" else None
+    bridge = ai_bridge.target(user_id, "chat", model) if provider == "openai" else None
+    temperature = float(row.get("temperature") or 0.3)
     if bridge:
-        # Через шлюз Cloudflare: свой адрес API не используется, модель — «провайдер/модель».
+        # Через мост Cloudflare: свой адрес API не используется, модель — в виде, понятном мосту.
         base = bridge["base_url"]
         headers.update(bridge["headers"])
-        model = ai_bridge.gateway_model(model)
+        model = bridge["model"]
+        if bridge["anthropic"]:
+            # OpenAI-совместимый слой Anthropic отвечает 400 на temperature ниже 1 у новых Claude.
+            temperature = None
     return {
         "provider": provider,
         "base_url": base,
         "model": model,
         "headers": headers,
         "bridge": bool(bridge),
-        "temperature": float(row.get("temperature") or 0.3),
+        "temperature": temperature,
         "check_host": base != OPENAI_BASE,
         "user_id": user_id,
         "workspace_id": workspace_id,
@@ -514,7 +518,9 @@ def complete(cfg: dict, messages: list[dict], tools: list[dict] | None = None) -
     check_budget(cfg)
     if cfg.get("check_host"):
         _check_url_resolves_public(cfg["base_url"])
-    body: dict = {"model": cfg["model"], "messages": messages, "temperature": cfg.get("temperature", 0.3)}
+    body: dict = {"model": cfg["model"], "messages": messages}
+    if cfg.get("temperature", 0.3) is not None:
+        body["temperature"] = cfg.get("temperature", 0.3)
     if tools:
         body["tools"] = tools
     url = f"{cfg['base_url']}/chat/completions"
@@ -530,8 +536,16 @@ def complete(cfg: dict, messages: list[dict], tools: list[dict] | None = None) -
     except httpx.HTTPError as exc:
         raise YandexError("ai-network", f"Не удалось связаться с ИИ: {exc.__class__.__name__}") from exc
     if response.status_code in (401, 403):
-        who = "Провайдер ИИ или шлюз Cloudflare (ключ провайдера или токен шлюза)" if cfg.get("bridge") else "Провайдер ИИ"
-        raise YandexError("ai-auth", f"{who} отклонил ключ: {_error_text(response)}")
+        text = _error_text(response)
+        if cfg.get("bridge") and "request not allowed" in text.lower():
+            # Anthropic не пускает запросы из дата-центров рядом с РФ — так отвечает AI Gateway.
+            raise YandexError(
+                "ai-region",
+                "Провайдер не принимает запросы из региона, через который прошёл мост. Переключите мост на "
+                "«Свой Worker» в США: Настройки → Мост Cloudflare",
+            )
+        who = "Провайдер ИИ или мост Cloudflare (ключ провайдера или токен моста)" if cfg.get("bridge") else "Провайдер ИИ"
+        raise YandexError("ai-auth", f"{who} отклонил ключ: {text}")
     if response.status_code == 429:
         raise YandexError("ai-limit", f"Лимит запросов к ИИ: {_error_text(response)}")
     if response.status_code >= 400:

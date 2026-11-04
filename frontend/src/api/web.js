@@ -168,6 +168,10 @@ export const aiApi = {
   /** Мост Cloudflare AI Gateway: зарубежные модели (Claude, GPT, Gemini) с сервера в РФ — для чата и картинок. */
   bridge: () => request('/api/web/ai/bridge'),
   saveBridge: (payload) => put('/api/web/ai/bridge', payload),
+  /** Разворачивает Worker моста в аккаунте Cloudflare пользователя (API-токен не сохраняется). */
+  deployBridge: (payload) => post('/api/web/ai/bridge/deploy', payload),
+  /** Откуда Worker выходит в интернет: { country, colo, blocked }. */
+  testBridge: () => post('/api/web/ai/bridge/test'),
   /** Вордстат для ассистента: свой API-ключ Search API Yandex Cloud и каталог. */
   wordstat: () => request('/api/web/ai/wordstat'),
   saveWordstat: (payload) => put('/api/web/ai/wordstat', payload),

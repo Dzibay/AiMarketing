@@ -173,7 +173,7 @@ def load_config(user_id: int, workspace_id: int | None = None) -> dict:
     else:
         base = row.get("base_url") or OPENAI_BASE
         headers = {"Authorization": f"Bearer {key}"}
-    bridge = ai_bridge.target(user_id, "images") if provider == "openai" else None
+    bridge = ai_bridge.target(user_id, "images", model) if provider == "openai" else None
     if bridge:
         base = bridge["base_url"]
         headers.update(bridge["headers"])
