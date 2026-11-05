@@ -324,6 +324,12 @@ def chat_message(chat_id: int, body: MessageBody, user_id: int = Depends(require
     return _call(ai_agent.post_message, user_id, chat_id, body.text, refs=body.refs)
 
 
+@router.post("/ai/chats/{chat_id}/retry")
+def chat_retry(chat_id: int, user_id: int = Depends(require_web_user)) -> dict:
+    """Повтор оборвавшегося хода ИИ без нового сообщения."""
+    return _call(ai_agent.retry_chat, user_id, chat_id)
+
+
 @router.post("/ai/chats/{chat_id}/board")
 def chat_board(chat_id: int, body: BoardBody, user_id: int = Depends(require_web_user)) -> dict:
     """Правки маркетолога на доске сборки новой кампании; ответ — чат целиком."""

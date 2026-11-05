@@ -40,6 +40,14 @@ PROVIDERS = {
 TIMEOUT_SECONDS = 90
 # Потоковый ответ: timeout вызова — молчание между кусками, а на весь ответ потолок свой.
 STREAM_TOTAL_SECONDS = 600
+# Временные сбои по дороге к модели (регион моста, перегрузка провайдера, 5xx шлюза, обрыв связи) обычно
+# проходят со второго раза: повторяем сами с этими паузами, прежде чем показать ошибку. Таймаут не повторяем —
+# ожидание удвоится; его повторяет пользователь кнопкой в чате.
+RETRY_PAUSES = (2, 5)
+# 429 с Retry-After дольше этого не ждём — сразу ошибка.
+RETRY_AFTER_MAX = 20
+# 524 — шлюз не дождался модели, тот же таймаут: не повторяем.
+RETRY_STATUSES = {500, 502, 503, 504, 520, 521, 522, 523, 529}
 
 # Какая модель на какую задачу: smart — основная, fast — «быстрая» из настроек (пусто — та же).
 TASKS = {
@@ -269,6 +277,7 @@ def load_config(user_id: int, task: str = "chat", workspace_id: int | None = Non
         base = row.get("base_url") or OPENAI_BASE
     bridge = ai_bridge.target(user_id, "chat", model) if provider == "openai" else None
     temperature = float(row.get("temperature") or 0.3)
+    bridge_kind = bridge["kind"] if bridge else ""
     if bridge:
         # Через мост Cloudflare: свой адрес API не используется, модель — в виде, понятном мосту.
         base = bridge["base_url"]
@@ -283,6 +292,7 @@ def load_config(user_id: int, task: str = "chat", workspace_id: int | None = Non
         "model": model,
         "headers": headers,
         "bridge": bool(bridge),
+        "bridge_kind": bridge_kind,
         "temperature": temperature,
         "check_host": base != OPENAI_BASE,
         "user_id": user_id,
@@ -485,7 +495,11 @@ def _post_stream(url: str, body: dict, headers: dict, timeout: float) -> tuple[h
                 continue
             if chunk.get("error"):
                 err = chunk["error"]
-                raise YandexError("ai-error", f"Ошибка ИИ: {str(err.get('message') if isinstance(err, dict) else err)[:300]}")
+                text = str(err.get("message") if isinstance(err, dict) else err)[:300]
+                kind = str(err.get("type") or "") if isinstance(err, dict) else ""
+                # Перегрузка провайдера посреди ответа (Anthropic: overloaded_error) — временная.
+                overloaded = kind in ("overloaded_error", "api_error") or "overloaded" in text.lower()
+                raise (_transient if overloaded else YandexError)("ai-error", f"Ошибка ИИ: {text}")
             answered_by = answered_by or str(chunk.get("model") or "")
             if isinstance(chunk.get("usage"), dict):
                 usage = chunk["usage"]
@@ -511,11 +525,104 @@ def _post_stream(url: str, body: dict, headers: dict, timeout: float) -> tuple[h
     return response, {"choices": [{"message": message}], "usage": usage, "model": answered_by}
 
 
+def _transient(code: str, message: str, retry_after: float | None = None) -> YandexError:
+    """Ошибка, которая обычно проходит сама: complete() повторит запрос, прежде чем её показать."""
+    exc = YandexError(code, message)
+    exc.transient = True
+    exc.retry_after = retry_after
+    return exc
+
+
+def _retry_after(response: httpx.Response) -> float | None:
+    try:
+        return max(0.0, float(response.headers.get("retry-after") or ""))
+    except ValueError:
+        return None
+
+
+def _region_error(cfg: dict, response: httpx.Response) -> YandexError:
+    """403 «Request not allowed»: провайдер (Anthropic) увидел запрос из дата-центра рядом с РФ."""
+    if cfg.get("bridge_kind") == "worker":
+        # Worker закреплён за США, но Cloudflare иногда выполняет его в ближайшем дата-центре.
+        # cf-placement (если Cloudflare его прислал) — где он выполнился: local-… / remote-….
+        placement = response.headers.get("cf-placement") or ""
+        where = f" (cf-placement: {placement[:40]})" if placement else ""
+        return _transient(
+            "ai-region",
+            f"Провайдер отклонил запрос по региону: Cloudflare выполнил Worker моста не в США{where}. Обычно это "
+            "разовый сбой — повторите запрос. Если повторяется часто, нажмите «Проверить мост»: Настройки → "
+            "Мост Cloudflare",
+        )
+    # AI Gateway выходит из ближайшего дата-центра — помогает свой Worker в США.
+    return _transient(
+        "ai-region",
+        "Провайдер не принимает запросы из региона, через который прошёл мост. Переключите мост на "
+        "«Свой Worker» в США: Настройки → Мост Cloudflare",
+    )
+
+
+def _raise_for_status(cfg: dict, response: httpx.Response) -> None:
+    status = response.status_code
+    if status in (401, 403):
+        text = _error_text(response)
+        if cfg.get("bridge") and "request not allowed" in text.lower():
+            raise _region_error(cfg, response)
+        who = "Провайдер ИИ или мост Cloudflare (ключ провайдера или токен моста)" if cfg.get("bridge") else "Провайдер ИИ"
+        raise YandexError("ai-auth", f"{who} отклонил ключ: {text}")
+    if status == 429:
+        text = _error_text(response)
+        message = f"Лимит запросов к ИИ: {text}"
+        # «Закончились деньги» у OpenAI — тоже 429, но сам он не пройдёт.
+        if any(word in text.lower() for word in ("quota", "billing", "balance")):
+            raise YandexError("ai-limit", message)
+        raise _transient("ai-limit", message, _retry_after(response))
+    if status >= 400:
+        where = " через мост Cloudflare" if cfg.get("bridge") else ""
+        message = f"Ошибка ИИ{where} ({status}): {_error_text(response)}"
+        raise _transient("ai-error", message) if status in RETRY_STATUSES else YandexError("ai-error", message)
+
+
+def _send(cfg: dict, url: str, body: dict, timeout: float) -> dict:
+    """Одна попытка chat/completions → тело ответа. Ошибки — YandexError, временные помечены transient."""
+    try:
+        response, data = _post_stream(url, body, cfg["headers"], timeout) if cfg.get("stream") else (None, None)
+        # Провайдер не знает stream / stream_options — спрашиваем обычным способом.
+        if response is None or (response.status_code == 400 and "stream" in response.text.lower()):
+            response = httpx.post(url, json=body, headers=cfg["headers"], timeout=timeout, follow_redirects=False)
+            data = None
+    except httpx.TimeoutException as exc:
+        raise YandexError("ai-timeout", "ИИ не ответил за отведённое время") from exc
+    except httpx.HTTPError as exc:
+        # Соединение не установилось или оборвалось посреди ответа.
+        raise _transient("ai-network", f"Не удалось связаться с ИИ: {exc.__class__.__name__}") from exc
+    _raise_for_status(cfg, response)
+    if data is None:
+        try:
+            data = response.json()
+        except ValueError as exc:
+            raise YandexError("ai-error", "Непонятный ответ ИИ") from exc
+    return data
+
+
+def _retry_wait(exc: YandexError, pauses: list) -> float | None:
+    """Сколько ждать перед повтором; None — не повторять (ошибка не временная или попытки кончились)."""
+    if not getattr(exc, "transient", False) or not pauses:
+        return None
+    wait = pauses.pop(0)
+    after = getattr(exc, "retry_after", None)
+    if after is not None:
+        if after > RETRY_AFTER_MAX:
+            return None
+        wait = max(wait, after)
+    return wait
+
+
 def complete(cfg: dict, messages: list[dict], tools: list[dict] | None = None) -> dict:
     """Один вызов chat/completions → {"content", "tool_calls": [{"id", "name", "arguments"}], "usage"}.
 
     До вызова — проверка месячного лимита, после — запись расхода (cfg["units"] — объектов в пачке).
-    cfg["stream"] — читать ответ потоком (чат: запросы большие, ответ долгий).
+    cfg["stream"] — читать ответ потоком (чат: запросы большие, ответ долгий). Временные сбои повторяются
+    с паузами RETRY_PAUSES; ответ модели при этом нигде не сохранён, поэтому повтор ничего не задваивает.
     """
     check_budget(cfg)
     if cfg.get("check_host"):
@@ -527,37 +634,24 @@ def complete(cfg: dict, messages: list[dict], tools: list[dict] | None = None) -
         body["tools"] = tools
     url = f"{cfg['base_url']}/chat/completions"
     timeout = cfg.get("timeout") or TIMEOUT_SECONDS
+    pauses = list(RETRY_PAUSES)
+    attempt = 1
+    while True:
+        try:
+            data = _send(cfg, url, body, timeout)
+            break
+        except YandexError as exc:
+            wait = _retry_wait(exc, pauses)
+            if wait is None:
+                if attempt > 1 and exc.message:
+                    exc.message = f"{exc.message} (попыток: {attempt})"
+                raise
+            log.warning("ИИ: временный сбой %s (%s), повтор через %s с", exc.code, exc.message, wait)
+            time.sleep(wait)
+            attempt += 1
     try:
-        response, data = _post_stream(url, body, cfg["headers"], timeout) if cfg.get("stream") else (None, None)
-        # Провайдер не знает stream / stream_options — спрашиваем обычным способом.
-        if response is None or (response.status_code == 400 and "stream" in response.text.lower()):
-            response = httpx.post(url, json=body, headers=cfg["headers"], timeout=timeout, follow_redirects=False)
-            data = None
-    except httpx.TimeoutException as exc:
-        raise YandexError("ai-timeout", "ИИ не ответил за отведённое время") from exc
-    except httpx.HTTPError as exc:
-        raise YandexError("ai-network", f"Не удалось связаться с ИИ: {exc.__class__.__name__}") from exc
-    if response.status_code in (401, 403):
-        text = _error_text(response)
-        if cfg.get("bridge") and "request not allowed" in text.lower():
-            # Anthropic не пускает запросы из дата-центров рядом с РФ — так отвечает AI Gateway.
-            raise YandexError(
-                "ai-region",
-                "Провайдер не принимает запросы из региона, через который прошёл мост. Переключите мост на "
-                "«Свой Worker» в США: Настройки → Мост Cloudflare",
-            )
-        who = "Провайдер ИИ или мост Cloudflare (ключ провайдера или токен моста)" if cfg.get("bridge") else "Провайдер ИИ"
-        raise YandexError("ai-auth", f"{who} отклонил ключ: {text}")
-    if response.status_code == 429:
-        raise YandexError("ai-limit", f"Лимит запросов к ИИ: {_error_text(response)}")
-    if response.status_code >= 400:
-        where = " через мост Cloudflare" if cfg.get("bridge") else ""
-        raise YandexError("ai-error", f"Ошибка ИИ{where} ({response.status_code}): {_error_text(response)}")
-    try:
-        if data is None:
-            data = response.json()
         message = data["choices"][0]["message"]
-    except (ValueError, KeyError, IndexError, TypeError) as exc:
+    except (KeyError, IndexError, TypeError) as exc:
         raise YandexError("ai-error", "Непонятный ответ ИИ") from exc
     calls = []
     for i, call in enumerate(message.get("tool_calls") or []):

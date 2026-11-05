@@ -150,7 +150,18 @@
             <span aria-hidden="true">✎</span> Правки на доске: {{ item.content }}
           </p>
 
-          <p v-else-if="item.role === 'error'" class="notice notice--warn">{{ item.content }}</p>
+          <div v-else-if="item.role === 'error'" class="notice notice--warn chat-error">
+            <span>{{ item.content }}</span>
+            <button
+              v-if="errorInFeed && item.key === lastMessageKey"
+              class="btn btn--ghost btn--xs"
+              type="button"
+              :disabled="!canRetry"
+              @click="retryTurn"
+            >
+              Повторить
+            </button>
+          </div>
 
           <div v-else class="msg msg--ai">
             <div v-if="item.content" class="msg__bubble md" v-html="renderMarkdown(item.content)" />
@@ -260,7 +271,10 @@
         <div v-if="status === 'running'" class="msg msg--ai">
           <div class="msg__bubble msg__bubble--thinking"><span class="spinner" /> {{ thinkingText }}</div>
         </div>
-        <p v-if="status === 'error' && chat?.error && !errorInFeed" class="notice notice--warn">{{ chat.error }}</p>
+        <div v-if="status === 'error' && chat?.error && !errorInFeed" class="notice notice--warn chat-error">
+          <span>{{ chat.error }}</span>
+          <button class="btn btn--ghost btn--xs" type="button" :disabled="!canRetry" @click="retryTurn">Повторить</button>
+        </div>
       </div>
 
       <div v-if="pendingWrites.length > 1" class="chat__pending">
@@ -421,6 +435,15 @@ const errorInFeed = computed(() => {
   const last = chat.value ? data.value.messages[data.value.messages.length - 1] : null
   return last?.role === 'error' && !!chat.value.error && last.content.startsWith(chat.value.error)
 })
+const lastMessageKey = computed(() => {
+  const messages = chat.value ? data.value.messages : []
+  return messages.length ? `m${messages[messages.length - 1].id}` : ''
+})
+const retrying = ref(false)
+// «Повторить» — тот же ход заново: ИИ продолжит с места сбоя, без нового сообщения.
+const canRetry = computed(
+  () => status.value === 'error' && !retrying.value && !sending.value && !deciding.value && aiConfigured.value,
+)
 const access = computed(() => ws.value.ai_access || { full_access: false, categories: {}, max_change_pct: 30 })
 const actions = computed(() => (chat.value ? data.value.actions : []))
 const pendingActions = computed(() => actions.value.filter((a) => a.status === 'pending'))
@@ -890,6 +913,24 @@ async function send(text) {
   } finally {
     sending.value = false
     nextTick(() => input.value?.focus())
+  }
+}
+
+async function retryTurn() {
+  const id = chatId.value
+  if (!id || !canRetry.value) return
+  retrying.value = true
+  try {
+    await aiApi.retry(id)
+    stickToBottom = true
+    await loadChat(id)
+    loadChats()
+  } catch (err) {
+    if (err?.code === 'ai-not-configured') aiConfigured.value = false
+    pushToast(errorText(err), 'error')
+    loadChat(id, true)
+  } finally {
+    retrying.value = false
   }
 }
 

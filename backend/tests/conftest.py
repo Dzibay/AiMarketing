@@ -20,6 +20,12 @@ if TEST_DB_NAME:
             os.environ[f"DB_{key}"] = value
 
 
+@pytest.fixture(autouse=True)
+def _instant_ai_retries(monkeypatch):
+    """Автоповтор временных сбоев ИИ в тестах — без настоящих пауз."""
+    monkeypatch.setattr("app.ai.RETRY_PAUSES", (0, 0))
+
+
 def reset_schema(pool) -> None:
     with pool.connection() as conn:
         conn.execute("DROP SCHEMA public CASCADE")

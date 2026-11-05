@@ -222,7 +222,7 @@ def gateway_model(model: str) -> str:
 
 
 def target(user_id: int, use: str, model: str = "") -> dict | None:
-    """Куда слать запрос через мост: {"base_url", "headers", "model", "anthropic"}; None — мост не для этой задачи.
+    """Куда слать запрос через мост: {"kind", "base_url", "headers", "model", "anthropic"}; None — мост не для этой задачи.
 
     use: "chat" — chat/completions, "images" — /images/generations OpenAI. anthropic — модель Claude: её
     OpenAI-совместимый слой отвергает temperature ниже 1, её не передаём.
@@ -240,6 +240,7 @@ def target(user_id: int, use: str, model: str = "") -> dict | None:
             )
         bare = model.split("/", 1)[1] if "/" in model else model
         return {
+            "kind": "worker",
             "base_url": f"{row['worker_url']}/{route}",
             "headers": {WORKER_TOKEN_HEADER: _decrypt(row["worker_token_enc"], "Секрет Worker'а")},
             "model": bare,
@@ -247,6 +248,7 @@ def target(user_id: int, use: str, model: str = "") -> dict | None:
         }
     headers = {TOKEN_HEADER: f"Bearer {_decrypt(row['token_enc'], 'Токен шлюза')}"} if row.get("token_enc") else {}
     return {
+        "kind": "gateway",
         "base_url": _base(row, "compat" if use == "chat" else "openai"),
         "headers": headers,
         "model": gateway_model(model) if use == "chat" else model,

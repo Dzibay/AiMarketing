@@ -190,6 +190,8 @@ export const aiApi = {
   deleteChat: (id) => del(`/api/web/ai/chats/${id}`),
   // refs — id других проектов, упомянутых через @: ИИ читает их, но не меняет.
   send: (id, text, refs = []) => post(`/api/web/ai/chats/${id}/messages`, { text, refs }),
+  /** Повтор оборвавшегося хода ИИ: модель продолжит с места сбоя, без нового сообщения. */
+  retry: (id) => post(`/api/web/ai/chats/${id}/retry`, {}),
   /** exclude — id строк, с которых сняли галочки: их в действии не будет. */
   decide: (actionId, approve, remember = false, exclude = []) =>
     post(`/api/web/ai/actions/${actionId}/decide`, { approve, remember, exclude }),

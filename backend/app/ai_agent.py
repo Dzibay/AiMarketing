@@ -5290,7 +5290,7 @@ def _chat_out(row: dict) -> dict:
     updated = row.get("updated_at")
     error = row.get("error") or ""
     if status == "running" and updated and datetime.now(timezone.utc) - updated > STALE_RUNNING:
-        status, error = "error", "Ответ прервался — отправьте сообщение ещё раз"
+        status, error = "error", "Ответ прервался — повторите запрос"
     return {
         "id": row["id"],
         "workspace_id": row["workspace_id"],
@@ -6717,6 +6717,29 @@ def post_message(user_id: int, chat_id: int, text: str, refs: list[int] | None =
         )
     job = _submit(user_id, chat_id, f"m{message['id']}")
     return {"message": _message_out(message), "job": public_job(job)}
+
+
+def retry_chat(user_id: int, chat_id: int) -> dict:
+    """«Повторить» после сбоя: тот же ход заново, без нового сообщения.
+
+    История чата — из сообщений в базе, строки-ошибки в неё не входят: модель продолжит с места обрыва,
+    а уже выполненные инструменты повторно не вызовутся.
+    """
+    from app.jobs import public_job
+
+    # Как при отправке: ИИ отключили или кончился лимит — сразу понятная ошибка, а не новый сбой в ленте.
+    ai.check_budget(ai.load_config(user_id, "chat"))
+    with pool.connection() as conn:
+        chat = _require_chat(conn, user_id, chat_id, lock=True)
+        status = _chat_out(chat)["status"]
+        if status == "running":
+            raise YandexError("busy", "ИИ ещё отвечает — дождитесь ответа")
+        if status != "error":
+            raise YandexError("nothing-to-retry", "Повторять нечего: последний ответ ИИ не оборвался")
+        conn.execute("UPDATE ai_chats SET status = 'running', error = '', updated_at = NOW() WHERE id = %s", (chat_id,))
+    # Свой маркер на каждый повтор: зависшая задача прошлой попытки не поглотит новую.
+    job = _submit(user_id, chat_id, f"r{secrets.token_hex(6)}")
+    return {"job": public_job(job)}
 
 
 REVIEW_PROMPT = "Сделай разбор пространства: что работает, что затухает и почему, что стоит повторить"
