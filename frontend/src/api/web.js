@@ -9,6 +9,21 @@ export class ApiError extends Error {
   }
 }
 
+/** Событие окна: доступ закрыт (подписка, почта) или нужен тариф выше (лимит, функция, проекты). */
+export const ACCESS_EVENT = 'aim:access'
+const ACCESS_CODES = new Set([
+  'subscription-expired',
+  'email-unverified',
+  'units-exhausted',
+  'feature-locked',
+  'projects-limit',
+])
+
+function notifyAccess(err) {
+  if (!ACCESS_CODES.has(err.code) || typeof window === 'undefined') return
+  window.dispatchEvent(new CustomEvent(ACCESS_EVENT, { detail: { code: err.code, message: err.messageDetail } }))
+}
+
 /** options.token — свой токен вместо сессии кабинета (админка): её 401 сессию кабинета не сбрасывает. */
 export async function request(path, { token, ...options } = {}) {
   const headers = { ...(options.headers || {}) }
@@ -24,10 +39,12 @@ export async function request(path, { token, ...options } = {}) {
   }
   if (!response.ok) {
     const detail = body.detail
-    if (detail && typeof detail === 'object') {
-      throw new ApiError(detail.code || 'error', response.status, detail.message || '')
-    }
-    throw new ApiError(detail || 'error', response.status)
+    const err =
+      detail && typeof detail === 'object'
+        ? new ApiError(detail.code || 'error', response.status, detail.message || '')
+        : new ApiError(detail || 'error', response.status)
+    if (ownSession) notifyAccess(err)
+    throw err
   }
   return body
 }
@@ -51,7 +68,9 @@ export async function waitJob(job, onProgress) {
   if (current.status === 'error') {
     const code = current.error_code || 'error'
     // Текст внутренних исключений пользователю не показываем.
-    throw new ApiError(code, 400, code === 'internal' ? '' : current.error || '')
+    const err = new ApiError(code, 400, code === 'internal' ? '' : current.error || '')
+    notifyAccess(err)
+    throw err
   }
   return current.result || {}
 }
@@ -86,6 +105,10 @@ const WS = (id) => `/api/web/workspaces/${id}`
 export const wsApi = {
   list: (archived = false) => request(`/api/web/workspaces${query({ archived })}`),
   refresh: () => post('/api/web/workspaces/refresh'),
+  /** Счётчики для выбора проектов по тарифу: { items: [{ counter_id, name, site, login, state, workspace_id, note }], projects_limit, projects_used }. */
+  counters: () => request('/api/web/workspaces/counters'),
+  /** Сделать счётчик проектом (или вернуть его архивный проект) → пространство. */
+  fromCounter: (counterId) => post('/api/web/workspaces/from-counter', { counter_id: counterId }),
   get: (id) => request(WS(id)),
   load: (id) => request(`${WS(id)}/load`),
   update: (id, payload) => patch(WS(id), payload),
@@ -217,6 +240,11 @@ export const webApi = {
   register: (payload) => request('/api/web/register', { method: 'POST', body: JSON.stringify(payload) }),
   login: (payload) => request('/api/web/login', { method: 'POST', body: JSON.stringify(payload) }),
   me: () => request('/api/web/me'),
+  /** Тариф, расход лимита за период и тарифы для перехода (цены со скидкой). */
+  plan: () => request('/api/web/plan'),
+  /** Ссылка из письма открывается и без входа — сессию не отправляем. */
+  verifyEmail: (token) => request('/api/web/verify-email', { method: 'POST', body: JSON.stringify({ token }), token: '' }),
+  resendVerify: () => post('/api/web/verify-email/resend'),
   // purpose=audience — второе приложение (Яндекс Аудитории) логину connectionId.
   yandexStart: (purpose = 'login', mode = '', connectionId = null) =>
     request(
@@ -405,7 +433,16 @@ export const ERRORS = {
   yandex: 'Яндекс не подтвердил доступ. Попробуйте снова.',
   state: 'Сессия или ссылка устарела. Попробуйте ещё раз.',
   code: 'Код Яндекса не получен.',
-  'yandex-taken': 'Этот Яндекс уже привязан к другому аккаунту.',
+  'yandex-taken': 'Этот логин Яндекса уже подключён в другом аккаунте — напишите в поддержку.',
+  'counter-taken': 'Этот счётчик уже подключён в другом аккаунте — напишите в поддержку.',
+  taken: 'Уже подключён в другом аккаунте — напишите в поддержку.',
+  'subscription-expired': 'Подписка закончилась — продлите тариф, чтобы продолжить.',
+  'email-unverified': 'Подтвердите почту — ссылка в письме.',
+  'feature-locked': 'Эта функция не входит в ваш тариф.',
+  'project-locked': 'Проект не входит в ваш тариф.',
+  'projects-limit': 'На вашем тарифе больше проектов не добавить.',
+  'too-soon': 'Письмо уже отправлено — повторить можно через минуту.',
+  'plan-in-use': 'На этом тарифе есть пользователи.',
   'not-found': 'Не найдено.',
   purpose: 'Некорректный режим подключения.',
   'token-expired': 'Токен Яндекса истёк. Подключите аккаунт заново.',
@@ -441,7 +478,7 @@ export const ERRORS = {
   decided: 'Решение по действию уже принято.',
   forbidden: 'Нет доступа.',
   'ai-not-configured': 'ИИ временно недоступен: администратор ещё не подключил модель.',
-  'units-exhausted': 'Лимит ИИ на этот месяц исчерпан.',
+  'units-exhausted': 'Лимит на этот период исчерпан.',
   'model-class': 'Эта модель сейчас недоступна.',
   'units-limit': 'Лимит — число единиц от 0.',
   'wordstat-not-configured': 'Вордстат временно недоступен.',

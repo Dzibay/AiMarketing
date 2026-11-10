@@ -6,6 +6,9 @@ import RegisterView from '../views/RegisterView.vue'
 import ForgotPasswordView from '../views/ForgotPasswordView.vue'
 import ResetPasswordView from '../views/ResetPasswordView.vue'
 import OAuthDoneView from '../views/OAuthDoneView.vue'
+import { ACCESS_EVENT } from '../api/web'
+import { accessRedirect, loadProfile, useProfile } from '../composables/useProfile'
+import { getSession } from '../composables/useSession'
 
 const DOCS_PAGES = new Set(['privacy', 'consent', 'offer', 'cookies'])
 
@@ -17,12 +20,14 @@ const router = createRouter({
     { path: '/register', name: 'register', component: RegisterView },
     { path: '/forgot-password', name: 'forgot-password', component: ForgotPasswordView },
     { path: '/reset-password', name: 'reset-password', component: ResetPasswordView },
+    { path: '/verify-email', name: 'verify-email', component: () => import('../views/VerifyEmailView.vue') },
 
     // Общий кабинет: все пространства, подключения, папки клиентов, инструменты и настройки.
     { path: '/cabinet', name: 'cabinet', component: () => import('../views/OverviewView.vue') },
     { path: '/cabinet/accounts', name: 'accounts', component: () => import('../views/AccountsView.vue') },
     { path: '/cabinet/clients', name: 'clients', component: () => import('../views/ClientsView.vue') },
     { path: '/cabinet/settings', name: 'settings', component: () => import('../views/SettingsView.vue') },
+    { path: '/cabinet/plan', name: 'plan', component: () => import('../views/PlanView.vue') },
     { path: '/cabinet/rules', name: 'rules', component: () => import('../views/RulesView.vue') },
     {
       path: '/cabinet/negative-lists',
@@ -108,5 +113,34 @@ const router = createRouter({
     return { top: 0 }
   },
 })
+
+// Кабинет закрыт, пока почта не подтверждена или подписка закончилась: ведём на нужный экран
+// до того, как страница начнёт грузить данные (иначе — пачка ошибок 402/403).
+const GATED = /^\/(cabinet|w)(\/|$)/
+
+router.beforeEach(async (to) => {
+  if (!GATED.test(to.path) || !getSession()) return true
+  try {
+    await loadProfile()
+  } catch {
+    return true // 401 и сбои разберёт оболочка кабинета
+  }
+  return accessRedirect(useProfile().subscription.value, to.path) || true
+})
+
+// Подписка закончилась или подтверждение включили, пока кабинет открыт: перечитываем профиль и уводим.
+if (typeof window !== 'undefined') {
+  window.addEventListener(ACCESS_EVENT, async (event) => {
+    const code = event.detail?.code
+    if (code !== 'subscription-expired' && code !== 'email-unverified') return
+    try {
+      await loadProfile(true)
+    } catch {
+      return
+    }
+    const target = accessRedirect(useProfile().subscription.value, router.currentRoute.value.path)
+    if (target) router.replace(target)
+  })
+}
 
 export default router

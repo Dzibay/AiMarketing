@@ -90,6 +90,14 @@ export function formatDate(iso) {
   return d.toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' })
 }
 
+/** «15 декабря 2026» — сроки подписки и тарифа. */
+export function formatDay(iso) {
+  if (!iso) return '—'
+  const d = iso.length === 10 ? new Date(`${iso}T00:00:00`) : new Date(iso)
+  // Без «г.»: дата часто стоит в конце фразы, и точка задваивалась бы.
+  return d.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' }).replace(/\s*г\.$/, '')
+}
+
 export function plural(n, one, few, many) {
   const v = Math.abs(Number(n || 0))
   const mod10 = v % 10

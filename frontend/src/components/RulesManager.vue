@@ -1,5 +1,9 @@
 <template>
   <div class="rules-manager">
+    <FeatureLockNotice feature="autopilot">
+      Автопилот не входит в ваш тариф: новые правила не создаются, а действующие не проверяются. Выключить или удалить
+      правило можно и сейчас.
+    </FeatureLockNotice>
     <section class="panel">
       <h2>Новое правило</h2>
       <p class="hint">
@@ -213,6 +217,7 @@
 <script setup>
 import { askConfirm } from '../composables/useConfirm'
 import { computed, onMounted, reactive, ref, watch } from 'vue'
+import FeatureLockNotice from './FeatureLockNotice.vue'
 import { errorText, webApi, wsApi } from '../api/web'
 import { pushToast } from '../composables/useToasts'
 import { useWorkspaces } from '../composables/useWorkspaces'

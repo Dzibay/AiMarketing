@@ -183,7 +183,10 @@
                     <small class="cell-note">
                       <template v-if="w.id">
                         № {{ w.counter_id }} · {{ w.campaigns }} {{ plural(w.campaigns, 'кампания', 'кампании', 'кампаний') }}
-                        <template v-if="!w.counter_ok"> · <span class="tone-warn">счётчик недоступен</span></template>
+                        <template v-if="lockedIds.has(w.id)">
+                          · <span class="tone-warn"><Lock class="inline-icon" aria-hidden="true" /> на тарифе выше</span>
+                        </template>
+                        <template v-else-if="!w.counter_ok"> · <span class="tone-warn">счётчик недоступен</span></template>
                         <template v-if="w.accounts && !w.stats_synced_at"> · статистика не загружена</template>
                       </template>
                       <template v-else>Кампании, которые не входят ни в одно пространство</template>
@@ -302,7 +305,7 @@
 <script setup>
 import { computed, onMounted, ref, watch } from 'vue'
 import { RouterLink, useRouter } from 'vue-router'
-import { CalendarClock, Coins, Crosshair, Target, TriangleAlert, Wallet } from '@lucide/vue'
+import { CalendarClock, Coins, Crosshair, Lock, Target, TriangleAlert, Wallet } from '@lucide/vue'
 import AppShell from '../components/AppShell.vue'
 import OnboardingChecklist from '../components/OnboardingChecklist.vue'
 import Sparkline from '../components/Sparkline.vue'
@@ -351,7 +354,9 @@ const WEEKDAY_TO_LAST = [
 ]
 
 const router = useRouter()
-const { loadWorkspaces } = useWorkspaces()
+const { loadWorkspaces, workspaces } = useWorkspaces()
+// Проекты сверх лимита тарифа: в обзоре видны, но открываются экраном «на тарифе выше».
+const lockedIds = computed(() => new Set(workspaces.value.filter((w) => w.locked).map((w) => w.id)))
 const loading = ref(true)
 const refreshing = ref(false)
 const refreshText = ref('')

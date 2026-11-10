@@ -65,6 +65,8 @@
     <div v-if="loading" class="panel"><p class="empty">Загружаем аккаунты…</p></div>
 
     <template v-else>
+      <ProjectChoice ref="projectChoice" />
+
       <section class="panel">
         <h2>Логины Яндекса</h2>
         <p class="hint">
@@ -309,6 +311,7 @@ import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { RouterLink } from 'vue-router'
 import AppShell from '../components/AppShell.vue'
 import LoadStages from '../components/LoadStages.vue'
+import ProjectChoice from '../components/ProjectChoice.vue'
 import YandexConnectButton from '../components/YandexConnectButton.vue'
 import { errorDetail, errorText, JOB_LABELS, jobProgressText, webApi } from '../api/web'
 import { jobText, refreshLoads, stageErrorText, stageFailure, useLoads } from '../composables/useLoads'
@@ -345,6 +348,7 @@ const busyId = ref(null)
 const loadBusy = ref('')
 const counterSearch = ref('')
 const accountSearch = ref('')
+const projectChoice = ref(null)
 let jobsTimer = null
 
 // Загрузка закончилась — тихо обновляем счётчики кампаний и пространства.
@@ -417,7 +421,7 @@ async function load(quiet = false) {
 }
 
 async function reloadAll() {
-  await Promise.all([load(true), loadWorkspaces(true).catch(() => null)])
+  await Promise.all([load(true), loadWorkspaces(true).catch(() => null), projectChoice.value?.load()])
 }
 
 // Пока на сервере идут задачи (синк сразу после подключения логина), опрашиваем их

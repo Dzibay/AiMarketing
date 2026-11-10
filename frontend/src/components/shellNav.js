@@ -12,6 +12,7 @@ import {
 /**
  * Навигация оболочки: группа — иконка в левой колонке, её страницы — вкладки в шапке.
  * В кабинете и в пространстве ровно четыре основные группы — столько же, сколько на нижней панели телефона.
+ * feature у страницы — функция тарифа: выключена — у вкладки замок, раздел открывается с подсказкой о тарифе.
  */
 export const CABINET_NAV = [
   { key: 'overview', label: 'Обзор', icon: LayoutDashboard, pages: [{ label: 'Обзор', to: '/cabinet', exact: true }] },
@@ -24,7 +25,7 @@ export const CABINET_NAV = [
     icon: Wrench,
     pages: [
       { label: 'Минус-фразы', to: '/cabinet/negative-lists' },
-      { label: 'Общие правила', to: '/cabinet/rules' },
+      { label: 'Общие правила', to: '/cabinet/rules', feature: 'autopilot' },
     ],
   },
 ]
@@ -33,7 +34,10 @@ export const CABINET_SETTINGS = {
   key: 'settings',
   label: 'Настройки',
   icon: Settings,
-  pages: [{ label: 'Настройки', to: '/cabinet/settings' }],
+  pages: [
+    { label: 'Настройки', to: '/cabinet/settings' },
+    { label: 'Тариф', to: '/cabinet/plan' },
+  ],
 }
 
 export function workspaceNav(wsId, campaignsCount = 0) {
@@ -66,7 +70,7 @@ export function workspaceNav(wsId, campaignsCount = 0) {
       icon: Workflow,
       pages: [
         { label: 'Действия и правила', to: `${base}/actions` },
-        { label: 'Эксперименты', to: `${base}/experiments` },
+        { label: 'Эксперименты', to: `${base}/experiments`, feature: 'experiments' },
       ],
     },
     { key: 'chat', label: 'ИИ-чат', icon: Sparkles, pages: [{ label: 'ИИ-чат', to: `${base}/chat` }] },

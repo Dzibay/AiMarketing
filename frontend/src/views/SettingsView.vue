@@ -5,7 +5,7 @@
         <h1>Настройки</h1>
         <p>
           <template v-if="user">{{ user.name || user.email }}<span v-if="user.name && user.email"> · {{ user.email }}</span></template>
-          <template v-else>Профиль, лимит ИИ, уведомления</template>
+          <template v-else>Профиль, тариф, уведомления</template>
         </p>
       </div>
     </div>
@@ -13,51 +13,34 @@
     <div v-if="loading" class="panel"><p class="empty">Загружаем настройки…</p></div>
 
     <template v-else>
-      <section class="panel" id="ai-usage">
+      <section class="panel" id="plan">
         <div class="panel__head">
-          <h2>ИИ: лимит месяца</h2>
-          <span v-if="usage" class="chip" :class="usageChip.cls">{{ usageChip.text }}</span>
-        </div>
-        <p v-if="!usage" class="empty">Не удалось загрузить расход.</p>
-        <template v-else>
-          <template v-if="usage.limited">
-            <div
-              class="meter"
-              :class="usageTone"
-              role="progressbar"
-              :aria-valuenow="usage.used_percent"
-              aria-valuemin="0"
-              aria-valuemax="100"
-            >
-              <span :style="{ width: `${usage.used_percent}%` }"></span>
-            </div>
-            <p class="sync-status" :class="usage.exhausted ? 'is-error' : ''">
-              <template v-if="usage.exhausted">
-                Лимит исчерпан — ИИ-ассистент, Вордстат и картинки недоступны до {{ formatDate(usage.period_end) }}
-              </template>
-              <template v-else>
-                Использовано {{ pct(usage.used_percent) }} · осталось {{ pct(usage.left_percent) }} · обновится
-                {{ formatDate(usage.period_end) }}
-              </template>
-            </p>
-          </template>
-          <p v-else class="hint">Лимит не установлен. Ниже — на что уходит расход в этом месяце.</p>
-          <p v-if="!usage.by_kind.length" class="empty">В этом месяце ИИ, Вордстат и картинки ещё не использовались.</p>
-          <div v-else class="usage-split">
-            <div v-for="group in usageGroups" :key="group.key">
-              <h3 class="subhead">{{ group.title }}</h3>
-              <ul class="usage-shares">
-                <li v-for="row in group.rows" :key="row.id">
-                  <span>
-                    {{ row.label }}
-                    <small>{{ num(row.calls) }} {{ plural(row.calls, 'запрос', 'запроса', 'запросов') }}</small>
-                  </span>
-                  <strong>{{ pct(row.percent) }}</strong>
-                </li>
-              </ul>
-            </div>
+          <div>
+            <h2>Тариф: {{ sub?.plan ? sub.plan.name : 'без тарифа' }}</h2>
+            <p class="hint">{{ sub?.last_day ? `Действует по ${formatDay(sub.last_day)} включительно` : 'Бессрочно' }}</p>
           </div>
+          <RouterLink class="btn btn--ghost" to="/cabinet/plan">Тариф и лимит</RouterLink>
+        </div>
+        <template v-if="usage?.limited">
+          <div
+            class="meter"
+            :class="usageTone"
+            role="progressbar"
+            :aria-valuenow="usage.used_percent"
+            aria-valuemin="0"
+            aria-valuemax="100"
+          >
+            <span :style="{ width: `${usage.used_percent}%` }"></span>
+          </div>
+          <p class="sync-status" :class="usage.exhausted ? 'is-error' : ''">
+            {{
+              usage.exhausted
+                ? `Лимит исчерпан — обновится ${formatDate(usage.period_end)}`
+                : `Использовано ${pct(usage.used_percent)} лимита · обновится ${formatDate(usage.period_end)}`
+            }}
+          </p>
         </template>
+        <p v-else-if="usage" class="hint">ИИ-ассистент, Вордстат и картинки — без лимита.</p>
       </section>
 
       <section class="panel" id="telegram">
@@ -74,6 +57,7 @@
           </div>
           <template v-if="digest">
             <h3 class="subhead">Утренний дайджест</h3>
+            <FeatureLockNotice feature="digest">Дайджест в Telegram не входит в ваш тариф.</FeatureLockNotice>
             <p class="hint">
               Вчерашний расход по сайтам, KPI, темп бюджета, баланс и «где горит». Перед отправкой статистика за вчера и
               балансы обновляются.
@@ -143,17 +127,22 @@
 
 <script setup>
 import { computed, onMounted, reactive, ref } from 'vue'
+import { RouterLink } from 'vue-router'
 import AppShell from '../components/AppShell.vue'
-import { aiApi, errorText, webApi } from '../api/web'
+import FeatureLockNotice from '../components/FeatureLockNotice.vue'
+import { errorText, webApi } from '../api/web'
+import { loadPlan, usePlan } from '../composables/usePlan'
 import { pushToast } from '../composables/useToasts'
 import { useHead } from '../utils/useHead'
-import { formatDate, num, pct, plural } from '../utils/format'
+import { formatDate, formatDay, pct } from '../utils/format'
 
 useHead('Настройки — AiMarketing', true)
 
 const loading = ref(true)
 const user = ref(null)
-const usage = ref(null)
+const { plan } = usePlan()
+const usage = computed(() => plan.value?.usage || null)
+const sub = computed(() => plan.value?.subscription || null)
 const telegram = ref({ configured: false, linked: false })
 const tgLink = ref('')
 const tgCode = ref('')
@@ -169,28 +158,10 @@ const usageTone = computed(() => {
   return p >= 100 ? 'is-over' : p >= 80 ? 'is-near' : ''
 })
 
-const usageChip = computed(() => {
-  const u = usage.value
-  if (!u?.limited) return { text: 'без лимита', cls: '' }
-  if (u.exhausted) return { text: 'исчерпан', cls: 'chip--warning' }
-  return { text: `осталось ${pct(u.left_percent)}`, cls: u.used_percent >= 80 ? 'chip--warning' : 'chip--ok' }
-})
-
-// С лимитом — доли лимита, без лимита — доли всего расхода за месяц.
-const usageGroups = computed(() => {
-  const u = usage.value
-  if (!u) return []
-  return [
-    { key: 'kind', title: u.limited ? 'Куда ушёл лимит' : 'Куда ушёл расход', rows: u.by_kind },
-    { key: 'project', title: 'По проектам', rows: u.by_project },
-  ]
-})
-
 async function loadUsage() {
   try {
-    usage.value = await aiApi.usage()
+    await loadPlan(true)
   } catch (err) {
-    usage.value = null
     pushToast(errorText(err), 'error')
   }
 }

@@ -29,14 +29,15 @@
             :key="ws.id"
             type="button"
             class="ws-picker__item"
-            :class="{ 'is-current': ws.id === currentId }"
+            :class="{ 'is-current': ws.id === currentId, 'is-locked': ws.locked }"
             @click="pick(ws.id)"
           >
             <span>
               <strong>{{ ws.name }}</strong>
               <small>№ {{ ws.counter_id }} · {{ campaignsText(ws.campaigns_count) }}</small>
             </span>
-            <span v-if="!ws.counter_ok" class="chip chip--warning" title="Счётчик недоступен или выключен">!</span>
+            <span v-if="ws.locked" class="ws-picker__lock" title="Проект не входит в тариф"><Lock aria-hidden="true" /></span>
+            <span v-else-if="!ws.counter_ok" class="chip chip--warning" title="Счётчик недоступен или выключен">!</span>
           </button>
         </div>
         <p v-if="!filtered.length" class="empty ws-picker__empty">
@@ -54,7 +55,7 @@
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
-import { ChevronDown, Gauge } from '@lucide/vue'
+import { ChevronDown, Gauge, Lock } from '@lucide/vue'
 import { useWorkspaces } from '../composables/useWorkspaces'
 
 const route = useRoute()

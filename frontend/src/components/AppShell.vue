@@ -18,16 +18,19 @@
           :to="page.to"
         >
           {{ page.label }}
+          <Lock v-if="featureLocked(subscription, page.feature)" class="topbar__lock" aria-label="не входит в тариф" />
           <span v-if="page.count" class="topbar__count">{{ page.count }}</span>
         </RouterLink>
       </nav>
       <span v-else class="topbar__spacer"></span>
 
       <div class="topbar__tools">
-        <WorkspacePicker />
-        <LoadsIndicator />
+        <template v-if="accessOk">
+          <WorkspacePicker />
+          <LoadsIndicator />
+        </template>
         <RouterLink
-          v-if="wsId && activeGroup?.key !== 'chat'"
+          v-if="accessOk && wsId && activeGroup?.key !== 'chat'"
           class="btn btn--accent topbar__ai"
           :to="`/w/${wsId}/chat`"
           title="Спросить ИИ"
@@ -87,8 +90,35 @@
     </aside>
 
     <main class="cabinet shell__main">
+      <div v-if="limitBanner" class="notice limit-banner" :class="limitBanner.cls" role="status">
+        <span>{{ limitBanner.text }}</span>
+        <RouterLink class="btn btn--ghost btn--xs" to="/cabinet/plan">{{ limitBanner.action }}</RouterLink>
+        <button class="icon-btn" type="button" aria-label="Скрыть" @click="dismissBanner">
+          <X aria-hidden="true" />
+        </button>
+      </div>
       <slot />
     </main>
+
+    <Modal :open="!!upgrade" :title="upgrade?.title || ''" wide @close="upgrade = null">
+      <template v-if="upgrade">
+        <p>{{ upgrade.text }}</p>
+        <PlanOffers
+          v-if="upgradeOffers.length"
+          :offers="upgradeOffers"
+          :features="plan?.features || {}"
+          upgrades-only
+          compact
+          @choose="chooseOffer"
+        />
+        <p v-else-if="plan" class="hint">Тарифов для перехода пока нет — напишите в поддержку, подберём условия.</p>
+        <p v-else class="empty">Загружаем тарифы…</p>
+      </template>
+      <template #footer>
+        <button class="btn btn--ghost" type="button" @click="upgrade = null">Закрыть</button>
+        <RouterLink class="btn btn--accent" to="/cabinet/plan" @click="upgrade = null">Все тарифы</RouterLink>
+      </template>
+    </Modal>
 
     <nav class="tabbar" aria-label="Разделы">
       <RouterLink
@@ -149,26 +179,35 @@
 </template>
 
 <script setup>
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
-import { Ellipsis, House, LogOut, Moon, Settings, Sparkles, Sun } from '@lucide/vue'
+import { Ellipsis, House, Lock, LogOut, Moon, Settings, Sparkles, Sun, X } from '@lucide/vue'
 import BrandMark from './BrandMark.vue'
 import LoadsIndicator from './LoadsIndicator.vue'
+import PlanOffers from './PlanOffers.vue'
 import ProfileMenu from './ProfileMenu.vue'
 import WorkspacePicker from './WorkspacePicker.vue'
+import Modal from './ui/Modal.vue'
 import { CABINET_NAV, CABINET_SETTINGS, groupMatches, pageMatches, workspaceNav, workspaceSettings } from './shellNav'
 import { resetLoads } from '../composables/useLoads'
-import { loadProfile, resetProfile } from '../composables/useProfile'
+import { loadPlan, resetPlan, usePlan } from '../composables/usePlan'
+import { featureLocked, loadProfile, resetProfile, useProfile } from '../composables/useProfile'
 import { clearSession, getSession } from '../composables/useSession'
 import { useTheme } from '../composables/useTheme'
 import { loadWorkspaces, resetWorkspaces, useWorkspaces } from '../composables/useWorkspaces'
-import { ApiError, errorText } from '../api/web'
+import { ACCESS_EVENT, ApiError, errorText } from '../api/web'
 import { pushToast } from '../composables/useToasts'
+import { formatDay, pct } from '../utils/format'
 
 const route = useRoute()
 const router = useRouter()
 const { isDark, toggleTheme } = useTheme()
 const { workspaces } = useWorkspaces()
+const { subscription } = useProfile()
+const { plan } = usePlan()
+
+// Подписка закончилась или почта не подтверждена — данных кабинета нет, переключатель и загрузки не показываем.
+const accessOk = computed(() => !subscription.value || subscription.value.state === 'ok')
 
 const moreOpen = ref(false)
 
@@ -201,24 +240,111 @@ function logout() {
   resetWorkspaces()
   resetLoads()
   resetProfile()
+  resetPlan()
   router.replace('/login')
 }
 
+// --- Лимит периода: предупреждение на 80% и 100%, окно «Лимит исчерпан» с тарифами выше ---
+
+const BANNER_KEY = 'aimarketing-limit-banner'
+const dismissed = ref(localStorage.getItem(BANNER_KEY) || '')
+
+const limitLevel = computed(() => {
+  const u = plan.value?.usage
+  if (!u?.limited) return ''
+  if (u.exhausted || u.used_percent >= 100) return 'over'
+  return u.used_percent >= 80 ? 'near' : ''
+})
+
+const limitBanner = computed(() => {
+  const u = plan.value?.usage
+  const level = limitLevel.value
+  // На странице тарифа шкала и так перед глазами.
+  if (!level || route.path === '/cabinet/plan' || dismissed.value === `${u.period_start}:${level}`) return null
+  if (level === 'over') {
+    return {
+      cls: 'notice--warn',
+      text: `Лимит на этот период исчерпан — ИИ-ассистент, Вордстат и картинки снова заработают ${formatDay(u.period_end)} или сразу после перехода на тариф выше.`,
+      action: 'Повысить тариф',
+    }
+  }
+  return {
+    cls: '',
+    text: `Использовано ${pct(u.used_percent)} лимита на этот период. Новый период — с ${formatDay(u.period_end)}`,
+    action: 'Тарифы',
+  }
+})
+
+function dismissBanner() {
+  const value = `${plan.value?.usage?.period_start}:${limitLevel.value}`
+  dismissed.value = value
+  localStorage.setItem(BANNER_KEY, value)
+}
+
+const UPGRADE = {
+  'units-exhausted': {
+    title: 'Лимит на этот период исчерпан',
+    text: 'ИИ-ассистент, Вордстат и генерация картинок остановлены до конца периода. Перейдите на тариф выше — они заработают сразу.',
+  },
+  'feature-locked': {
+    title: 'Функция не входит в ваш тариф',
+    text: 'Она есть на тарифах ниже.',
+  },
+  'projects-limit': {
+    title: 'Проекты по тарифу закончились',
+    text: 'Перейдите на тариф с большим числом проектов или отправьте лишний проект в архив.',
+  },
+}
+
+const upgrade = ref(null)
+const upgradeOffers = computed(() => (plan.value?.offers || []).filter((o) => !o.current))
+
+async function onAccess(event) {
+  const { code, message } = event.detail || {}
+  const preset = UPGRADE[code]
+  if (!preset) return
+  const u = plan.value?.usage
+  let text = preset.text
+  if (code === 'units-exhausted' && u?.period_end) {
+    text = `ИИ-ассистент, Вордстат и генерация картинок снова заработают ${formatDay(u.period_end)}. Перейдите на тариф выше — они заработают сразу.`
+  } else if (code === 'feature-locked' && message) {
+    text = `${message}. Перейдите на тариф, где она есть.`
+  }
+  upgrade.value = { code, title: preset.title, text }
+  try {
+    await loadPlan(true)
+  } catch {
+    // в окне останется кнопка «Все тарифы»
+  }
+}
+
+function chooseOffer() {
+  upgrade.value = null
+  router.push('/cabinet/plan')
+}
+
 onMounted(async () => {
+  window.addEventListener(ACCESS_EVENT, onAccess)
   if (!getSession()) {
     router.replace('/login')
     return
   }
   try {
-    await Promise.all([loadWorkspaces(), loadProfile()])
+    await loadProfile()
+    if (accessOk.value) await Promise.all([loadWorkspaces(), loadPlan().catch(() => null)])
   } catch (err) {
     if (err instanceof ApiError && err.status === 401) {
       resetWorkspaces()
       resetProfile()
+      resetPlan()
       router.replace('/login')
       return
     }
+    // Доступ закрылся на ходу — на нужный экран уведёт обработчик в роутере.
+    if (err instanceof ApiError && (err.status === 402 || err.status === 403)) return
     pushToast(errorText(err), 'error')
   }
 })
+
+onBeforeUnmount(() => window.removeEventListener(ACCESS_EVENT, onAccess))
 </script>

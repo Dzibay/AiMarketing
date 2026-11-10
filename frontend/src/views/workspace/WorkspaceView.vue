@@ -1,6 +1,19 @@
 <template>
   <AppShell>
-    <div v-if="error" class="panel">
+    <div v-if="locked" class="panel project-locked">
+      <h2><Lock aria-hidden="true" /> Проект на тарифе выше</h2>
+      <p>
+        Проект сверх лимита вашего тарифа, но его данные сохранены. Чтобы открыть его, перейдите на тариф с большим
+        числом проектов или отправьте в архив другой проект. Если этот проект больше не нужен — отправьте в архив его.
+      </p>
+      <div class="row-actions">
+        <RouterLink class="btn btn--accent" to="/cabinet/plan">Тарифы</RouterLink>
+        <button class="btn btn--ghost" type="button" :disabled="archiving" @click="archiveLocked">В архив</button>
+        <RouterLink class="btn btn--ghost" to="/cabinet">К обзору</RouterLink>
+      </div>
+    </div>
+
+    <div v-else-if="error" class="panel">
       <h2>Пространство недоступно</h2>
       <p class="empty">{{ error }}</p>
       <RouterLink class="btn btn--ghost" to="/cabinet">К обзору</RouterLink>
@@ -75,18 +88,24 @@
 
 <script setup>
 import { computed, onBeforeUnmount, provide, ref, watch } from 'vue'
-import { RouterLink, RouterView, useRoute } from 'vue-router'
+import { RouterLink, RouterView, useRoute, useRouter } from 'vue-router'
+import { Lock } from '@lucide/vue'
 import AppShell from '../../components/AppShell.vue'
-import { errorText, wsApi } from '../../api/web'
+import { ApiError, errorText, wsApi } from '../../api/web'
+import { pushToast } from '../../composables/useToasts'
 import { jobPercent, jobText, stageErrorText, stageFailure, stageProblem } from '../../composables/useLoads'
-import { patchWorkspaceInList, rememberWorkspace } from '../../composables/useWorkspaces'
+import { loadWorkspaces, patchWorkspaceInList, rememberWorkspace } from '../../composables/useWorkspaces'
 import { useHead } from '../../utils/useHead'
 import { plural, rubles } from '../../utils/format'
 import { WS_KEY } from './context'
 
 const route = useRoute()
+const router = useRouter()
 const ws = ref(null)
 const error = ref('')
+// Проект сверх лимита тарифа: открыть нельзя, но можно освободить место архивом.
+const locked = ref(false)
+const archiving = ref(false)
 
 useHead('Пространство — AiMarketing', true)
 watch(
@@ -104,6 +123,7 @@ const siteUrl = computed(() => {
 
 async function load(id) {
   error.value = ''
+  locked.value = false
   try {
     const data = await wsApi.get(id)
     if (Number(route.params.wsId) !== id) return
@@ -111,7 +131,22 @@ async function load(id) {
     rememberWorkspace(id)
   } catch (err) {
     ws.value = null
+    locked.value = err instanceof ApiError && err.code === 'project-locked'
     error.value = errorText(err)
+  }
+}
+
+async function archiveLocked() {
+  archiving.value = true
+  try {
+    await wsApi.update(Number(route.params.wsId), { archived: true })
+    pushToast('Проект в архиве — вернуть его можно в «Аккаунтах»')
+    await loadWorkspaces(true).catch(() => null)
+    router.replace('/cabinet')
+  } catch (err) {
+    pushToast(errorText(err), 'error')
+  } finally {
+    archiving.value = false
   }
 }
 

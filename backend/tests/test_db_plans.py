@@ -250,11 +250,11 @@ def test_trial_on_register_and_email_confirmation(db, smtp):
     # Старая ссылка уже недействительна, новая подтверждает (и без входа).
     old = smtp[0]["link"].split("token=")[1]
     new = smtp[1]["link"].split("token=")[1]
-    assert client.post("/api/web/verify-email", json={"token": old}).status_code == 401
+    assert client.post("/api/web/verify-email", json={"token": old}).status_code == 400
     assert client.post("/api/web/verify-email", json={"token": new}).json() == {"ok": True}
     assert get_user(user)["email_verified_at"] is not None
     assert client.get("/api/web/workspaces", headers=auth).status_code == 200
-    assert client.post("/api/web/verify-email", json={"token": new}).status_code == 401
+    assert client.post("/api/web/verify-email", json={"token": new}).status_code == 400
     assert "email_verified" in [e["kind"] for e in events.list_events(user)]
 
 

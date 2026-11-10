@@ -15,6 +15,10 @@
         <Settings aria-hidden="true" />
         Настройки
       </RouterLink>
+      <RouterLink class="menu-item" role="menuitem" to="/cabinet/plan" @click="open = false">
+        <CreditCard aria-hidden="true" />
+        Тариф<small v-if="planName" class="menu-item__note">{{ planName }}</small>
+      </RouterLink>
       <button class="menu-item is-danger" type="button" role="menuitem" @click="$emit('logout')">
         <LogOut aria-hidden="true" />
         Выйти
@@ -26,13 +30,15 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { RouterLink } from 'vue-router'
-import { ChevronDown, LogOut, Settings } from '@lucide/vue'
+import { ChevronDown, CreditCard, LogOut, Settings } from '@lucide/vue'
 import { useProfile } from '../composables/useProfile'
 
 defineEmits(['logout'])
 
-const { user } = useProfile()
+const { user, subscription } = useProfile()
 const open = ref(false)
+
+const planName = computed(() => subscription.value?.plan?.name || '')
 const root = ref(null)
 
 const displayName = computed(() => user.value?.name || user.value?.email || 'Профиль')

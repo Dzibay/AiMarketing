@@ -484,11 +484,13 @@ class VerifyEmailBody(BaseModel):
 
 @router.post("/verify-email")
 def web_verify_email(body: VerifyEmailBody) -> dict:
-    """Ссылка из письма: открывается и без входа (с другого устройства)."""
+    """Ссылка из письма: открывается и без входа (с другого устройства).
+
+    Плохая ссылка — 400, а не 401: страница открыта и в кабинете, сессию она сбрасывать не должна."""
     try:
         email_verify.confirm(body.token)
     except UsersError as exc:
-        raise _http(exc) from exc
+        raise HTTPException(status_code=400, detail=exc.code) from exc
     return {"ok": True}
 
 

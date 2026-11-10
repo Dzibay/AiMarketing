@@ -12,6 +12,9 @@
         Предложить эксперимент
       </RouterLink>
     </div>
+    <FeatureLockNotice feature="experiments">
+      Эксперименты не входят в ваш тариф: ИИ может предложить гипотезу, но запустить её не получится.
+    </FeatureLockNotice>
     <p class="notice">
       Деньги ограничивает только недельный бюджет тестовых кампаний в Директе — сервис сам ничего не останавливает. Срок
       считается с первого дня показов: копии сначала проходят модерацию.
@@ -261,6 +264,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { RouterLink, useRouter } from 'vue-router'
 import { aiApi, errorText } from '../../api/web'
+import FeatureLockNotice from '../../components/FeatureLockNotice.vue'
 import { askConfirm } from '../../composables/useConfirm'
 import { pushToast } from '../../composables/useToasts'
 import { CAMPAIGN_STATES, CAMPAIGN_STATUSES, formatDate, num, pct, plural, rub, rubExact, rubles } from '../../utils/format'
