@@ -65,7 +65,6 @@ TASK_LABELS = {**{k: v["label"] for k, v in TASKS.items()}, "chat": "ИИ-чат
 CHARS_PER_TOKEN = 2.5
 PRICE_MAX = 1_000_000
 NOT_CONFIGURED = "ИИ временно недоступен: администратор ещё не подключил модель. Напишите в поддержку"
-_KEEP = object()
 
 
 def _key_hint(cipher: str) -> str:
@@ -184,7 +183,6 @@ def get_service_settings() -> dict:
         "classes": classes,
         "task_classes": _task_classes(row),
         "tasks": [{"id": k, "label": v["label"], "default": v["class"]} for k, v in TASKS.items()],
-        "default_units_limit": _num(row.get("default_units_limit")),
         "providers": [{"id": k, "label": v["label"], "default_model": v["default_model"]} for k, v in PROVIDERS.items()],
         "default_base_url": OPENAI_BASE,
         "updated_at": row["updated_at"].isoformat() if row.get("updated_at") else None,
@@ -261,7 +259,6 @@ def save_service_settings(
     temperature: float | None = None,
     classes: list[dict] | None = None,
     task_classes: dict | None = None,
-    default_units_limit=_KEEP,
 ) -> dict:
     """api_key: None — оставить прежний, "" — удалить. classes — [{id, name, model, units_*, cost_*, enabled}]."""
     provider = (provider or "yandexgpt").strip().lower()
@@ -285,19 +282,15 @@ def save_service_settings(
     for task, cid in (task_classes or {}).items():
         if task in TASKS and cid in CLASSES:
             stored[task] = cid
-    if default_units_limit is _KEEP:
-        limit = _num(current.get("default_units_limit"))
-    else:
-        limit = amount(default_units_limit, "Лимит единиц по умолчанию", maximum=1_000_000_000, digits=2)
     with pool.connection() as conn:
         _save_classes(conn, classes or [])
         conn.execute(
             """
             UPDATE service_ai SET provider = %s, base_url = %s, folder_id = %s, api_key_enc = %s,
-                   temperature = %s, task_classes = %s, default_units_limit = %s, updated_at = NOW()
+                   temperature = %s, task_classes = %s, updated_at = NOW()
             WHERE id = 1
             """,
-            (provider, base_url, folder_id, key_enc, temp, json.dumps(stored), limit),
+            (provider, base_url, folder_id, key_enc, temp, json.dumps(stored)),
         )
     return get_service_settings()
 

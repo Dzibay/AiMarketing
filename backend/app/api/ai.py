@@ -5,7 +5,7 @@
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
-from app import ai, ai_agent, billing, experiments, insights, workspaces
+from app import ai, ai_agent, billing, events, experiments, insights, workspaces
 from app.api.web import _http
 from app.web_auth import require_web_user
 from app.yandex import YandexError
@@ -203,7 +203,9 @@ def chat_delete(chat_id: int, user_id: int = Depends(require_web_user)) -> dict:
 
 @router.post("/ai/chats/{chat_id}/messages")
 def chat_message(chat_id: int, body: MessageBody, user_id: int = Depends(require_web_user)) -> dict:
-    return _call(ai_agent.post_message, user_id, chat_id, body.text, refs=body.refs)
+    out = _call(ai_agent.post_message, user_id, chat_id, body.text, refs=body.refs)
+    events.record(user_id, "ai_question", chat_id=chat_id)
+    return out
 
 
 @router.post("/ai/chats/{chat_id}/retry")
@@ -220,13 +222,19 @@ def chat_board(chat_id: int, body: BoardBody, user_id: int = Depends(require_web
 
 @router.post("/ai/chats/{chat_id}/decide-all")
 def chat_decide_all(chat_id: int, body: DecideAllBody, user_id: int = Depends(require_web_user)) -> dict:
-    return _call(ai_agent.decide_all, user_id, chat_id, approve=body.approve, exclude=body.exclude)
+    out = _call(ai_agent.decide_all, user_id, chat_id, approve=body.approve, exclude=body.exclude)
+    if body.approve:
+        events.record(user_id, "action_applied", chat_id=chat_id, all=True)
+    return out
 
 
 @router.post("/ai/actions/{action_id}/decide")
 def action_decide(action_id: int, body: DecideBody, user_id: int = Depends(require_web_user)) -> dict:
-    return _call(ai_agent.decide_action, user_id, action_id, approve=body.approve, remember=body.remember,
-                 exclude=body.exclude)
+    out = _call(ai_agent.decide_action, user_id, action_id, approve=body.approve, remember=body.remember,
+                exclude=body.exclude)
+    if body.approve:
+        events.record(user_id, "action_applied", action_id=action_id)
+    return out
 
 
 @router.post("/ai/actions/{action_id}/answer")

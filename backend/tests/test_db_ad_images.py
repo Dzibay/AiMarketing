@@ -15,7 +15,7 @@ from app.config import settings
 from app.main import app
 from app.web_auth import make_session
 from app.yandex import YandexError
-from tests.dbutil import admin_headers, make_account, make_campaign, make_connection, make_user, make_workspace, setup_ai
+from tests.dbutil import admin_headers, make_account, make_campaign, make_connection, make_user, make_workspace, set_units_limit, setup_ai
 
 JPEG = b"\xff\xd8\xff" + b"0" * 64
 # Заведомо ненастоящий ключ генератора; заголовки собираем из него, а не пишем строкой.
@@ -100,7 +100,7 @@ def test_settings_keep_key_reset_check_and_yandexart(db):
 
 def test_generated_images_charge_units(db, monkeypatch):
     s = _seed(db)
-    billing.set_user_limit(s.user, 100)
+    set_units_limit(s.user, 100)
     image_gen.save_settings(provider="openai", api_key=IMAGE_KEY, units_per_image=40, cost_per_image=4)
     sent = []
 
@@ -127,11 +127,11 @@ def test_generated_images_charge_units(db, monkeypatch):
     with pytest.raises(YandexError) as err:
         image_gen.generate(s.user, "окно", count=4)
     assert (err.value.code, err.value.message, len(sent)) == ("units-exhausted", billing.NOT_ENOUGH, 2)
-    billing.set_user_limit(s.user, 120)
+    set_units_limit(s.user, 120)
     assert len(image_gen.generate(s.user, "окно", count=4)["images"]) == 1
     with pytest.raises(YandexError) as err:
         image_gen.generate(s.user, "окно")
-    assert (err.value.code, err.value.message) == ("units-exhausted", billing.EXHAUSTED)
+    assert (err.value.code, err.value.message) == ("units-exhausted", billing.exhausted_text(billing.period(s.user)[1]))
 
     # Проверка подключения в админке — одна картинка без списания; ошибка запоминается.
     monkeypatch.setattr(image_gen.httpx, "post", lambda url, **kw: httpx.Response(

@@ -1,4 +1,8 @@
-"""Фоновые потоки: исполнители очереди задач, планировщик периодических синков, Telegram."""
+"""Фоновые потоки: исполнители очереди задач, планировщик периодических синков, Telegram.
+
+Периодические задачи ставятся только тем, у кого действует подписка (и подтверждена почта, если это
+включено): у остальных данные хранятся, но не обновляются; после продления — догрузка (plans.resume).
+"""
 
 from __future__ import annotations
 
@@ -13,6 +17,7 @@ from app.digest import users_due_for_digest
 from app.job_handlers import run_job, submit
 from app.jobs import claim, claim_schedule, purge_finished, requeue_stale
 from app.metrika_sync import canonical_counters
+from app.plans import active_user_ids, has_feature
 from app.rules import list_users_with_rules
 from app.stats import list_user_ids_with_accounts
 from app.telegram_notify import poll_updates_once, telegram_configured
@@ -29,34 +34,46 @@ _threads: list[threading.Thread] = []
 
 
 def _enqueue_connections() -> None:
+    active = active_user_ids()
     for connection_id, user_id in list_all_connection_ids():
-        submit("sync_connection", user_id, {"connection_id": connection_id})
+        if user_id in active:
+            submit("sync_connection", user_id, {"connection_id": connection_id})
 
 
 def _enqueue_accounts() -> None:
     """Актуализация кабинетов: задача сама решает, что пора перечитать (account_load)."""
+    active = active_user_ids()
     for account_id, user_id in list_enabled_direct_account_ids():
-        submit("load_account", user_id, {"account_id": account_id})
+        if user_id in active:
+            submit("load_account", user_id, {"account_id": account_id})
 
 
 def _enqueue_counters() -> None:
+    active = active_user_ids()
     for counter in canonical_counters():
-        submit("load_counter", int(counter["user_id"]), {"counter_row_id": int(counter["id"])})
+        if int(counter["user_id"]) in active:
+            submit("load_counter", int(counter["user_id"]), {"counter_row_id": int(counter["id"])})
 
 
 def _enqueue_today() -> None:
+    active = active_user_ids()
     for user_id in list_user_ids_with_accounts():
-        submit("stats_today", user_id)
+        if user_id in active:
+            submit("stats_today", user_id)
 
 
 def _enqueue_digests() -> None:
+    active = active_user_ids()
     for user_id, day in users_due_for_digest():
-        submit("send_digest", user_id, {"day": day.isoformat()})
+        if user_id in active and has_feature(user_id, "digest"):
+            submit("send_digest", user_id, {"day": day.isoformat()})
 
 
 def _enqueue_rules() -> None:
+    active = active_user_ids()
     for user_id in list_users_with_rules():
-        submit("run_rules", user_id)
+        if user_id in active and has_feature(user_id, "autopilot"):
+            submit("run_rules", user_id)
 
 
 def _purge_jobs() -> None:

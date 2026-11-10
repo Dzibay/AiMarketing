@@ -1,4 +1,4 @@
-"""Админка владельца: пользователи, лимиты единиц, общие ИИ и сервисы, расход.
+"""Админка владельца: пользователи и их подписки, тарифы, общие ИИ и сервисы, расход.
 
 Вход — отдельный, по паролю ADMIN_PASSWORD (auth.login); админ — не пользователь кабинета, сессии
 кабинета сюда не пускают.
@@ -7,9 +7,9 @@
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
-from app import ai, ai_bridge, auth, billing, image_gen, wordstat
+from app import ai, ai_bridge, auth, billing, events, image_gen, mailer, plans, wordstat
 from app.api.web import _http
-from app.users import UsersError, count_users, list_users, set_user_blocked
+from app.users import UsersError, count_users, list_users, mark_email_verified, set_user_blocked
 from app.yandex import YandexError, yandex_configured
 
 admin_public = APIRouter(tags=["admin"])
@@ -57,6 +57,10 @@ def admin_me() -> dict:
         "ai_configured": ai.is_configured(),
         "wordstat_configured": wordstat.is_configured(),
         "images_configured": image_gen.is_configured(),
+        # Без SMTP письма не уходят — подтверждение почты при регистрации выключено.
+        "email_check": plans.email_check_required(),
+        "smtp_configured": mailer.configured(),
+        "trial_plan": next((p["name"] for p in plans.list_plans(for_admin=True) if p["is_trial"] and p["active"]), None),
     }
 
 
@@ -64,9 +68,15 @@ class BlockBody(BaseModel):
     reason: str = ""
 
 
-class LimitBody(BaseModel):
-    # None — общий лимит сервиса, число — свой лимит единиц в месяц.
-    units_limit: float | None = None
+class SubscriptionBody(BaseModel):
+    # Поля, которых нет в запросе, не меняются. plan_id null — без тарифа; until null — без срока.
+    plan_id: int | None = None
+    # Последний день подписки «ГГГГ-ММ-ДД» включительно.
+    until: str | None = None
+    # Поверх тарифа: {"units_limit": число | null, "projects_limit": число | null, "features": {...}}.
+    overrides: dict | None = None
+    # Продлить на срок тарифа.
+    renew: bool = False
 
 
 @router.get("/users")
@@ -75,11 +85,11 @@ def admin_users(limit: int = 100, offset: int = 0) -> dict:
     offset = max(0, offset)
     items = list_users(limit=limit, offset=offset)
     usage = billing.users_usage([u["id"] for u in items])
-    empty = {"spent": 0.0, "limit": billing.default_limit(), "own_limit": None, "cost_rub": 0.0, "calls": 0}
     return {
-        "items": [{**u, "usage": usage.get(u["id"], empty)} for u in items],
+        "items": [
+            {**u, "usage": usage.get(u["id"]), "subscription": plans.admin_view(u["id"])} for u in items
+        ],
         "total": count_users(),
-        "default_units_limit": billing.default_limit(),
     }
 
 
@@ -100,9 +110,77 @@ def admin_unblock_user(user_id: int) -> dict:
         raise _users_error(exc) from exc
 
 
-@router.put("/users/{user_id}/limit")
-def admin_user_limit(user_id: int, body: LimitBody) -> dict:
-    return _call(billing.set_user_limit, user_id, body.units_limit)
+@router.put("/users/{user_id}/subscription")
+def admin_user_subscription(user_id: int, body: SubscriptionBody) -> dict:
+    fields = body.model_fields_set
+    kwargs: dict = {"renew": body.renew}
+    if "plan_id" in fields:
+        kwargs["plan_id"] = body.plan_id
+    if "until" in fields:
+        kwargs["until"] = body.until
+    if "overrides" in fields:
+        kwargs["overrides"] = body.overrides or {}
+    return _call(plans.set_subscription, user_id, **kwargs)
+
+
+@router.post("/users/{user_id}/verify-email")
+def admin_user_verify_email(user_id: int) -> dict:
+    mark_email_verified(user_id)
+    return {"ok": True}
+
+
+@router.get("/users/{user_id}/events")
+def admin_user_events(user_id: int, limit: int = 50) -> dict:
+    return {"items": events.list_events(user_id, max(1, min(limit, 200))), "kinds": events.KINDS}
+
+
+# --- Тарифы --------------------------------------------------------------------------------------
+
+
+class PlanBody(BaseModel):
+    name: str = ""
+    price_rub: float | None = None
+    days: int | None = None
+    # null — без лимита.
+    units_limit: float | None = None
+    projects_limit: int | None = None
+    features: dict[str, bool] = {}
+    is_trial: bool = False
+    active: bool = True
+    position: int = 0
+
+
+class UpgradeBody(BaseModel):
+    from_plan_id: int
+    to_plan_id: int
+    # Пусто или 0 — без скидки.
+    discount_pct: float | None = None
+
+
+@router.get("/plans")
+def admin_plans() -> dict:
+    return {"items": plans.list_plans(for_admin=True), "upgrades": plans.list_upgrades(), "features": plans.FEATURES}
+
+
+@router.post("/plans")
+def admin_plan_create(body: PlanBody) -> dict:
+    return _call(plans.save_plan, None, body.model_dump())
+
+
+@router.put("/plans/{plan_id}")
+def admin_plan_update(plan_id: int, body: PlanBody) -> dict:
+    return _call(plans.save_plan, plan_id, body.model_dump())
+
+
+@router.delete("/plans/{plan_id}")
+def admin_plan_delete(plan_id: int) -> dict:
+    _call(plans.delete_plan, plan_id)
+    return {"ok": True}
+
+
+@router.put("/plan-upgrades")
+def admin_plan_upgrade(body: UpgradeBody) -> dict:
+    return _call(plans.set_upgrade, body.from_plan_id, body.to_plan_id, body.discount_pct)
 
 
 # --- ИИ: ключ и классы моделей -------------------------------------------------------------------
@@ -130,8 +208,6 @@ class AiServiceBody(BaseModel):
     classes: list[ModelClassBody] | None = None
     # {задача: класс} — фоновые задачи (разметка, бриф, площадки…).
     task_classes: dict[str, str] | None = None
-    # Общий лимит единиц в месяц; не передан — как был, null — без лимита.
-    default_units_limit: float | None = None
 
 
 @router.get("/ai")
@@ -144,8 +220,6 @@ def admin_ai_put(body: AiServiceBody) -> dict:
     data = body.model_dump()
     if data["classes"] is not None:
         data["classes"] = [dict(c) for c in data["classes"]]
-    if "default_units_limit" not in body.model_fields_set:
-        data.pop("default_units_limit")
     return _call(ai.save_service_settings, **data)
 
 

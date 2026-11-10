@@ -4,10 +4,9 @@ from __future__ import annotations
 
 import logging
 import secrets
-import smtplib
 from datetime import datetime, timedelta, timezone
-from email.message import EmailMessage
 
+from app import mailer
 from app.config import settings
 from app.db import pool
 from app.passwords import hash_password
@@ -81,36 +80,9 @@ def reset_password(*, token: str, password: str) -> None:
 
 
 def _send_reset_mail(to_email: str, link: str) -> None:
-    subject = f"{settings.app_name}: сброс пароля"
     body = (
         f"Чтобы задать новый пароль, откройте ссылку (действует {_TTL_HOURS} ч.):\n\n"
         f"{link}\n\n"
         "Если вы не запрашивали сброс — просто проигнорируйте письмо."
     )
-    if not settings.smtp_host or not settings.smtp_from:
-        log.warning("SMTP не настроен. Ссылка сброса для %s: %s", to_email, link)
-        return
-    msg = EmailMessage()
-    msg["Subject"] = subject
-    msg["From"] = settings.smtp_from
-    msg["To"] = to_email
-    msg.set_content(body)
-    try:
-        if settings.smtp_ssl:
-            with smtplib.SMTP_SSL(settings.smtp_host, settings.smtp_port, timeout=20) as smtp:
-                if settings.smtp_user:
-                    smtp.login(settings.smtp_user, settings.smtp_password)
-                smtp.send_message(msg)
-        else:
-            with smtplib.SMTP(settings.smtp_host, settings.smtp_port, timeout=20) as smtp:
-                smtp.ehlo()
-                if settings.smtp_starttls:
-                    smtp.starttls()
-                    smtp.ehlo()
-                if settings.smtp_user:
-                    smtp.login(settings.smtp_user, settings.smtp_password)
-                smtp.send_message(msg)
-        log.info("Письмо сброса отправлено на %s", to_email)
-    except Exception:
-        log.exception("Не удалось отправить письмо сброса на %s", to_email)
-        log.warning("Ссылка сброса для %s: %s", to_email, link)
+    mailer.send(to_email, f"{settings.app_name}: сброс пароля", body, link=link)

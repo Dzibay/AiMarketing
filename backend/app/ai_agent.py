@@ -16,7 +16,7 @@ from datetime import date, datetime, timedelta, timezone
 
 from psycopg.types.json import Jsonb
 
-from app import ai, audiences, context_files, experiments, image_gen
+from app import ai, audiences, context_files, experiments, image_gen, plans
 from app.actions import BULK_ACTIONS, SETTINGS_LABELS, campaign_options
 from app.brief import brief_filled, normalize_brief
 from app.clock import today_msk
@@ -2125,6 +2125,7 @@ def _p_start_experiment(ctx: Context, args: dict) -> Plan:
 
 def _x_start_experiment(ctx: Context, args: dict) -> dict:
     """Лимиты в Директе → запись эксперимента. Лимит не встал — эксперимент не записываем."""
+    plans.require_feature(ctx.user_id, "experiments")
     d, rows, _source = _experiment_args(ctx, args)
     limits = experiments.apply_limits(ctx.user_id, rows, d["weekly_budget_rub"]) if _bool(args, "set_limit", True) else []
     action = getattr(ctx, "action", None) or {}
@@ -2219,6 +2220,9 @@ def _x_create_variants(ctx: Context, args: dict) -> dict:
         out["experiment"] = {"status": "skipped", "note": "Ни один вариант не собран целиком — эксперимент не начат"}
         return out
     rows = [{"id": v["campaign_row_id"], "name": v["name"]} for v in ready]
+    if not plans.has_feature(ctx.user_id, "experiments"):
+        out["experiment"] = {"status": "skipped", "note": plans.feature_locked("experiments").message}
+        return out
     try:
         limits = experiments.apply_limits(ctx.user_id, rows, exp["weekly_budget_rub"])
     except YandexError as exc:

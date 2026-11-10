@@ -3,9 +3,9 @@
 Платное — вызовы модели (по токенам и цене класса модели), запросы Вордстата и картинки. Каждое списание —
 строка ai_usage: вид (model | wordstat | image), класс модели, единицы (charged) и себестоимость в рублях.
 
-Пользователь не видит ни денег, ни токенов, ни самих единиц — только долю месячного лимита в процентах.
-До тарифов (фаза 2) период — календарный месяц по Москве, лимит — users.units_limit или общий
-service_ai.default_units_limit; пусто — без лимита.
+Пользователь не видит ни денег, ни токенов, ни самих единиц — только долю лимита в процентах. Лимит и
+период — из подписки (plans.subscription): период — оплаченный срок тарифа, без тарифа — календарный
+месяц; лимит пусто — без лимита.
 """
 
 from __future__ import annotations
@@ -13,6 +13,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime
 
+from app import events, plans
 from app.clock import MSK, today_msk
 from app.db import pool
 from app.yandex import YandexError
@@ -20,8 +21,7 @@ from app.yandex import YandexError
 log = logging.getLogger(__name__)
 
 KINDS = {"model": "ИИ-ассистент", "wordstat": "Вордстат", "image": "Картинки"}
-EXHAUSTED = "Лимит ИИ на этот месяц исчерпан — ИИ, Вордстат и картинки снова заработают с 1-го числа"
-NOT_ENOUGH = "Остатка месячного лимита ИИ не хватит на эту операцию"
+NOT_ENOUGH = "Остатка лимита ИИ не хватит на эту операцию"
 
 
 def month_start(year: int | None = None, month: int | None = None) -> datetime:
@@ -29,68 +29,72 @@ def month_start(year: int | None = None, month: int | None = None) -> datetime:
     return datetime(year or today.year, month or today.month, 1, tzinfo=MSK)
 
 
+def exhausted_text(period_end: datetime) -> str:
+    day = period_end.astimezone(MSK).strftime("%d.%m")
+    return f"Лимит ИИ на этот период исчерпан — ИИ, Вордстат и картинки снова заработают {day}"
+
+
 def period(user_id: int) -> tuple[datetime, datetime]:
     """Текущий расчётный период пользователя: [начало, конец)."""
-    start = month_start()
-    end = month_start(start.year + start.month // 12, start.month % 12 + 1)
-    return start, end
+    sub = plans.subscription(user_id)
+    return sub["period_start"], sub["period_end"]
 
 
 def _num(value) -> float | None:
     return None if value is None else float(value)
 
 
-def default_limit() -> float | None:
-    with pool.connection() as conn:
-        row = conn.execute("SELECT default_units_limit FROM service_ai WHERE id = 1").fetchone()
-    return _num(row["default_units_limit"]) if row else None
-
-
 def units_limit(user_id: int) -> float | None:
     """Лимит единиц на период; None — без лимита."""
+    return plans.subscription(user_id)["units_limit"]
+
+
+def _spent(user_id: int, start: datetime, end: datetime) -> float:
     with pool.connection() as conn:
         row = conn.execute(
             """
-            SELECT COALESCE(u.units_limit, s.default_units_limit) AS lim
-            FROM users u LEFT JOIN service_ai s ON s.id = 1
-            WHERE u.id = %s
+            SELECT COALESCE(SUM(charged), 0) AS s FROM ai_usage
+            WHERE user_id = %s AND created_at >= %s AND created_at < %s
             """,
-            (user_id,),
-        ).fetchone()
-    return _num(row["lim"]) if row else None
-
-
-def units_spent(user_id: int) -> float:
-    start, _ = period(user_id)
-    with pool.connection() as conn:
-        row = conn.execute(
-            "SELECT COALESCE(SUM(charged), 0) AS s FROM ai_usage WHERE user_id = %s AND created_at >= %s",
-            (user_id, start),
+            (user_id, start, end),
         ).fetchone()
     return float(row["s"])
 
 
+def units_spent(user_id: int) -> float:
+    start, end = period(user_id)
+    return _spent(user_id, start, end)
+
+
 def units_left(user_id: int) -> float | None:
     """Остаток единиц в периоде; None — без лимита."""
-    limit = units_limit(user_id)
-    return None if limit is None else limit - units_spent(user_id)
+    sub = plans.subscription(user_id)
+    if sub["units_limit"] is None:
+        return None
+    return sub["units_limit"] - _spent(user_id, sub["period_start"], sub["period_end"])
 
 
 def check(user_id: int, need: float = 0.0) -> None:
-    """Единственная проверка перед платным вызовом: лимит исчерпан или не хватит на need — ошибка."""
+    """Единственная проверка перед платным вызовом: подписка кончилась, лимит исчерпан или не хватит на need — ошибка."""
     if not user_id:
         return
-    left = units_left(user_id)
-    if left is None:
+    sub = plans.subscription(user_id)
+    if sub["expired"]:
+        raise YandexError("subscription-expired", plans.EXPIRED)
+    if sub["units_limit"] is None:
         return
+    left = sub["units_limit"] - _spent(user_id, sub["period_start"], sub["period_end"])
     if left <= 0:
-        raise YandexError("units-exhausted", EXHAUSTED)
+        # Событие — один раз за период: для статистики «у кого кончается лимит».
+        if not events.recorded_since(user_id, "limit_exhausted", sub["period_start"]):
+            events.record(user_id, "limit_exhausted", period_start=sub["period_start"].isoformat())
+        raise YandexError("units-exhausted", exhausted_text(sub["period_end"]))
     if need and need > left:
         raise YandexError("units-exhausted", NOT_ENOUGH)
 
 
 def share(user_id: int, units: float) -> float | None:
-    """Сколько процентов месячного лимита составляют units; None — лимита нет."""
+    """Сколько процентов лимита периода составляют units; None — лимита нет."""
     limit = units_limit(user_id)
     if not limit:
         return None
@@ -162,8 +166,9 @@ def user_summary(user_id: int) -> dict:
     """
     from app import ai
 
-    start, end = period(user_id)
-    limit = units_limit(user_id)
+    sub = plans.subscription(user_id)
+    start, end = sub["period_start"], sub["period_end"]
+    limit = sub["units_limit"]
     classes = {c["id"]: c for c in ai.model_classes()}
     with pool.connection() as conn:
         rows = conn.execute(
@@ -218,57 +223,26 @@ def user_summary(user_id: int) -> dict:
 # --- Админка ------------------------------------------------------------------------------------
 
 
-def set_user_limit(user_id: int, limit) -> dict:
-    """Свой лимит единиц пользователя; None / "" — общий лимит сервиса."""
-    value = _limit_value(limit)
-    with pool.connection() as conn:
-        row = conn.execute("UPDATE users SET units_limit = %s WHERE id = %s RETURNING id", (value, user_id)).fetchone()
-    if row is None:
-        raise YandexError("not-found", "Пользователь не найден")
-    return {"units_limit": value}
-
-
-def _limit_value(limit) -> float | None:
-    if limit is None or (isinstance(limit, str) and not limit.strip()):
-        return None
-    try:
-        value = float(str(limit).replace(",", ".").replace(" ", ""))
-    except ValueError as exc:
-        raise YandexError("units-limit", "Лимит — число единиц") from exc
-    if not 0 <= value <= 1_000_000_000:
-        raise YandexError("units-limit", "Лимит — от 0 до миллиарда единиц")
-    return round(value, 2)
-
-
 def users_usage(user_ids: list[int]) -> dict[int, dict]:
-    """Для таблицы пользователей: {user_id: {"spent", "limit", "own_limit", "cost_rub", "calls"}} за текущий месяц."""
-    if not user_ids:
-        return {}
-    start = month_start()
-    with pool.connection() as conn:
-        rows = conn.execute(
-            """
-            SELECT u.id, u.units_limit, s.default_units_limit,
-                   COALESCE(x.charged, 0) AS charged, COALESCE(x.cost, 0) AS cost, COALESCE(x.n, 0) AS n
-            FROM users u
-            LEFT JOIN service_ai s ON s.id = 1
-            LEFT JOIN (
-                SELECT user_id, SUM(charged) AS charged, SUM(cost_rub) AS cost, COUNT(*) AS n
-                FROM ai_usage WHERE created_at >= %s AND user_id = ANY(%s) GROUP BY user_id
-            ) x ON x.user_id = u.id
-            WHERE u.id = ANY(%s)
-            """,
-            (start, user_ids, user_ids),
-        ).fetchall()
+    """Для таблицы пользователей: {user_id: {"spent", "limit", "cost_rub", "calls", "period_*"}} за текущий период каждого."""
     out = {}
-    for r in rows:
-        own = _num(r["units_limit"])
-        out[int(r["id"])] = {
-            "spent": round(float(r["charged"]), 2),
-            "limit": own if own is not None else _num(r["default_units_limit"]),
-            "own_limit": own,
-            "cost_rub": round(float(r["cost"]), 2),
-            "calls": int(r["n"]),
+    for uid in user_ids:
+        sub = plans.subscription(uid)
+        with pool.connection() as conn:
+            row = conn.execute(
+                """
+                SELECT COALESCE(SUM(charged), 0) AS charged, COALESCE(SUM(cost_rub), 0) AS cost, COUNT(*) AS n
+                FROM ai_usage WHERE user_id = %s AND created_at >= %s AND created_at < %s
+                """,
+                (uid, sub["period_start"], sub["period_end"]),
+            ).fetchone()
+        out[uid] = {
+            "spent": round(float(row["charged"]), 2),
+            "limit": sub["units_limit"],
+            "cost_rub": round(float(row["cost"]), 2),
+            "calls": int(row["n"]),
+            "period_start": sub["period_start"].isoformat(),
+            "period_end": sub["period_end"].isoformat(),
         }
     return out
 

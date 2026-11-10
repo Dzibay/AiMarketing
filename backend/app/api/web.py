@@ -8,7 +8,7 @@ from pydantic import BaseModel, Field
 
 log = logging.getLogger("app.api.web")
 
-from app import ad_extras
+from app import ad_extras, billing, email_verify, events, plans
 from app.actions import (
     _account_creds,
     bulk_campaign_action,
@@ -85,7 +85,7 @@ from app.users import (
     public_user,
     register_user,
 )
-from app.web_auth import make_session, require_web_user, verify_session
+from app.web_auth import make_session, require_web_identity, require_web_user, verify_session
 from app.workspaces import ensure_workspaces, list_workspaces
 from app.yandex import (
     OAUTH_MODES,
@@ -336,12 +336,16 @@ def _http(exc: UsersError | YandexError) -> HTTPException:
     status = 400
     if code in ("unauthorized", "credentials", "state", "code", "token-expired"):
         status = 401
-    elif code == "blocked":
+    elif code in ("blocked", "email-unverified"):
         status = 403
+    elif code in ("subscription-expired", "feature-locked", "project-locked", "projects-limit"):
+        status = 402
     elif code == "not-found":
         status = 404
-    elif code in ("exists", "yandex-taken"):
+    elif code in ("exists", "yandex-taken", "counter-taken", "plan-in-use"):
         status = 409
+    elif code == "too-soon":
+        status = 429
     message = getattr(exc, "message", None)
     detail: str | dict = {"code": code, "message": message} if message else code
     return HTTPException(status_code=status, detail=detail)
@@ -395,6 +399,10 @@ def web_register(body: RegisterBody) -> dict:
         user = register_user(email=body.email, password=body.password, name=body.name)
     except UsersError as exc:
         raise _http(exc) from exc
+    plans.start_trial(user["id"])
+    events.record(user["id"], "register", via="email")
+    if plans.email_check_required():
+        email_verify.send(user["id"])
     return {"token": make_session(user["id"]), "user": public_user(user)}
 
 
@@ -404,6 +412,7 @@ def web_login(body: LoginBody) -> dict:
         user = login_user(email=body.email, password=body.password)
     except UsersError as exc:
         raise _http(exc) from exc
+    events.record(user["id"], "login", via="email")
     return {"token": make_session(user["id"]), "user": public_user(user)}
 
 
@@ -425,7 +434,7 @@ def web_reset_password(body: ResetPasswordBody) -> dict:
 @router.post("/change-password")
 def web_change_password(
     body: ChangePasswordBody,
-    user_id: int = Depends(require_web_user),
+    user_id: int = Depends(require_web_identity),
 ) -> dict:
     try:
         change_password(
@@ -439,21 +448,68 @@ def web_change_password(
 
 
 @router.get("/me")
-def web_me(user_id: int = Depends(require_web_user)) -> dict:
+def web_me(user_id: int = Depends(require_web_identity)) -> dict:
+    """Профиль и подписка — всегда; данные кабинета — только при действующем доступе.
+
+    subscription.state: ok | expired (экран «Продлить») | unverified (экран «Подтвердите почту»)."""
     user = get_user(user_id)
     if user is None:
         raise HTTPException(status_code=401, detail="unauthorized")
-    if user.get("blocked_at"):
-        raise HTTPException(status_code=403, detail="blocked")
-    return {
+    sub = plans.subscription(user_id)
+    out = {
         "user": public_user(user),
-        "clients": list_clients(user_id),
-        "connections": list_connections(user_id),
-        "metrika": list_metrika(user_id),
-        "direct": list_direct(user_id),
-        "workspaces": list_workspaces(user_id),
+        "subscription": plans.public(sub),
+        "clients": [],
+        "connections": [],
+        "metrika": [],
+        "direct": [],
+        "workspaces": [],
         # Второе приложение (Яндекс Аудитории) задано — в «Аккаунтах» есть «Подключить Аудитории».
         "audience_oauth": audience_configured(),
+    }
+    if sub["state"] == "ok":
+        out.update(
+            clients=list_clients(user_id),
+            connections=list_connections(user_id),
+            metrika=list_metrika(user_id),
+            direct=list_direct(user_id),
+            workspaces=list_workspaces(user_id),
+        )
+    return out
+
+
+class VerifyEmailBody(BaseModel):
+    token: str = ""
+
+
+@router.post("/verify-email")
+def web_verify_email(body: VerifyEmailBody) -> dict:
+    """Ссылка из письма: открывается и без входа (с другого устройства)."""
+    try:
+        email_verify.confirm(body.token)
+    except UsersError as exc:
+        raise _http(exc) from exc
+    return {"ok": True}
+
+
+@router.post("/verify-email/resend")
+def web_verify_email_resend(user_id: int = Depends(require_web_identity)) -> dict:
+    try:
+        sent = email_verify.send(user_id, throttle=True)
+    except YandexError as exc:
+        raise _http(exc) from exc
+    return {"ok": True, "sent": sent}
+
+
+@router.get("/plan")
+def web_plan(user_id: int = Depends(require_web_identity)) -> dict:
+    """Тариф пользователя, расход лимита за период и тарифы для перехода (цены со скидкой)."""
+    sub = plans.subscription(user_id)
+    return {
+        "subscription": plans.public(sub),
+        "usage": billing.user_summary(user_id) if sub["state"] == "ok" else None,
+        "offers": plans.offers(user_id),
+        "features": plans.FEATURES,
     }
 
 
@@ -509,6 +565,7 @@ def web_oauth_exchange(body: OAuthExchangeBody) -> dict:
         raise HTTPException(status_code=401, detail="unauthorized")
     if user.get("blocked_at"):
         raise HTTPException(status_code=403, detail="blocked")
+    events.record(user_id, "login", via="yandex")
     return {"token": make_session(user_id), "user": public_user(user)}
 
 
@@ -1174,6 +1231,7 @@ def web_telegram_webhook(
 @router.post("/rules")
 def web_create_rule(body: RuleBody, user_id: int = Depends(require_web_user)) -> dict:
     try:
+        plans.require_feature(user_id, "autopilot")
         return create_rule(
             user_id,
             name=body.name,
@@ -1202,8 +1260,12 @@ def web_patch_rule(
     body: RulePatchBody,
     user_id: int = Depends(require_web_user),
 ) -> dict:
+    fields = body.model_dump(exclude_unset=True)
     try:
-        return update_rule(user_id, rule_id, **body.model_dump(exclude_unset=True))
+        # Выключить правило можно и без автопилота на тарифе — остальное только с ним.
+        if fields != {"enabled": False}:
+            plans.require_feature(user_id, "autopilot")
+        return update_rule(user_id, rule_id, **fields)
     except YandexError as exc:
         raise _http(exc) from exc
 
@@ -1224,6 +1286,7 @@ def web_run_rule(
     user_id: int = Depends(require_web_user),
 ) -> dict:
     try:
+        plans.require_feature(user_id, "autopilot")
         return run_rule(user_id, rule_id, force_dry_run=dry_run)
     except YandexError as exc:
         raise _http(exc) from exc

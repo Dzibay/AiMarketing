@@ -743,6 +743,21 @@ def upsert_metrika(user_id: int, connection_id: int, counters: list[dict]) -> tu
     return count, new_ids
 
 
+def login_taken(conn, user_id: int, client_login: str) -> bool:
+    """Кабинет Директа уже подключён в другом аккаунте сервиса, а у этого пользователя его ещё нет."""
+    row = conn.execute(
+        """
+        SELECT
+            EXISTS (SELECT 1 FROM direct_accounts WHERE lower(client_login) = lower(%(login)s) AND user_id <> %(uid)s)
+                AS other,
+            EXISTS (SELECT 1 FROM direct_accounts WHERE lower(client_login) = lower(%(login)s) AND user_id = %(uid)s)
+                AS own
+        """,
+        {"login": client_login, "uid": user_id},
+    ).fetchone()
+    return bool(row["other"]) and not bool(row["own"])
+
+
 def upsert_direct(user_id: int, connection_id: int, accounts: list[dict]) -> tuple[int, list[int]]:
     """Возвращает (сколько записано, id впервые появившихся кабинетов)."""
     if not accounts:
@@ -751,6 +766,8 @@ def upsert_direct(user_id: int, connection_id: int, accounts: list[dict]) -> tup
     new_ids: list[int] = []
     with pool.connection() as conn:
         for item in accounts:
+            if login_taken(conn, user_id, item["client_login"]):
+                continue
             row = conn.execute(
                 """
                 INSERT INTO direct_accounts (
@@ -827,7 +844,11 @@ def sync_connection(user_id: int, connection_id: int) -> dict:
             ]
 
     metrika_n, new_counter_ids = upsert_metrika(user_id, connection_id, counters)
+    with pool.connection() as conn:
+        taken = [a["client_login"] for a in accounts if login_taken(conn, user_id, a["client_login"])]
     direct_n, new_account_ids = upsert_direct(user_id, connection_id, accounts)
+    if taken and not direct_error:
+        direct_error = "taken"
     ensure_workspaces(user_id)
 
     status = "ok"
@@ -848,6 +869,8 @@ def sync_connection(user_id: int, connection_id: int) -> dict:
         "direct_error": direct_error,
         "new_counters": len(new_counter_ids),
         "new_accounts": len(new_account_ids),
+        # Кабинеты Директа, подключённые в другом аккаунте сервиса, — не добавлены.
+        "taken_accounts": taken,
     }
     finish_run(run_id, status=status, error=";".join(error_parts), meta=result)
     return result
@@ -1014,6 +1037,7 @@ def complete_oauth(*, code: str, state: str) -> tuple[dict, dict | None]:
     profile = fetch_yandex_profile(access)
 
     existing_user_id = oauth_state.get("user_id") if oauth_state["purpose"] == "connect" else None
+    _check_login_free(profile, existing_user_id)
     try:
         user = upsert_yandex_user(
             yandex_uid=profile["uid"],
@@ -1038,4 +1062,41 @@ def complete_oauth(*, code: str, state: str) -> tuple[dict, dict | None]:
         {"connection_id": connection["id"], "deep": True},
         priority=PRIORITY_USER,
     )
+    from app import events, plans
+
+    if user.get("_created"):
+        plans.start_trial(user["id"])
+        events.record(user["id"], "register", via="yandex")
+    events.record(user["id"], "yandex_connected", login=profile.get("login") or "", mode=oauth_state.get("mode") or "")
     return user, job
+
+
+TAKEN = "уже подключён в другом аккаунте — напишите в поддержку"
+
+
+def _connection_holders(yandex_uid: str) -> set[int]:
+    with pool.connection() as conn:
+        rows = conn.execute("SELECT DISTINCT user_id FROM yandex_connections WHERE yandex_uid = %s", (yandex_uid,)).fetchall()
+    return {int(r["user_id"]) for r in rows}
+
+
+def _check_login_free(profile: dict, existing_user_id: int | None) -> None:
+    """Один логин Яндекса — в одном аккаунте сервиса.
+
+    Подключение к своему аккаунту — логин не должен быть у другого. Вход — логин, уже подключённый
+    в чужом аккаунте, не создаёт новый аккаунт и не входит в чужой (клиент не попадёт в кабинет фрилансера).
+    """
+    from app.users import get_user_by_email, get_user_by_yandex_uid
+
+    holders = _connection_holders(profile["uid"])
+    if not holders:
+        return
+    target = existing_user_id
+    if target is None:
+        found = get_user_by_yandex_uid(profile["uid"]) or (
+            get_user_by_email(profile["email"]) if profile.get("email") else None
+        )
+        target = int(found["id"]) if found else None
+    if target is None or target not in holders:
+        login = profile.get("login") or "Этот логин"
+        raise YandexError("yandex-taken", f"Логин Яндекса {login} {TAKEN}")

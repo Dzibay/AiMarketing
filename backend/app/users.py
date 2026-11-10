@@ -39,7 +39,7 @@ def get_user(user_id: int) -> dict | None:
         return conn.execute(
             """
             SELECT id, email, name, yandex_uid, blocked_at, blocked_reason,
-                   telegram_chat_id, created_at
+                   telegram_chat_id, email_verified_at, created_at
             FROM users WHERE id = %s
             """,
             (user_id,),
@@ -50,7 +50,7 @@ def get_user_by_email(email: str) -> dict | None:
     with pool.connection() as conn:
         return conn.execute(
             """
-            SELECT id, email, name, password_hash, yandex_uid, blocked_at, blocked_reason, created_at
+            SELECT id, email, name, password_hash, yandex_uid, blocked_at, blocked_reason, email_verified_at, created_at
             FROM users WHERE lower(email) = %s
             """,
             (normalize_email(email),),
@@ -63,7 +63,7 @@ def get_user_by_yandex_uid(yandex_uid: str) -> dict | None:
     with pool.connection() as conn:
         return conn.execute(
             """
-            SELECT id, email, name, yandex_uid, blocked_at, blocked_reason, created_at
+            SELECT id, email, name, yandex_uid, blocked_at, blocked_reason, email_verified_at, created_at
             FROM users WHERE yandex_uid = %s
             """,
             (yandex_uid,),
@@ -109,7 +109,7 @@ def register_user(*, email: str, password: str, name: str = "") -> dict:
             """
             INSERT INTO users (email, password_hash, name)
             VALUES (%s, %s, %s)
-            RETURNING id, email, name, yandex_uid, blocked_at, blocked_reason, created_at
+            RETURNING id, email, name, yandex_uid, blocked_at, blocked_reason, email_verified_at, created_at
             """,
             (email_n, hash_password(password_n), display),
         ).fetchone()
@@ -131,6 +131,7 @@ def login_user(*, email: str, password: str) -> dict:
         "yandex_uid": user["yandex_uid"],
         "blocked_at": user["blocked_at"],
         "blocked_reason": user["blocked_reason"],
+        "email_verified_at": user["email_verified_at"],
         "created_at": user["created_at"],
     }
 
@@ -159,6 +160,9 @@ def upsert_yandex_user(
     found = get_user_by_yandex_uid(yandex_uid)
     if found:
         ensure_not_blocked(found)
+        if found.get("email_verified_at") is None:
+            mark_email_verified(found["id"])
+            found = get_user(found["id"])
         return found
 
     email_n = normalize_email(email)
@@ -166,27 +170,33 @@ def upsert_yandex_user(
         by_email = get_user_by_email(email_n)
         if by_email:
             ensure_not_blocked(by_email)
+            # Вход Яндексом подтверждает почту. Если аккаунт с этой почтой её не подтвердил, пароль
+            # от него задал неизвестно кто — сбрасываем его (вернуть можно через «Забыли пароль?»).
             with pool.connection() as conn:
                 return conn.execute(
                     """
                     UPDATE users
                     SET yandex_uid = %s,
-                        name = CASE WHEN name = '' THEN %s ELSE name END
+                        name = CASE WHEN name = '' THEN %s ELSE name END,
+                        password_hash = CASE WHEN email_verified_at IS NULL THEN NULL ELSE password_hash END,
+                        email_verified_at = COALESCE(email_verified_at, NOW())
                     WHERE id = %s
-                    RETURNING id, email, name, yandex_uid, blocked_at, blocked_reason, created_at
+                    RETURNING id, email, name, yandex_uid, blocked_at, blocked_reason, email_verified_at, created_at
                     """,
                     (yandex_uid, (name or "").strip()[:120], by_email["id"]),
                 ).fetchone()
 
     with pool.connection() as conn:
-        return conn.execute(
+        row = conn.execute(
             """
-            INSERT INTO users (email, name, yandex_uid)
-            VALUES (%s, %s, %s)
-            RETURNING id, email, name, yandex_uid, blocked_at, blocked_reason, created_at
+            INSERT INTO users (email, name, yandex_uid, email_verified_at)
+            VALUES (%s, %s, %s, NOW())
+            RETURNING id, email, name, yandex_uid, blocked_at, blocked_reason, email_verified_at, created_at
             """,
             (email_n, (name or "").strip()[:120], yandex_uid),
         ).fetchone()
+    # Новый аккаунт: вызывающий выдаст пробный тариф и запишет регистрацию.
+    return {**row, "_created": True}
 
 
 def public_user(user: dict) -> dict:
@@ -197,6 +207,7 @@ def public_user(user: dict) -> dict:
         "yandex_uid": user.get("yandex_uid") or "",
         "has_yandex": bool(user.get("yandex_uid")),
         "telegram_linked": bool(user.get("telegram_chat_id")),
+        "email_verified": user.get("email_verified_at") is not None,
         "created_at": user["created_at"].isoformat() if user.get("created_at") else None,
     }
 
@@ -220,7 +231,7 @@ def set_user_blocked(user_id: int, *, blocked: bool, reason: str = "") -> dict:
                 SET blocked_at = COALESCE(blocked_at, NOW()),
                     blocked_reason = %s
                 WHERE id = %s
-                RETURNING id, email, name, yandex_uid, blocked_at, blocked_reason, created_at
+                RETURNING id, email, name, yandex_uid, blocked_at, blocked_reason, email_verified_at, created_at
                 """,
                 (reason_n, user_id),
             ).fetchone()
@@ -230,7 +241,7 @@ def set_user_blocked(user_id: int, *, blocked: bool, reason: str = "") -> dict:
                 UPDATE users
                 SET blocked_at = NULL, blocked_reason = ''
                 WHERE id = %s
-                RETURNING id, email, name, yandex_uid, blocked_at, blocked_reason, created_at
+                RETURNING id, email, name, yandex_uid, blocked_at, blocked_reason, email_verified_at, created_at
                 """,
                 (user_id,),
             ).fetchone()
@@ -243,7 +254,7 @@ def list_users(limit: int = 100, offset: int = 0) -> list[dict]:
     with pool.connection() as conn:
         rows = conn.execute(
             """
-            SELECT id, email, name, yandex_uid, blocked_at, blocked_reason, created_at
+            SELECT id, email, name, yandex_uid, blocked_at, blocked_reason, email_verified_at, created_at
             FROM users
             ORDER BY created_at DESC
             LIMIT %s OFFSET %s
@@ -251,6 +262,13 @@ def list_users(limit: int = 100, offset: int = 0) -> list[dict]:
             (limit, offset),
         ).fetchall()
     return [admin_user(row) for row in rows]
+
+
+def mark_email_verified(user_id: int) -> None:
+    with pool.connection() as conn:
+        conn.execute(
+            "UPDATE users SET email_verified_at = COALESCE(email_verified_at, NOW()) WHERE id = %s", (user_id,)
+        )
 
 
 def count_users() -> int:

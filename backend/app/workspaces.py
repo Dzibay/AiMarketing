@@ -84,31 +84,65 @@ def normalize_ai_facts(raw) -> list[dict]:
 # --- Создание и раскладка -------------------------------------------------------------------
 
 
+_CANDIDATES = """
+    SELECT DISTINCT ON (m.counter_id)
+        m.id, m.counter_id, m.client_row_id, m.name, m.site, y.yandex_login,
+        EXISTS (SELECT 1 FROM workspaces o
+                WHERE o.counter_id = m.counter_id AND o.user_id <> m.user_id AND o.archived_at IS NULL) AS taken
+    FROM metrika_counters m
+    JOIN yandex_connections y ON y.id = m.connection_id
+    WHERE m.user_id = %s AND m.enabled = TRUE AND y.use_metrika = TRUE
+    ORDER BY m.counter_id, (m.client_row_id IS NULL), m.id
+"""
+
+_INSERT_FOR_COUNTERS = """
+    INSERT INTO workspaces (user_id, client_row_id, counter_id, counter_row_id, name, site)
+    SELECT m.user_id, m.client_row_id, m.counter_id, m.id,
+           COALESCE(NULLIF(m.name, ''), NULLIF(m.site, ''), 'Счётчик ' || m.counter_id),
+           m.site
+    FROM metrika_counters m
+    WHERE m.user_id = %s AND m.id = ANY(%s)
+    ON CONFLICT (user_id, counter_id) DO NOTHING
+    RETURNING id, counter_id
+"""
+
+
+def projects_limit(user_id: int) -> int | None:
+    from app.plans import subscription
+
+    return subscription(user_id)["projects_limit"]
+
+
+def active_projects(user_id: int) -> int:
+    with pool.connection() as conn:
+        row = conn.execute(
+            "SELECT COUNT(*) AS n FROM workspaces WHERE user_id = %s AND archived_at IS NULL", (user_id,)
+        ).fetchone()
+    return int(row["n"])
+
+
 def ensure_workspaces(user_id: int) -> list[int]:
     """
-    Пространство на каждый номер видимого счётчика + актуальная строка счётчика.
+    Пространство (проект) на каждый новый видимый счётчик — если все они помещаются в тариф.
 
+    Не помещаются — проекты не создаются: пользователь сам выбирает счётчики (counter_choices /
+    create_project_for_counter). Счётчик, который уже стал проектом в другом аккаунте, пропускается.
     Счётчик может приходить через несколько логинов; читаем его через включённую строку
     подключения с ролью Метрики. Возвращает id созданных пространств — в них сразу
     раскладываются кампании, у которых в настройках этот счётчик.
     """
     with pool.connection() as conn:
-        created = conn.execute(
-            """
-            INSERT INTO workspaces (user_id, client_row_id, counter_id, counter_row_id, name, site)
-            SELECT DISTINCT ON (m.counter_id)
-                m.user_id, m.client_row_id, m.counter_id, m.id,
-                COALESCE(NULLIF(m.name, ''), NULLIF(m.site, ''), 'Счётчик ' || m.counter_id),
-                m.site
-            FROM metrika_counters m
-            JOIN yandex_connections y ON y.id = m.connection_id
-            WHERE m.user_id = %s AND m.enabled = TRUE AND y.use_metrika = TRUE
-            ORDER BY m.counter_id, (m.client_row_id IS NULL), m.id
-            ON CONFLICT (user_id, counter_id) DO NOTHING
-            RETURNING id
-            """,
-            (user_id,),
-        ).fetchall()
+        rows = conn.execute(_CANDIDATES, (user_id,)).fetchall()
+        have = {
+            int(r["counter_id"])
+            for r in conn.execute("SELECT counter_id FROM workspaces WHERE user_id = %s", (user_id,))
+        }
+    fresh = [r for r in rows if int(r["counter_id"]) not in have and not r["taken"]]
+    limit = projects_limit(user_id) if fresh else None
+    if limit is not None and len(fresh) > limit - active_projects(user_id):
+        fresh = []
+    with pool.connection() as conn:
+        created = conn.execute(_INSERT_FOR_COUNTERS, (user_id, [int(r["id"]) for r in fresh])).fetchall() if fresh else []
         conn.execute(
             """
             UPDATE workspaces w SET counter_row_id = best.id, updated_at = NOW()
@@ -131,18 +165,27 @@ def ensure_workspaces(user_id: int) -> list[int]:
         )
     ids = [int(r["id"]) for r in created]
     if ids:
-        with pool.connection() as conn:
-            loose = conn.execute(
-                """
-                SELECT c.id FROM direct_campaigns c
-                JOIN direct_accounts a ON a.id = c.account_id
-                WHERE c.user_id = %s AND c.counter_ids IS NOT NULL
-                  AND NOT EXISTS (SELECT 1 FROM workspace_campaigns wc WHERE wc.campaign_row_id = c.id)
-                """,
-                (user_id,),
-            ).fetchall()
-        auto_attach_campaigns(user_id, [int(r["id"]) for r in loose])
+        from app import events
+
+        for r in created:
+            events.record(user_id, "project_created", workspace_id=int(r["id"]), counter_id=int(r["counter_id"]), auto=True)
+        _attach_loose(user_id)
     return ids
+
+
+def _attach_loose(user_id: int) -> None:
+    """Кампании без пространства — по счётчикам из их настроек (после появления новых проектов)."""
+    with pool.connection() as conn:
+        loose = conn.execute(
+            """
+            SELECT c.id FROM direct_campaigns c
+            JOIN direct_accounts a ON a.id = c.account_id
+            WHERE c.user_id = %s AND c.counter_ids IS NOT NULL
+              AND NOT EXISTS (SELECT 1 FROM workspace_campaigns wc WHERE wc.campaign_row_id = c.id)
+            """,
+            (user_id,),
+        ).fetchall()
+    auto_attach_campaigns(user_id, [int(r["id"]) for r in loose])
 
 
 def auto_attach_campaigns(user_id: int, campaign_row_ids: list[int]) -> int:
@@ -214,7 +257,11 @@ _WS_COLUMNS = """
     (SELECT COUNT(*) FROM workspace_campaigns wc WHERE wc.workspace_id = w.id) AS campaigns_count,
     (SELECT COUNT(*) FROM workspace_accounts wa WHERE wa.workspace_id = w.id) AS accounts_count,
     (SELECT g.name FROM metrika_goals g
-       WHERE g.counter_row_id = w.counter_row_id AND g.goal_id = w.goal_id LIMIT 1) AS goal_name
+       WHERE g.counter_row_id = w.counter_row_id AND g.goal_id = w.goal_id LIMIT 1) AS goal_name,
+    -- Сколько действующих проектов создано раньше: проекты сверх лимита тарифа (новые) закрыты.
+    (SELECT COUNT(*) FROM workspaces o
+       WHERE o.user_id = w.user_id AND o.archived_at IS NULL
+         AND (o.created_at, o.id) < (w.created_at, w.id)) AS active_rank
 """
 _WS_FROM = """
     FROM workspaces w
@@ -250,6 +297,7 @@ def _ws_out(row: dict) -> dict:
         "ai_access": normalize_ai_access(row.get("ai_access")),
         "ai_facts": normalize_ai_facts(row.get("ai_facts")),
         "archived": row.get("archived_at") is not None,
+        "locked": bool(row.get("_locked")),
         "campaigns_count": int(row.get("campaigns_count") or 0),
         "accounts_count": int(row.get("accounts_count") or 0),
         "created_at": _iso(row.get("created_at")),
@@ -267,10 +315,16 @@ def list_workspaces(user_id: int, *, include_archived: bool = False) -> list[dic
             """,
             (user_id, include_archived),
         ).fetchall()
-    return [_ws_out(r) for r in rows]
+    limit = projects_limit(user_id) if rows else None
+    return [_ws_out({**r, "_locked": _locked(r, limit)}) for r in rows]
 
 
-def require_workspace(user_id: int, workspace_id: int) -> dict:
+def _locked(row: dict, limit: int | None) -> bool:
+    """Проект сверх лимита тарифа: открыты первые по времени создания, остальные — под замком."""
+    return limit is not None and row.get("archived_at") is None and int(row.get("active_rank") or 0) >= limit
+
+
+def require_workspace(user_id: int, workspace_id: int, *, allow_locked: bool = False) -> dict:
     with pool.connection() as conn:
         row = conn.execute(
             f"SELECT {_WS_COLUMNS} {_WS_FROM} WHERE w.id = %s AND w.user_id = %s",
@@ -278,11 +332,16 @@ def require_workspace(user_id: int, workspace_id: int) -> dict:
         ).fetchone()
     if row is None:
         raise YandexError("not-found")
-    return row
+    locked = row["archived_at"] is None and _locked(row, projects_limit(user_id))
+    if locked and not allow_locked:
+        from app.plans import PROJECT_LOCKED
+
+        raise YandexError("project-locked", PROJECT_LOCKED)
+    return {**row, "_locked": locked}
 
 
-def get_workspace(user_id: int, workspace_id: int) -> dict:
-    out = _ws_out(require_workspace(user_id, workspace_id))
+def get_workspace(user_id: int, workspace_id: int, *, allow_locked: bool = False) -> dict:
+    out = _ws_out(require_workspace(user_id, workspace_id, allow_locked=allow_locked))
     out["accounts"] = list_workspace_accounts(user_id, workspace_id)
     out["goals"] = workspace_goals(user_id, workspace_id)
     out["ai_categories"] = [{"key": k, "label": v} for k, v in AI_CATEGORIES]
@@ -355,8 +414,19 @@ def _clean_budget(raw) -> int | None:
 
 
 def update_workspace(user_id: int, workspace_id: int, **fields) -> dict:
-    """Частичное обновление; None у kpi_target / monthly_budget_rub / goal_id / client_id очищает поле."""
-    ws = require_workspace(user_id, workspace_id)
+    """Частичное обновление; None у kpi_target / monthly_budget_rub / goal_id / client_id очищает поле.
+
+    Закрытый тарифом проект можно только отправить в архив; вернуть из архива — если есть место в тарифе.
+    """
+    from app.plans import PROJECT_LOCKED, PROJECTS_LIMIT
+
+    ws = require_workspace(user_id, workspace_id, allow_locked=True)
+    if ws["_locked"] and set(fields) - {"archived"}:
+        raise YandexError("project-locked", PROJECT_LOCKED)
+    if fields.get("archived") is False and ws["archived_at"] is not None:
+        limit = projects_limit(user_id)
+        if limit is not None and active_projects(user_id) >= limit:
+            raise YandexError("projects-limit", PROJECTS_LIMIT)
     sets: list[str] = []
     params: list = []
     if "name" in fields:
@@ -428,7 +498,88 @@ def update_workspace(user_id: int, workspace_id: int, **fields) -> dict:
                 f"UPDATE workspaces SET {', '.join(sets)}, updated_at = NOW() WHERE id = %s AND user_id = %s",
                 (*params, workspace_id, user_id),
             )
-    return get_workspace(user_id, workspace_id)
+    return get_workspace(user_id, workspace_id, allow_locked=True)
+
+
+def counter_choices(user_id: int) -> dict:
+    """Счётчики пользователя для выбора проектов: что уже проект, что можно добавить, что — на тарифе выше.
+
+    state: project | archived | available | locked (нет места в тарифе) | taken (проект в другом аккаунте).
+    """
+    from app.yandex import TAKEN
+
+    with pool.connection() as conn:
+        rows = conn.execute(_CANDIDATES, (user_id,)).fetchall()
+        own = {
+            int(r["counter_id"]): r
+            for r in conn.execute(
+                "SELECT id, counter_id, name, archived_at FROM workspaces WHERE user_id = %s", (user_id,)
+            )
+        }
+    limit = projects_limit(user_id)
+    used = active_projects(user_id)
+    free = None if limit is None else max(0, limit - used)
+    items = []
+    for r in rows:
+        counter_id = int(r["counter_id"])
+        ws = own.get(counter_id)
+        if ws is not None and ws["archived_at"] is None:
+            state = "project"
+        elif r["taken"]:
+            state = "taken"
+        elif free is not None and free <= 0:
+            state = "locked"
+        else:
+            state = "archived" if ws is not None else "available"
+        items.append(
+            {
+                "counter_id": counter_id,
+                "name": r["name"] or "",
+                "site": r["site"] or "",
+                "login": r["yandex_login"] or "",
+                "state": state,
+                "workspace_id": int(ws["id"]) if ws is not None else None,
+                "note": f"Счётчик {TAKEN}" if state == "taken" else "",
+            }
+        )
+    return {"items": items, "projects_limit": limit, "projects_used": used}
+
+
+def create_project_for_counter(user_id: int, counter_id: int) -> dict:
+    """Проект для выбранного счётчика: в пределах тарифа; архивный проект этого счётчика возвращается."""
+    from app import events
+    from app.plans import PROJECTS_LIMIT
+    from app.yandex import TAKEN
+
+    with pool.connection() as conn:
+        rows = conn.execute(_CANDIDATES, (user_id,)).fetchall()
+        existing = conn.execute(
+            "SELECT id, archived_at FROM workspaces WHERE user_id = %s AND counter_id = %s", (user_id, counter_id)
+        ).fetchone()
+    row = next((r for r in rows if int(r["counter_id"]) == int(counter_id)), None)
+    if existing is not None and existing["archived_at"] is None:
+        return get_workspace(user_id, int(existing["id"]), allow_locked=True)
+    if row is None:
+        raise YandexError("not-found", "Счётчик не найден — обновите подключения")
+    if row["taken"]:
+        raise YandexError("counter-taken", f"Счётчик {counter_id} {TAKEN}")
+    limit = projects_limit(user_id)
+    if limit is not None and active_projects(user_id) >= limit:
+        raise YandexError("projects-limit", PROJECTS_LIMIT)
+    if existing is not None:
+        with pool.connection() as conn:
+            conn.execute(
+                "UPDATE workspaces SET archived_at = NULL, updated_at = NOW() WHERE id = %s AND user_id = %s",
+                (existing["id"], user_id),
+            )
+        return get_workspace(user_id, int(existing["id"]))
+    with pool.connection() as conn:
+        created = conn.execute(_INSERT_FOR_COUNTERS, (user_id, [int(row["id"])])).fetchone()
+    if created is None:
+        raise YandexError("exists", "Проект для этого счётчика уже есть")
+    events.record(user_id, "project_created", workspace_id=int(created["id"]), counter_id=int(counter_id), auto=False)
+    _attach_loose(user_id)
+    return get_workspace(user_id, int(created["id"]))
 
 
 def _edit_facts(user_id: int, workspace_id: int, edit) -> list[dict]:

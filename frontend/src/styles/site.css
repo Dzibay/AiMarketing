@@ -934,6 +934,44 @@ button.stat-card[aria-pressed='true'] {
   min-width: 7rem;
 }
 
+.admin-users .chip {
+  margin-top: 0.3rem;
+}
+
+.admin-users__plan .chip + .chip {
+  margin-left: 0.3rem;
+}
+
+/* Правка поверх тарифа: режим (как в тарифе / без лимита / своё) и число рядом. */
+.admin-override {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.admin-override select {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.admin-override input {
+  flex: 0 0 8rem;
+  min-width: 0;
+}
+
+.admin-plans .chip {
+  margin-left: 0.35rem;
+}
+
+.admin-upgrades input {
+  width: 5.5rem;
+  text-align: right;
+}
+
+.admin-upgrades th[scope='row'] {
+  font-weight: 540;
+  white-space: nowrap;
+}
+
 .table tr.is-muted td {
   opacity: 0.6;
 }

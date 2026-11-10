@@ -89,12 +89,7 @@
         </select>
       </div>
 
-      <h3>Лимит по умолчанию</h3>
-      <div v-field class="field">
-        <label>Единиц в месяц на пользователя</label>
-        <input v-model="aiForm.default_units_limit" type="number" min="0" step="any" inputmode="decimal" placeholder="без лимита" />
-        <small class="field-hint">Свой лимит пользователя задаётся во вкладке «Пользователи» и заменяет этот.</small>
-      </div>
+      <p class="field-hint">Лимит единиц пользователя задаётся тарифом — вкладка «Тарифы».</p>
 
       <div class="form-actions">
         <button class="btn btn--accent" type="submit" :disabled="aiBusy">Сохранить</button>
@@ -271,7 +266,6 @@ const aiForm = reactive({
   temperature: 0.3,
   classes: [],
   task_classes: {},
-  default_units_limit: '',
 })
 const aiBusy = ref(false)
 const aiTesting = ref(false)
@@ -316,7 +310,6 @@ function fillAi(data) {
   aiForm.api_key = ''
   aiForm.classes = (data.classes || []).map((c) => ({ ...c, ...Object.fromEntries(PRICE_FIELDS.map((f) => [f, blank(c[f])])) }))
   aiForm.task_classes = { ...(data.task_classes || {}) }
-  aiForm.default_units_limit = blank(data.default_units_limit)
 }
 
 async function saveAi() {
@@ -339,7 +332,6 @@ async function saveAi() {
           ...Object.fromEntries(PRICE_FIELDS.map((f) => [f, money(c[f])])),
         })),
         task_classes: aiForm.task_classes,
-        default_units_limit: money(aiForm.default_units_limit),
       }),
     )
     emit('changed')

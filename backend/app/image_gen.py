@@ -21,7 +21,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 import httpx
 
-from app import ai, ai_bridge, billing
+from app import ai, ai_bridge, billing, plans
 from app.ad_extras import IMAGE_MAX_BYTES, IMAGE_TYPES
 from app.db import pool
 from app.token_crypto import decrypt_token, encrypt_token
@@ -286,6 +286,7 @@ def generate(user_id: int | None, prompt: str, *, count: int = 1, workspace_id: 
 
     → {"images": [bytes…], "errors": [текст…], "model"}. Ошибка, если не вышло ни одной.
     """
+    plans.require_feature(user_id, "images")
     cfg = load_config(user_id, workspace_id)
     prompt = clean_prompt(prompt, cfg["provider"])
     count = max(1, min(int(count or 1), COUNT_MAX))

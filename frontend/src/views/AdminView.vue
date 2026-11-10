@@ -44,7 +44,7 @@
         <div class="cabinet__head">
           <div>
             <h1>Админка</h1>
-            <p>Пользователи и их лимиты, общие ИИ, Вордстат и картинки, расход сервиса.</p>
+            <p>Пользователи и подписки, тарифы, общие ИИ, Вордстат и картинки, расход сервиса.</p>
           </div>
         </div>
 
@@ -59,6 +59,16 @@
             <div v-for="s in services" :key="s.key" class="stat-card">
               <small>{{ s.label }}</small>
               <strong :class="s.ok ? 'tone-ok' : 'tone-warn'">{{ s.ok ? 'работает' : 'не подключено' }}</strong>
+            </div>
+            <div class="stat-card" :title="summary.email_check ? '' : 'Без SMTP письма не уходят — кабинет открыт сразу после регистрации'">
+              <small>Подтверждение почты</small>
+              <strong :class="summary.email_check ? 'tone-ok' : 'tone-warn'">
+                {{ summary.email_check ? 'включено' : 'выкл.: нет SMTP' }}
+              </strong>
+            </div>
+            <div class="stat-card">
+              <small>Пробный тариф</small>
+              <strong :class="summary.trial_plan ? 'tone-ok' : 'tone-warn'">{{ summary.trial_plan || 'нет — без ограничений' }}</strong>
             </div>
           </div>
 
@@ -75,6 +85,7 @@
           </nav>
 
           <AdminUsers v-if="tab === 'users'" />
+          <AdminPlans v-else-if="tab === 'plans'" @changed="loadSummary" />
           <template v-else-if="tab === 'services'">
             <AdminServices :bridge="bridge" @changed="loadSummary" />
             <AdminBridge @update="bridge = $event" />
@@ -92,6 +103,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { LogOut, Moon, Sun } from '@lucide/vue'
 import BrandMark from '../components/BrandMark.vue'
 import AdminBridge from './admin/AdminBridge.vue'
+import AdminPlans from './admin/AdminPlans.vue'
 import AdminServices from './admin/AdminServices.vue'
 import AdminUsage from './admin/AdminUsage.vue'
 import AdminUsers from './admin/AdminUsers.vue'
@@ -107,6 +119,7 @@ useHead('Админка — AiMarketing', true)
 
 const TABS = [
   { id: 'users', label: 'Пользователи' },
+  { id: 'plans', label: 'Тарифы' },
   { id: 'services', label: 'ИИ и сервисы' },
   { id: 'usage', label: 'Расход' },
 ]

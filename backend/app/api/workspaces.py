@@ -41,6 +41,8 @@ from app.workspaces import (
     add_workspace_account,
     campaign_candidates,
     counter_access,
+    counter_choices,
+    create_project_for_counter,
     ensure_workspaces,
     get_workspace,
     list_workspace_accounts,
@@ -225,6 +227,24 @@ def ws_refresh(user_id: int = Depends(require_web_user)) -> dict:
     """Пространства для новых счётчиков (после синка подключений)."""
     created = ensure_workspaces(user_id)
     return {"created": len(created), "items": list_workspaces(user_id)}
+
+
+class FromCounterBody(BaseModel):
+    counter_id: int
+
+
+@router.get("/counters")
+def ws_counters(user_id: int = Depends(require_web_user)) -> dict:
+    """Счётчики для выбора проектов в пределах тарифа."""
+    return counter_choices(user_id)
+
+
+@router.post("/from-counter")
+def ws_from_counter(body: FromCounterBody, user_id: int = Depends(require_web_user)) -> dict:
+    try:
+        return create_project_for_counter(user_id, body.counter_id)
+    except YandexError as exc:
+        raise _http(exc) from exc
 
 
 @router.get("/{workspace_id}")

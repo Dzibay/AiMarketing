@@ -41,7 +41,8 @@ def verify_session(token: str) -> int | None:
     return user_id
 
 
-def require_web_user(authorization: str = Header(default="")) -> int:
+def require_web_identity(authorization: str = Header(default="")) -> int:
+    """Вошёл и не заблокирован — для профиля, тарифа и подтверждения почты: они нужны и без подписки."""
     scheme, _, token = authorization.partition(" ")
     user_id = verify_session(token) if scheme.lower() == "bearer" else None
     if user_id is None:
@@ -51,4 +52,17 @@ def require_web_user(authorization: str = Header(default="")) -> int:
         raise HTTPException(status_code=401, detail="unauthorized")
     if user.get("blocked_at"):
         raise HTTPException(status_code=403, detail="blocked")
+    return user_id
+
+
+def require_web_user(authorization: str = Header(default="")) -> int:
+    """Полный доступ к кабинету: почта подтверждена (если подтверждение включено) и подписка действует."""
+    from app import plans
+
+    user_id = require_web_identity(authorization)
+    state = plans.subscription(user_id)["state"]
+    if state == "unverified":
+        raise HTTPException(status_code=403, detail="email-unverified")
+    if state == "expired":
+        raise HTTPException(status_code=402, detail="subscription-expired")
     return user_id

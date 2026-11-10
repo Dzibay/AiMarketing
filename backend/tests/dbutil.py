@@ -158,11 +158,10 @@ def setup_ai(
     folder_id: str = "",
     base_url: str = "",
     prices: dict | None = None,
-    limit: float | None = None,
 ) -> dict:
     """Общий ключ ИИ сервиса (админка): стандартная модель model, быстрая и думающая — если заданы.
 
-    prices — {класс: {"units_in", "units_out", "cost_in", "cost_out"}}; limit — лимит единиц по умолчанию.
+    prices — {класс: {"units_in", "units_out", "cost_in", "cost_out"}}.
     """
     from app import ai
 
@@ -179,5 +178,18 @@ def setup_ai(
         base_url=base_url,
         folder_id=folder_id,
         classes=classes,
-        default_units_limit=limit,
     )
+
+
+def set_units_limit(user_id: int, units) -> dict:
+    """Лимит единиц пользователя поверх тарифа (как правка подписки в админке); None — без лимита."""
+    from app import plans
+
+    return plans.set_subscription(user_id, overrides={"units_limit": units})
+
+
+def make_plan(**fields) -> dict:
+    from app import plans
+
+    data = {"name": "Тариф", "price_rub": 1000, "days": 30, **fields}
+    return plans.save_plan(None, data)

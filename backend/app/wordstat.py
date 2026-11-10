@@ -16,7 +16,7 @@ import logging
 
 import httpx
 
-from app import billing
+from app import billing, plans
 from app.db import pool
 from app.direct_api import post_json
 from app.token_crypto import decrypt_token, encrypt_token
@@ -159,6 +159,7 @@ class Client:
         self.cost = _num(row.get("cost_per_request"))
 
     def top_requests(self, phrase: str, **kwargs) -> dict:
+        plans.require_feature(self.user_id, "wordstat")
         billing.check(self.user_id, self.units)
         found = top_requests(self.api_key, self.folder_id, phrase, **kwargs)
         billing.record(

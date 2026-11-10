@@ -26,6 +26,14 @@ def _instant_ai_retries(monkeypatch):
     monkeypatch.setattr("app.ai.RETRY_PAUSES", (0, 0))
 
 
+@pytest.fixture(autouse=True)
+def _no_plan_without_db(request, monkeypatch):
+    """Юнит-тесты без БД: у пользователя нет тарифа — все функции открыты, лимитов нет."""
+    if {"db", "db_pool"} & set(request.fixturenames):
+        return
+    monkeypatch.setattr("app.plans._row", lambda user_id: None)
+
+
 def reset_schema(pool) -> None:
     with pool.connection() as conn:
         conn.execute("DROP SCHEMA public CASCADE")
@@ -52,6 +60,6 @@ def db(db_pool):
     from tests.dbutil import reset_services
 
     with db_pool.connection() as conn:
-        conn.execute("TRUNCATE users, jobs, job_schedules RESTART IDENTITY CASCADE")
+        conn.execute("TRUNCATE users, jobs, job_schedules, plans RESTART IDENTITY CASCADE")
     reset_services(db_pool)
     return db_pool

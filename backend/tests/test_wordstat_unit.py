@@ -224,7 +224,7 @@ def billed(monkeypatch):
     def check(user_id, need=0.0):
         state.checks.append((user_id, need))
         if state.exhausted:
-            raise YandexError("units-exhausted", billing.EXHAUSTED)
+            raise YandexError("units-exhausted", "Лимит ИИ на этот период исчерпан")
 
     monkeypatch.setattr(billing, "check", check)
     monkeypatch.setattr(billing, "record", lambda user_id, **kw: state.records.append({"user_id": user_id, **kw}))

@@ -3,6 +3,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
+from app import plans
 from app.api.web import _http, _start_job
 from app.digest import build_digest, get_digest_settings, update_digest_settings
 from app.onboarding import get_onboarding, set_onboarding_dismissed
@@ -57,6 +58,8 @@ def web_digest_settings(user_id: int = Depends(require_web_user)) -> dict:
 @router.put("/digest")
 def web_update_digest(body: DigestBody, user_id: int = Depends(require_web_user)) -> dict:
     try:
+        if body.enabled:
+            plans.require_feature(user_id, "digest")
         return update_digest_settings(user_id, enabled=body.enabled, hour=body.hour)
     except YandexError as exc:
         raise _http(exc) from exc
@@ -70,6 +73,10 @@ def web_digest_preview(user_id: int = Depends(require_web_user)) -> dict:
 @router.post("/digest/send")
 def web_digest_send(user_id: int = Depends(require_web_user)) -> dict:
     """Отправить сейчас по уже загруженным данным; утреннюю отправку не отменяет."""
+    try:
+        plans.require_feature(user_id, "digest")
+    except YandexError as exc:
+        raise _http(exc) from exc
     if not notify_user(user_id, build_digest(user_id)):
         raise HTTPException(status_code=400, detail="telegram")
     return {"ok": True}

@@ -17,7 +17,7 @@ from app.config import settings
 from app.main import app
 from app.web_auth import make_session
 from app.yandex import YandexError
-from tests.dbutil import admin_headers, make_account, make_campaign, make_connection, make_user, make_workspace, setup_ai
+from tests.dbutil import admin_headers, make_account, make_campaign, make_connection, make_user, make_workspace, set_units_limit, setup_ai
 from tests.test_db_query_cleaning import _query
 
 # Единиц и себестоимости (₽) за 1 млн токенов входа / выхода.
@@ -95,10 +95,9 @@ def test_class_per_task_prices_and_keep(db):
     assert saved["task_classes"]["classify"] == "standard" and saved["task_classes"]["brief"] == "fast"
     assert ai.load_config(user, "classify")["model"] == "gpt-smart"
     assert [t["id"] for t in saved["tasks"]] == ["chat", "classify", "brief", "placements", "ads"]
-    # Сохранение без классов и лимита (как «Удалить ключ») их не трогает.
-    ai.save_service_settings(provider="openai", default_units_limit=500)
+    # Сохранение без классов (как «Удалить ключ») их не трогает.
     kept = ai.save_service_settings(provider="openai", api_key=None)
-    assert kept["classes"][0]["units_in"] == 10.0 and kept["default_units_limit"] == 500.0 and kept["has_key"]
+    assert kept["classes"][0]["units_in"] == 10.0 and "default_units_limit" not in kept and kept["has_key"]
     # Выключенный быстрый класс — фоновые задачи уходят на стандартный.
     ai.save_service_settings(provider="openai", task_classes={"classify": "fast"},
                              classes=[{"id": "fast", "model": "gpt-fast", "enabled": False}])
@@ -113,8 +112,6 @@ def test_class_per_task_prices_and_keep(db):
         with pytest.raises(YandexError) as err:
             ai.save_service_settings(provider="openai", classes=[{"id": "standard", "model": "gpt-smart", "enabled": True, **bad}])
         assert err.value.code == "ai-price"
-    with pytest.raises(YandexError):
-        ai.save_service_settings(provider="openai", default_units_limit=-5)
 
     setup_ai(provider="yandexgpt", api_key=None, folder_id="b1g", model="yandexgpt/latest", fast="yandexgpt-lite/latest")
     cfg = ai.load_config(user, "classify")
@@ -165,7 +162,7 @@ def test_complete_charges_units_and_meter(db, monkeypatch):
     assert ai.usage_out(outer, user) == {"calls": 2, "percent": None, "estimated": False}
 
     # С лимитом — доля лимита.
-    billing.set_user_limit(user, 10)
+    set_units_limit(user, 10)
     spent = sum(float(r["charged"]) for r in _usage_rows(db, user))
     summary = billing.user_summary(user)
     assert summary["limited"] and summary["used_percent"] == pytest.approx(spent * 10, abs=0.06)
@@ -176,7 +173,7 @@ def test_complete_charges_units_and_meter(db, monkeypatch):
 def test_limit_blocks_paid_calls_except_admin_check(db, monkeypatch):
     user, ws = _seed(db)
     bodies = _provider(monkeypatch)
-    billing.set_user_limit(user, 1)
+    set_units_limit(user, 1)
     _spend(db, user, 5, days_ago=40)  # прошлый месяц не считается
     _spend(db, user, 0.9)
     cfg = ai.load_config(user, "chat", ws)
@@ -184,7 +181,7 @@ def test_limit_blocks_paid_calls_except_admin_check(db, monkeypatch):
     ai.complete(cfg, [{"role": "user", "content": "привет"}])  # 0,9 + 0,18 — уже за лимитом
     with pytest.raises(YandexError) as exc:
         ai.complete(cfg, [{"role": "user", "content": "ещё"}])
-    assert exc.value.code == "units-exhausted" and exc.value.message == billing.EXHAUSTED
+    assert exc.value.code == "units-exhausted" and exc.value.message == billing.exhausted_text(billing.period(user)[1])
     assert len(bodies) == 1
     summary = billing.user_summary(user)
     assert summary["exhausted"] and summary["used_percent"] == 100.0 and summary["left_percent"] == 0.0
@@ -211,22 +208,23 @@ def test_limit_blocks_paid_calls_except_admin_check(db, monkeypatch):
     assert len(_usage_rows(db, user)) == rows_before
 
     # Админ поднял лимит — снова работает; не хватит на операцию — понятная ошибка.
-    billing.set_user_limit(user, 100)
+    set_units_limit(user, 100)
     ai.complete(cfg, [{"role": "user", "content": "снова"}])
     with pytest.raises(YandexError) as exc:
         billing.check(user, 1000)
     assert exc.value.message == billing.NOT_ENOUGH
-    # Лимит 0 — платное закрыто, шкала полная; свой лимит снят — общий лимит сервиса.
-    billing.set_user_limit(user, 0)
-    with pytest.raises(YandexError):
+    # Лимит 0 — платное закрыто, шкала полная; лимит снят — без ограничений.
+    set_units_limit(user, 0)
+    with pytest.raises(YandexError) as exc:
         billing.check(user)
+    assert exc.value.code == "units-exhausted" and "снова заработают" in exc.value.message
     assert billing.user_summary(user)["used_percent"] == 100.0
-    billing.set_user_limit(user, None)
+    set_units_limit(user, None)
     assert billing.units_limit(user) is None
-    ai.save_service_settings(provider="openai", default_units_limit=2)
+    set_units_limit(user, 2)
     assert billing.units_limit(user) == 2.0
     with pytest.raises(YandexError):
-        billing.set_user_limit(user, "много")
+        set_units_limit(user, "много")
 
 
 def test_estimate_then_classify_stops_at_limit(db, monkeypatch):
@@ -244,14 +242,14 @@ def test_estimate_then_classify_stops_at_limit(db, monkeypatch):
     system = qc._classify_system(user, plan)
     first = ai.units_for(cfg, *qc._batch_tokens(system, plan["rest"][:40], ai.CHARS_PER_TOKEN, qc.OUT_TOKENS_PER_QUERY))
     limit = round(first * 1.5, 2)
-    billing.set_user_limit(user, limit)
+    set_units_limit(user, limit)
     est = qc.estimate_classify(user, {"workspace_id": ws, "limit": 500})
     assert est["fits"] == 40 and est["left_percent"] == 100.0 and est["percent"] > 100
 
     bodies = _provider(monkeypatch, tokens=(10_000, 2_000))  # фактически дороже оценки: 180 единиц за пачку
     res = qc.classify_queries(user, {"workspace_id": ws, "limit": 500})
     assert len(bodies) == 1 and res["labeled"] == 40 and res["target"] == 40
-    assert res["ai_error"] == billing.EXHAUSTED
+    assert res["ai_error"] == billing.exhausted_text(billing.period(user)[1])
     assert res["usage"] == {"calls": 1, "percent": round(180 * 100 / limit, 2), "estimated": False}
     row = _usage_rows(db, user)[-1]
     assert (row["task"], row["model"], row["model_class"], row["units"], row["workspace_id"]) == ("classify", "gpt-fast", "fast", 40, ws)
@@ -295,7 +293,7 @@ def test_estimate_without_ai_and_usage_api(db, monkeypatch):
 
     usage = client.get("/api/web/ai/usage", headers=auth).json()
     assert not usage["limited"] and usage["used_percent"] is None and usage["by_kind"] == []
-    billing.set_user_limit(user, 50)
+    set_units_limit(user, 50)
     _spend(db, user, 5, ws=ws)
     _spend(db, user, 5, kind="wordstat", model_class="")
     usage = client.get("/api/web/ai/usage", headers=auth).json()
@@ -334,10 +332,13 @@ def test_admin_usage_and_user_limits(db, monkeypatch):
     assert client.get("/api/admin/usage", headers=auth).json()["total"]["units"] == 51.0
     assert client.get("/api/admin/usage?month=май", headers=auth).status_code == 400
 
-    put = client.put(f"/api/admin/users/{user}/limit", headers=auth, json={"units_limit": 100})
-    assert put.json() == {"units_limit": 100.0}
+    put = client.put(f"/api/admin/users/{user}/subscription", headers=auth, json={"overrides": {"units_limit": 100}})
+    assert put.status_code == 200 and put.json()["units_limit"] == 100.0
     users = client.get("/api/admin/users", headers=auth).json()
     row = next(u for u in users["items"] if u["id"] == user)
-    assert row["usage"] == {"spent": 51.0, "limit": 100.0, "own_limit": 100.0, "cost_rub": 6.02, "calls": 3}
-    assert client.put("/api/admin/users/999999/limit", headers=auth, json={"units_limit": 1}).status_code == 404
-    assert client.put(f"/api/admin/users/{user}/limit", headers=auth, json={"units_limit": None}).json() == {"units_limit": None}
+    usage = {k: row["usage"][k] for k in ("spent", "limit", "cost_rub", "calls")}
+    assert usage == {"spent": 51.0, "limit": 100.0, "cost_rub": 6.02, "calls": 3}
+    assert row["subscription"]["overrides"] == {"units_limit": 100.0} and row["subscription"]["plan"] is None
+    assert client.put("/api/admin/users/999999/subscription", headers=auth, json={"overrides": {}}).status_code == 404
+    cleared = client.put(f"/api/admin/users/{user}/subscription", headers=auth, json={"overrides": {"units_limit": None}})
+    assert cleared.json()["units_limit"] is None
