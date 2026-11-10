@@ -28,7 +28,6 @@
           <tr v-for="u in users" :key="u.id" :class="{ 'is-muted': u.blocked }">
             <td>
               <strong>{{ u.email || '—' }}</strong>
-              <span v-if="u.is_admin" class="chip chip--info">админ</span>
               <small class="cell-note">
                 #{{ u.id }}<template v-if="u.name"> · {{ u.name }}</template><template v-if="u.has_yandex"> · вход через Яндекс</template>
                 <template v-if="u.telegram_linked"> · Telegram</template>
@@ -65,7 +64,7 @@
                 v-if="!u.blocked"
                 class="btn btn--ghost btn--xs btn--danger"
                 type="button"
-                :disabled="busyId === u.id || u.is_admin"
+                :disabled="busyId === u.id"
                 @click="blockUser(u)"
               >
                 Заблокировать

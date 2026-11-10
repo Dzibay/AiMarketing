@@ -1390,15 +1390,25 @@ input[type='radio'] {
   white-space: pre-wrap;
 }
 
-.admin {
-  padding: 2rem 0 4rem;
+/* Админка: своя оболочка без меню кабинета — админ не пользователь кабинета. */
+.admin-shell {
+  width: min(1320px, 100%);
+  min-height: 100vh;
+  margin: 0 auto;
+  padding: 0.85rem 1.25rem 4rem;
 }
 
-.admin h1 {
-  font-family: var(--display);
-  font-weight: 650;
-  margin: 0 0 1rem;
-  letter-spacing: -0.02em;
+.admin-shell__top {
+  justify-content: space-between;
+}
+
+.admin-shell__top .btn svg {
+  width: 17px;
+  height: 17px;
+}
+
+.admin-shell__main .auth-card {
+  margin-top: 8vh;
 }
 
 /* ---------- Таблицы ---------- */

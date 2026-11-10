@@ -24,12 +24,12 @@ class Settings(BaseSettings):
 
     public_base_url: str = ""
 
-    # Админка: email пользователей кабинета с правами администратора, через запятую.
-    admin_emails: str = ""
-    # Старые настройки входа в админку по паролю: из них выводится секрет сессий кабинета,
-    # если WEB_SESSION_SECRET не задан (смена разлогинит всех).
+    # Админка /admin-panel: отдельный вход по паролю, админ — не пользователь кабинета. Пусто — вход закрыт.
     admin_password: str = ""
+    # Секрет подписи токена админки; пусто — выводится из пароля. Из него же выводится секрет сессий
+    # кабинета, если WEB_SESSION_SECRET не задан (смена разлогинит всех).
     admin_token_secret: str = ""
+    admin_token_ttl_hours: int = 12
 
     web_session_secret: str = ""
     web_session_ttl_days: int = 30

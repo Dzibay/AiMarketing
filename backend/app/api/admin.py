@@ -1,18 +1,19 @@
 """Админка владельца: пользователи, лимиты единиц, общие ИИ и сервисы, расход.
 
-Вход — обычной сессией кабинета; доступ — только email из ADMIN_EMAILS (web_auth.require_admin).
+Вход — отдельный, по паролю ADMIN_PASSWORD (auth.login); админ — не пользователь кабинета, сессии
+кабинета сюда не пускают.
 """
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
-from app import ai, ai_bridge, billing, image_gen, wordstat
+from app import ai, ai_bridge, auth, billing, image_gen, wordstat
 from app.api.web import _http
-from app.users import UsersError, count_users, get_user, list_users, set_user_blocked
-from app.web_auth import require_admin
+from app.users import UsersError, count_users, list_users, set_user_blocked
 from app.yandex import YandexError, yandex_configured
 
-router = APIRouter(tags=["admin"], dependencies=[Depends(require_admin)])
+admin_public = APIRouter(tags=["admin"])
+router = APIRouter(tags=["admin"], dependencies=[Depends(auth.require_admin)])
 
 
 def _call(fn, *args, **kwargs):
@@ -29,12 +30,28 @@ def _users_error(exc: UsersError) -> HTTPException:
 # --- Обзор и пользователи -----------------------------------------------------------------------
 
 
+class LoginBody(BaseModel):
+    password: str = ""
+
+
+def _client(request: Request) -> str:
+    # За Caddy и nginx: первый адрес X-Forwarded-For — клиент (Caddy подставляет его сам).
+    forwarded = request.headers.get("x-forwarded-for", "").split(",")[0].strip()
+    return forwarded or request.headers.get("x-real-ip", "") or (request.client.host if request.client else "")
+
+
+@admin_public.post("/login")
+def admin_login(body: LoginBody, request: Request) -> dict:
+    try:
+        return {"token": auth.login(body.password, _client(request))}
+    except auth.LoginError as exc:
+        raise HTTPException(status_code=429 if exc.code == "too-many-attempts" else 401, detail=exc.code) from exc
+
+
 @router.get("/me")
-def admin_me(user_id: int = Depends(require_admin)) -> dict:
-    user = get_user(user_id) or {}
+def admin_me() -> dict:
     return {
         "ok": True,
-        "email": user.get("email") or "",
         "users_total": count_users(),
         "yandex_oauth": yandex_configured(),
         "ai_configured": ai.is_configured(),

@@ -4,10 +4,9 @@ import hashlib
 import hmac
 import time
 
-from fastapi import Depends, Header, HTTPException
+from fastapi import Header, HTTPException
 
 from app.auth import _secret as _admin_secret
-from app.auth import is_admin
 from app.config import settings
 from app.users import get_user
 
@@ -52,11 +51,4 @@ def require_web_user(authorization: str = Header(default="")) -> int:
         raise HTTPException(status_code=401, detail="unauthorized")
     if user.get("blocked_at"):
         raise HTTPException(status_code=403, detail="blocked")
-    return user_id
-
-
-def require_admin(user_id: int = Depends(require_web_user)) -> int:
-    """Админка: тот же вход, что в кабинет, плюс email из ADMIN_EMAILS."""
-    if not is_admin(get_user(user_id)):
-        raise HTTPException(status_code=403, detail="forbidden")
     return user_id

@@ -17,7 +17,7 @@ from app.config import settings
 from app.main import app
 from app.web_auth import make_session
 from app.yandex import YandexError
-from tests.dbutil import make_account, make_campaign, make_connection, make_user, make_workspace, setup_ai
+from tests.dbutil import admin_headers, make_account, make_campaign, make_connection, make_user, make_workspace, setup_ai
 from tests.test_db_query_cleaning import _query
 
 # Единиц и себестоимости (₽) за 1 млн токенов входа / выхода.
@@ -328,10 +328,9 @@ def test_admin_usage_and_user_limits(db, monkeypatch):
         billing.service_usage("2026-13")
 
     client = TestClient(app)
-    auth = {"Authorization": f"Bearer {make_session(admin)}"}
-    monkeypatch.setattr(settings, "admin_emails", "")
-    assert client.get("/api/admin/usage", headers=auth).status_code == 403
-    monkeypatch.setattr(settings, "admin_emails", "owner@example.com")
+    session = {"Authorization": f"Bearer {make_session(admin)}"}
+    assert client.get("/api/admin/usage", headers=session).status_code == 401
+    auth = admin_headers()
     assert client.get("/api/admin/usage", headers=auth).json()["total"]["units"] == 51.0
     assert client.get("/api/admin/usage?month=май", headers=auth).status_code == 400
 

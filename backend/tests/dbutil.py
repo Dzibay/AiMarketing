@@ -121,6 +121,13 @@ def make_workspace(
     return ws
 
 
+def admin_headers() -> dict:
+    """Токен админки (вход по ADMIN_PASSWORD): админ — не пользователь кабинета."""
+    from app.auth import make_token
+
+    return {"Authorization": f"Bearer {make_token()}"}
+
+
 SERVICE_TABLES = ("service_ai", "service_wordstat", "service_images", "service_bridge")
 
 

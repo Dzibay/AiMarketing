@@ -9,15 +9,17 @@ export class ApiError extends Error {
   }
 }
 
-export async function request(path, options = {}) {
+/** options.token — свой токен вместо сессии кабинета (админка): её 401 сессию кабинета не сбрасывает. */
+export async function request(path, { token, ...options } = {}) {
   const headers = { ...(options.headers || {}) }
   if (!headers['Content-Type'] && options.body) headers['Content-Type'] = 'application/json'
-  const session = getSession()
+  const ownSession = token === undefined
+  const session = ownSession ? getSession() : token
   if (session && headers.Authorization !== '') headers.Authorization = `Bearer ${session}`
   if (headers.Authorization === '') delete headers.Authorization
   const response = await fetch(path, { cache: 'no-store', ...options, headers })
   const body = await response.json().catch(() => ({}))
-  if (response.status === 401 && session && headers.Authorization && !path.endsWith('/login')) {
+  if (response.status === 401 && ownSession && session && headers.Authorization && !path.endsWith('/login')) {
     clearSession()
   }
   if (!response.ok) {

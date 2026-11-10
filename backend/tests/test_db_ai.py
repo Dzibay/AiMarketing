@@ -10,7 +10,16 @@ from app.config import settings
 from app.main import app
 from app.web_auth import make_session
 from app.yandex import YandexError
-from tests.dbutil import make_account, make_campaign, make_connection, make_counter, make_user, make_workspace, setup_ai
+from tests.dbutil import (
+    admin_headers,
+    make_account,
+    make_campaign,
+    make_connection,
+    make_counter,
+    make_user,
+    make_workspace,
+    setup_ai,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -277,17 +286,18 @@ def test_ai_api(db, monkeypatch):
     models = client.get("/api/web/ai/models", headers=auth).json()
     assert models == {"configured": True, "default": "standard", "items": [{"id": "standard", "name": "Стандартная", "dots": 2}]}
     assert client.get("/api/web/ai/settings", headers=auth).status_code == 404
-    assert client.get("/api/admin/ai", headers=auth).status_code == 403
-    monkeypatch.setattr(settings, "admin_emails", "U@example.com")
-    got = client.get("/api/admin/ai", headers=auth).json()
+    # Сессия кабинета в админку не пускает: у админки свой вход по паролю.
+    assert client.get("/api/admin/ai", headers=auth).status_code == 401
+    admin = admin_headers()
+    got = client.get("/api/admin/ai", headers=admin).json()
     assert got["configured"] and got["key_hint"] == "…abcd" and "api_key_enc" not in str(got)
-    put = client.put("/api/admin/ai", headers=auth, json={"provider": "openai", "classes": [
+    put = client.put("/api/admin/ai", headers=admin, json={"provider": "openai", "classes": [
         {"id": "standard", "name": "Стандартная", "model": "gpt-x", "enabled": True},
     ]})
     assert put.json()["has_key"] and put.json()["classes"][1]["model"] == "gpt-x"
-    bad = client.put("/api/admin/ai", headers=auth, json={"provider": "openai", "base_url": "http://x"})
+    bad = client.put("/api/admin/ai", headers=admin, json={"provider": "openai", "base_url": "http://x"})
     assert bad.status_code == 400 and bad.json()["detail"]["code"] == "ai-url"
-    assert client.get("/api/admin/ai", headers=other).status_code == 403
+    assert client.get("/api/admin/ai", headers=other).status_code == 401
 
     created = client.post(f"/api/web/workspaces/{s['ws']}/chats", headers=auth, json={}).json()
     assert created["title"] == "Новый чат"

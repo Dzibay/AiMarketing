@@ -1,60 +1,104 @@
 <template>
-  <AppShell>
-    <div class="cabinet__head">
-      <div>
-        <h1>Админка</h1>
-        <p>Пользователи и их лимиты, общие ИИ, Вордстат и картинки, расход сервиса.</p>
-      </div>
-    </div>
-
-    <div v-if="loading" class="panel"><p class="empty">Загружаем…</p></div>
-
-    <section v-else-if="denied" class="panel">
-      <h2>Нет доступа</h2>
-      <p class="hint">
-        Админка открыта только владельцу сервиса: почта аккаунта должна быть в ADMIN_EMAILS в настройках сервера.
-      </p>
-      <RouterLink class="btn btn--ghost" to="/cabinet">В кабинет</RouterLink>
-    </section>
-
-    <template v-else-if="summary">
-      <div class="stats-grid">
-        <div class="stat-card">
-          <small>Пользователей</small>
-          <strong>{{ num(summary.users_total) }}</strong>
-        </div>
-        <div v-for="s in services" :key="s.key" class="stat-card">
-          <small>{{ s.label }}</small>
-          <strong :class="s.ok ? 'tone-ok' : 'tone-warn'">{{ s.ok ? 'работает' : 'не подключено' }}</strong>
-        </div>
-      </div>
-
-      <nav class="seg seg--tabs" aria-label="Разделы админки">
-        <button v-for="t in TABS" :key="t.id" type="button" :class="{ active: tab === t.id }" @click="setTab(t.id)">
-          {{ t.label }}
+  <div class="admin-shell">
+    <header class="topbar admin-shell__top">
+      <span class="topbar__brand">
+        <span class="topbar__logo"><BrandMark :size="34" /></span>
+        <span class="topbar__name">
+          <strong>Ai<span>Marketing</span></strong>
+          <small>Админка</small>
+        </span>
+      </span>
+      <span class="topbar__spacer"></span>
+      <div class="topbar__tools">
+        <button class="icon-btn" type="button" :aria-label="isDark ? 'Светлая тема' : 'Тёмная тема'" @click="toggleTheme">
+          <Sun v-if="isDark" aria-hidden="true" />
+          <Moon v-else aria-hidden="true" />
         </button>
-      </nav>
+        <button v-if="isLoggedIn" class="btn btn--ghost" type="button" @click="logout">
+          <LogOut aria-hidden="true" />
+          Выйти
+        </button>
+      </div>
+    </header>
 
-      <AdminUsers v-if="tab === 'users'" />
-      <template v-else-if="tab === 'services'">
-        <AdminServices :bridge="bridge" @changed="loadSummary" />
-        <AdminBridge @update="bridge = $event" />
+    <main class="admin-shell__main">
+      <form v-if="!isLoggedIn" class="auth-card" @submit.prevent="login">
+        <h1>Вход в админку</h1>
+        <p class="sub">Пароль владельца сервиса — ADMIN_PASSWORD в настройках сервера.</p>
+        <p v-if="error" class="form-error">{{ error }}</p>
+        <div class="field">
+          <label for="admin-password">Пароль</label>
+          <input
+            id="admin-password"
+            v-model="password"
+            type="password"
+            autocomplete="current-password"
+            required
+            autofocus
+          />
+        </div>
+        <button class="btn btn--wide" type="submit" :disabled="busy">Войти</button>
+      </form>
+
+      <template v-else>
+        <div class="cabinet__head">
+          <div>
+            <h1>Админка</h1>
+            <p>Пользователи и их лимиты, общие ИИ, Вордстат и картинки, расход сервиса.</p>
+          </div>
+        </div>
+
+        <div v-if="!summary" class="panel"><p class="empty">Загружаем…</p></div>
+
+        <template v-else>
+          <div class="stats-grid">
+            <div class="stat-card">
+              <small>Пользователей</small>
+              <strong>{{ num(summary.users_total) }}</strong>
+            </div>
+            <div v-for="s in services" :key="s.key" class="stat-card">
+              <small>{{ s.label }}</small>
+              <strong :class="s.ok ? 'tone-ok' : 'tone-warn'">{{ s.ok ? 'работает' : 'не подключено' }}</strong>
+            </div>
+          </div>
+
+          <nav class="seg seg--tabs" aria-label="Разделы админки">
+            <button
+              v-for="t in TABS"
+              :key="t.id"
+              type="button"
+              :class="{ active: tab === t.id }"
+              @click="setTab(t.id)"
+            >
+              {{ t.label }}
+            </button>
+          </nav>
+
+          <AdminUsers v-if="tab === 'users'" />
+          <template v-else-if="tab === 'services'">
+            <AdminServices :bridge="bridge" @changed="loadSummary" />
+            <AdminBridge @update="bridge = $event" />
+          </template>
+          <AdminUsage v-else-if="tab === 'usage'" />
+        </template>
       </template>
-      <AdminUsage v-else-if="tab === 'usage'" />
-    </template>
-  </AppShell>
+    </main>
+  </div>
 </template>
 
 <script setup>
-import { computed, onMounted, ref } from 'vue'
-import { RouterLink, useRoute, useRouter } from 'vue-router'
-import AppShell from '../components/AppShell.vue'
+import { computed, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
+import { LogOut, Moon, Sun } from '@lucide/vue'
+import BrandMark from '../components/BrandMark.vue'
 import AdminBridge from './admin/AdminBridge.vue'
 import AdminServices from './admin/AdminServices.vue'
 import AdminUsage from './admin/AdminUsage.vue'
 import AdminUsers from './admin/AdminUsers.vue'
 import { adminApi } from '../api/admin'
 import { errorText } from '../api/web'
+import { clearAdminSession, setAdminSession, useAdminSession } from '../composables/useAdminSession'
+import { useTheme } from '../composables/useTheme'
 import { pushToast } from '../composables/useToasts'
 import { useHead } from '../utils/useHead'
 import { num } from '../utils/format'
@@ -69,8 +113,11 @@ const TABS = [
 
 const route = useRoute()
 const router = useRouter()
-const loading = ref(true)
-const denied = ref(false)
+const { isLoggedIn } = useAdminSession()
+const { isDark, toggleTheme } = useTheme()
+const password = ref('')
+const error = ref('')
+const busy = ref(false)
 const summary = ref(null)
 const bridge = ref(null)
 const tab = ref(TABS.some((t) => t.id === route.query.tab) ? route.query.tab : 'users')
@@ -91,13 +138,37 @@ async function loadSummary() {
   try {
     summary.value = await adminApi.me()
   } catch (err) {
-    if (err.status === 403) denied.value = true
-    else pushToast(errorText(err), 'error')
+    // 401 уже сбросил токен — показываем вход.
+    if (err.status !== 401) pushToast(errorText(err), 'error')
   }
 }
 
-onMounted(async () => {
-  await loadSummary()
-  loading.value = false
-})
+async function login() {
+  busy.value = true
+  error.value = ''
+  try {
+    const data = await adminApi.login(password.value)
+    password.value = ''
+    setAdminSession(data.token)
+  } catch (err) {
+    if (err.status === 429) error.value = 'Слишком много неверных попыток. Попробуйте через 15 минут.'
+    else if (err.status === 401) error.value = 'Неверный пароль.'
+    else error.value = errorText(err)
+  } finally {
+    busy.value = false
+  }
+}
+
+function logout() {
+  clearAdminSession()
+}
+
+watch(
+  isLoggedIn,
+  (on) => {
+    summary.value = null
+    if (on) loadSummary()
+  },
+  { immediate: true },
+)
 </script>

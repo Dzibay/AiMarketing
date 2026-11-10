@@ -15,7 +15,7 @@ from app.config import settings
 from app.main import app
 from app.web_auth import make_session
 from app.yandex import YandexError
-from tests.dbutil import make_account, make_campaign, make_connection, make_user, make_workspace, setup_ai
+from tests.dbutil import admin_headers, make_account, make_campaign, make_connection, make_user, make_workspace, setup_ai
 
 JPEG = b"\xff\xd8\xff" + b"0" * 64
 # Заведомо ненастоящий ключ генератора; заголовки собираем из него, а не пишем строкой.
@@ -213,16 +213,15 @@ def test_api_settings_and_board_generation(db, monkeypatch):
 
     # Генерация картинок — общая, настраивается только в админке.
     assert client.get("/api/web/ai/image-gen", headers=auth).status_code == 404
-    monkeypatch.setattr(settings, "admin_emails", "")
-    assert client.get("/api/admin/images", headers=auth).status_code == 403
-    monkeypatch.setattr(settings, "admin_emails", "u@example.com")
-    put = client.put("/api/admin/images", headers=auth, json={"provider": "openai", "api_key": IMAGE_KEY, "units_per_image": 3})
+    assert client.get("/api/admin/images", headers=auth).status_code == 401
+    admin = admin_headers()
+    put = client.put("/api/admin/images", headers=admin, json={"provider": "openai", "api_key": IMAGE_KEY, "units_per_image": 3})
     assert put.status_code == 200 and put.json()["configured"] and put.json()["units_per_image"] == 3.0
     # PUT без цены её не стирает, null — стирает.
-    assert client.put("/api/admin/images", headers=auth, json={"provider": "openai"}).json()["units_per_image"] == 3.0
-    cleared = client.put("/api/admin/images", headers=auth, json={"provider": "openai", "units_per_image": None}).json()
+    assert client.put("/api/admin/images", headers=admin, json={"provider": "openai"}).json()["units_per_image"] == 3.0
+    cleared = client.put("/api/admin/images", headers=admin, json={"provider": "openai", "units_per_image": None}).json()
     assert cleared["units_per_image"] is None
-    got = client.get("/api/admin/images", headers=auth).json()
+    got = client.get("/api/admin/images", headers=admin).json()
     assert got["has_key"] and got["key_hint"] == "…1234" and [p["id"] for p in got["providers"]] == ["openai", "yandexart"]
 
     monkeypatch.setattr(yandex_module, "get_connection_access_token", lambda conn_id, user_id: "tok")

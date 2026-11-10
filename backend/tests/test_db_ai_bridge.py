@@ -11,7 +11,7 @@ from app.config import settings
 from app.main import app
 from app.web_auth import make_session
 from app.yandex import YandexError
-from tests.dbutil import make_user, setup_ai
+from tests.dbutil import admin_headers, make_user, setup_ai
 
 ACCOUNT = "0123456789abcdef0123456789abcdef"
 GATEWAY = f"https://gateway.ai.cloudflare.com/v1/{ACCOUNT}/aimarketing"
@@ -200,19 +200,18 @@ def test_bridge_api(db, monkeypatch):
     auth = {"Authorization": f"Bearer {make_session(user)}"}
     # Мост — только в админке.
     assert client.get("/api/web/ai/bridge", headers=auth).status_code == 404
-    monkeypatch.setattr(settings, "admin_emails", "")
-    assert client.get("/api/admin/bridge", headers=auth).status_code == 403
-    monkeypatch.setattr(settings, "admin_emails", "Owner@example.com")
-    assert client.get("/api/admin/bridge", headers=auth).json()["enabled"] is False
+    assert client.get("/api/admin/bridge", headers=auth).status_code == 401
+    admin = admin_headers()
+    assert client.get("/api/admin/bridge", headers=admin).json()["enabled"] is False
     res = client.put(
         "/api/admin/bridge",
-        headers=auth,
+        headers=admin,
         json={"enabled": True, "kind": "gateway", "account_id": ACCOUNT, "gateway_id": "aimarketing", "token": "cf-token-123456"},
     )
     assert res.status_code == 200 and res.json()["active"] and "token" not in res.json()
-    bad = client.put("/api/admin/bridge", headers=auth, json={"enabled": True, "kind": "worker"})
+    bad = client.put("/api/admin/bridge", headers=admin, json={"enabled": True, "kind": "worker"})
     assert bad.status_code == 400 and bad.json()["detail"]["code"] == "bridge-incomplete"
-    missing = client.post("/api/admin/bridge/test", headers=auth)
+    missing = client.post("/api/admin/bridge/test", headers=admin)
     assert missing.status_code == 400
 
 

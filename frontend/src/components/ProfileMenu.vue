@@ -15,10 +15,6 @@
         <Settings aria-hidden="true" />
         Настройки
       </RouterLink>
-      <RouterLink v-if="user?.is_admin" class="menu-item" role="menuitem" to="/admin-panel" @click="open = false">
-        <Shield aria-hidden="true" />
-        Админка
-      </RouterLink>
       <button class="menu-item is-danger" type="button" role="menuitem" @click="$emit('logout')">
         <LogOut aria-hidden="true" />
         Выйти
@@ -30,7 +26,7 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { RouterLink } from 'vue-router'
-import { ChevronDown, LogOut, Settings, Shield } from '@lucide/vue'
+import { ChevronDown, LogOut, Settings } from '@lucide/vue'
 import { useProfile } from '../composables/useProfile'
 
 defineEmits(['logout'])
