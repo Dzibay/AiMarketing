@@ -6,6 +6,8 @@ COPY frontend/package.json frontend/package-lock.json* ./
 RUN npm install
 
 COPY frontend/ ./
+# On small VPSes the build can exceed RAM; cap the V8 heap so it spills into swap instead of being OOM-killed.
+ENV NODE_OPTIONS=--max-old-space-size=1536
 RUN npm run build
 
 FROM nginx:1.27-alpine
