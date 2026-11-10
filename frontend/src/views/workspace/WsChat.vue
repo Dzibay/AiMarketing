@@ -1,6 +1,6 @@
 <template>
   <div class="chat" :class="build ? ['chat--board', `is-tab-${tab}`, { 'is-chats-open': chatsOpen }] : null">
-    <aside class="chat__side panel" aria-label="Чаты пространства">
+    <aside class="chat__side panel" :aria-label="general ? 'Общие чаты' : 'Чаты проекта'">
       <button class="btn btn--accent chat__new" type="button" :disabled="sending" @click="newChat">Новый чат</button>
       <p v-if="chatsError" class="empty">{{ chatsError }}</p>
       <p v-else-if="!chats.length" class="hint">Чатов пока нет.</p>
@@ -8,7 +8,7 @@
         <RouterLink
           v-for="c in chats"
           :key="c.id"
-          :to="`/w/${ws.id}/chat/${c.id}`"
+          :to="`${basePath}/${c.id}`"
           class="chat__item"
           :class="{ active: c.id === chatId }"
         >
@@ -34,7 +34,7 @@
             Чаты
           </button>
           <button
-            v-if="!isFirst"
+            v-if="!isFirst && !general"
             class="btn"
             type="button"
             :disabled="!canReview"
@@ -43,11 +43,17 @@
           >
             {{ reviewing ? 'Запускаем…' : 'Разбор' }}
           </button>
-          <label class="switch" :title="access.full_access ? 'Выключить полный доступ' : 'Включить полный доступ'">
+          <label
+            v-if="!general"
+            class="switch"
+            :title="access.full_access ? 'Выключить полный доступ' : 'Включить полный доступ'"
+          >
             <input type="checkbox" :checked="access.full_access" :disabled="accessBusy" @change="toggleFullAccess($event)" />
             <span>Полный доступ</span>
           </label>
-          <RouterLink class="btn btn--ghost" :to="{ path: `/w/${ws.id}/settings`, hash: '#ai' }">Права ИИ</RouterLink>
+          <RouterLink v-if="!general" class="btn btn--ghost" :to="{ path: `/w/${ws.id}/settings`, hash: '#ai' }">
+            Права ИИ
+          </RouterLink>
           <template v-if="chat">
             <button class="btn btn--ghost" type="button" @click="renameChat">Переименовать</button>
             <button class="btn btn--ghost btn--danger" type="button" @click="deleteChat">Удалить</button>
@@ -73,18 +79,27 @@
         <p v-else-if="chatId && !data" class="empty">Загружаем чат…</p>
 
         <div v-else-if="!items.length" class="chat__intro">
-          <h3>Чем помочь с «{{ ws.name }}»?</h3>
-          <p v-if="isFirst" class="hint">
+          <template v-if="general">
+            <h3>Чем помочь по всем проектам?</h3>
+            <p class="hint">
+              ИИ читает статистику, кампании, фразы, объявления и запросы любого вашего проекта и сравнивает их между
+              собой. Правки он предлагает карточками — каждая выполняется только после вашего подтверждения. Новую
+              кампанию удобнее собирать в чате самого проекта: там доска сборки. Напишите @, чтобы указать проект.
+            </p>
+          </template>
+          <h3 v-else>Чем помочь с «{{ ws.name }}»?</h3>
+          <p v-if="general" hidden></p>
+          <p v-else-if="isFirst" class="hint">
             Кампаний здесь пока нет, поэтому разбирать нечего. ИИ соберёт первую по этапам — цели, анализ спроса,
             группы и фразы, объявления, настройки. Рядом с чатом появится доска кампании: на ней вы согласуете
             этапы, поправите фразы, заголовки и тексты и увидите объявление в выдаче. Любое изменение в Директе ИИ
             сначала покажет вам.
           </p>
           <p v-else class="hint">
-            ИИ видит статистику, кампании, ключевые фразы, объявления и поисковые запросы этого пространства. Любое
+            ИИ видит статистику, кампании, ключевые фразы, объявления и поисковые запросы этого проекта. Любое
             изменение в Директе он сначала покажет вам на согласование.
           </p>
-          <div class="chat__review">
+          <div v-if="!general" class="chat__review">
             <button
               v-if="isFirst"
               class="btn btn--accent"
@@ -95,7 +110,7 @@
               Собрать первую кампанию
             </button>
             <button v-else class="btn btn--accent" type="button" :disabled="!canReview" @click="startReview()">
-              {{ reviewing ? 'Запускаем…' : 'Разбор пространства' }}
+              {{ reviewing ? 'Запускаем…' : 'Разбор проекта' }}
             </button>
             <span v-if="isFirst" class="hint">
               ИИ задаст вопросы по продукту, гео, бюджету и цели, изучит спрос в Вордстате и предложит направления.
@@ -111,7 +126,7 @@
             <h4 class="chat__subhead">Заметил в данных</h4>
             <div class="chat__suggestions">
               <template v-for="s in signals.suggestions" :key="`${s.kind}${s.account_id || ''}${s.experiment_id || ''}`">
-                <RouterLink v-if="!s.prompt" class="quick-action quick-action--warn" to="/cabinet/accounts">
+                <RouterLink v-if="!s.prompt" class="quick-action quick-action--warn" to="/cabinet/connections">
                   <strong>{{ s.title }}</strong>
                   <small>{{ s.detail }}</small>
                 </RouterLink>
@@ -215,6 +230,7 @@
                 <div class="action-card__head">
                   <strong>{{ a.label }}</strong>
                   <span class="chip" :class="STATUS_CHIPS[a.status]">{{ STATUS_LABELS[a.status] || a.status }}</span>
+                  <span v-if="projectName(a)" class="chip chip--project">{{ projectName(a) }}</span>
                   <span v-if="a.plan_step" class="chip">шаг {{ a.plan_step }} плана</span>
                   <span v-if="a.auto" class="chip">без согласования</span>
                 </div>
@@ -255,7 +271,10 @@
                   </button>
                   <button class="btn btn--ghost" type="button" :disabled="deciding" @click="decide(a, false)">Отклонить</button>
                   <span v-if="allOff(a)" class="hint">Сняты все строки — отклоните действие</span>
-                  <label v-if="a.categories?.length && !a.categories.some((c) => c.id === 'destructive')" class="check-row">
+                  <label
+                    v-if="!general && a.categories?.length && !a.categories.some((c) => c.id === 'destructive')"
+                    class="check-row"
+                  >
                     <input v-model="remember[a.id]" type="checkbox" />
                     <span>Больше не спрашивать для «{{ a.categories.map((c) => c.label).join('», «') }}»</span>
                   </label>
@@ -333,8 +352,8 @@
             v-if="otherProjects.length"
             class="icon-btn"
             type="button"
-            title="Сослаться на другой проект"
-            aria-label="Сослаться на другой проект"
+            :title="general ? 'Указать проект' : 'Сослаться на другой проект'"
+            :aria-label="general ? 'Указать проект' : 'Сослаться на другой проект'"
             :disabled="status === 'running' || !aiConfigured"
             @mousedown.prevent
             @click="insertAt"
@@ -373,6 +392,7 @@ import { AtSign } from '@lucide/vue'
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
 import { aiApi, errorText, wsApi } from '../../api/web'
+import { refreshPending } from '../../composables/usePending'
 import { pushToast } from '../../composables/useToasts'
 import { loadWorkspaces, useWorkspaces } from '../../composables/useWorkspaces'
 import { formatDateTime } from '../../utils/format'
@@ -394,11 +414,28 @@ const SUGGESTIONS = [
   'Почисти поисковые запросы: предложи минус-фразы',
   'Составь план оптимизации на неделю',
 ]
-// В пространстве без кампаний нет ни статистики, ни запросов: спрашивать про них нечего.
+// В проекте без кампаний нет ни статистики, ни запросов: спрашивать про них нечего.
 const FIRST_SUGGESTIONS = [
   'Помоги заполнить бриф: продукт, оффер, гео, бюджет и цель',
   'Какую стратегию и какой бюджет выбрать для первой кампании?',
 ]
+// Общий чат: ИИ сравнивает проекты и предлагает правки в любом из них.
+const GENERAL_SUGGESTIONS = [
+  'Сравни проекты за последние 7 дней: расход, конверсии, CPA',
+  'Где во всех проектах сливается бюджет без конверсий?',
+  'Какие проекты выбиваются из KPI и почему?',
+  'Найди кампании, которые стоит остановить, и те, что стоит масштабировать',
+  'Составь план работ на неделю по всем проектам',
+]
+// Общий чат живёт вне проекта: заглушка вместо проекта, чтобы шаблон не ветвился на каждом шаге.
+const GENERAL_WS = {
+  id: null,
+  name: 'Все проекты',
+  site: '',
+  ai_access: { full_access: false, categories: {}, max_change_pct: 30 },
+  ai_categories: [],
+  campaigns_count: 1,
+}
 const STATUS_LABELS = {
   pending: 'ждёт решения',
   approved: 'выполняется',
@@ -409,9 +446,18 @@ const STATUS_LABELS = {
 const STATUS_CHIPS = { pending: 'chip--warning', done: 'chip--ok', error: 'chip--bad' }
 const STATUS_TONES = { pending: 'tone-warn', done: 'tone-ok', error: 'tone-bad' }
 
+const props = defineProps({
+  // Общий чат по всем проектам (раздел «ИИ-помощник» при «Все проекты»).
+  general: { type: Boolean, default: false },
+})
+
 const route = useRoute()
 const router = useRouter()
-const { ws, patch, reload: reloadWs } = useWs()
+const wsCtx = props.general ? null : useWs()
+const ws = props.general ? ref(GENERAL_WS) : wsCtx.ws
+const patch = (fields) => wsCtx?.patch(fields)
+const reloadWs = () => wsCtx?.reload()
+const basePath = computed(() => (props.general ? '/cabinet/chat' : `/w/${ws.value.id}/chat`))
 const { workspaces } = useWorkspaces()
 
 const chats = ref([])
@@ -474,7 +520,7 @@ const tab = ref('chat')
 // набранные руками находим по названию в тексте при отправке.
 const mentions = ref([])
 const picker = reactive({ open: false, index: 0, items: [], start: 0, end: 0 })
-const otherProjects = computed(() => workspaces.value.filter((w) => w.id !== ws.value.id && !w.archived))
+const otherProjects = computed(() => workspaces.value.filter((w) => w.id !== ws.value.id && !w.archived && !w.locked))
 loadWorkspaces().catch(() => null)
 
 const accessText = computed(() => {
@@ -534,7 +580,7 @@ const placeholder = computed(() => {
       : 'Ответьте в карточке или напишите своими словами'
   }
   if (pendingWrites.value.length) return 'Новое сообщение отклонит действия, которые ждут решения'
-  const tip = otherProjects.value.length ? ', @ — сослаться на другой проект' : ''
+  const tip = otherProjects.value.length ? (props.general ? ', @ — указать проект' : ', @ — сослаться на другой проект') : ''
   return `Задача для ИИ: проанализировать, найти проблемы, создать, поправить… (Enter — отправить, Shift+Enter — новая строка${tip})`
 })
 const canSend = computed(
@@ -545,7 +591,17 @@ const canReview = computed(
 )
 // Первая кампания: «Разбор» и сигналы без данных пусты, вместо них — сборка по этапам.
 const isFirst = computed(() => !ws.value.campaigns_count)
-const starters = computed(() => (isFirst.value ? [NEW_CAMPAIGN_PROMPT, ...FIRST_SUGGESTIONS] : SUGGESTIONS))
+const starters = computed(() => {
+  if (props.general) return GENERAL_SUGGESTIONS
+  return isFirst.value ? [NEW_CAMPAIGN_PROMPT, ...FIRST_SUGGESTIONS] : SUGGESTIONS
+})
+
+/** Проект карточки действия в общем чате — чтобы не перепутать, где ИИ что-то меняет. */
+function projectName(action) {
+  if (!props.general) return ''
+  const id = action.args?.project_id
+  return id == null ? '' : data.value?.projects?.[String(id)] || `проект ${id}`
+}
 const canSendStarter = computed(() => !sending.value && status.value !== 'running' && aiConfigured.value)
 
 const thinkingText = computed(() => {
@@ -760,6 +816,7 @@ function schedulePoll() {
 async function loadSignals() {
   signalsError.value = ''
   try {
+    if (props.general) return
     signals.value = await aiApi.signals(ws.value.id)
   } catch (err) {
     signalsError.value = errorText(err)
@@ -769,7 +826,7 @@ async function loadSignals() {
 async function loadChats() {
   chatsError.value = ''
   try {
-    const res = await aiApi.chats(ws.value.id)
+    const res = props.general ? await aiApi.generalChats() : await aiApi.chats(ws.value.id)
     chats.value = res.items || []
   } catch (err) {
     chatsError.value = errorText(err)
@@ -927,10 +984,12 @@ async function send(text) {
   try {
     let id = chatId.value
     if (!id) {
-      const created = await aiApi.createChat(ws.value.id, '', pickedClass.value)
+      const created = props.general
+        ? await aiApi.createGeneralChat('', pickedClass.value)
+        : await aiApi.createChat(ws.value.id, '', pickedClass.value)
       id = created.id
       chats.value = [created, ...chats.value]
-      await router.replace({ path: `/w/${ws.value.id}/chat/${id}` })
+      await router.replace({ path: `${basePath.value}/${id}` })
     }
     // Подсказки-стартеры — готовый текст без упоминаний.
     await aiApi.send(id, message, text == null ? usedMentions(message).map((m) => m.id) : [])
@@ -986,7 +1045,7 @@ async function startReview(card = null) {
     stickToBottom = true
     if (id !== chatId.value) {
       const go = chatId.value ? router.push : router.replace
-      await go({ path: `/w/${ws.value.id}/chat/${id}` })
+      await go({ path: `${basePath.value}/${id}` })
     }
     await loadChat(id)
   } catch (err) {
@@ -1074,7 +1133,7 @@ function newChat() {
   stopPolling()
   data.value = null
   draft.value = ''
-  router.push(`/w/${ws.value.id}/chat`)
+  router.push(basePath.value)
   nextTick(() => input.value?.focus())
 }
 
@@ -1107,15 +1166,15 @@ async function deleteChat() {
 function askPrompt(q) {
   switch (q.ask) {
     case 'problems':
-      return 'Разбери проблемы пространства из сводки: где сливается бюджет, что с KPI и темпом расхода. Дай конкретные действия по важности.'
+      return 'Разбери проблемы проекта из сводки: где сливается бюджет, что с KPI и темпом расхода. Дай конкретные действия по важности.'
     case 'analytics':
       return `Проанализируй аналитику за период ${q.from || ''} — ${q.to || ''}: динамика расхода, конверсий и CPA, что изменилось и почему, какие кампании тянут результат вниз. Дай рекомендации.`
     case 'campaign':
       return `Разбери кампанию${q.name ? ` «${q.name}»` : ''} (campaign_row_id ${q.cid}): настройки и стратегия, структура, ключевые фразы, объявления, поисковые запросы и статистика. Найди проблемы и предложи правки.`
     case 'audit':
-      return 'Проведи аудит всех кампаний пространства: структура, стратегии и бюджеты, минус-фразы, объявления, поисковые запросы, расход без конверсий. Дай список проблем по важности и план правок.'
+      return 'Проведи аудит всех кампаний проекта: структура, стратегии и бюджеты, минус-фразы, объявления, поисковые запросы, расход без конверсий. Дай список проблем по важности и план правок.'
     case 'experiment':
-      return 'Предложи эксперимент: какую гипотезу стоит проверить в этом пространстве — перезапуск копией, новое гео, другие ключи или тип кампании, — на каких кампаниях и почему. Опирайся на то, что уже работает, и на прошлые эксперименты.'
+      return 'Предложи эксперимент: какую гипотезу стоит проверить в этом проекте — перезапуск копией, новое гео, другие ключи или тип кампании, — на каких кампаниях и почему. Опирайся на то, что уже работает, и на прошлые эксперименты.'
     case 'headlines':
       return `Масштабируй выгодные заголовки${q.name ? ` кампании «${q.name}»` : ''}${q.cid ? ` (campaign_row_id ${q.cid})` : ''}: разбери статистику заголовков и конверсии по ключевой цели, покажи лучшие и предложи тест с похожими заголовками. Согласуй каждый шаг.`
     case 'links':
@@ -1125,10 +1184,27 @@ function askPrompt(q) {
   }
 }
 
+/** Вопросы из разделов «Все проекты» — в общий чат. */
+function generalAskPrompt(q) {
+  switch (q.ask) {
+    case 'analytics':
+      return 'Сравни проекты за последнюю неделю: где растёт расход без конверсий, у кого CPA или ДРР хуже KPI, какие кампании тянут результат вниз. Дай по каждому проекту главное действие.'
+    // Первые вопросы из мастера «Начало работы».
+    case 'first':
+      return 'Посмотри мои проекты и кампании и скажи, с чего начать: где теряются деньги, что настроено не так и какие три действия дадут результат быстрее всего.'
+    case 'cleanup':
+      return 'Найди по всем проектам поисковые запросы, которые тратят деньги без конверсий, и предложи минус-фразы для них.'
+    case 'kpi':
+      return 'Проверь, в каких проектах не выбрана цель Метрики, не задан KPI или месячный бюджет, и предложи значения по данным за последний месяц.'
+    default:
+      return ''
+  }
+}
+
 async function handleAsk() {
-  const prompt = askPrompt(route.query)
+  const prompt = props.general ? generalAskPrompt(route.query) : askPrompt(route.query)
   if (!prompt) return
-  await router.replace({ path: `/w/${ws.value.id}/chat` })
+  await router.replace({ path: basePath.value })
   try {
     fillModels(await aiApi.models())
   } catch {
@@ -1138,12 +1214,18 @@ async function handleAsk() {
   else draft.value = prompt
 }
 
+// Счётчик «Ждёт решения» в шапке: в чате появились карточки без решения или решение принято.
+watch(
+  () => (data.value?.actions || []).filter((a) => a.status === 'pending').length,
+  () => refreshPending(),
+)
+
 // Пустой открытый чат или новый: тогда и считаем сигналы — один раз за визит.
 const showIntro = computed(() => !loadError.value && !items.value.length && (!chatId.value || !!chat.value))
 watch(
   showIntro,
   (show) => {
-    if (show && !isFirst.value && !signals.value && !signalsError.value) loadSignals()
+    if (show && !props.general && !isFirst.value && !signals.value && !signalsError.value) loadSignals()
   },
   { immediate: true },
 )

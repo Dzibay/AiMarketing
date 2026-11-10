@@ -84,8 +84,8 @@
     </div>
 
     <div v-if="mode === 'library'" class="board-imgs__panel">
-      <p v-if="library === null" class="hint"><span class="spinner" /> Ищу картинки в кампаниях пространства…</p>
-      <p v-else-if="!library.length" class="hint">В объявлениях кампаний пространства картинок нет.</p>
+      <p v-if="library === null" class="hint"><span class="spinner" /> Ищу картинки в кампаниях проекта…</p>
+      <p v-else-if="!library.length" class="hint">В объявлениях кампаний проекта картинок нет.</p>
       <template v-else>
         <div class="board-imgs__grid">
           <button
@@ -141,7 +141,7 @@
 <script setup>
 /**
  * Картинки группы на доске: превью с галочками ждущей таблицы и «убрать»; добавить — загрузить свои,
- * взять из объявлений других кампаний пространства или сгенерировать по описанию (если API подключён).
+ * взять из объявлений других кампаний проекта или сгенерировать по описанию (если API подключён).
  * Загруженное и сгенерированное ложится в библиотеку кабинета, на доску — правкой по хэшу.
  */
 import { computed, inject, ref } from 'vue'

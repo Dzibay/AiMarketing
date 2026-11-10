@@ -54,7 +54,7 @@
       <span class="cell-note">расход {{ rubles(data.new_cost_rub) }}</span>
     </div>
     <div class="stat-card">
-      <small>Предложено в минус</small>
+      <small>Предложено в минус<TermHint term="minus" /></small>
       <strong :class="{ 'tone-bad': counts.negative }">{{ num(counts.negative) }}</strong>
       <span class="cell-note">слили {{ rubles(data.negative_cost_rub) }} за период</span>
     </div>
@@ -143,7 +143,7 @@
       <button class="btn btn--ghost" type="button" @click="load()">Повторить</button>
     </div>
     <div v-else-if="!campaigns.length" class="empty">
-      В пространстве нет поисковых кампаний — чистить нечего. Добавьте кампании в
+      В проекте нет поисковых кампаний — чистить нечего. Добавьте кампании в
       <RouterLink :to="`/w/${ws.id}/settings`">настройках</RouterLink>.
     </div>
     <div v-else-if="!counts.all && !hasFilters" class="empty">
@@ -497,6 +497,7 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
 import Modal from '../../components/ui/Modal.vue'
+import TermHint from '../../components/TermHint.vue'
 import UndoDialog from '../../components/UndoDialog.vue'
 import { errorText, jobProgressText, wsApi } from '../../api/web'
 import { askConfirm } from '../../composables/useConfirm'

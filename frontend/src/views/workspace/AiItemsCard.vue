@@ -84,7 +84,7 @@ import AiCheckTable from './AiCheckTable.vue'
 const props = defineProps({
   action: { type: Object, required: true },
   disabled: { type: Boolean, default: false },
-  // Сайт пространства — домен в предпросмотре объявлений.
+  // Сайт проекта — домен в предпросмотре объявлений.
   site: { type: String, default: '' },
 })
 const emit = defineEmits(['submit'])

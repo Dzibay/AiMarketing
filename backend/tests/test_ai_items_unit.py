@@ -12,7 +12,8 @@ ACCOUNT = {"id": 3, "client_login": "acc-a", "name": "Кабинет"}
 
 
 class FakeContext:
-    """Context без БД: пространство с одним кабинетом; chat_id — чат, где идёт работа."""
+    """Context без БД: проект с одним кабинетом; chat_id — чат, где идёт работа."""
+    general = False  # чат проекта, не общий
 
     require_account = ai_agent.Context.require_account
 

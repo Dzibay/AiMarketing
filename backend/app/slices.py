@@ -1,4 +1,4 @@
-"""Срезы статистики пространства и действия по ним.
+"""Срезы статистики проекта и действия по ним.
 
 Площадки РСЯ, устройства, пол и возраст, регионы — отчётом Директа (CUSTOM_REPORT) по выбранным
 кампаниям; время суток — из Метрики (в Директе нет разбивки по часам): визиты и цели по часу визита
@@ -109,10 +109,10 @@ def _campaigns(user_id: int, workspace_id: int, campaign_ids: list[int] | None) 
             (workspace_id, user_id, ids, ids),
         ).fetchall()
     if ids and len(rows) != len(set(ids)):
-        raise YandexError("not-found", "Часть кампаний не входит в пространство")
+        raise YandexError("not-found", "Часть кампаний не входит в проект")
     rows = [r for r in rows if r["enabled"]]
     if not rows:
-        raise YandexError("empty", "В пространстве нет кампаний из включённых кабинетов")
+        raise YandexError("empty", "В проекте нет кампаний из включённых кабинетов")
     if len(rows) > CAMPAIGNS_MAX:
         raise YandexError("limit", f"За раз — до {CAMPAIGNS_MAX} кампаний")
     return rows
@@ -343,14 +343,14 @@ def _direct_slice(ws: dict, campaigns: list[dict], dimension: str, date_from, da
 
 def _hour_slice(user_id: int, ws: dict, campaigns: list[dict], date_from, date_to) -> dict[str, dict]:
     if not ws.get("counter_row_id"):
-        raise YandexError("metrika", "У пространства нет счётчика Метрики — время суток считается по нему")
+        raise YandexError("metrika", "У проекта нет счётчика Метрики — время суток считается по нему")
     with pool.connection() as conn:
         counter = conn.execute(
             "SELECT connection_id, counter_id FROM metrika_counters WHERE id = %s AND user_id = %s",
             (ws["counter_row_id"], user_id),
         ).fetchone()
     if counter is None:
-        raise YandexError("metrika", "Счётчик пространства не найден")
+        raise YandexError("metrika", "Счётчик проекта не найден")
     token = get_connection_access_token(counter["connection_id"], user_id)
     goal = int(ws["goal_id"]) if ws.get("goal_id") else None
     goal_metric = f"ym:s:goal{goal}reaches" if goal else "ym:s:anyGoalReaches"

@@ -204,7 +204,7 @@
               <th class="num">CTR</th>
               <th class="num">Расход</th>
               <th class="num">Конв.</th>
-              <th class="num">CPA</th>
+              <th class="num">CPA<TermHint term="cpa" /></th>
               <th>Почему</th>
             </tr>
           </thead>
@@ -266,6 +266,7 @@ import { pushToast } from '../../composables/useToasts'
 import { aiUsageText, formatDate, num, pct, plural, rub } from '../../utils/format'
 import { useWs } from './context'
 import HeadlinesPanel from './HeadlinesPanel.vue'
+import TermHint from '../../components/TermHint.vue'
 
 const AI_MAX = 20
 const LIMITS = { title: 56, title2: 30, text: 81, word: 22 }

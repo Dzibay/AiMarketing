@@ -2,7 +2,7 @@
   <section class="panel">
     <div class="panel__head">
       <div>
-        <h2>Пространство</h2>
+        <h2>Проект</h2>
         <p class="hint">
           Счётчик Метрики № {{ ws.counter_id }}{{ ws.counter_name ? ` · ${ws.counter_name}` : '' }}{{
             ws.counter_login ? ` · доступ через ${ws.counter_login}` : ''
@@ -12,7 +12,7 @@
     </div>
     <p v-if="!ws.counter_ok" class="notice notice--warn">
       Счётчик не найден среди включённых в подключениях Яндекса — статистика сайта не обновляется. Проверьте доступы в
-      <RouterLink to="/cabinet/accounts">аккаунтах</RouterLink>.
+      <RouterLink to="/cabinet/connections">подключениях</RouterLink>.
     </p>
     <form class="form-grid" @submit.prevent="saveGeneral">
       <div v-field class="field">
@@ -27,9 +27,9 @@
         <label>Папка клиента</label>
         <select v-model="general.client_id">
           <option :value="null">Без клиента</option>
-          <option v-for="c in clients" :key="c.id" :value="c.id">{{ c.name }}</option>
+          <option v-for="c in clientOptions" :key="c.id" :value="c.id">{{ c.name }}{{ c.archived ? ' (в архиве)' : '' }}</option>
         </select>
-        <small class="field-hint"><RouterLink to="/cabinet/clients">Папки клиентов</RouterLink></small>
+        <small class="field-hint">Новый клиент и его общий бюджет — в блоке «Клиент» ниже.</small>
       </div>
       <div v-field class="field">
         <label>Бюджет на месяц, ₽</label>
@@ -37,7 +37,7 @@
         <small class="field-hint">Сводка покажет темп расхода относительно плана.</small>
       </div>
       <div v-field class="field">
-        <label>KPI</label>
+        <label>KPI<TermHint term="cpa" /><TermHint term="drr" /></label>
         <select v-model="general.kpi_type">
           <option value="">Не задан</option>
           <option value="cpa">CPA — цена конверсии, ₽</option>
@@ -83,13 +83,92 @@
 
   <ContextFilesPanel />
 
+  <section class="panel" id="client">
+    <div class="panel__head">
+      <div>
+        <h2>Клиент</h2>
+        <p class="hint">
+          Клиент объединяет проекты в переключателе и сводке. Общий бюджет клиента на месяц сверяется с суммой расходов
+          всех его проектов.
+        </p>
+      </div>
+    </div>
+
+    <template v-if="currentClient">
+      <form class="form-grid" @submit.prevent="saveClient">
+        <div v-field class="field">
+          <label>Название клиента</label>
+          <input v-model.trim="clientEdit.name" type="text" required maxlength="200" />
+        </div>
+        <div v-field class="field">
+          <label>Общий бюджет в месяц, ₽</label>
+          <input v-model="clientEdit.monthly_budget_rub" type="number" min="0" step="1000" placeholder="не задан" />
+        </div>
+        <div v-field class="field field--wide">
+          <label>Заметки</label>
+          <textarea v-model="clientEdit.notes" rows="3" maxlength="5000" placeholder="Контакты, договорённости, особенности"></textarea>
+        </div>
+        <div class="form-actions">
+          <button class="btn btn--accent" type="submit" :disabled="clientBusy || !clientChanged">Сохранить клиента</button>
+          <button class="btn btn--ghost" type="button" :disabled="clientBusy" @click="detachClient">Убрать проект от клиента</button>
+          <button class="btn btn--ghost" type="button" :disabled="clientBusy" @click="archiveClient(currentClient, !currentClient.archived)">
+            {{ currentClient.archived ? 'Вернуть из архива' : 'В архив' }}
+          </button>
+          <button class="btn btn--ghost btn--danger" type="button" :disabled="clientBusy" @click="removeClient(currentClient)">
+            Удалить клиента
+          </button>
+        </div>
+      </form>
+      <p class="hint">
+        Проекты клиента:
+        <template v-for="(w, i) in clientProjects" :key="w.id">
+          <template v-if="i">, </template>
+          <strong v-if="w.id === ws.id">{{ w.name }}</strong>
+          <RouterLink v-else :to="`/w/${w.id}/settings`">{{ w.name }}</RouterLink>
+        </template>
+      </p>
+    </template>
+
+    <template v-else>
+      <p class="hint">Проект без клиента. Выберите клиента в блоке «Проект» или создайте нового — проект сразу войдёт в него.</p>
+      <form class="filters" @submit.prevent="createClient">
+        <div v-field class="field field--wide">
+          <label>Новый клиент</label>
+          <input v-model.trim="clientDraft.name" type="text" required maxlength="200" placeholder="ООО «Ромашка»" />
+        </div>
+        <div v-field class="field">
+          <label>Общий бюджет в месяц, ₽</label>
+          <input v-model="clientDraft.monthly_budget_rub" type="number" min="0" step="1000" placeholder="не задан" />
+        </div>
+        <button class="btn btn--accent" type="submit" :disabled="clientBusy">Создать и привязать</button>
+      </form>
+    </template>
+
+    <template v-if="archivedClients.length">
+      <h3 class="subhead">Клиенты в архиве</h3>
+      <div class="list">
+        <div v-for="c in archivedClients" :key="c.id" class="list-row is-off">
+          <div>
+            <strong>{{ c.name }}</strong>
+          </div>
+          <div class="row-actions">
+            <button class="btn btn--ghost" type="button" :disabled="clientBusy" @click="archiveClient(c, false)">Вернуть</button>
+            <button class="btn btn--ghost btn--danger" type="button" :disabled="clientBusy" @click="removeClient(c)">
+              Удалить
+            </button>
+          </div>
+        </div>
+      </div>
+    </template>
+  </section>
+
   <section class="panel">
     <div class="panel__head">
       <div>
         <h2>Кабинеты Директа</h2>
         <p class="hint">
-          Кабинеты, из которых пространство берёт кампании и в которых создаёт новые. Новые логины Яндекса добавляются в
-          <RouterLink to="/cabinet/accounts">аккаунтах</RouterLink>.
+          Кабинеты, из которых проект берёт кампании и в которых создаёт новые. Новые логины Яндекса добавляются в
+          <RouterLink to="/cabinet/connections">подключениях</RouterLink>.
         </p>
       </div>
     </div>
@@ -104,7 +183,7 @@
           </strong>
           <small>
             {{ a.client_login }}<template v-if="a.connection_login"> · вход {{ a.connection_login }}</template> ·
-            кампаний в пространстве {{ a.campaigns_in_workspace }} из {{ a.campaigns_total }}
+            кампаний в проекте {{ a.campaigns_in_workspace }} из {{ a.campaigns_total }}
             <template v-if="a.balance_kopecks != null"> · баланс {{ rub(a.balance_kopecks) }}</template>
           </small>
           <small v-if="a.counter_access?.hint" :class="COUNTER_TONES[a.counter_access.status]">
@@ -142,9 +221,9 @@
   <section class="panel">
     <div class="panel__head">
       <div>
-        <h2>Кампании пространства</h2>
+        <h2>Кампании проекта</h2>
         <p class="hint">
-          Отметьте кампании, с которыми работает пространство. Кампания живёт в одном пространстве — отметка здесь
+          Отметьте кампании, с которыми работает проект. Кампания живёт в одном проекте — отметка здесь
           перенесёт её из другого.
         </p>
       </div>
@@ -171,7 +250,7 @@
     <p v-else-if="candidatesError" class="empty">{{ candidatesError }}</p>
     <p v-else-if="!groups.length" class="empty">
       В подключённых логинах нет кампаний Директа. Обновите кабинеты в
-      <RouterLink to="/cabinet/accounts">аккаунтах</RouterLink>.
+      <RouterLink to="/cabinet/connections">подключениях</RouterLink>.
     </p>
     <template v-else>
       <div v-for="g in visibleGroups" :key="g.account_id" class="campaign-picker">
@@ -213,7 +292,7 @@
         <template v-if="diff.add.length">Добавить {{ diff.add.length }}</template>
         <template v-if="diff.add.length && diff.remove.length">, </template>
         <template v-if="diff.remove.length">убрать {{ diff.remove.length }}</template>
-        <template v-if="diff.moving"> (перенос из других пространств: {{ diff.moving }})</template>
+        <template v-if="diff.moving"> (перенос из других проектов: {{ diff.moving }})</template>
       </span>
       <button class="btn btn--ghost" type="button" :disabled="campaignsBusy" @click="resetSelection">Сбросить</button>
       <button class="btn btn--accent" type="button" :disabled="campaignsBusy" @click="saveCampaigns">
@@ -237,7 +316,7 @@
         <input v-model="ai.full_access" type="checkbox" />
         <span>
           <strong>Полный доступ</strong>
-          <small>ИИ выполняет любые действия в рамках пространства без согласования. Удаление — тоже.</small>
+          <small>ИИ выполняет любые действия в рамках проекта без согласования. Удаление — тоже.</small>
         </span>
       </label>
       <fieldset class="ai-access__cats" :disabled="ai.full_access">
@@ -275,7 +354,7 @@
           maxlength="8000"
           placeholder="Ниша, сезонность, что нельзя трогать, приоритетные регионы, тон объявлений…"
         />
-        <small class="field-hint">ИИ читает это перед каждым ответом в чате этого пространства.</small>
+        <small class="field-hint">ИИ читает это перед каждым ответом в чате этого проекта.</small>
       </div>
       <p v-if="aiError" class="form-error">{{ aiError }}</p>
       <div class="form-actions">
@@ -287,7 +366,7 @@
     <div class="ai-facts">
       <h3>Что ИИ запомнил</h3>
       <p class="hint">
-        Ваши ответы из чата — например, как устроена схема конверсий за 0 ₽. ИИ учитывает их в каждом чате пространства
+        Ваши ответы из чата — например, как устроена схема конверсий за 0 ₽. ИИ учитывает их в каждом чате проекта
         и не переспрашивает. Устаревший ответ забудьте — ИИ спросит снова.
       </p>
       <p v-if="!ws.ai_facts?.length" class="hint">Пока ничего: ИИ запоминает только то, что вы сами ответили или подтвердили.</p>
@@ -309,12 +388,12 @@
   <section class="panel">
     <div class="panel__head">
       <div>
-        <h2>{{ ws.archived ? 'Пространство в архиве' : 'Архив' }}</h2>
+        <h2>{{ ws.archived ? 'Проект в архиве' : 'Архив' }}</h2>
         <p class="hint">
           {{
             ws.archived
-              ? 'Пространство скрыто из переключателя и обзора. Кампании и история сохранены.'
-              : 'Архивное пространство скрыто из переключателя и обзора; кампании в Директе не меняются.'
+              ? 'Проект скрыт из переключателя и обзора. Кампании и история сохранены.'
+              : 'Архивный проект скрыт из переключателя и обзора; кампании в Директе не меняются.'
           }}
         </p>
       </div>
@@ -337,11 +416,12 @@ import BriefPanel from './BriefPanel.vue'
 import ContextFilesPanel from './ContextFilesPanel.vue'
 import LinkTemplatePanel from './LinkTemplatePanel.vue'
 import { useWs } from './context'
+import TermHint from '../../components/TermHint.vue'
 
 const COUNTER_TONES = { ok: 'tone-ok', unknown: 'tone-warn' }
 
 const { ws, reload, patch } = useWs()
-const { clients } = useWorkspaces()
+const { clients, workspaces } = useWorkspaces()
 
 // --- Основное ---------------------------------------------------------------------------------
 
@@ -401,6 +481,99 @@ async function saveGeneral() {
   }
 }
 
+// --- Клиент (бывшая страница «Клиенты») ---------------------------------------------------------
+
+const clientOptions = computed(() => clients.value.filter((c) => !c.archived || c.id === general.client_id))
+const archivedClients = computed(() => clients.value.filter((c) => c.archived && c.id !== ws.value.client_id))
+const currentClient = computed(() => clients.value.find((c) => c.id === ws.value.client_id) || null)
+const clientProjects = computed(() => workspaces.value.filter((w) => w.client_id === ws.value.client_id))
+const clientBusy = ref(false)
+const clientDraft = reactive({ name: '', monthly_budget_rub: '' })
+const clientEdit = reactive({ name: '', monthly_budget_rub: '', notes: '' })
+
+function clientFields(c) {
+  return { name: c?.name || '', monthly_budget_rub: c?.monthly_budget_rub ?? '', notes: c?.notes || '' }
+}
+
+watch(currentClient, (c) => Object.assign(clientEdit, clientFields(c)), { immediate: true })
+
+const clientChanged = computed(() => {
+  const base = clientFields(currentClient.value)
+  return (
+    clientEdit.name !== base.name ||
+    clientEdit.notes !== base.notes ||
+    numOrNull(clientEdit.monthly_budget_rub) !== numOrNull(base.monthly_budget_rub)
+  )
+})
+
+async function clientRun(fn, done) {
+  clientBusy.value = true
+  try {
+    await fn()
+    if (done) pushToast(done, 'ok')
+  } catch (err) {
+    pushToast(errorText(err), 'error')
+  } finally {
+    clientBusy.value = false
+  }
+}
+
+async function setProjectClient(clientId) {
+  const updated = await wsApi.update(ws.value.id, { client_id: clientId })
+  patch(updated)
+  general.client_id = updated.client_id ?? null
+}
+
+function createClient() {
+  return clientRun(async () => {
+    const created = await webApi.createClient({
+      name: clientDraft.name,
+      monthly_budget_rub: numOrNull(clientDraft.monthly_budget_rub),
+    })
+    await setProjectClient(created.id)
+    clientDraft.name = ''
+    clientDraft.monthly_budget_rub = ''
+    await loadWorkspaces(true)
+  }, 'Клиент создан, проект в нём')
+}
+
+function saveClient() {
+  return clientRun(async () => {
+    await webApi.patchClient(currentClient.value.id, {
+      name: clientEdit.name,
+      notes: clientEdit.notes,
+      monthly_budget_rub: numOrNull(clientEdit.monthly_budget_rub),
+    })
+    await loadWorkspaces(true)
+  }, 'Клиент сохранён')
+}
+
+function detachClient() {
+  return clientRun(async () => {
+    await setProjectClient(null)
+    await loadWorkspaces(true)
+  }, 'Проект без клиента')
+}
+
+function archiveClient(client, archived) {
+  return clientRun(async () => {
+    await webApi.patchClient(client.id, { archived })
+    await loadWorkspaces(true)
+  }, archived ? 'Клиент в архиве' : 'Клиент возвращён')
+}
+
+async function removeClient(client) {
+  const left = workspaces.value.filter((w) => w.client_id === client.id).length
+  const tail = left ? ` Его проекты (${left}) останутся, просто без клиента.` : ''
+  if (!(await askConfirm(`Удалить клиента «${client.name}»?${tail}`))) return
+  return clientRun(async () => {
+    await webApi.deleteClient(client.id)
+    if (ws.value.client_id === client.id) await reload()
+    general.client_id = ws.value.client_id ?? null
+    await loadWorkspaces(true)
+  }, 'Клиент удалён')
+}
+
 async function syncGoals() {
   goalsBusy.value = true
   try {
@@ -457,7 +630,7 @@ async function addAccount() {
 async function removeAccount(a) {
   if (
     !await askConfirm(
-      `Отключить кабинет ${a.client_login}? Его кампании уйдут из пространства (в Директе ничего не изменится).`,
+      `Отключить кабинет ${a.client_login}? Его кампании уйдут из проекта (в Директе ничего не изменится).`,
     )
   )
     return
@@ -557,7 +730,7 @@ async function saveCampaigns() {
   if (
     moving &&
     !(await askConfirm(
-      `${moving} ${plural(moving, 'кампания', 'кампании', 'кампаний')} сейчас ${moving === 1 ? 'в другом пространстве' : 'в других пространствах'}. Перенести сюда? Там ${moving === 1 ? 'она пропадёт' : 'они пропадут'} из списка.`,
+      `${moving} ${plural(moving, 'кампания', 'кампании', 'кампаний')} сейчас ${moving === 1 ? 'в другом проекте' : 'в других проектах'}. Перенести сюда? Там ${moving === 1 ? 'она пропадёт' : 'они пропадут'} из списка.`,
       { confirmText: 'Перенести', danger: false },
     ))
   )
@@ -666,7 +839,7 @@ async function toggleArchive() {
     const updated = await wsApi.update(ws.value.id, { archived })
     patch(updated)
     loadWorkspaces(true).catch(() => {})
-    pushToast(archived ? 'Пространство в архиве' : 'Пространство восстановлено', 'ok')
+    pushToast(archived ? 'Проект в архиве' : 'Проект восстановлен', 'ok')
   } catch (err) {
     pushToast(errorText(err), 'error')
   } finally {
@@ -674,7 +847,7 @@ async function toggleArchive() {
   }
 }
 
-// Пространство перечитали (например, после синхронизации целей) — подтягиваем несохранённые формы,
+// Проект перечитали (например, после синхронизации целей) — подтягиваем несохранённые формы,
 // только если пользователь их не трогал.
 watch(
   () => ws.value,

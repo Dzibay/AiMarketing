@@ -97,7 +97,7 @@ def _ids(payload: dict) -> set[int]:
 
 
 def _workspace_for(user_id: int, payload: dict) -> int | None:
-    """Пространство действия — если все затронутые кампании лежат в одном."""
+    """Проект действия — если все затронутые кампании лежат в одном."""
     ids = _ids(payload)
     if not ids:
         return None
@@ -128,7 +128,7 @@ _CAMPAIGNS_OF = {
 
 
 def campaigns_of(user_id: int, kind: str, ids: list[int]) -> list[int]:
-    """Кампании, в которых лежат группы / ключи / объявления — для пространства записи."""
+    """Кампании, в которых лежат группы / ключи / объявления — для проекта записи."""
     if not ids:
         return []
     with pool.connection() as conn:

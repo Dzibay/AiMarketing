@@ -1,4 +1,4 @@
-"""Статистика объявлений пространства и переписывание слабых объявлений.
+"""Статистика объявлений проекта и переписывание слабых объявлений.
 
 Отчёт Директа (CUSTOM_REPORT) по объявлениям выбранных кампаний — отдельно поиск и сети. Слабое
 объявление — CTR заметно ниже соседей по группе в той же сети (если соседей нет — ниже кампании)
@@ -315,7 +315,7 @@ def clean_suggestion(ad: dict, got: dict) -> dict | None:
 
 
 def _workspace_ads(user_id: int, workspace_id: int, ad_row_ids: list[int]) -> dict[int, dict]:
-    """Объявления пространства из базы; чужие и вне пространства — ошибка."""
+    """Объявления проекта из базы; чужие и вне проекта — ошибка."""
     with pool.connection() as conn:
         rows = conn.execute(
             """
@@ -329,7 +329,7 @@ def _workspace_ads(user_id: int, workspace_id: int, ad_row_ids: list[int]) -> di
         ).fetchall()
     found = {int(r["id"]): {**ads_mod._public(r), "campaign_row_id": r["campaign_row_id"]} for r in rows}
     if len(found) != len(set(ad_row_ids)):
-        raise YandexError("not-found", "Часть объявлений не найдена в пространстве — обновите отчёт")
+        raise YandexError("not-found", "Часть объявлений не найдена в проекте — обновите отчёт")
     return found
 
 

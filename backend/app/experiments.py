@@ -391,7 +391,7 @@ def get_experiment(user_id: int, exp_id: int, *, workspace_id: int | None = None
     with pool.connection() as conn:
         row = conn.execute("SELECT * FROM ai_experiments WHERE id = %s AND user_id = %s", (exp_id, user_id)).fetchone()
     if row is None or (workspace_id is not None and int(row["workspace_id"]) != int(workspace_id)):
-        raise YandexError("not-found", f"Эксперимента #{exp_id} нет в этом пространстве")
+        raise YandexError("not-found", f"Эксперимента #{exp_id} нет в этом проекте")
     return row
 
 
@@ -418,7 +418,7 @@ def finish_experiment(
             (exp_id, user_id),
         ).fetchone()
         if row is None or (workspace_id is not None and int(row["workspace_id"]) != int(workspace_id)):
-            raise YandexError("not-found", f"Эксперимента #{exp_id} нет в этом пространстве")
+            raise YandexError("not-found", f"Эксперимента #{exp_id} нет в этом проекте")
         if row["status"] != "running":
             raise YandexError("finished", f"Эксперимент «{row['title']}» уже {STATUS_LABELS.get(row['status'], row['status'])}")
         return conn.execute(
@@ -766,7 +766,7 @@ def experiment_out(row: dict, prog: dict | None = None) -> dict:
 
 
 def experiments_overview(user_id: int, ws_id: int, today: date | None = None) -> dict:
-    """Эксперименты пространства с прогрессом — для страницы, карточек чата и выжимки ИИ."""
+    """Эксперименты проекта с прогрессом — для страницы, карточек чата и выжимки ИИ."""
     require_workspace(user_id, ws_id)
     today = today or today_msk()
     rows = list_experiments(user_id, ws_id)
@@ -810,7 +810,7 @@ def chat_cards(user_id: int, ws_id: int, today: date | None = None) -> list[dict
     try:
         return review_cards(experiments_overview(user_id, ws_id, today)["items"])
     except Exception:
-        log.warning("Карточки экспериментов пространства %s не собраны", ws_id, exc_info=True)
+        log.warning("Карточки экспериментов проекта %s не собраны", ws_id, exc_info=True)
         return []
 
 
@@ -883,10 +883,10 @@ def _full_lines(e: dict) -> list[str]:
 def digest(items: list[dict], full_ids: set[int] | None = None) -> str:
     """Эксперименты текстом для ИИ: идущие (или full_ids) — подробно, прочие — строкой, прошлые — с выводами."""
     if not items:
-        return "Экспериментов в этом пространстве ещё не было."
+        return "Экспериментов в этом проекте ещё не было."
     full = {e["id"] for e in items if e["status"] == "running"} if full_ids is None else set(full_ids)
     lines = [
-        "Эксперименты пространства. #N — experiment_id, номера в [скобках] — campaign_row_id. Деньги ограничивает "
+        "Эксперименты проекта. #N — experiment_id, номера в [скобках] — campaign_row_id. Деньги ограничивает "
         "только недельный бюджет кампаний в Директе: сервис сам ничего не останавливает. Статус посчитан кодом по "
         "загруженной статистике; конверсии — из отчёта Директа, «платных» — по целям, за которые платит стратегия."
     ]

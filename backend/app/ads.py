@@ -721,7 +721,7 @@ def campaign_images(user_id: int, campaign_row_id: int, *, limit: int = 30) -> d
 
 
 def workspace_images(user_id: int, campaign_row_ids: list[int], *, account_id: int | None = None, limit: int = 40) -> dict:
-    """Картинки из объявлений кампаний пространства — чтобы взять их в новую кампанию.
+    """Картинки из объявлений кампаний проекта — чтобы взять их в новую кампанию.
 
     → {"items": [{hash, account_id, preview_url, campaigns: [название…], ads}], "more"}; account_id — только этот кабинет.
     Чаще используемые — первыми. Превью — из библиотеки кабинета; картинку, которой там уже нет, пропускаем.

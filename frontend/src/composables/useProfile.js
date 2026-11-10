@@ -33,6 +33,11 @@ export function setSubscription(sub) {
   if (sub) subscription.value = sub
 }
 
+/** Свежий профиль из ответа PATCH /me — шапка сразу показывает новое имя. */
+export function setUser(next) {
+  if (next) user.value = next
+}
+
 export function resetProfile() {
   user.value = null
   subscription.value = null

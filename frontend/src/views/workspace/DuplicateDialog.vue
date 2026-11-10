@@ -10,25 +10,25 @@
         <input v-model.trim="form.name" type="text" maxlength="255" required />
       </div>
       <div v-field class="field field--wide">
-        <label>Пространство для копии</label>
+        <label>Проект для копии</label>
         <select v-model.number="form.target_workspace_id">
           <option v-for="w in workspaceChoices" :key="w.id" :value="w.id">
             {{ w.name }} · счётчик {{ w.counter_id }}{{ w.client_name ? ` · ${w.client_name}` : '' }}
           </option>
         </select>
         <p v-if="form.target_workspace_id !== workspace.id" class="field-hint">
-          Копия получит счётчик выбранного пространства вместо № {{ workspace.counter_id }}.
+          Копия получит счётчик выбранного проекта вместо № {{ workspace.counter_id }}.
         </p>
       </div>
       <div v-field class="field field--wide">
         <label>Кабинет Директа</label>
         <select v-model.number="form.target_account_id" required>
-          <optgroup v-if="accounts.length" label="Кабинеты пространства">
+          <optgroup v-if="accounts.length" label="Кабинеты проекта">
             <option v-for="a in accounts" :key="a.id" :value="a.id" :disabled="!a.enabled">
               {{ accountLabel(a) }}
             </option>
           </optgroup>
-          <optgroup v-if="otherAccounts.length" label="Другие кабинеты — подключатся к пространству">
+          <optgroup v-if="otherAccounts.length" label="Другие кабинеты — подключатся к проекту">
             <option v-for="a in otherAccounts" :key="a.id" :value="a.id">
               {{ accountLabel(a) }}
             </option>
@@ -36,7 +36,7 @@
         </select>
         <p v-if="accountsError" class="field-hint tone-bad">{{ accountsError }}</p>
         <p v-else-if="!accounts.length && !otherAccounts.length" class="field-hint tone-warn">
-          Нет ни одного кабинета Директа — подключите логин на странице «Аккаунты».
+          Нет ни одного кабинета Директа — подключите логин на странице «Подключения».
         </p>
         <p v-else-if="targetAccount && targetAccount.id !== campaign?.account_id" class="field-hint">
           В другой кабинет не переносятся картинки, визитки и турбо-страницы — они живут в кабинете-источнике.
@@ -94,7 +94,7 @@ function accountLabel(a) {
 async function loadAccounts(wsId) {
   accountsError.value = ''
   try {
-    // Кабинеты пространства + остальные кабинеты пользователя (с подсказкой про доступ к счётчику).
+    // Кабинеты проекта + остальные кабинеты пользователя (с подсказкой про доступ к счётчику).
     const data = await wsApi.campaignOptions(wsId)
     if (form.target_workspace_id !== wsId) return
     accounts.value = data.accounts || []

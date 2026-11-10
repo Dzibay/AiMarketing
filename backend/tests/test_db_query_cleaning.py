@@ -57,7 +57,7 @@ def _query(db, user, acc, camp, group, text, *, clicks=1, cost_rub=0, conversion
 
 @pytest.fixture
 def env(db):
-    """Пространство «Кухни»: две поисковые кампании, три группы, ключи и запросы."""
+    """Проект «Кухни»: две поисковые кампании, три группы, ключи и запросы."""
     user = make_user(db, "q@example.com")
     acc = make_account(db, user, make_connection(db, user), login="client-1")
     camp = make_campaign(db, user, acc, 101, "Кухни поиск")
@@ -486,3 +486,25 @@ def test_workspace_brief_api(env):
     assert client.get(base, headers=auth).json()["brief"]["not_ours"] == ["б/у", "вакансии"]
     job = client.post(f"{base}/brief/draft", headers=auth, json={"site": "kitchen.example"}).json()["job"]
     assert job["kind"] == "brief_draft"
+
+
+def test_portfolio_queue_merges_projects(env):
+    db, user = env["db"], env["user"]
+    camp3 = make_campaign(db, user, env["acc"], 103, "Двери")
+    g4 = _adgroup(db, user, env["acc"], camp3, 3001, "Двери")
+    _query(db, user, env["acc"], camp3, g4, "двери межкомнатные", clicks=2, cost_rub=250)
+    doors = make_workspace(db, user, 556, "Двери", campaigns=[camp3])
+
+    client = TestClient(app)
+    auth = {"Authorization": f"Bearer {make_session(user)}"}
+    got = client.get("/api/web/queries", headers=auth).json()
+    assert got["tab"] == "new" and got["counts"]["new"] == 6 and got["total"] == 6
+    assert [i["query"] for i in got["items"][:3]] == ["кухни на заказ москва", "Кухни бесплатно", "двери межкомнатные"]
+    assert got["items"][2]["project"] == {"id": doors, "name": "Двери"}
+    assert {p["name"]: p["counts"]["new"] for p in got["projects"]} == {"Кухни": 5, "Двери": 1}
+    assert got["new_cost_rub"] == 1180
+
+    only = client.get(f"/api/web/queries?workspace_id={doors}&search=двери", headers=auth).json()
+    assert [i["query"] for i in only["items"]] == ["двери межкомнатные"] and len(only["projects"]) == 1
+    other = {"Authorization": f"Bearer {make_session(make_user(db, 'x@example.com'))}"}
+    assert client.get("/api/web/queries", headers=other).json()["items"] == []

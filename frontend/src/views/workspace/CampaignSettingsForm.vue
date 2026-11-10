@@ -96,7 +96,7 @@
           <label>Счётчики Метрики — номера через запятую</label>
           <input v-model.trim="form.counter_ids" type="text" />
           <p v-if="!counterIds().includes(workspace.counter_id)" class="field-hint tone-warn">
-            Счётчик пространства № {{ workspace.counter_id }} не подключён — конверсии по его целям Директ не увидит.
+            Счётчик проекта № {{ workspace.counter_id }} не подключён — конверсии по его целям Директ не увидит.
           </p>
         </div>
       </div>

@@ -2,48 +2,27 @@
   <section class="panel">
     <div class="panel__head">
       <div>
-        <h2>Быстрые действия</h2>
-        <p class="hint">Частые операции с кампаниями пространства. Каждое изменение попадает в журнал ниже.</p>
-      </div>
-    </div>
-    <div class="quick-actions">
-      <RouterLink class="quick-action" :to="`/w/${ws.id}/campaigns?new=1`">
-        <strong>Создать кампанию</strong>
-        <small>Мастер: кабинет, стратегия, расписание, первая группа</small>
-      </RouterLink>
-      <RouterLink class="quick-action" :to="`/w/${ws.id}/queries`">
-        <strong>Чистка поисковых запросов</strong>
-        <small>ИИ размечает запросы, вы подтверждаете минус-фразы пачкой</small>
-      </RouterLink>
-      <RouterLink class="quick-action" :to="`/w/${ws.id}/campaigns`">
-        <strong>Копировать, остановить, бюджеты</strong>
-        <small>Массовые действия в списке кампаний</small>
-      </RouterLink>
-      <RouterLink class="quick-action" to="/cabinet/negative-lists">
-        <strong>Общие минус-фразы</strong>
-        <small>Списки с предпросмотром и применением к кампаниям</small>
-      </RouterLink>
-      <RouterLink class="quick-action" :to="{ path: `/w/${ws.id}/chat`, query: { ask: 'audit' } }">
-        <strong>Аудит с ИИ</strong>
-        <small>Проверить кампании и получить план правок</small>
-      </RouterLink>
-    </div>
-  </section>
-
-  <RulesManager :workspace="ws" />
-
-  <section class="panel">
-    <div class="panel__head">
-      <div>
         <h2>Журнал изменений</h2>
         <p class="hint">
           Что меняли в Директе вы, ИИ и правила — с параметрами и результатом. Большинство действий можно откатить.
         </p>
       </div>
-      <div class="seg" role="group" aria-label="Источник">
-        <button v-for="s in SOURCES" :key="s.id" type="button" :class="{ active: source === s.id }" @click="setSource(s.id)">
-          {{ s.label }}
-        </button>
+      <div class="row-actions">
+        <select v-if="!workspaceId && projects.length > 1" v-model="project" aria-label="Проект" @change="reload">
+          <option :value="0">Все проекты</option>
+          <option v-for="p in projects" :key="p.id" :value="p.id">{{ p.name }}</option>
+        </select>
+        <div class="seg" role="group" aria-label="Источник">
+          <button
+            v-for="s in SOURCES"
+            :key="s.id"
+            type="button"
+            :class="{ active: source === s.id }"
+            @click="setSource(s.id)"
+          >
+            {{ s.label }}
+          </button>
+        </div>
       </div>
     </div>
 
@@ -57,6 +36,14 @@
             <strong>{{ a.title || a.action }}</strong>
             <small>
               <span class="chip" :class="`chip--src-${a.source}`">{{ ACTION_SOURCES[a.source] || a.source }}</span>
+              <RouterLink
+                v-if="!workspaceId && a.workspace_id"
+                class="log-row__project"
+                :to="`/w/${a.workspace_id}/history`"
+                @click.stop
+              >
+                {{ a.workspace_name || `Проект ${a.workspace_id}` }}
+              </RouterLink>
               {{ formatDateTime(a.created_at) }}
               <template v-if="summaryLine(a)"> · {{ summaryLine(a) }}</template>
             </small>
@@ -88,7 +75,7 @@
         </div>
       </details>
     </div>
-    <UndoDialog :log-id="undoId" @close="undoId = null" @done="fetchPage()" />
+    <UndoDialog :log-id="undoId" @close="undoId = null" @done="reload" />
     <div v-if="hasMore" class="pager">
       <button class="btn btn--ghost" type="button" :disabled="loading" @click="loadMore">
         {{ loading ? 'Загружаем…' : 'Показать ещё' }}
@@ -98,13 +85,15 @@
 </template>
 
 <script setup>
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { RouterLink } from 'vue-router'
-import RulesManager from '../../components/RulesManager.vue'
-import UndoDialog from '../../components/UndoDialog.vue'
-import { errorText, wsApi } from '../../api/web'
-import { ACTION_SOURCES, ACTION_STATUS_TONES, formatDateTime } from '../../utils/format'
-import { useWs } from './context'
+import UndoDialog from './UndoDialog.vue'
+import { errorText, webApi, wsApi } from '../api/web'
+import { useWorkspaces } from '../composables/useWorkspaces'
+import { ACTION_SOURCES, ACTION_STATUS_TONES, formatDateTime } from '../utils/format'
+
+/** Журнал изменений с откатом: по одному проекту (workspaceId) или по всем — с фильтром проекта и источника. */
+const props = defineProps({ workspaceId: { type: Number, default: null } })
 
 const PAGE = 50
 const SOURCES = [
@@ -115,11 +104,14 @@ const SOURCES = [
 ]
 const STATUS_LABELS = { ok: 'выполнено', partial: 'частично', error: 'ошибка', failed: 'ошибка' }
 
-const { ws } = useWs()
+const { workspaces } = useWorkspaces()
+const projects = computed(() => workspaces.value.filter((w) => !w.locked))
+
 const items = ref([])
 const loading = ref(false)
 const loadError = ref('')
 const source = ref('')
+const project = ref(0)
 const hasMore = ref(false)
 const undoId = ref(null)
 
@@ -148,7 +140,13 @@ async function fetchPage(beforeId) {
     const params = { limit: PAGE }
     if (source.value) params.source = source.value
     if (beforeId) params.before_id = beforeId
-    const data = await wsApi.actions(ws.value.id, params)
+    let data
+    if (props.workspaceId) {
+      data = await wsApi.actions(props.workspaceId, params)
+    } else {
+      if (project.value) params.workspace_id = project.value
+      data = await webApi.actionLogs(params)
+    }
     const page = data.items || []
     items.value = beforeId ? [...items.value, ...page] : page
     hasMore.value = page.length === PAGE
@@ -159,10 +157,14 @@ async function fetchPage(beforeId) {
   }
 }
 
+function reload() {
+  items.value = []
+  return fetchPage()
+}
+
 function setSource(id) {
   source.value = id
-  items.value = []
-  fetchPage()
+  reload()
 }
 
 function loadMore() {

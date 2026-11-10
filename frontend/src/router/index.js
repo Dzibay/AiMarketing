@@ -12,6 +12,13 @@ import { getSession } from '../composables/useSession'
 
 const DOCS_PAGES = new Set(['privacy', 'consent', 'offer', 'cookies'])
 
+/** Раздел по всем проектам. */
+const all = (section) => ({ section, scope: 'all' })
+/** Раздел по одному проекту (/w/:id/…). */
+const proj = (section) => ({ section, scope: 'project' })
+/** Страница вне проектов: фильтр проекта на ней не сбрасывается. */
+const neutral = (section, title) => ({ section, scope: 'neutral', title })
+
 const router = createRouter({
   history: createWebHistory(),
   routes: [
@@ -22,62 +29,185 @@ const router = createRouter({
     { path: '/reset-password', name: 'reset-password', component: ResetPasswordView },
     { path: '/verify-email', name: 'verify-email', component: () => import('../views/VerifyEmailView.vue') },
 
-    // Общий кабинет: все пространства, подключения, папки клиентов, инструменты и настройки.
-    { path: '/cabinet', name: 'cabinet', component: () => import('../views/OverviewView.vue') },
-    { path: '/cabinet/accounts', name: 'accounts', component: () => import('../views/AccountsView.vue') },
-    { path: '/cabinet/clients', name: 'clients', component: () => import('../views/ClientsView.vue') },
-    { path: '/cabinet/settings', name: 'settings', component: () => import('../views/SettingsView.vue') },
-    { path: '/cabinet/plan', name: 'plan', component: () => import('../views/PlanView.vue') },
-    { path: '/cabinet/rules', name: 'rules', component: () => import('../views/RulesView.vue') },
+    // Кабинет: одна оболочка (меню слева) на все страницы, меню при переходах не перерисовывается.
+    // meta.section — пункт меню, meta.scope — по всем проектам / по проекту / вне проектов.
     {
-      path: '/cabinet/negative-lists',
-      name: 'negative-lists',
-      component: () => import('../views/NegativeListsView.vue'),
-    },
-    // Старые адреса — в обзор.
-    { path: '/cabinet/overview', redirect: '/cabinet' },
-    { path: '/cabinet/analytics', redirect: '/cabinet' },
-    { path: '/cabinet/campaigns/:rest(.*)*', redirect: '/cabinet' },
-
-    // Рабочее пространство счётчика.
-    {
-      path: '/w/:wsId(\\d+)',
-      component: () => import('../views/workspace/WorkspaceView.vue'),
+      path: '/',
+      component: () => import('../components/AppShell.vue'),
       children: [
-        { path: '', redirect: (to) => `/w/${to.params.wsId}/summary` },
-        { path: 'summary', name: 'ws-summary', component: () => import('../views/workspace/WsSummary.vue') },
+        { path: 'cabinet', name: 'cabinet', component: () => import('../views/OverviewView.vue'), meta: all('summary') },
         {
-          path: 'analytics',
-          name: 'ws-analytics',
-          component: () => import('../views/workspace/WsAnalytics.vue'),
+          path: 'cabinet/chat/:chatId(\\d+)?',
+          name: 'chat',
+          component: () => import('../views/AiChatView.vue'),
+          meta: all('chat'),
         },
         {
-          path: 'campaigns',
-          name: 'ws-campaigns',
-          component: () => import('../views/workspace/WsCampaigns.vue'),
+          path: 'cabinet/campaigns',
+          name: 'campaigns',
+          component: () => import('../views/CampaignsView.vue'),
+          meta: all('campaigns'),
         },
         {
-          path: 'campaigns/:cid(\\d+)',
-          name: 'ws-campaign',
-          component: () => import('../views/workspace/WsCampaign.vue'),
+          path: 'cabinet/queries',
+          name: 'queries',
+          component: () => import('../views/QueriesView.vue'),
+          meta: all('queries'),
         },
-        { path: 'slices', name: 'ws-slices', component: () => import('../views/workspace/WsSlices.vue') },
-        { path: 'ad-stats', name: 'ws-ad-stats', component: () => import('../views/workspace/WsAdStats.vue') },
-        { path: 'queries', name: 'ws-queries', component: () => import('../views/workspace/WsQueries.vue') },
-        { path: 'actions', name: 'ws-actions', component: () => import('../views/workspace/WsActions.vue') },
         {
-          path: 'experiments',
-          name: 'ws-experiments',
-          component: () => import('../views/workspace/WsExperiments.vue'),
+          path: 'cabinet/negative-lists',
+          name: 'negative-lists',
+          component: () => import('../views/NegativeListsView.vue'),
+          meta: neutral('queries'),
         },
-        { path: 'chat/:chatId(\\d+)?', name: 'ws-chat', component: () => import('../views/workspace/WsChat.vue') },
         {
-          path: 'settings',
-          name: 'ws-settings',
-          component: () => import('../views/workspace/WsSettings.vue'),
+          path: 'cabinet/analytics',
+          name: 'analytics',
+          component: () => import('../views/AnalyticsView.vue'),
+          meta: all('analytics'),
+        },
+        {
+          path: 'cabinet/autopilot',
+          name: 'autopilot',
+          component: () => import('../views/RulesView.vue'),
+          meta: all('autopilot'),
+        },
+        {
+          path: 'cabinet/history',
+          name: 'history',
+          component: () => import('../views/HistoryView.vue'),
+          meta: all('history'),
+        },
+        {
+          path: 'cabinet/pending',
+          name: 'pending',
+          component: () => import('../views/PendingView.vue'),
+          meta: neutral('pending', 'Ждёт решения'),
+        },
+        {
+          path: 'cabinet/connections',
+          name: 'connections',
+          component: () => import('../views/AccountsView.vue'),
+          meta: neutral('connections', 'Подключения'),
+        },
+        {
+          path: 'cabinet/settings',
+          name: 'settings',
+          component: () => import('../views/SettingsView.vue'),
+          props: { tab: 'profile' },
+          meta: neutral('settings', 'Настройки'),
+        },
+        {
+          path: 'cabinet/settings/notifications',
+          name: 'settings-notifications',
+          component: () => import('../views/SettingsView.vue'),
+          props: { tab: 'notifications' },
+          meta: neutral('settings', 'Настройки'),
+        },
+        {
+          path: 'cabinet/plan',
+          name: 'plan',
+          component: () => import('../views/PlanView.vue'),
+          meta: neutral('plan', 'Тариф'),
+        },
+        {
+          path: 'cabinet/welcome',
+          name: 'welcome',
+          component: () => import('../views/WelcomeView.vue'),
+          meta: neutral('welcome', 'Начало работы'),
+        },
+
+        // Проект (счётчик Метрики): те же разделы, но по одному сайту.
+        {
+          path: 'w/:wsId(\\d+)',
+          component: () => import('../views/workspace/WorkspaceView.vue'),
+          children: [
+            { path: '', redirect: (to) => `/w/${to.params.wsId}/summary` },
+            {
+              path: 'summary',
+              name: 'ws-summary',
+              component: () => import('../views/workspace/WsSummary.vue'),
+              meta: proj('summary'),
+            },
+            {
+              path: 'chat/:chatId(\\d+)?',
+              name: 'ws-chat',
+              component: () => import('../views/workspace/WsChat.vue'),
+              meta: proj('chat'),
+            },
+            {
+              path: 'campaigns',
+              name: 'ws-campaigns',
+              component: () => import('../views/workspace/WsCampaigns.vue'),
+              meta: proj('campaigns'),
+            },
+            {
+              path: 'campaigns/:cid(\\d+)',
+              name: 'ws-campaign',
+              component: () => import('../views/workspace/WsCampaign.vue'),
+              meta: proj('campaigns'),
+            },
+            {
+              path: 'queries',
+              name: 'ws-queries',
+              component: () => import('../views/workspace/WsQueries.vue'),
+              meta: proj('queries'),
+            },
+            {
+              path: 'analytics',
+              name: 'ws-analytics',
+              component: () => import('../views/workspace/WsAnalytics.vue'),
+              meta: proj('analytics'),
+            },
+            {
+              path: 'slices',
+              name: 'ws-slices',
+              component: () => import('../views/workspace/WsSlices.vue'),
+              meta: proj('analytics'),
+            },
+            {
+              path: 'ad-stats',
+              name: 'ws-ad-stats',
+              component: () => import('../views/workspace/WsAdStats.vue'),
+              meta: proj('analytics'),
+            },
+            {
+              path: 'autopilot',
+              name: 'ws-autopilot',
+              component: () => import('../views/workspace/WsAutopilot.vue'),
+              meta: proj('autopilot'),
+            },
+            {
+              path: 'experiments',
+              name: 'ws-experiments',
+              component: () => import('../views/workspace/WsExperiments.vue'),
+              meta: proj('autopilot'),
+            },
+            {
+              path: 'history',
+              name: 'ws-history',
+              component: () => import('../views/workspace/WsHistory.vue'),
+              meta: proj('history'),
+            },
+            {
+              path: 'settings',
+              name: 'ws-settings',
+              component: () => import('../views/workspace/WsSettings.vue'),
+              meta: proj('project-settings'),
+            },
+            // Старый адрес: «Действия» разделились на «Автопилот» и «Историю».
+            { path: 'actions', redirect: (to) => `/w/${to.params.wsId}/autopilot` },
+          ],
         },
       ],
     },
+
+    // Старые адреса кабинета.
+    { path: '/cabinet/overview', redirect: '/cabinet' },
+    { path: '/cabinet/accounts', redirect: '/cabinet/connections' },
+    { path: '/cabinet/clients', redirect: '/cabinet' },
+    { path: '/cabinet/rules', redirect: '/cabinet/autopilot' },
+    { path: '/cabinet/campaigns/:rest(.*)+', redirect: '/cabinet/campaigns' },
     { path: '/w', redirect: '/cabinet' },
 
     { path: '/oauth/done', name: 'oauth-done', component: OAuthDoneView },
@@ -96,8 +226,9 @@ const router = createRouter({
       return { top: 0, left: 0 }
     }
     if (savedPosition) return savedPosition
-    // Переключение чатов внутри вкладки не прокручивает страницу наверх.
+    // Переключение чатов внутри раздела не прокручивает страницу наверх.
     if (to.name === 'ws-chat' && from.name === 'ws-chat' && to.params.wsId === from.params.wsId) return false
+    if (to.name === 'chat' && from.name === 'chat') return false
     // Якорь на секцию (#ai): страница дорисовывается после загрузки данных — ждём, пока секция появится.
     if (to.hash) {
       return new Promise((resolve) => {

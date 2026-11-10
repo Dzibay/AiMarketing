@@ -116,7 +116,7 @@
       <button class="btn btn--ghost" type="button" @click="load">Повторить</button>
     </div>
     <div v-else-if="!data.items.length" class="empty">
-      В пространстве нет кампаний. Добавьте кабинет и кампании в
+      В проекте нет кампаний. Добавьте кабинет и кампании в
       <RouterLink :to="`/w/${ws.id}/settings`">настройках</RouterLink> или создайте новую.
     </div>
     <div v-else class="table-scroll" :class="{ 'is-loading': loading }">

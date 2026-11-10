@@ -387,7 +387,7 @@ class _AccountLoad:
 
     def _report_goal_ids(self) -> list[int]:
         """Цели для отчёта по целям: оплачиваемые в стратегиях, ключевые цели кампаний кабинета
-        и цели пространств с его кампаниями. Оплачиваемые — первыми, всего не больше MAX_REPORT_GOALS."""
+        и цели проектов с его кампаниями. Оплачиваемые — первыми, всего не больше MAX_REPORT_GOALS."""
         with pool.connection() as conn:
             campaigns = conn.execute(
                 """
@@ -787,7 +787,7 @@ def counter_load_out(row: dict) -> dict:
 
 
 def load_overview(user_id: int, *, account_ids: list[int] | None = None, counter_ids: list[int] | None = None) -> dict:
-    """Кабинеты и счётчики с этапами загрузки и активные задачи загрузки (для шапки и пространства)."""
+    """Кабинеты и счётчики с этапами загрузки и активные задачи загрузки (для шапки и проекта)."""
     account_filter = "" if account_ids is None else "AND id = ANY(%(accounts)s)"
     counter_filter = "" if counter_ids is None else "AND id = ANY(%(counters)s)"
     params = {"user": user_id, "accounts": account_ids or [], "counters": counter_ids or []}

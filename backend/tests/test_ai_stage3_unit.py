@@ -607,7 +607,7 @@ def _past_item(n=2, **kw):
 
 def test_digest_running_in_full_and_past_in_short():
     text = experiments.digest([_running_item(), _past_item()])
-    assert text.startswith("Эксперименты пространства. #N — experiment_id, номера в [скобках] — campaign_row_id.")
+    assert text.startswith("Эксперименты проекта. #N — experiment_id, номера в [скобках] — campaign_row_id.")
     lines = text.splitlines()
     week = f"за эту неделю {rub(2000)} из {experiments._rub(3000)} (1%)"
     metrics = f"показы 90, клики 8, расход {rub(5000)}, конверсии 0, CR 0%"
@@ -657,7 +657,7 @@ def test_digest_details():
 
 
 def test_digest_limits_past_and_handles_empty():
-    assert experiments.digest([]) == "Экспериментов в этом пространстве ещё не было."
+    assert experiments.digest([]) == "Экспериментов в этом проекте ещё не было."
     text = experiments.digest([_past_item(n) for n in range(2, 9)])
     assert sum(line.startswith("- #") for line in text.splitlines()) == experiments.DIGEST_PAST
 
@@ -695,7 +695,8 @@ CRITERION = "конверсии за ~0 ₽ — от 2 конв. за весь �
 
 
 class FakeContext:
-    """Context без БД: пространство из словаря, кампании — из CAMPAIGNS."""
+    """Context без БД: проект из словаря, кампании — из CAMPAIGNS."""
+    general = False  # чат проекта, не общий
 
     def __init__(self, ws: dict | None = None):
         self.user_id = 1
@@ -707,7 +708,7 @@ class FakeContext:
     def campaigns(self, ids: list[int]) -> list[dict]:
         foreign = [i for i in ids if i not in CAMPAIGNS]
         if foreign:
-            raise YandexError("scope", f"Кампании {foreign} не входят в это пространство")
+            raise YandexError("scope", f"Кампании {foreign} не входят в этот проект")
         return [CAMPAIGNS[i] for i in ids]
 
     def campaign(self, campaign_row_id: int) -> dict:
@@ -756,7 +757,7 @@ def test_start_refuses_busy_and_foreign_campaigns(store):
     )
     with pytest.raises(YandexError) as exc:
         ai_agent._p_start_experiment(FakeContext(), {**START, "campaign_row_ids": [70, 99]})
-    assert exc.value.message == "Кампании [99] не входят в это пространство"
+    assert exc.value.message == "Кампании [99] не входят в этот проект"
 
 
 def test_start_sets_limits_then_records(store, direct):
@@ -836,7 +837,7 @@ def finishing(monkeypatch):
 
     def get(user_id, exp_id, *, workspace_id=None):
         if exp_id not in EXPS:
-            raise YandexError("not-found", f"Эксперимента #{exp_id} нет в этом пространстве")
+            raise YandexError("not-found", f"Эксперимента #{exp_id} нет в этом проекте")
         return EXPS[exp_id]
 
     def finish(user_id, exp_id, **kw):
@@ -866,7 +867,7 @@ def test_finish_plan(finishing):
         ({**FINISH, "experiment_id": 5}, "finished", "Эксперимент «Самара» уже завершён"),
         ({"experiment_id": 4, "verdict": "fail"}, "args", "Укажите conclusion — что узнали и что делать дальше"),
         ({**FINISH, "verdict": "maybe"}, "args", "verdict — одно из ['success', 'fail', 'unclear']"),
-        ({**FINISH, "experiment_id": 99}, "not-found", "Эксперимента #99 нет в этом пространстве"),
+        ({**FINISH, "experiment_id": 99}, "not-found", "Эксперимента #99 нет в этом проекте"),
         ({"verdict": "success"}, "args", "Укажите experiment_id (число)"),
     ],
 )
@@ -909,7 +910,7 @@ def test_get_experiments_tool(monkeypatch):
     assert ai_agent._t_experiments(FakeContext(), {"experiment_id": ""}) == {"digest": experiments.digest(items)}
     with pytest.raises(YandexError) as exc:
         ai_agent._t_experiments(FakeContext(), {"experiment_id": 99})
-    assert (exc.value.code, exc.value.message) == ("not-found", "Эксперимента #99 нет в этом пространстве")
+    assert (exc.value.code, exc.value.message) == ("not-found", "Эксперимента #99 нет в этом проекте")
 
 
 def test_experiment_tools_registered():

@@ -199,6 +199,19 @@ def upsert_yandex_user(
     return {**row, "_created": True}
 
 
+def set_name(user_id: int, name: str) -> dict:
+    """Имя в профиле: пустое — показываем почту."""
+    name = " ".join((name or "").split())
+    if len(name) > 120:
+        raise UsersError("name-too-long")
+    with pool.connection() as conn:
+        conn.execute("UPDATE users SET name = %s WHERE id = %s", (name, user_id))
+    user = get_user(user_id)
+    if user is None:
+        raise UsersError("not-found")
+    return public_user(user)
+
+
 def public_user(user: dict) -> dict:
     return {
         "id": user["id"],

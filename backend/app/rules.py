@@ -141,7 +141,7 @@ def _validate_workspace(user_id: int, workspace_id: int | None) -> int | None:
 def _validate_campaign(
     user_id: int, campaign_row_id: int | None, account_id: int | None, workspace_id: int | None
 ) -> int | None:
-    """Кампания-ограничение правила: своя и из выбранных кабинета и пространства."""
+    """Кампания-ограничение правила: своя и из выбранных кабинета и проекта."""
     if not campaign_row_id:
         return None
     with pool.connection() as conn:
@@ -161,7 +161,7 @@ def _validate_campaign(
     if account_id and int(row["account_id"]) != int(account_id):
         raise YandexError("rule-campaign", "Кампания не из выбранного кабинета.")
     if not row["in_workspace"]:
-        raise YandexError("rule-campaign", "Кампания не из выбранного пространства.")
+        raise YandexError("rule-campaign", "Кампания не из выбранного проекта.")
     return int(row["id"])
 
 
@@ -178,7 +178,7 @@ _NAMED_RULES = """
 
 
 def _with_names(row: dict) -> dict:
-    """Строка правила с названиями цели, пространства, кабинета и кампании — как в списке."""
+    """Строка правила с названиями цели, проекта, кабинета и кампании — как в списке."""
     with pool.connection() as conn:
         named = conn.execute(_NAMED_RULES + "WHERE r.id = %s", (row["id"],)).fetchone()
     return named or row
@@ -199,7 +199,7 @@ def list_rules(user_id: int, *, workspace_id: int | None = None) -> list[dict]:
 
 
 def rule_campaigns(user_id: int, *, workspace_id: int | None = None) -> list[dict]:
-    """Кампании, которыми можно ограничить правило: все, кроме архивных (в пространстве — только его)."""
+    """Кампании, которыми можно ограничить правило: все, кроме архивных (в проекте — только его)."""
     with pool.connection() as conn:
         rows = conn.execute(
             """
@@ -523,7 +523,7 @@ def _matching_campaigns(user_id: int, rule: dict) -> list[dict]:
         goal_by_campaign: dict[tuple[int, int], int] = {}
         goal_by_account: dict[int, int] = {}
         if yandex_goal_id is not None:
-            # Достижения цели по кампании — из счётчика пространства, где лежит кампания.
+            # Достижения цели по кампании — из счётчика проекта, где лежит кампания.
             g_rows = conn.execute(
                 """
                 SELECT c.campaign_id, s.goal_reaches, c.account_id

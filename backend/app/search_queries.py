@@ -354,7 +354,7 @@ def _query_row(user_id: int, query_row_id: int) -> dict:
 
 
 def _remember(user_id: int, rows: list[dict], decisions: dict[int, dict]) -> dict[int, list[dict]]:
-    """Решения по запросам — в память пространства кампании. → прежние метки по пространствам, для отката."""
+    """Решения по запросам — в память проекта кампании. → прежние метки по проектам, для отката."""
     by_ws: dict[int, dict[str, dict]] = defaultdict(dict)
     for row in rows:
         decision = decisions.get(int(row["id"]))
@@ -432,7 +432,7 @@ def _keywords_from_rows(user_id: int, rows: list[dict], adgroup_row_id: int | No
 
 
 def _negatives_from_rows(user_id: int, rows: list[dict], level: str) -> tuple[dict, dict]:
-    """Запросы в минус-фразы — общий путь с экраном чистки: журнал с откатом и память пространства."""
+    """Запросы в минус-фразы — общий путь с экраном чистки: журнал с откатом и память проекта."""
     entries = []
     outcomes: dict[str, dict] = {}
     for row in rows:

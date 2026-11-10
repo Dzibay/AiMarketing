@@ -1,6 +1,6 @@
 import { inject } from 'vue'
 
-/** Текущее пространство для вкладок: { ws (ref), reload(), patch(fields) }. */
+/** Текущее проект для вкладок: { ws (ref), reload(), patch(fields) }. */
 export const WS_KEY = Symbol('workspace')
 
 export function useWs() {

@@ -84,6 +84,7 @@ from app.users import (
     login_user,
     public_user,
     register_user,
+    set_name,
 )
 from app.web_auth import make_session, require_web_identity, require_web_user, verify_session
 from app.workspaces import ensure_workspaces, list_workspaces
@@ -111,6 +112,10 @@ router = APIRouter(prefix="/web", tags=["web"])
 class RegisterBody(BaseModel):
     email: str = ""
     password: str = ""
+    name: str = ""
+
+
+class ProfileBody(BaseModel):
     name: str = ""
 
 
@@ -447,6 +452,15 @@ def web_change_password(
     return {"ok": True}
 
 
+@router.patch("/me")
+def web_patch_me(body: ProfileBody, user_id: int = Depends(require_web_identity)) -> dict:
+    """Имя в профиле — доступно и при закончившейся подписке."""
+    try:
+        return {"user": set_name(user_id, body.name)}
+    except UsersError as exc:
+        raise _http(exc) from exc
+
+
 @router.get("/me")
 def web_me(user_id: int = Depends(require_web_identity)) -> dict:
     """Профиль и подписка — всегда; данные кабинета — только при действующем доступе.
@@ -512,6 +526,7 @@ def web_plan(user_id: int = Depends(require_web_identity)) -> dict:
         "usage": billing.user_summary(user_id) if sub["state"] == "ok" else None,
         "offers": plans.offers(user_id),
         "features": plans.FEATURES,
+        "history": billing.plan_history(user_id),
     }
 
 
@@ -619,7 +634,7 @@ def web_patch_metrika(
         out = set_metrika_enabled(user_id, item_id, body.enabled)
     except YandexError as exc:
         raise _http(exc) from exc
-    # Включённый счётчик сразу получает своё пространство и загрузку данных.
+    # Включённый счётчик сразу получает своё проект и загрузку данных.
     if body.enabled:
         ensure_workspaces(user_id)
         if any(int(c["id"]) == item_id for c in canonical_counters(user_id)):
@@ -737,6 +752,45 @@ def web_load_counter(
 def web_loads(user_id: int = Depends(require_web_user)) -> dict:
     """Этапы загрузки кабинетов и счётчиков и идущие задачи — для индикатора в шапке."""
     return load_overview(user_id)
+
+
+@router.get("/portfolio")
+def web_portfolio(date_from: str = "", date_to: str = "", user_id: int = Depends(require_web_user)) -> dict:
+    """«Все проекты»: итоги и динамика суммой, строка на проект и все кампании с проектом."""
+    from app.analytics import parse_range, portfolio_analytics
+
+    try:
+        d_from, d_to = parse_range(date_from, date_to)
+        return portfolio_analytics(user_id, date_from=d_from, date_to=d_to)
+    except YandexError as exc:
+        raise _http(exc) from exc
+
+
+@router.get("/queries")
+def web_queries(
+    tab: str = "new",
+    search: str = "",
+    min_cost_rub: float | None = None,
+    no_conversions: bool = False,
+    workspace_id: int | None = None,
+    limit: int = 100,
+    user_id: int = Depends(require_web_user),
+) -> dict:
+    """«Все проекты»: общая очередь разбора поисковых запросов."""
+    from app.query_cleaning import portfolio_queue
+
+    try:
+        return portfolio_queue(
+            user_id,
+            tab=tab,
+            search=search,
+            min_cost_rub=min_cost_rub,
+            no_conversions=no_conversions,
+            workspace_id=workspace_id,
+            limit=limit,
+        )
+    except YandexError as exc:
+        raise _http(exc) from exc
 
 
 @router.get("/direct/campaigns")
@@ -1091,10 +1145,16 @@ def web_search_query_bulk(
 def web_action_logs(
     source: str = "",
     before_id: int | None = None,
+    workspace_id: int | None = None,
     limit: int = 50,
     user_id: int = Depends(require_web_user),
 ) -> dict:
-    return {"items": list_action_logs(user_id, limit=limit, source=source or None, before_id=before_id)}
+    """Журнал по всем проектам; workspace_id — фильтр проекта (список и так только свой: user_id)."""
+    return {
+        "items": list_action_logs(
+            user_id, limit=limit, workspace_id=workspace_id, source=source or None, before_id=before_id
+        )
+    }
 
 
 @router.get("/actions/{log_id}/undo")

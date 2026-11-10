@@ -1,5 +1,5 @@
 <template>
-  <p class="ws-head__crumbs">
+  <p class="page-crumbs">
     <RouterLink :to="`/w/${ws.id}/campaigns`">← Все кампании</RouterLink>
   </p>
 
@@ -13,7 +13,7 @@
       <div class="panel__head">
         <div>
           <h2>{{ row?.name || campaign?.name || 'Кампания' }}</h2>
-          <p class="ws-head__meta">
+          <p class="ws-meta ws-meta--inline">
             <span v-if="state" class="chip" :class="state === 'ON' ? 'chip--ok' : state === 'SUSPENDED' ? 'chip--warning' : ''">
               {{ CAMPAIGN_STATES[state] || state }}
             </span>
@@ -161,7 +161,7 @@ async function loadRow() {
   try {
     const data = await wsApi.campaigns(ws.value.id, lastDays(7))
     row.value = data.items.find((c) => c.campaign_row_id === campaignId.value) || null
-    if (!row.value) loadError.value = 'Кампания не входит в это пространство. Добавьте её в настройках пространства.'
+    if (!row.value) loadError.value = 'Кампания не входит в этот проект. Добавьте её в настройках проекта.'
   } catch (err) {
     loadError.value = errorText(err)
   }

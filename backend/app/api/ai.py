@@ -70,7 +70,7 @@ class BoardBody(BaseModel):
 
 
 class ReviewBody(BaseModel):
-    # Пусто — общий разбор пространства; текст карточки сигнала — разбор по ней.
+    # Пусто — общий разбор проекта; текст карточки сигнала — разбор по ней.
     prompt: str = ""
     title: str = ""
     # Не задан — разбор в новом чате.
@@ -114,7 +114,7 @@ class ImageGenerateBody(BaseModel):
 
 @router.get("/workspaces/{workspace_id}/ad-images")
 def workspace_ad_images(workspace_id: int, account_id: int | None = None, user_id: int = Depends(require_web_user)) -> dict:
-    """Картинки из объявлений кампаний пространства — взять в новую кампанию."""
+    """Картинки из объявлений кампаний проекта — взять в новую кампанию."""
     return _call(ai_agent.workspace_images, user_id, workspace_id, account_id=account_id)
 
 
@@ -180,6 +180,29 @@ def workspace_forget_fact(workspace_id: int, body: ForgetFactBody, user_id: int 
     return _call(workspaces.forget_ai_fact, user_id, workspace_id, body.key)
 
 
+@router.get("/ai/chats")
+def general_chats_list(user_id: int = Depends(require_web_user)) -> dict:
+    """Общие чаты по всем проектам."""
+    return {"items": _call(ai_agent.list_chats, user_id, None)}
+
+
+@router.post("/ai/chats")
+def general_chats_create(body: ChatBody, user_id: int = Depends(require_web_user)) -> dict:
+    return _call(ai_agent.create_chat, user_id, None, body.title, body.model_class)
+
+
+@router.get("/ai/pending/count")
+def pending_count(user_id: int = Depends(require_web_user)) -> dict:
+    """Счётчик «Ждёт решения» в шапке: карточки ИИ без решения во всех проектах."""
+    return _call(ai_agent.pending_count, user_id)
+
+
+@router.get("/ai/pending")
+def pending_list(workspace_id: int | None = None, user_id: int = Depends(require_web_user)) -> dict:
+    """Очередь «Ждёт решения»: действия, вопросы и планы ИИ без решения; workspace_id — только одного проекта."""
+    return _call(ai_agent.pending_actions, user_id, workspace_id)
+
+
 @router.get("/ai/chats/{chat_id}")
 def chat_get(chat_id: int, user_id: int = Depends(require_web_user)) -> dict:
     return _call(ai_agent.get_chat, user_id, chat_id)
@@ -239,7 +262,7 @@ def action_decide(action_id: int, body: DecideBody, user_id: int = Depends(requi
 
 @router.post("/ai/actions/{action_id}/answer")
 def action_answer(action_id: int, body: AnswerBody, user_id: int = Depends(require_web_user)) -> dict:
-    """Ответы в карточке вопросов ИИ; вопросы с key запоминаются в пространстве."""
+    """Ответы в карточке вопросов ИИ; вопросы с key запоминаются в проекте."""
     return _call(ai_agent.answer_questions, user_id, action_id, answers=body.answers, comment=body.comment,
                  skip=body.skip)
 

@@ -48,12 +48,23 @@
           </ul>
         </div>
       </div>
+      <template v-if="usage.by_day?.length > 1 && usage.by_kind.length">
+        <h3 class="subhead">По дням</h3>
+        <TrendChart
+          :points="usage.by_day"
+          value-key="percent"
+          :label="usage.limited ? 'Доля лимита' : 'Доля расхода'"
+          :format-value="pct"
+          :height="160"
+        />
+      </template>
     </template>
   </section>
 </template>
 
 <script setup>
 import { computed } from 'vue'
+import TrendChart from './TrendChart.vue'
 import { formatDate, num, pct, plural } from '../utils/format'
 
 /** Шкала лимита за период из GET /api/web/plan (usage) или /api/web/ai/usage. */

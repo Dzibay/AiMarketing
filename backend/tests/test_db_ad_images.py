@@ -1,5 +1,5 @@
 """Картинки объявлений: общий ключ генерации (админка), списание единиц, вопрос об источнике в чате и картинки
-кампаний пространства — на настоящей БД; провайдер и Директ подменены."""
+кампаний проекта — на настоящей БД; провайдер и Директ подменены."""
 
 import base64
 import json
@@ -168,7 +168,7 @@ def test_image_source_answer_needs_connected_generation(db, monkeypatch):
     monkeypatch.setattr(ai, "complete", lambda cfg, messages, tools=None: {"content": "Опишите товар", "tool_calls": []})
     ai_agent.answer_questions(s.user, card["id"], answers=pick)
     assert ai_agent._wants_generation(ctx) is True
-    # Ответ — на эту кампанию: в память пространства не попадает.
+    # Ответ — на эту кампанию: в память проекта не попадает.
     assert not [f for f in ai_agent.get_workspace(s.user, s.ws).get("ai_facts") or [] if f["key"] == "image_source"]
 
 
@@ -176,7 +176,7 @@ def test_workspace_images_from_campaign_ads(db, monkeypatch):
     s = _seed(db)
     _ad(db, s.user, s.acc, s.summer, 1, ["h1", "h2"])
     _ad(db, s.user, s.acc, s.winter, 2, ["h1", "gone"])
-    _ad(db, s.user, s.other, s.foreign, 3, ["x1"])  # чужое пространство
+    _ad(db, s.user, s.other, s.foreign, 3, ["x1"])  # чужое проект
     asked = []
     monkeypatch.setattr(ads, "get_connection_access_token", lambda conn_id, user_id: "tok")
 

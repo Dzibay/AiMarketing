@@ -58,7 +58,7 @@
               <th>Заголовок</th>
               <th class="num">Конв.</th>
               <th class="num">CR</th>
-              <th class="num">CPA</th>
+              <th class="num">CPA<TermHint term="cpa" /></th>
               <th class="num">Клики</th>
               <th class="num">CTR</th>
               <th class="num">Расход</th>
@@ -121,6 +121,7 @@ import { pushToast } from '../../composables/useToasts'
 import { readFileBase64 } from '../../utils/adExtras'
 import { formatDateTime, num, pct, plural, rub } from '../../utils/format'
 import { useWs } from './context'
+import TermHint from '../../components/TermHint.vue'
 
 const props = defineProps({
   // report.headlines из отчёта по объявлениям: {headlines, mixed}; null — отчёт ещё не строили.

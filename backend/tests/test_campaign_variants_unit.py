@@ -452,6 +452,7 @@ CAMPAIGNS = {7: {"id": 7, "name": "Окна", "state": "ON", "status": "ACCEPTED
 
 
 class FakeContext:
+    general = False  # чат проекта, не общий
     def __init__(self):
         self.user_id = 1
         self.ws_id = 2
@@ -462,7 +463,7 @@ class FakeContext:
     def campaigns(self, ids):
         foreign = [i for i in ids if i not in CAMPAIGNS]
         if foreign:
-            raise YandexError("scope", f"Кампании {foreign} не входят в это пространство")
+            raise YandexError("scope", f"Кампании {foreign} не входят в этот проект")
         return [CAMPAIGNS[i] for i in ids]
 
     def campaign(self, cid):

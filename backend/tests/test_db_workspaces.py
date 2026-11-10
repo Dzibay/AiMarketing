@@ -1,4 +1,4 @@
-"""Рабочие пространства: раскладка кампаний, настройки, аналитика и API на настоящем Postgres."""
+"""Проекты: раскладка кампаний, настройки, аналитика и API на настоящем Postgres."""
 
 from datetime import date, timedelta
 
@@ -182,7 +182,7 @@ def test_analytics_uses_workspace_campaigns_and_goal(db):
         day = D1 + timedelta(days=i)
         _direct(user, s["acc_a"], 11, day, 1000, clicks=20, conv=1)
         _direct(user, s["acc_b"], 21, day, 500, clicks=10)
-        _direct(user, s["acc_b"], 22, day, 9999)  # кампания другого пространства
+        _direct(user, s["acc_b"], 22, day, 9999)  # кампания другого проекта
         _direct(user, s["acc_a"], 11, day - timedelta(days=7), 500, clicks=20, conv=1)
         _metrika(db, user, s["counter"], day, 100)
     # Без цели — конверсии Директа.
@@ -197,7 +197,7 @@ def test_analytics_uses_workspace_campaigns_and_goal(db):
     assert {a["login"] for a in data["by_account"]} == {"acc-a", "acc-b"}
     assert len(data["by_day"]) == 7 and data["by_day"][0]["cost_kopecks"] == 150_000
 
-    # С основной целью — конверсии из Метрики по кампаниям пространства.
+    # С основной целью — конверсии из Метрики по кампаниям проекта.
     workspaces.update_workspace(user, s["ws"], goal_id=9001, kpi_type="cpa", kpi_target=1000)
     for i in range(7):
         day = D1 + timedelta(days=i)
@@ -249,7 +249,7 @@ def test_workspace_api(db):
     camps = client.get(f"{base}/campaigns", headers=auth).json()
     assert {c["name"] for c in camps["items"]} == {"Поиск", "РСЯ"}
 
-    # Кампания чужого пространства недоступна через это пространство.
+    # Кампания чужого проекта недоступна через этот проект.
     assert client.get(f"{base}/campaigns/{s['foreign']}", headers=auth).status_code == 404
     assert client.get(f"{base}/campaigns/{s['search']}", headers=auth).json()["campaign"]["name"] == "Поиск"
     bulk = client.post(
@@ -272,3 +272,33 @@ def test_workspace_api(db):
     assert client.get(f"{base}/rules", headers=auth).json()["items"] == []
     options = client.get(f"{base}/campaign-options", headers=auth).json()
     assert options["counter_id"] == 555 and len(options["accounts"]) == 2
+
+
+def test_portfolio_sums_projects_and_lists_campaigns_with_project(db):
+    s = _seed(db)
+    user = s["user"]
+    for day in (D1, D7):
+        _direct(user, s["acc_a"], 11, day, 100, clicks=10, conv=1)
+    _direct(user, s["acc_b"], 22, D7, 50, clicks=5, conv=2)
+    _direct(user, s["acc_a"], 11, D1 - timedelta(days=1), 70, clicks=7)  # прошлый период
+
+    client = TestClient(app)
+    auth = {"Authorization": f"Bearer {make_session(user)}"}
+    got = client.get("/api/web/portfolio?date_from=2026-10-19&date_to=2026-10-25", headers=auth).json()
+    assert got["prev_from"] == "2026-10-12" and got["prev_to"] == "2026-10-18"
+    assert got["totals"]["cost_kopecks"] == 25000 and got["totals"]["clicks"] == 25
+    assert got["previous"]["cost_kopecks"] == 7000
+    assert len(got["by_day"]) == 7 and got["by_day"][-1]["cost_kopecks"] == 15000
+    assert [p["name"] for p in got["projects"]] == ["Магазин", "Блог"]
+    shop = got["projects"][0]
+    assert shop["totals"]["cost_kopecks"] == 20000 and shop["campaigns"] == 2 and len(shop["spark"]) == 7
+    by_name = {c["name"]: c for c in got["campaigns"]}
+    assert by_name["Поиск"]["project"] == {"id": s["ws"], "name": "Магазин"}
+    assert by_name["Блог"]["project"]["id"] == s["blog"] and by_name["Блог"]["cost_kopecks"] == 5000
+    assert got["campaigns"][0]["name"] == "Поиск"
+
+    # Проект в архиве в сумму не входит.
+    _sql(db, "UPDATE workspaces SET archived_at = now() WHERE id = %s", (s["blog"],))
+    got = client.get("/api/web/portfolio?date_from=2026-10-19&date_to=2026-10-25", headers=auth).json()
+    assert [p["name"] for p in got["projects"]] == ["Магазин"] and got["totals"]["cost_kopecks"] == 20000
+    assert client.get("/api/web/portfolio?date_from=2026-10-25&date_to=2026-10-19", headers=auth).status_code == 400

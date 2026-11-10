@@ -164,7 +164,7 @@
               <th class="num">CTR</th>
               <th class="num">Расход</th>
               <th class="num">Конв.</th>
-              <th class="num">CPA</th>
+              <th class="num">CPA<TermHint term="cpa" /></th>
               <th class="num">Отказы</th>
               <th>Почему</th>
             </tr>
@@ -298,6 +298,7 @@ import { askConfirm } from '../../composables/useConfirm'
 import { pushToast } from '../../composables/useToasts'
 import { aiUsageText, formatDate, num, pct, plural, rub } from '../../utils/format'
 import { useWs } from './context'
+import TermHint from '../../components/TermHint.vue'
 
 const DIMENSIONS = [
   { key: 'placement', label: 'Площадки РСЯ' },

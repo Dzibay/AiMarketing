@@ -361,7 +361,7 @@ def test_finish_and_cancel_from_page(db):
 
     assert client.post(f"{url}/{kazan}/finish", headers=other, json={"verdict": "success"}).status_code == 404
     foreign = client.post(f"/api/web/workspaces/{blog}/experiments/{kazan}/finish", headers=auth, json={"verdict": "success"})
-    assert foreign.status_code == 404 and foreign.json()["detail"]["message"] == f"Эксперимента #{kazan} нет в этом пространстве"
+    assert foreign.status_code == 404 and foreign.json()["detail"]["message"] == f"Эксперимента #{kazan} нет в этом проекте"
     bad = client.post(f"{url}/{kazan}/finish", headers=auth, json={"verdict": "maybe"})
     assert bad.status_code == 400 and bad.json()["detail"]["code"] == "args"
 

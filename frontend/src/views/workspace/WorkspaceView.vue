@@ -1,96 +1,85 @@
 <template>
-  <AppShell>
-    <div v-if="locked" class="panel project-locked">
-      <h2><Lock aria-hidden="true" /> Проект на тарифе выше</h2>
-      <p>
-        Проект сверх лимита вашего тарифа, но его данные сохранены. Чтобы открыть его, перейдите на тариф с большим
-        числом проектов или отправьте в архив другой проект. Если этот проект больше не нужен — отправьте в архив его.
-      </p>
-      <div class="row-actions">
-        <RouterLink class="btn btn--accent" to="/cabinet/plan">Тарифы</RouterLink>
-        <button class="btn btn--ghost" type="button" :disabled="archiving" @click="archiveLocked">В архив</button>
-        <RouterLink class="btn btn--ghost" to="/cabinet">К обзору</RouterLink>
+  <div v-if="locked" class="panel project-locked">
+    <h2><Lock aria-hidden="true" /> Проект на тарифе выше</h2>
+    <p>
+      Проект сверх лимита вашего тарифа, но его данные сохранены. Чтобы открыть его, перейдите на тариф с большим
+      числом проектов или отправьте в архив другой проект. Если этот проект больше не нужен — отправьте в архив его.
+    </p>
+    <div class="row-actions">
+      <RouterLink class="btn btn--accent" to="/cabinet/plan">Тарифы</RouterLink>
+      <button class="btn btn--ghost" type="button" :disabled="archiving" @click="archiveLocked">В архив</button>
+      <RouterLink class="btn btn--ghost" to="/cabinet">К сводке</RouterLink>
+    </div>
+  </div>
+
+  <div v-else-if="error" class="panel">
+    <h2>Проект недоступен</h2>
+    <p class="empty">{{ error }}</p>
+    <RouterLink class="btn btn--ghost" to="/cabinet">К сводке</RouterLink>
+  </div>
+
+  <div v-else-if="!ws" class="panel"><p class="empty">Открываем проект…</p></div>
+
+  <template v-else>
+    <!-- Название проекта — в шапке страницы; здесь на сводке — сайт, KPI и цель, номер счётчика на втором плане. -->
+    <p v-if="route.name === 'ws-summary'" class="ws-meta">
+      <span v-if="ws.client_name">{{ ws.client_name }}</span>
+      <a v-if="siteUrl" :href="siteUrl" target="_blank" rel="noopener noreferrer">{{ ws.site }}</a>
+      <span>{{ ws.accounts_count }} {{ plural(ws.accounts_count, 'кабинет', 'кабинета', 'кабинетов') }} Директа</span>
+      <span>{{ ws.campaigns_count }} {{ plural(ws.campaigns_count, 'кампания', 'кампании', 'кампаний') }}</span>
+      <span v-if="ws.kpi_type">
+        KPI: {{ ws.kpi_type === 'cpa' ? 'CPA' : 'ДРР' }}
+        <template v-if="ws.kpi_target != null">
+          ≤ {{ ws.kpi_type === 'cpa' ? rubles(ws.kpi_target) : `${ws.kpi_target}%` }}
+        </template>
+      </span>
+      <span v-if="ws.goal_name">цель «{{ ws.goal_name }}»</span>
+      <span class="ws-meta__minor">счётчик № {{ ws.counter_id }}</span>
+      <span v-if="refreshing" class="ws-meta__sync">
+        <span class="spinner" aria-hidden="true"></span>
+        обновляем данные
+      </span>
+    </p>
+
+    <p v-if="!ws.counter_ok" class="notice notice--warn">
+      Счётчик № {{ ws.counter_id }} сейчас не виден ни одному подключённому логину Метрики или выключен — визиты и цели
+      не обновляются. Проверьте доступ в <RouterLink to="/cabinet/connections">Подключениях</RouterLink>.
+    </p>
+    <p v-if="ws.archived" class="notice">
+      Проект в архиве. Вернуть его можно в <RouterLink :to="`/w/${ws.id}/settings`">настройках проекта</RouterLink>.
+    </p>
+
+    <div v-if="pendingItems.length" class="notice ws-loading" :class="{ 'notice--warn': loadStalled }" role="status">
+      <div class="ws-loading__head">
+        <span v-if="pendingItems.some((i) => i.job)" class="spinner" aria-hidden="true"></span>
+        <strong>{{ loadStalled ? 'Загрузка остановилась на ошибке' : 'Данные ещё загружаются' }}</strong>
+        <span v-if="loadPercent != null" class="ws-loading__pct">{{ loadPercent }}%</span>
       </div>
+      <div class="load-bar"><span :style="{ width: `${loadPercent || 0}%` }"></span></div>
+      <p v-if="loadStalled">
+        Часть данных не загрузилась, поэтому кампании и цифры неполные. Загрузку повторим автоматически в течение часа,
+        запустить сразу можно кнопкой «Обновить» в <RouterLink to="/cabinet/connections">Подключениях</RouterLink>.
+      </p>
+      <p v-else>
+        Пока загрузка не закончится, кампании и цифры неполные — разделы обновятся сами. Подробнее — в
+        <RouterLink to="/cabinet/connections">Подключениях</RouterLink>.
+      </p>
+      <ul class="ws-loading__list">
+        <li v-for="item in pendingItems" :key="item.key">
+          <strong>{{ item.title }}</strong>
+          <span>{{ loadLine(item) }}</span>
+        </li>
+      </ul>
     </div>
 
-    <div v-else-if="error" class="panel">
-      <h2>Пространство недоступно</h2>
-      <p class="empty">{{ error }}</p>
-      <RouterLink class="btn btn--ghost" to="/cabinet">К обзору</RouterLink>
-    </div>
-
-    <div v-else-if="!ws" class="panel"><p class="empty">Открываем пространство…</p></div>
-
-    <template v-else>
-      <div class="ws-head">
-        <div>
-          <p class="ws-head__crumbs">
-            <RouterLink v-if="ws.client_id" to="/cabinet/clients">{{ ws.client_name }}</RouterLink>
-            <span v-else>Без клиента</span>
-            <span aria-hidden="true">/</span>
-            <span>Счётчик № {{ ws.counter_id }}</span>
-          </p>
-          <h1>{{ ws.name }}</h1>
-          <p class="ws-head__meta">
-            <a v-if="siteUrl" :href="siteUrl" target="_blank" rel="noopener noreferrer">{{ ws.site }}</a>
-            <span>{{ ws.accounts_count }} {{ plural(ws.accounts_count, 'кабинет', 'кабинета', 'кабинетов') }} Директа</span>
-            <span>{{ ws.campaigns_count }} {{ plural(ws.campaigns_count, 'кампания', 'кампании', 'кампаний') }}</span>
-            <span v-if="ws.kpi_type">
-              KPI: {{ ws.kpi_type === 'cpa' ? 'CPA' : 'ДРР' }}
-              <template v-if="ws.kpi_target != null">
-                ≤ {{ ws.kpi_type === 'cpa' ? rubles(ws.kpi_target) : `${ws.kpi_target}%` }}
-              </template>
-            </span>
-            <span v-if="ws.goal_name">цель «{{ ws.goal_name }}»</span>
-            <span v-if="refreshing" class="ws-head__sync">
-              <span class="spinner" aria-hidden="true"></span>
-              обновляем данные
-            </span>
-          </p>
-        </div>
-      </div>
-
-      <p v-if="!ws.counter_ok" class="notice notice--warn">
-        Счётчик № {{ ws.counter_id }} сейчас не виден ни одному подключённому логину Метрики или выключен — визиты и цели
-        не обновляются. Проверьте доступ в <RouterLink to="/cabinet/accounts">Аккаунтах</RouterLink>.
-      </p>
-      <p v-if="ws.archived" class="notice">
-        Пространство в архиве. Вернуть его можно в <RouterLink :to="`/w/${ws.id}/settings`">настройках</RouterLink>.
-      </p>
-
-      <div v-if="pendingItems.length" class="notice ws-loading" :class="{ 'notice--warn': loadStalled }" role="status">
-        <div class="ws-loading__head">
-          <span v-if="pendingItems.some((i) => i.job)" class="spinner" aria-hidden="true"></span>
-          <strong>{{ loadStalled ? 'Загрузка остановилась на ошибке' : 'Данные ещё загружаются' }}</strong>
-          <span v-if="loadPercent != null" class="ws-loading__pct">{{ loadPercent }}%</span>
-        </div>
-        <div class="load-bar"><span :style="{ width: `${loadPercent || 0}%` }"></span></div>
-        <p v-if="loadStalled">
-          Часть данных не загрузилась, поэтому кампании и цифры неполные. Загрузку повторим автоматически в течение часа,
-          запустить сразу можно кнопкой «Обновить» в <RouterLink to="/cabinet/accounts">Аккаунтах</RouterLink>.
-        </p>
-        <p v-else>
-          Пока загрузка не закончится, кампании и цифры неполные — разделы обновятся сами. Подробнее — в
-          <RouterLink to="/cabinet/accounts">Аккаунтах</RouterLink>.
-        </p>
-        <ul class="ws-loading__list">
-          <li v-for="item in pendingItems" :key="item.key">
-            <strong>{{ item.title }}</strong>
-            <span>{{ loadLine(item) }}</span>
-          </li>
-        </ul>
-      </div>
-
-      <RouterView :key="`${ws.id}:${dataVersion}`" />
-    </template>
-  </AppShell>
+    <RouterView :key="`${ws.id}:${dataVersion}`" />
+  </template>
 </template>
 
 <script setup>
 import { computed, onBeforeUnmount, provide, ref, watch } from 'vue'
 import { RouterLink, RouterView, useRoute, useRouter } from 'vue-router'
 import { Lock } from '@lucide/vue'
-import AppShell from '../../components/AppShell.vue'
 import { ApiError, errorText, wsApi } from '../../api/web'
 import { pushToast } from '../../composables/useToasts'
 import { jobPercent, jobText, stageErrorText, stageFailure, stageProblem } from '../../composables/useLoads'
@@ -107,7 +96,7 @@ const error = ref('')
 const locked = ref(false)
 const archiving = ref(false)
 
-useHead('Пространство — AiMarketing', true)
+useHead('Проект — AiMarketing', true)
 watch(
   () => ws.value?.name,
   (name) => {
@@ -140,7 +129,7 @@ async function archiveLocked() {
   archiving.value = true
   try {
     await wsApi.update(Number(route.params.wsId), { archived: true })
-    pushToast('Проект в архиве — вернуть его можно в «Аккаунтах»')
+    pushToast('Проект в архиве — вернуть его можно в «Подключениях»')
     await loadWorkspaces(true).catch(() => null)
     router.replace('/cabinet')
   } catch (err) {
@@ -154,7 +143,7 @@ function reload() {
   return load(Number(route.params.wsId))
 }
 
-/** Вкладка сохранила изменения пространства — обновляем шапку и переключатель без запроса. */
+/** Вкладка сохранила изменения проекта — обновляем шапку и переключатель без запроса. */
 function patch(updated) {
   if (!updated || !ws.value || updated.id !== ws.value.id) return
   ws.value = { ...ws.value, ...updated }
@@ -163,7 +152,7 @@ function patch(updated) {
 
 provide(WS_KEY, { ws, reload, patch })
 
-// --- Загрузка данных кабинетов и счётчика пространства ---
+// --- Загрузка данных кабинетов и счётчика проекта ---
 
 const LOAD_ACTIVE_MS = 3000
 const LOAD_WAIT_MS = 30000

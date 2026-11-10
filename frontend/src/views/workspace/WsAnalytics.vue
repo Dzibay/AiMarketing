@@ -96,7 +96,7 @@
         <input v-model.trim="campaignSearch" type="search" class="search-input" placeholder="Найти кампанию" aria-label="Поиск кампании" />
       </div>
       <p v-if="!data.by_campaign.length" class="empty">
-        В пространстве нет кампаний —
+        В проекте нет кампаний —
         <RouterLink :to="`/w/${ws.id}/settings`">добавьте их в настройках</RouterLink>.
       </p>
       <div v-else class="table-scroll">
@@ -192,7 +192,7 @@
               <th class="num">Клики</th>
               <th class="num">Расход</th>
               <th class="num">Конверсии</th>
-              <th class="num">CPA</th>
+              <th class="num">CPA<TermHint term="cpa" /></th>
             </tr>
           </thead>
           <tbody>
@@ -225,6 +225,7 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import { RouterLink } from 'vue-router'
 import TrendChart from '../../components/TrendChart.vue'
+import TermHint from '../../components/TermHint.vue'
 import { errorText, jobProgressText, wsApi } from '../../api/web'
 import { pushToast } from '../../composables/useToasts'
 import {

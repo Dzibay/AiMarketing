@@ -45,7 +45,7 @@
           <input v-model.number="form.lookback_days" type="number" min="1" max="30" />
         </div>
         <div v-if="!workspace" v-field class="field">
-          <label>Пространство</label>
+          <label>Проект</label>
           <select v-model="form.scope_workspace_id">
             <option value="">Все</option>
             <option v-for="w in workspaces" :key="w.id" :value="String(w.id)">{{ w.name }}</option>
@@ -225,7 +225,7 @@ import { formatDateTime, rubles } from '../utils/format'
 import { campaignLabel, repeatedNames } from '../utils/campaignNames'
 
 const props = defineProps({
-  // Пространство: правила только его кампаний; без него — все правила пользователя.
+  // Проект: правила только его кампаний; без него — все правила пользователя.
   workspace: { type: Object, default: null },
 })
 
@@ -294,7 +294,7 @@ const goals = computed(() =>
     : allGoals.value,
 )
 
-// Кампании выбранных кабинета и пространства; выбор вне них сбрасываем.
+// Кампании выбранных кабинета и проекта; выбор вне них сбрасываем.
 const campaignOptions = computed(() => {
   const ws = props.workspace ? '' : form.scope_workspace_id
   return allCampaigns.value.filter(

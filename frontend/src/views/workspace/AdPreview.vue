@@ -40,7 +40,7 @@ const props = defineProps({
   titles: { type: Array, default: () => [] },
   texts: { type: Array, default: () => [] },
   href: { type: String, default: '' },
-  // Сайт пространства — когда у объявления нет своей ссылки (её подставит шаблон).
+  // Сайт проекта — когда у объявления нет своей ссылки (её подставит шаблон).
   site: { type: String, default: '' },
   pending: { type: Boolean, default: false },
   // Быстрые ссылки [{ text, href, description }] и уточнения (строки).

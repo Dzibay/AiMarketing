@@ -1,15 +1,15 @@
 <template>
   <div class="admin-shell">
-    <header class="topbar admin-shell__top">
-      <span class="topbar__brand">
-        <span class="topbar__logo"><BrandMark :size="34" /></span>
-        <span class="topbar__name">
+    <header class="admin-top">
+      <span class="admin-top__brand">
+        <span class="side__logo"><BrandMark :size="34" /></span>
+        <span class="admin-top__name">
           <strong>Ai<span>Marketing</span></strong>
           <small>Админка</small>
         </span>
       </span>
-      <span class="topbar__spacer"></span>
-      <div class="topbar__tools">
+      
+      <div class="admin-top__tools">
         <button class="icon-btn" type="button" :aria-label="isDark ? 'Светлая тема' : 'Тёмная тема'" @click="toggleTheme">
           <Sun v-if="isDark" aria-hidden="true" />
           <Moon v-else aria-hidden="true" />

@@ -17,6 +17,7 @@ JPEG = b"\xff\xd8\xff" + b"0" * 64
 
 
 class FakeContext:
+    general = False  # чат проекта, не общий
     require_account = ai_agent.Context.require_account
     account_ids = ai_agent.Context.account_ids
 
@@ -49,7 +50,7 @@ def library(monkeypatch):
 
     monkeypatch.setattr(audiences, "account_access", lambda user_id, account_id: (f"t{account_id}", {3: "acc-a", 4: "acc-b"}[account_id]))
     monkeypatch.setattr(ad_extras, "image_previews", previews)
-    # Где картинка стоит в объявлениях пространства: хэш → {account_id}.
+    # Где картинка стоит в объявлениях проекта: хэш → {account_id}.
     monkeypatch.setattr(ai_agent, "_image_homes", lambda ctx, hashes: {h: set(a) for h, a in state.homes.items() if h in hashes})
     return state
 
@@ -209,7 +210,7 @@ def test_image_source_question_has_our_options():
     assert question["options"] == ["Взять из других кампаний", "Загружу свои", "Сгенерировать по описанию", "Без картинок"]
     assert question["multiple"] is True and question["remember"] is False
     assert question["needs"] == {"Сгенерировать по описанию": "image_gen"}
-    # Ответ — на эту кампанию: прошлый ответ из памяти пространства не подставляем.
+    # Ответ — на эту кампанию: прошлый ответ из памяти проекта не подставляем.
     remembered = FakeContext(ws={"ai_facts": [{"key": "image_source", "question": "Картинки?", "answer": "Загружу свои"}]})
     assert ai_agent._q_questions(remembered, {"questions": [{"question": "Картинки?", "key": "image_source"}]})["questions"]
 
@@ -381,7 +382,7 @@ def _copying(monkeypatch, mapping):
 def test_update_ad_copies_images_from_other_account(monkeypatch, library):
     from app import ads
 
-    # В чате таблицей картинку не согласовывали — но она стоит в объявлении второго кабинета пространства.
+    # В чате таблицей картинку не согласовывали — но она стоит в объявлении второго кабинета проекта.
     library.homes = {"x1": {4}}
     monkeypatch.setattr(ai_agent, "_image_approvals", lambda ctx: [])
     copies = _copying(monkeypatch, {"x1": "new1"})

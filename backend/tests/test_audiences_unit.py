@@ -28,6 +28,7 @@ CATALOG = {
 
 
 class FakeContext:
+    general = False  # чат проекта, не общий
     require_account = ai_agent.Context.require_account
 
     def __init__(self, ws: dict | None = None, chat_id: int | None = 5):

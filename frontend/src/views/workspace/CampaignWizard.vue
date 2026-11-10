@@ -17,29 +17,29 @@
             <label>Кабинет Директа, где создать кампанию</label>
             <select v-model.number="form.account_id" required>
               <option :value="null" disabled>Выберите кабинет</option>
-              <optgroup v-if="accounts.length" label="Кабинеты пространства">
+              <optgroup v-if="accounts.length" label="Кабинеты проекта">
                 <option v-for="a in accounts" :key="a.id" :value="a.id" :disabled="!a.enabled">
                   {{ accountLabel(a) }}{{ a.enabled ? '' : ' — выключен' }}
                 </option>
               </optgroup>
-              <optgroup v-if="otherAccounts.length" label="Другие кабинеты — подключатся к пространству">
+              <optgroup v-if="otherAccounts.length" label="Другие кабинеты — подключатся к проекту">
                 <option v-for="a in otherAccounts" :key="a.id" :value="a.id">{{ accountLabel(a) }}</option>
               </optgroup>
             </select>
             <p v-if="!accounts.length && !otherAccounts.length" class="field-hint tone-warn">
               Нет ни одного кабинета Директа — подключите логин на странице
-              <RouterLink to="/cabinet/accounts">«Аккаунты»</RouterLink>.
+              <RouterLink to="/cabinet/connections">«Подключения»</RouterLink>.
             </p>
             <p v-else-if="account" class="field-hint" :class="COUNTER_TONES[account.counter_access?.status]">
               Счётчик № {{ options.counter_id }}:
               {{ account.counter_access?.status === 'ok' ? 'у логина кабинета есть доступ, цели Метрики доступны в стратегиях.' : account.counter_access?.hint || 'проверка не выполнялась' }}
               <template v-if="otherAccounts.some((a) => a.id === account.id)">
-                Кабинет будет подключён к пространству вместе с новой кампанией.
+                Кабинет будет подключён к проекту вместе с новой кампанией.
               </template>
             </p>
           </div>
           <div v-field class="field">
-            <label>Тип</label>
+            <label>Тип<TermHint term="epk" /></label>
             <select v-model="form.type">
               <option v-for="t in options.types" :key="t.id" :value="t.id">{{ t.label }}</option>
             </select>
@@ -57,7 +57,7 @@
             <input v-model="form.end_date" type="date" :min="form.start_date || today" />
           </div>
           <p class="field-hint field--wide">
-            Счётчик пространства № {{ options.counter_id }} подключится к кампании автоматически — без него Директ не
+            Счётчик проекта № {{ options.counter_id }} подключится к кампании автоматически — без него Директ не
             увидит цели и конверсии. Кампания создаётся черновиком и не тратит деньги, пока вы не отправите объявления на
             модерацию.
           </p>
@@ -243,7 +243,7 @@
               <template v-else>нет</template>
             </dd>
           </dl>
-          <p class="field-hint">Кампания появится в Директе черновиком и сразу добавится в это пространство.</p>
+          <p class="field-hint">Кампания появится в Директе черновиком и сразу добавится в этот проект.</p>
         </div>
         <p v-if="formError" class="form-error">{{ formError }}</p>
       </form>
@@ -263,6 +263,7 @@
 import { computed, reactive, ref, watch } from 'vue'
 import { RouterLink } from 'vue-router'
 import Modal from '../../components/ui/Modal.vue'
+import TermHint from '../../components/TermHint.vue'
 import ScheduleGrid from '../../components/ScheduleGrid.vue'
 import StrategyFields from '../../components/StrategyFields.vue'
 import AdExtrasFields from '../../components/AdExtrasFields.vue'

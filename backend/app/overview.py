@@ -1,4 +1,4 @@
-"""Сводка по сайтам (рабочим пространствам) и папкам-клиентам: расход, KPI, темп бюджета, баланс, «где горит».
+"""Сводка по сайтам (проектам) и папкам-клиентам: расход, KPI, темп бюджета, баланс, «где горит».
 
 Всё считается из уже загруженных данных (stats_daily, direct_campaigns, балансы кабинетов) —
 сводка открывается мгновенно и не ходит в API. Свежесть данных — задачи stats_today / stats_day.
@@ -198,7 +198,7 @@ def campaign_anomalies(
 
 # --- Сборка сводки ---------------------------------------------------------------------------
 
-NO_WORKSPACE = "Без пространства"
+NO_WORKSPACE = "Без проекта"
 NO_CLIENT = "Без клиента"
 
 
@@ -216,7 +216,7 @@ def _problem(severity: str, kind: str, title: str, detail: str = "", **where) ->
         "account_id": where.get("account_id"),
         "campaign_row_id": where.get("campaign_row_id"),
         "object_name": where.get("object_name", ""),
-        # Пространства, которые задевает проблема кабинета или логина, — для счётчиков в строках.
+        # Проекта, которые задевает проблема кабинета или логина, — для счётчиков в строках.
         "workspace_ids": workspace_ids,
     }
 
@@ -384,10 +384,10 @@ def _budget_problems(budget: dict | None, where: dict, *, label: str = "") -> li
 
 def build_overview(user_id: int, today: date | None = None, now: datetime | None = None) -> dict:
     """
-    Строки по рабочим пространствам (сайтам), папки-клиенты с общим бюджетом и список «где горит».
+    Строки по проектам (сайтам), папки-клиенты с общим бюджетом и список «где горит».
 
-    Расход кампании идёт в пространство, где она лежит; кампании вне пространств — в строку
-    «Без пространства». Пространства архивных клиентов и их кабинеты в сводку не попадают.
+    Расход кампании идёт в проект, где она лежит; кампании вне проектов — в строку
+    «Без проекта». Проекта архивных клиентов и их кабинеты в сводку не попадают.
     today — московская дата.
     """
     today = today or today_msk()
@@ -422,7 +422,7 @@ def build_overview(user_id: int, today: date | None = None, now: datetime | None
     campaign_row = {(c["account_id"], c["campaign_id"]): c for c in data["campaigns"]}
 
     def ws_of_campaign(account_id: int, campaign_id: int | None) -> tuple[bool, int | None]:
-        """(видно ли, пространство). Кампания скрытого пространства не видна."""
+        """(видно ли, проект). Кампания скрытого проекта не видна."""
         row = campaign_row.get((account_id, campaign_id)) if campaign_id else None
         ws_id = campaign_ws.get(row["id"]) if row else None
         if ws_id in hidden_ws:
@@ -508,7 +508,7 @@ def build_overview(user_id: int, today: date | None = None, now: datetime | None
         ws = ws_by_id.get(ws_id) or {}
         client = clients_by_id.get(ws.get("client_row_id")) or {}
         s = ws_sums[ws_id]
-        # KPI пространства; не задан — берём KPI папки-клиента.
+        # KPI проекта; не задан — берём KPI папки-клиента.
         kpi_type = ws.get("kpi_type") or client.get("kpi_type") or ""
         raw_target = ws.get("kpi_target") if ws.get("kpi_type") else client.get("kpi_target")
         target = float(raw_target) if raw_target is not None else None

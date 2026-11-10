@@ -309,7 +309,7 @@ def test_tool_is_registered_and_prompt_points_to_it(monkeypatch):
     monkeypatch.setattr(ai_agent, "memory_examples", lambda ws_id, limit: {})
     monkeypatch.setattr(ai_agent, "_image_gen_ready", lambda ctx: False)
     monkeypatch.setattr(ai_agent, "_running_experiments", lambda ctx: [])
-    ctx = SimpleNamespace(user_id=1, ws_id=2, ws={"name": "Окна", "counter_id": 555, "accounts": []}, access=ai_agent.normalize_ai_access(None))
+    ctx = SimpleNamespace(user_id=1, ws_id=2, general=False, ws={"name": "Окна", "counter_id": 555, "accounts": []}, access=ai_agent.normalize_ai_access(None))
     prompt = ai_agent._system_prompt(ctx)
     assert "get_wordstat" in prompt
     assert "недоступен" not in prompt

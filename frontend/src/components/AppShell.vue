@@ -1,104 +1,139 @@
 <template>
-  <div class="shell">
-    <header class="topbar">
-      <RouterLink class="topbar__brand" to="/cabinet" aria-label="AiMarketing — обзор кабинета">
-        <span class="topbar__logo"><BrandMark :size="34" /></span>
-        <span class="topbar__name">
-          <strong>Ai<span>Marketing</span></strong>
-          <small>{{ contextLabel }}</small>
-        </span>
-      </RouterLink>
-
-      <nav v-if="activeGroup && activeGroup.pages.length > 1" class="topbar__tabs" :aria-label="activeGroup.label">
-        <RouterLink
-          v-for="page in activeGroup.pages"
-          :key="page.to"
-          class="topbar__tab"
-          :class="{ active: pageMatches(page, route.path) }"
-          :to="page.to"
-        >
-          {{ page.label }}
-          <Lock v-if="featureLocked(subscription, page.feature)" class="topbar__lock" aria-label="не входит в тариф" />
-          <span v-if="page.count" class="topbar__count">{{ page.count }}</span>
-        </RouterLink>
-      </nav>
-      <span v-else class="topbar__spacer"></span>
-
-      <div class="topbar__tools">
-        <template v-if="accessOk">
-          <WorkspacePicker />
-          <LoadsIndicator />
-        </template>
-        <RouterLink
-          v-if="accessOk && wsId && activeGroup?.key !== 'chat'"
-          class="btn btn--accent topbar__ai"
-          :to="`/w/${wsId}/chat`"
-          title="Спросить ИИ"
-        >
-          <Sparkles aria-hidden="true" />
-          <span>Спросить ИИ</span>
+  <div class="app" :class="{ 'is-collapsed': collapsed }">
+    <aside class="side" aria-label="Меню">
+      <div class="side__top">
+        <RouterLink class="side__brand" to="/cabinet" aria-label="AiMarketing — сводка">
+          <span class="side__logo"><BrandMark :size="30" /></span>
+          <strong class="side__name">Ai<span>Marketing</span></strong>
         </RouterLink>
         <button
-          class="icon-btn topbar__theme"
+          class="side__collapse"
           type="button"
-          :aria-label="isDark ? 'Светлая тема' : 'Тёмная тема'"
+          :aria-label="collapsed ? 'Развернуть меню' : 'Свернуть меню'"
+          :title="collapsed ? 'Развернуть меню' : 'Свернуть меню'"
+          @click="toggleCollapsed"
+        >
+          <PanelLeftOpen v-if="collapsed" aria-hidden="true" />
+          <PanelLeftClose v-else aria-hidden="true" />
+        </button>
+      </div>
+
+      <ProjectPicker v-if="accessOk" class="side__picker" :compact="collapsed" />
+
+      <nav class="side__nav" aria-label="Разделы">
+        <template v-for="item in sections" :key="item.key">
+          <RouterLink
+            v-if="item.to"
+            class="side__item"
+            :class="{ active: item.active }"
+            :to="item.to"
+            :title="collapsed ? item.label : undefined"
+          >
+            <component :is="item.icon" aria-hidden="true" />
+            <span class="side__label">{{ item.label }}</span>
+            <span v-if="item.badge" class="side__badge">{{ item.badge }}</span>
+          </RouterLink>
+          <span v-else class="side__item is-disabled" :title="item.hint" aria-disabled="true">
+            <component :is="item.icon" aria-hidden="true" />
+            <span class="side__label">
+              {{ item.label }}
+              <small>{{ item.hint }}</small>
+            </span>
+          </span>
+        </template>
+      </nav>
+
+      <nav class="side__nav side__nav--service" aria-label="Служебные разделы">
+        <RouterLink
+          v-for="item in SERVICE"
+          :key="item.key"
+          class="side__item"
+          :class="{ active: route.meta.section === item.key }"
+          :to="item.to"
+          :title="collapsed ? item.label : undefined"
+        >
+          <component :is="item.icon" aria-hidden="true" />
+          <span class="side__label">{{ item.label }}</span>
+        </RouterLink>
+        <button
+          class="side__item"
+          type="button"
+          :title="collapsed ? themeLabel : undefined"
           @click="toggleTheme"
         >
           <Sun v-if="isDark" aria-hidden="true" />
           <Moon v-else aria-hidden="true" />
-        </button>
-        <ProfileMenu @logout="logout" />
-      </div>
-    </header>
-
-    <aside class="rail">
-      <nav class="rail__group rail__group--nav" :aria-label="wsId ? 'Разделы пространства' : 'Разделы кабинета'">
-        <template v-if="wsId">
-          <RouterLink class="rail__btn" to="/cabinet">
-            <House aria-hidden="true" />
-            <span class="rail__tip">Обзор кабинета</span>
-          </RouterLink>
-          <span class="rail__sep" aria-hidden="true"></span>
-        </template>
-        <RouterLink
-          v-for="group in groups"
-          :key="group.key"
-          class="rail__btn"
-          :class="{ active: group === activeGroup }"
-          :to="group.pages[0].to"
-          :aria-label="group.label"
-        >
-          <component :is="group.icon" aria-hidden="true" />
-          <span class="rail__tip">{{ group.label }}</span>
-        </RouterLink>
-        <RouterLink
-          class="rail__btn rail__bottom"
-          :class="{ active: settingsGroup === activeGroup }"
-          :to="settingsGroup.pages[0].to"
-          :aria-label="settingsGroup.label"
-        >
-          <Settings aria-hidden="true" />
-          <span class="rail__tip">{{ settingsGroup.label }}</span>
-        </RouterLink>
-        <!-- Одна кнопка темы под настройками: подсвеченным в колонке остаётся только текущий раздел. -->
-        <button class="rail__btn" type="button" :aria-label="isDark ? 'Светлая тема' : 'Тёмная тема'" @click="toggleTheme">
-          <Sun v-if="isDark" aria-hidden="true" />
-          <Moon v-else aria-hidden="true" />
-          <span class="rail__tip">{{ isDark ? 'Светлая тема' : 'Тёмная тема' }}</span>
+          <span class="side__label">{{ themeLabel }}</span>
         </button>
       </nav>
     </aside>
 
-    <main class="cabinet shell__main">
-      <div v-if="limitBanner" class="notice limit-banner" :class="limitBanner.cls" role="status">
-        <span>{{ limitBanner.text }}</span>
-        <RouterLink class="btn btn--ghost btn--xs" to="/cabinet/plan">{{ limitBanner.action }}</RouterLink>
-        <button class="icon-btn" type="button" aria-label="Скрыть" @click="dismissBanner">
-          <X aria-hidden="true" />
-        </button>
+    <div class="app__main">
+      <!-- На телефоне меню нет: логотип, переключатель проекта и профиль — в верхней строке. -->
+      <div class="mobile-top">
+        <RouterLink class="side__logo" to="/cabinet" aria-label="AiMarketing — сводка"><BrandMark :size="28" /></RouterLink>
+        <ProjectPicker v-if="accessOk" class="mobile-top__picker" />
+        <ProfileMenu @logout="logout" />
       </div>
-      <slot />
-    </main>
+
+      <header class="page-head">
+        <div class="page-head__title">
+          <h1>{{ title }}</h1>
+          <p v-if="scopeLabel">{{ scopeLabel }}</p>
+        </div>
+        <div class="page-head__tools">
+          <RouterLink
+            v-if="limitChip"
+            class="limit-chip"
+            :class="`is-${limitLevel || 'ok'}`"
+            to="/cabinet/plan"
+            title="Расход лимита и тариф"
+          >
+            <span v-if="limitChip.percent !== null" class="limit-chip__bar" aria-hidden="true">
+              <span :style="{ width: `${limitChip.percent}%` }"></span>
+            </span>
+            <span class="limit-chip__text">{{ limitChip.text }}</span>
+          </RouterLink>
+          <RouterLink
+            v-if="accessOk"
+            class="pending-chip"
+            :class="{ 'has-items': pendingCount > 0, active: route.meta.section === 'pending' }"
+            to="/cabinet/pending"
+            title="Предложения ИИ, которые ждут вашего решения"
+          >
+            <Inbox aria-hidden="true" />
+            <span class="pending-chip__label">Ждёт решения:</span>
+            <strong>{{ pendingCount }}</strong>
+          </RouterLink>
+          <LoadsIndicator v-if="accessOk" />
+          <ProfileMenu class="page-head__profile" @logout="logout" />
+        </div>
+      </header>
+
+      <nav v-if="tabs.length > 1" class="page-tabs" :aria-label="title">
+        <RouterLink
+          v-for="tab in tabs"
+          :key="tab.to"
+          class="page-tabs__tab"
+          :class="{ active: pageMatches(tab, route.path) }"
+          :to="tab.to"
+        >
+          {{ tab.label }}
+          <Lock v-if="featureLocked(subscription, tab.feature)" class="page-tabs__lock" aria-label="не входит в тариф" />
+        </RouterLink>
+      </nav>
+
+      <main class="cabinet app__content">
+        <div v-if="limitBanner" class="notice limit-banner" :class="limitBanner.cls" role="status">
+          <span>{{ limitBanner.text }}</span>
+          <RouterLink class="btn btn--ghost btn--xs" to="/cabinet/plan">{{ limitBanner.action }}</RouterLink>
+          <button class="icon-btn" type="button" aria-label="Скрыть" @click="dismissBanner">
+            <X aria-hidden="true" />
+          </button>
+        </div>
+        <RouterView />
+      </main>
+    </div>
 
     <Modal :open="!!upgrade" :title="upgrade?.title || ''" wide @close="upgrade = null">
       <template v-if="upgrade">
@@ -122,18 +157,18 @@
 
     <nav class="tabbar" aria-label="Разделы">
       <RouterLink
-        v-for="group in groups"
-        :key="group.key"
+        v-for="item in tabbarItems"
+        :key="item.key"
         class="tabbar__item"
-        :class="{ active: group === activeGroup }"
-        :to="group.pages[0].to"
+        :class="{ active: item.active }"
+        :to="item.to"
       >
-        <component :is="group.icon" aria-hidden="true" />
-        <span>{{ group.short || group.label }}</span>
+        <component :is="item.icon" aria-hidden="true" />
+        <span>{{ item.short || item.label }}</span>
       </RouterLink>
       <button
         class="tabbar__item"
-        :class="{ active: moreOpen || settingsGroup === activeGroup }"
+        :class="{ active: moreOpen || moreActive }"
         type="button"
         :aria-expanded="moreOpen"
         @click="moreOpen = !moreOpen"
@@ -146,28 +181,33 @@
     <template v-if="moreOpen">
       <div class="tabbar-backdrop" @click="moreOpen = false"></div>
       <div class="tabbar-sheet" role="menu">
-        <RouterLink
-          class="menu-item"
-          :class="{ active: settingsGroup === activeGroup }"
-          role="menuitem"
-          :to="settingsGroup.pages[0].to"
-        >
-          <Settings aria-hidden="true" />
-          {{ settingsGroup.label }}
-        </RouterLink>
-        <template v-if="wsId">
-          <hr />
-          <template v-for="group in cabinetGroups" :key="group.key">
-            <RouterLink v-for="page in group.pages" :key="page.to" class="menu-item" role="menuitem" :to="page.to">
-              <component :is="group.icon" aria-hidden="true" />
-              {{ page.label === 'Обзор' ? 'Обзор кабинета' : page.label }}
-            </RouterLink>
-          </template>
-          <RouterLink class="menu-item" role="menuitem" :to="CABINET_SETTINGS.pages[0].to">
-            <Settings aria-hidden="true" />
-            Настройки кабинета
+        <template v-for="item in moreItems" :key="item.key">
+          <RouterLink v-if="item.to" class="menu-item" :class="{ active: item.active }" role="menuitem" :to="item.to">
+            <component :is="item.icon" aria-hidden="true" />
+            {{ item.label }}
           </RouterLink>
+          <span v-else class="menu-item is-disabled" role="menuitem" aria-disabled="true">
+            <component :is="item.icon" aria-hidden="true" />
+            {{ item.label }}<small class="menu-item__note">{{ item.hint }}</small>
+          </span>
         </template>
+        <hr />
+        <RouterLink
+          v-for="item in SERVICE"
+          :key="item.key"
+          class="menu-item"
+          :class="{ active: route.meta.section === item.key }"
+          role="menuitem"
+          :to="item.to"
+        >
+          <component :is="item.icon" aria-hidden="true" />
+          {{ item.label }}
+        </RouterLink>
+        <button class="menu-item" type="button" role="menuitem" @click="toggleTheme">
+          <Sun v-if="isDark" aria-hidden="true" />
+          <Moon v-else aria-hidden="true" />
+          {{ themeLabel }}
+        </button>
         <hr />
         <button class="menu-item is-danger" type="button" role="menuitem" @click="logout">
           <LogOut aria-hidden="true" />
@@ -180,54 +220,70 @@
 
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { RouterLink, useRoute, useRouter } from 'vue-router'
-import { Ellipsis, House, Lock, LogOut, Moon, Settings, Sparkles, Sun, X } from '@lucide/vue'
+import { RouterLink, RouterView, useRoute, useRouter } from 'vue-router'
+import { Ellipsis, Inbox, Lock, LogOut, Moon, PanelLeftClose, PanelLeftOpen, Sun, X } from '@lucide/vue'
 import BrandMark from './BrandMark.vue'
 import LoadsIndicator from './LoadsIndicator.vue'
 import PlanOffers from './PlanOffers.vue'
 import ProfileMenu from './ProfileMenu.vue'
-import WorkspacePicker from './WorkspacePicker.vue'
+import ProjectPicker from './ProjectPicker.vue'
 import Modal from './ui/Modal.vue'
-import { CABINET_NAV, CABINET_SETTINGS, groupMatches, pageMatches, workspaceNav, workspaceSettings } from './shellNav'
+import { SECTIONS, SERVICE, TABBAR_KEYS, pageMatches, sectionTabs, sectionTo } from './shellNav'
 import { resetLoads } from '../composables/useLoads'
+import { loadPending, resetPending, usePending } from '../composables/usePending'
 import { loadPlan, resetPlan, usePlan } from '../composables/usePlan'
 import { featureLocked, loadProfile, resetProfile, useProfile } from '../composables/useProfile'
+import { resetProjectFilter, useProjectFilter } from '../composables/useProjectFilter'
 import { clearSession, getSession } from '../composables/useSession'
 import { useTheme } from '../composables/useTheme'
-import { loadWorkspaces, resetWorkspaces, useWorkspaces } from '../composables/useWorkspaces'
+import { loadWorkspaces, resetWorkspaces } from '../composables/useWorkspaces'
 import { ACCESS_EVENT, ApiError, errorText } from '../api/web'
 import { pushToast } from '../composables/useToasts'
 import { formatDay, pct } from '../utils/format'
 
+/**
+ * Оболочка кабинета — родительский маршрут всех его страниц: меню слева (не меняется от проекта),
+ * шапка страницы с вкладками раздела, шкалой лимита и «Ждёт решения», нижняя панель на телефоне.
+ */
 const route = useRoute()
 const router = useRouter()
 const { isDark, toggleTheme } = useTheme()
-const { workspaces } = useWorkspaces()
 const { subscription } = useProfile()
 const { plan } = usePlan()
+const { pendingCount } = usePending()
+const { projectId, project } = useProjectFilter()
 
 // Подписка закончилась или почта не подтверждена — данных кабинета нет, переключатель и загрузки не показываем.
 const accessOk = computed(() => !subscription.value || subscription.value.state === 'ok')
+const themeLabel = computed(() => (isDark.value ? 'Светлая тема' : 'Тёмная тема'))
+
+// --- Меню ---
+
+const COLLAPSE_KEY = 'aimarketing-side-collapsed'
+const collapsed = ref(localStorage.getItem(COLLAPSE_KEY) === '1')
+
+function toggleCollapsed() {
+  collapsed.value = !collapsed.value
+  localStorage.setItem(COLLAPSE_KEY, collapsed.value ? '1' : '0')
+}
+
+const sections = computed(() =>
+  SECTIONS.map((s) => ({
+    ...s,
+    to: sectionTo(s, projectId.value),
+    active: route.meta.section === s.key,
+  })),
+)
+
+const tabbarItems = computed(() =>
+  TABBAR_KEYS.map((key) => sections.value.find((s) => s.key === key)).filter((s) => s.to),
+)
+const moreItems = computed(() => sections.value.filter((s) => !TABBAR_KEYS.includes(s.key)))
+const moreActive = computed(
+  () => moreItems.value.some((s) => s.active) || SERVICE.some((s) => s.key === route.meta.section),
+)
 
 const moreOpen = ref(false)
-
-const wsId = computed(() => (route.params.wsId ? Number(route.params.wsId) : null))
-const currentWs = computed(() => workspaces.value.find((w) => w.id === wsId.value) || null)
-
-const cabinetGroups = CABINET_NAV
-const groups = computed(() =>
-  wsId.value ? workspaceNav(wsId.value, currentWs.value?.campaigns_count) : CABINET_NAV,
-)
-const settingsGroup = computed(() => (wsId.value ? workspaceSettings(wsId.value) : CABINET_SETTINGS))
-const activeGroup = computed(
-  () => [...groups.value, settingsGroup.value].find((group) => groupMatches(group, route.path)) || null,
-)
-
-const contextLabel = computed(() => {
-  if (!wsId.value) return 'Кабинет'
-  return currentWs.value?.client_name || 'Пространство'
-})
-
 watch(
   () => route.fullPath,
   () => {
@@ -235,12 +291,45 @@ watch(
   },
 )
 
+// --- Шапка страницы ---
+
+const currentSection = computed(() => SECTIONS.find((s) => s.key === route.meta.section) || null)
+const title = computed(() => route.meta.title || currentSection.value?.label || '')
+/** Под заголовком раздела — по какому проекту он открыт; у служебных страниц — ничего. */
+const scopeLabel = computed(() => {
+  if (!currentSection.value) return ''
+  if (route.params.wsId) return project.value?.name || ''
+  return 'Все проекты'
+})
+const tabs = computed(() => sectionTabs(route.meta.section, route.params.wsId ? projectId.value : null))
+
+/** «12 декабря» — без года, шапка узкая. */
+function dayMonth(iso) {
+  return new Date(`${iso}T00:00:00`).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' })
+}
+
+const limitChip = computed(() => {
+  const sub = subscription.value
+  if (!sub?.plan) return null
+  const until = sub.last_day ? ` до ${dayMonth(sub.last_day)}` : ''
+  const u = plan.value?.usage
+  if (u?.limited && u.used_percent !== null) {
+    return {
+      percent: Math.min(100, Math.max(0, u.used_percent)),
+      text: `Использовано ${pct(u.used_percent, 0)} · ${sub.plan.name}${until}`,
+    }
+  }
+  return { percent: null, text: `${sub.plan.name}${until}` }
+})
+
 function logout() {
   clearSession()
   resetWorkspaces()
   resetLoads()
   resetProfile()
   resetPlan()
+  resetPending()
+  resetProjectFilter()
   router.replace('/login')
 }
 
@@ -264,7 +353,7 @@ const limitBanner = computed(() => {
   if (level === 'over') {
     return {
       cls: 'notice--warn',
-      text: `Лимит на этот период исчерпан — ИИ-ассистент, Вордстат и картинки снова заработают ${formatDay(u.period_end)} или сразу после перехода на тариф выше.`,
+      text: `Лимит на этот период исчерпан — ИИ-помощник, Вордстат и картинки снова заработают ${formatDay(u.period_end)} или сразу после перехода на тариф выше.`,
       action: 'Повысить тариф',
     }
   }
@@ -284,7 +373,7 @@ function dismissBanner() {
 const UPGRADE = {
   'units-exhausted': {
     title: 'Лимит на этот период исчерпан',
-    text: 'ИИ-ассистент, Вордстат и генерация картинок остановлены до конца периода. Перейдите на тариф выше — они заработают сразу.',
+    text: 'ИИ-помощник, Вордстат и генерация картинок остановлены до конца периода. Перейдите на тариф выше — они заработают сразу.',
   },
   'feature-locked': {
     title: 'Функция не входит в ваш тариф',
@@ -306,7 +395,7 @@ async function onAccess(event) {
   const u = plan.value?.usage
   let text = preset.text
   if (code === 'units-exhausted' && u?.period_end) {
-    text = `ИИ-ассистент, Вордстат и генерация картинок снова заработают ${formatDay(u.period_end)}. Перейдите на тариф выше — они заработают сразу.`
+    text = `ИИ-помощник, Вордстат и генерация картинок снова заработают ${formatDay(u.period_end)}. Перейдите на тариф выше — они заработают сразу.`
   } else if (code === 'feature-locked' && message) {
     text = `${message}. Перейдите на тариф, где она есть.`
   }
@@ -323,15 +412,25 @@ function chooseOffer() {
   router.push('/cabinet/plan')
 }
 
-onMounted(async () => {
-  window.addEventListener(ACCESS_EVENT, onAccess)
+// --- Загрузка: профиль, проекты, тариф и «Ждёт решения» (раз в минуту, пока вкладка открыта) ---
+
+const PENDING_MS = 60 * 1000
+let pendingTimer = null
+
+function pollPending() {
+  if (document.visibilityState === 'visible' && accessOk.value && getSession()) loadPending()
+}
+
+async function boot() {
   if (!getSession()) {
     router.replace('/login')
     return
   }
   try {
     await loadProfile()
-    if (accessOk.value) await Promise.all([loadWorkspaces(), loadPlan().catch(() => null)])
+    if (accessOk.value) {
+      await Promise.all([loadWorkspaces(), loadPlan().catch(() => null), loadPending()])
+    }
   } catch (err) {
     if (err instanceof ApiError && err.status === 401) {
       resetWorkspaces()
@@ -344,7 +443,23 @@ onMounted(async () => {
     if (err instanceof ApiError && (err.status === 402 || err.status === 403)) return
     pushToast(errorText(err), 'error')
   }
+}
+
+// Доступ открылся (подтвердили почту, продлили тариф) — догружаем то, что пропустили при входе.
+watch(accessOk, (ok, was) => {
+  if (ok && !was) boot()
 })
 
-onBeforeUnmount(() => window.removeEventListener(ACCESS_EVENT, onAccess))
+onMounted(() => {
+  window.addEventListener(ACCESS_EVENT, onAccess)
+  document.addEventListener('visibilitychange', pollPending)
+  pendingTimer = setInterval(pollPending, PENDING_MS)
+  boot()
+})
+
+onBeforeUnmount(() => {
+  window.removeEventListener(ACCESS_EVENT, onAccess)
+  document.removeEventListener('visibilitychange', pollPending)
+  clearInterval(pendingTimer)
+})
 </script>

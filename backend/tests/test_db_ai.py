@@ -160,7 +160,7 @@ def test_action_waits_for_approval_then_runs(db, monkeypatch):
     assert decided["pending"] == 0 and decided["job"]["kind"] == "ai_chat"
     with pytest.raises(YandexError):
         ai_agent.decide_action(s["user"], action["id"], approve=False)
-    # «Запомнить» включает категорию в доступах пространства.
+    # «Запомнить» включает категорию в доступах проекта.
     assert workspaces.get_workspace(s["user"], s["ws"])["ai_access"]["categories"]["pause_resume"] is True
 
     fake = FakeModel(_text("Остановил."))
@@ -342,7 +342,7 @@ def test_read_tools_work_on_local_data(db):
 def test_same_named_campaigns_get_direct_number(db):
     s = _seed(db)
     ctx = ai_agent.Context(s["user"], s["ws"])
-    make_campaign(db, s["user"], s["acc"], 31, "Поиск")  # одноимённая, но вне пространства — номер не нужен
+    make_campaign(db, s["user"], s["acc"], 31, "Поиск")  # одноимённая, но вне проекта — номер не нужен
     assert ai_agent._cnames(ctx.campaigns([s["search"], s["network"]])) == "«Поиск», «РСЯ»"
 
     twin = make_campaign(db, s["user"], s["acc"], 13, "Поиск")
@@ -653,7 +653,7 @@ def test_items_table_rejected_and_decide_all_with_exclude(db, monkeypatch):
 
 
 def _empty_workspace(db):
-    """Первое пространство нового пользователя: кабинет и счётчик есть, кампаний нет."""
+    """Первое проект нового пользователя: кабинет и счётчик есть, кампаний нет."""
     user = make_user(db, "first@example.com")
     conn_id = make_connection(db, user, "agency")
     acc = make_account(db, user, conn_id, name="Новый кабинет", login="new-acc")
@@ -686,7 +686,7 @@ def test_first_campaign_in_empty_workspace(db, monkeypatch):
     assert "ещё нет ни одной кампании" in prompt and "Максимум кликов" in prompt
     assert "Механика конверсий за 0" not in prompt
 
-    # Пустое пространство отдаёт пустые данные, а не падает.
+    # Пустое проект отдаёт пустые данные, а не падает.
     assert json.loads(fake.calls[1][-1]["content"])["campaigns"] == []
     assert "Итого: 0 кампаний" in json.loads(fake.calls[2][-1]["content"])["digest"]
     assert "Вордстат временно недоступен" in json.loads(fake.calls[3][-1]["content"])["error"]
@@ -751,7 +751,7 @@ def test_project_references_are_read_only(db, monkeypatch):
         db, stranger, 999, "Чужой", counter_row_id=make_counter(db, stranger, stranger_conn, 999, site="x.ru")
     )
 
-    # Упоминание: свои проекты без повторов и без самого пространства чата; чужой проект — ошибка.
+    # Упоминание: свои проекты без повторов и без самого проекта чата; чужой проект — ошибка.
     with pytest.raises(YandexError) as err:
         ai_agent.post_message(user, chat, "Как у @Чужой", refs=[stranger_ws])
     assert err.value.code == "not-found"
@@ -775,7 +775,7 @@ def test_project_references_are_read_only(db, monkeypatch):
     # Модель видит пометку о проекте; в ленте текст остаётся тем, что написал маркетолог.
     first_user = fake.calls[0][1]
     assert first_user["content"].startswith("Сделай как в @Блог\n\n[Упомянуты проекты: «Блог» (project_id %d)" % other_ws)
-    assert "Менять можно только кампании и кабинеты этого пространства" in fake.calls[0][0]["content"]
+    assert "Менять можно только кампании и кабинеты этого проекта" in fake.calls[0][0]["content"]
 
     def result(n: int) -> dict:
         return json.loads(fake.calls[n][-1]["content"])

@@ -87,7 +87,7 @@ def _seed(db):
         kpi_type="drr",
         kpi_target=20,
     )
-    # Пространство архивного клиента скрыто вместе с кабинетом.
+    # Проект архивного клиента скрыто вместе с кабинетом.
     old_campaign = make_campaign(db, user, acc_old, 31, "Старая")
     make_workspace(db, user, 103, "Архивный сайт", client_id=archived["id"], accounts=[acc_old], campaigns=[old_campaign])
     _stat(db, user, acc_old, 31, YESTERDAY, 99999)
@@ -120,7 +120,7 @@ def test_overview_rows(db):
     s = _seed(db)
     overview = build_overview(s["user"], TODAY)
     rows = {r["name"]: r for r in overview["workspaces"]}
-    assert set(rows) == {"Ромашка", "Вектор", "Без пространства"}  # пространство архивного клиента скрыто
+    assert set(rows) == {"Ромашка", "Вектор", "Без проекта"}  # проект архивного клиента скрыто
 
     r = rows["Ромашка"]
     assert (r["spend_today"], r["spend_yesterday"]) == (100_000, 1_200_000)
@@ -139,7 +139,7 @@ def test_overview_rows(db):
     assert (v["revenue_7d"], v["drr_7d"], v["kpi"]["status"]) == (7_000_000, 10.0, "ok")
     assert v["balance_kopecks"] is None and v["days_on_balance"] is None
 
-    assert rows["Без пространства"]["accounts"] == 1
+    assert rows["Без проекта"]["accounts"] == 1
     assert rows["Ромашка"]["client_name"] == "ООО Ромашка" and rows["Ромашка"]["campaigns"] == 2
     assert overview["totals"]["spend_yesterday"] == 1_200_000 + 100_000
     assert overview["today_updated_at"] is not None
@@ -163,7 +163,7 @@ def test_client_shared_budget_and_unassigned_spend(db):
     shared = [p for p in overview["problems"] if p["kind"] == "budget" and p["client_id"] == s["romashka"]]
     assert any("Общий бюджет клиента" in p["title"] for p in shared)
     rows = {r["id"]: r for r in overview["workspaces"]}
-    # Кампания кабинета вне пространств — в строке «Без пространства».
+    # Кампания кабинета вне проектов — в строке «Без проекта».
     assert rows[None]["spend_yesterday"] == 30_000
 
 
@@ -184,10 +184,10 @@ def test_where_it_burns(db):
 
     token = [p for p in overview["problems"] if p["kind"] == "token"]
     assert len(token) == 1 and token[0]["severity"] == "critical"
-    assert token[0]["workspace_name"] == "Вектор, Ромашка, Без пространства"
+    assert token[0]["workspace_name"] == "Вектор, Ромашка, Без проекта"
     rows = {r["name"]: r for r in overview["workspaces"]}
-    # Проблема логина засчитана каждому пространству на нём.
-    assert rows["Без пространства"]["problems"] == {"critical": 1, "warning": 0, "info": 0}
+    # Проблема логина засчитана каждому проекту на нём.
+    assert rows["Без проекта"]["problems"] == {"critical": 1, "warning": 0, "info": 0}
     assert rows["Вектор"]["problems"]["critical"] == 2
 
     stopped = next(p for p in overview["problems"] if p["kind"] == "stopped")

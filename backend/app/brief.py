@@ -1,4 +1,4 @@
-"""Бриф пространства: что продаём, география, что точно «не наше», заметки.
+"""Бриф проекта: что продаём, география, что точно «не наше», заметки.
 
 Бриф читают ИИ (чистка запросов, чат) и правила чистки: «не наше» сразу предлагается в минус.
 Черновик брифа ИИ собирает по главной странице сайта; сохраняет его пользователь сам.
@@ -66,7 +66,7 @@ def brief_filled(brief) -> bool:
 
 
 def brief_prompt(ws: dict) -> str:
-    """Бриф и KPI пространства — блоком для промпта ИИ."""
+    """Бриф и KPI проекта — блоком для промпта ИИ."""
     b = normalize_brief(ws.get("brief"))
     lines = [f"Клиент: {ws.get('name') or ''}"]
     site = ws.get("site") or ws.get("counter_site") or ""
@@ -97,7 +97,7 @@ def brief_prompt(ws: dict) -> str:
 def _site_url(raw: str) -> str:
     url = (raw or "").strip()
     if not url:
-        raise YandexError("site", "Укажите адрес сайта в настройках пространства")
+        raise YandexError("site", "Укажите адрес сайта в настройках проекта")
     if "://" not in url:
         url = "https://" + url
     return url
@@ -249,7 +249,7 @@ _DRAFT_SYSTEM = """Ты помогаешь маркетологу заполни
 
 
 def draft_brief(user_id: int, payload: dict, progress=None) -> dict:
-    """Задача: черновик брифа по сайту пространства. Не сохраняет — пользователь правит и сохраняет сам."""
+    """Задача: черновик брифа по сайту проекта. Не сохраняет — пользователь правит и сохраняет сам."""
     from app.workspaces import _ws_out, require_workspace
 
     progress = progress or (lambda *_a: None)

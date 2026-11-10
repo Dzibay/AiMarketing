@@ -1,4 +1,4 @@
-"""Файлы контекста пространства на настоящей БД: загрузка txt/zip через API, список, выключение, удаление,
+"""Файлы контекста проекта на настоящей БД: загрузка txt/zip через API, список, выключение, удаление,
 лимиты и текст файлов в системном промпте чата (модель подменена)."""
 
 import base64
@@ -103,7 +103,7 @@ def test_upload_list_replace_toggle_delete(db):
     assert [f["filename"] for f in body["items"]] == ["бриф.txt", "chat/2.md", "escape.txt"]
     assert client.delete(_url(ws, f"/{first}"), headers=auth).status_code == 404
 
-    # Чужое пространство и чужой файл не видны.
+    # Чужое проект и чужой файл не видны.
     stranger = {"Authorization": f"Bearer {make_session(make_user(db, 'x@example.com'))}"}
     assert client.get(_url(ws), headers=stranger).status_code == 404
     assert client.post(_url(ws), json={"filename": "a.txt", "data": _b64(b"x")}, headers=stranger).status_code == 404
@@ -137,8 +137,8 @@ def test_workspace_limits(db, monkeypatch):
         _url(ws), json={"filename": "three.zip", "data": _b64(_zip([(f"{i}.txt", b"text") for i in range(3)]))}, headers=auth
     ).json()
     assert body["added"] == ["0.txt", "1.txt"]
-    assert body["skipped"] == [{"name": "2.txt", "reason": "в пространстве уже 2 файлов"}]
-    # Замена существующего файла при полном пространстве разрешена.
+    assert body["skipped"] == [{"name": "2.txt", "reason": "в проекте уже 2 файлов"}]
+    # Замена существующего файла при полном проекте разрешена.
     body = client.post(_url(ws), json={"filename": "three.zip", "data": _b64(_zip([("0.txt", b"new")]))}, headers=auth).json()
     assert body["replaced"] == ["0.txt"]
 
@@ -186,7 +186,7 @@ def test_workspace_prompt_limit_setting(db):
     assert "=== a.txt ===\n" + "a" * 3000 in block
     assert "=== b.txt — начало, 2 000 из 3 000 символов ===\n" + "b" * 2000 + "\n" in block
     assert "c" * 10 not in block and block.endswith("Не поместились в лимит и тебе не видны: c.txt.")
-    # У другого пространства свой лимит.
+    # У другого проекта свой лимит.
     assert client.get(_url(other_ws), headers=auth).json()["usage"]["limit"] == 20_000
 
     for bad in (4999, 100_001):

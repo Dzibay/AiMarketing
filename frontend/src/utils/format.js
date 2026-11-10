@@ -184,13 +184,12 @@ export function priorityGoalsForApi(goals) {
 
 const CONNECTION_PROBLEMS = new Set(['token', 'connection_sync', 'account_sync', 'stats_error', 'stats_stale', 'balance'])
 
-/** Куда вести из строки «Где горит»: кампания, аккаунты, настройки пространства или папка клиента. */
+/** Куда вести из строки «Где горит»: кампания, подключения, настройки проекта или его сводка. */
 export function problemLink(p) {
   const ws = p.workspace_id
   if (p.campaign_row_id && ws) return { to: `/w/${ws}/campaigns/${p.campaign_row_id}`, label: 'К кампании' }
-  if (CONNECTION_PROBLEMS.has(p.kind)) return { to: '/cabinet/accounts', label: 'К аккаунтам' }
+  if (CONNECTION_PROBLEMS.has(p.kind)) return { to: '/cabinet/connections', label: 'К подключениям' }
   if ((p.kind === 'budget' || p.kind === 'kpi') && ws) return { to: `/w/${ws}/settings`, label: 'Настройки' }
-  if (p.kind === 'budget' && p.client_id) return { to: '/cabinet/clients', label: 'К клиенту' }
   if (ws) return { to: `/w/${ws}/summary`, label: 'Открыть' }
   return null
 }

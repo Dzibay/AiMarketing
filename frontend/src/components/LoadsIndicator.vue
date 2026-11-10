@@ -28,10 +28,10 @@
           </template>
           <small v-else :class="{ 'is-warn': stageProblem(item) || !item.loaded_at }">{{ statusLine(item) }}</small>
         </div>
-        <p v-if="hidden" class="loads-ind__more">и ещё {{ hidden }} — все в «Аккаунтах»</p>
+        <p v-if="hidden" class="loads-ind__more">и ещё {{ hidden }} — все в «Подключениях»</p>
       </div>
       <div class="loads-ind__footer">
-        <RouterLink to="/cabinet/accounts" @click="open = false">Кабинеты и счётчики</RouterLink>
+        <RouterLink to="/cabinet/connections" @click="open = false">Кабинеты и счётчики</RouterLink>
       </div>
     </div>
   </div>

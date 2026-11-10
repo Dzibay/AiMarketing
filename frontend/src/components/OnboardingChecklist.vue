@@ -1,7 +1,38 @@
 <template>
-  <section v-if="state?.visible" class="panel onboarding" :class="{ 'is-compact': !open }">
+  <!-- Мастер первого входа не пройден — одна строка со ссылкой на него. -->
+  <section v-if="wizardPending" class="panel onboarding is-compact">
     <div class="onboarding__head">
-      <h2>С чего начать</h2>
+      <h2>Начало работы</h2>
+      <div
+        class="onboarding__bar"
+        role="progressbar"
+        :aria-valuenow="state.wizard.done"
+        aria-valuemin="0"
+        :aria-valuemax="state.wizard.total"
+        aria-label="Пройдено шагов мастера"
+      >
+        <span :style="{ width: `${Math.round((state.wizard.done / state.wizard.total) * 100)}%` }"></span>
+      </div>
+      <span class="onboarding__count">{{ state.wizard.done }} из {{ state.wizard.total }}</span>
+      <span v-if="wizardStep" class="onboarding__next">Дальше: {{ wizardStep.title }}</span>
+      <div class="row-actions">
+        <RouterLink class="btn btn--accent" to="/cabinet/welcome">Продолжить</RouterLink>
+      </div>
+      <button
+        class="icon-btn onboarding__close"
+        type="button"
+        aria-label="Скрыть мастер"
+        title="Скрыть"
+        :disabled="busy"
+        @click="setDismissed(true)"
+      >
+        <X aria-hidden="true" />
+      </button>
+    </div>
+  </section>
+  <section v-else-if="state?.visible" class="panel onboarding" :class="{ 'is-compact': !open }">
+    <div class="onboarding__head">
+      <h2>Что ещё настроить</h2>
       <div
         class="onboarding__bar"
         role="progressbar"
@@ -61,14 +92,14 @@
     </ol>
   </section>
   <p v-else-if="justDismissed" class="sync-status onboarding__undo" role="status">
-    Чек-лист первых шагов скрыт.
+    Подсказки первых шагов скрыты — мастер «Начало работы» остаётся по ссылке в Сводке.
     <button class="btn btn--ghost" type="button" :disabled="busy" @click="setDismissed(false)">Вернуть</button>
   </p>
 </template>
 
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
-import { RouterLink } from 'vue-router'
+import { RouterLink, useRouter } from 'vue-router'
 import { Check, CircleAlert, LoaderCircle, X } from '@lucide/vue'
 import { errorText, webApi } from '../api/web'
 import { pushToast } from '../composables/useToasts'
@@ -79,6 +110,9 @@ const DETAIL_TONES = { error: 'tone-bad', progress: 'tone-warn' }
 const OPEN_KEY = 'aimarketing-onboarding-open'
 
 const emit = defineEmits(['advanced'])
+const router = useRouter()
+// Первый вход (проектов нет): один раз за сессию ведём со Сводки в мастер.
+const WIZARD_SHOWN_KEY = 'aimarketing-wizard-shown'
 
 const state = ref(null)
 const busy = ref(false)
@@ -87,6 +121,8 @@ const justDismissed = ref(false)
 const openChoice = ref(localStorage.getItem(OPEN_KEY))
 let timer = 0
 
+const wizardPending = computed(() => !!state.value?.wizard && !state.value.wizard.complete && !state.value.dismissed)
+const wizardStep = computed(() => state.value?.wizard?.steps.find((s) => s.id === state.value.wizard.current) || null)
 const required = computed(() => (state.value?.steps || []).filter((s) => !s.optional))
 const requiredDone = computed(() => required.value.filter((s) => s.done).length)
 const progressPct = computed(() =>
@@ -113,6 +149,11 @@ function schedule() {
 async function load() {
   try {
     state.value = await webApi.onboarding()
+    if (state.value?.start_wizard && !sessionStorage.getItem(WIZARD_SHOWN_KEY)) {
+      sessionStorage.setItem(WIZARD_SHOWN_KEY, '1')
+      router.replace('/cabinet/welcome')
+      return
+    }
   } catch {
     // Чек-лист — подсказка: без него обзор работает, поэтому молча не показываем.
     state.value = null

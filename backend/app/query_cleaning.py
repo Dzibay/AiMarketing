@@ -1,6 +1,6 @@
-"""Чистка поисковых запросов пространства: очередь, разметка ИИ, конфликты с ключами, память решений.
+"""Чистка поисковых запросов проекта: очередь, разметка ИИ, конфликты с ключами, память решений.
 
-Запросы всех кампаний пространства сводятся в одну очередь по нормализованному тексту
+Запросы всех кампаний проекта сводятся в одну очередь по нормализованному тексту
 (регистр и ё/е не различаются, как в Директе). Решение по запросу хранится в query_labels:
 неподтверждённое — подсказка (ИИ, память, бриф), подтверждённое — решение маркетолога.
 Подтверждённые больше не переспрашиваем, а их минус-фразы и примеры уходят в правила и в промпт ИИ.
@@ -25,7 +25,7 @@ from app.db import pool
 from app.journal import journal_quiet, log_action
 from app.negative_lists import MAX_WORDS, phrase_key, phrase_problems
 from app.negatives import REASONS, inverse, patch_negatives, targets_of
-from app.workspaces import require_workspace
+from app.workspaces import list_workspaces, require_workspace
 from app.yandex import YandexError
 
 log = logging.getLogger("app.query_cleaning")
@@ -254,8 +254,64 @@ def query_queue(
     }
 
 
+def portfolio_queue(
+    user_id: int,
+    *,
+    tab: str = "new",
+    search: str = "",
+    min_cost_rub=None,
+    no_conversions: bool = False,
+    workspace_id: int | None = None,
+    limit: int = 100,
+) -> dict:
+    """Общая очередь разбора при «Все проекты»: очереди проектов одним списком по расходу, у строки — её проект.
+    Разметка у каждого проекта своя, поэтому решения применяются через проект строки."""
+    tab = tab if tab in TABS else "new"
+    limit = max(1, min(int(limit or 100), 300))
+    items: list[dict] = []
+    projects: list[dict] = []
+    counts = {k: 0 for k in TABS}
+    new_cost = negative_cost = 0.0
+    for ws in list_workspaces(user_id):
+        if ws["locked"] or (workspace_id and ws["id"] != workspace_id):
+            continue
+        q = query_queue(
+            user_id, ws["id"], tab=tab, search=search, min_cost_rub=min_cost_rub,
+            no_conversions=no_conversions, limit=limit,
+        )
+        project = {"id": ws["id"], "name": ws["name"]}
+        items.extend({**row, "project": project} for row in q["items"])
+        for key in TABS:
+            counts[key] += q["counts"][key]
+        new_cost += q["new_cost_rub"]
+        negative_cost += q["negative_cost_rub"]
+        projects.append(
+            {
+                **project,
+                "counts": q["counts"],
+                "new_cost_rub": q["new_cost_rub"],
+                "negative_cost_rub": q["negative_cost_rub"],
+                "date_from": q["date_from"],
+                "date_to": q["date_to"],
+                "synced_at": q["synced_at"],
+                "search_campaigns": len(q["campaigns"]),
+            }
+        )
+    items.sort(key=lambda r: (-r["cost_rub"], -r["clicks"], r["query_norm"]))
+    projects.sort(key=lambda p: (-p["new_cost_rub"] - p["negative_cost_rub"], p["name"].lower()))
+    return {
+        "tab": tab,
+        "items": items[:limit],
+        "counts": counts,
+        "total": counts[tab],
+        "new_cost_rub": round(new_cost, 2),
+        "negative_cost_rub": round(negative_cost, 2),
+        "projects": projects,
+    }
+
+
 def workspace_search_campaigns(user_id: int, workspace_id: int) -> list[dict]:
-    """Кампании пространства, у которых бывают поисковые запросы, — для фильтра и загрузки."""
+    """Кампании проекта, у которых бывают поисковые запросы, — для фильтра и загрузки."""
     with pool.connection() as conn:
         rows = conn.execute(
             """
@@ -713,7 +769,7 @@ def examples_prompt(examples: dict[str, list[dict]]) -> str:
 
 
 def _memory_rules(workspace_id: int) -> list[tuple[str, list[str], str, str]]:
-    """Подтверждённые минус-фразы пространства → (фраза, основы, уровень, исходный запрос)."""
+    """Подтверждённые минус-фразы проекта → (фраза, основы, уровень, исходный запрос)."""
     with pool.connection() as conn:
         rows = conn.execute(
             """
@@ -1342,7 +1398,7 @@ def log_query_action(
 
 
 def sync_workspace_queries(user_id: int, payload: dict, progress: Progress | None = None) -> dict:
-    """Задача: свежие поисковые запросы всех поисковых кампаний пространства."""
+    """Задача: свежие поисковые запросы всех поисковых кампаний проекта."""
     from app.search_queries import sync_campaign_search_queries
 
     progress = progress or (lambda *_a: None)
@@ -1351,7 +1407,7 @@ def sync_workspace_queries(user_id: int, payload: dict, progress: Progress | Non
     days = max(1, min(int(payload.get("days") or 14), 90))
     campaigns = [c for c in workspace_search_campaigns(user_id, workspace_id) if c["state"] != "ARCHIVED"]
     if not campaigns:
-        raise YandexError("empty", "В пространстве нет поисковых кампаний")
+        raise YandexError("empty", "В проекте нет поисковых кампаний")
     queries = 0
     errors: list[dict] = []
     first_error: YandexError | None = None

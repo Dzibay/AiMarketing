@@ -1,9 +1,9 @@
-"""Рабочие пространства: счётчик Метрики (сайт) + кампании Директа из любых кабинетов.
+"""Проекты: счётчик Метрики (сайт) + кампании Директа из любых кабинетов.
 
-Пространство создаётся на каждый номер счётчика, который видят подключения с ролью Метрики.
-Кабинеты Директа подключаются к пространству явно; кампания живёт не больше чем в одном
-пространстве — её статистика и цели считаются по одному сайту. Новые кампании, в настройках
-которых указан счётчик пространства, попадают в него сами.
+Проект создаётся на каждый номер счётчика, который видят подключения с ролью Метрики.
+Кабинеты Директа подключаются к проекту явно; кампания живёт не больше чем в одном
+проекте — её статистика и цели считаются по одному сайту. Новые кампании, в настройках
+которых указан счётчик проекта, попадают в него сами.
 """
 
 from __future__ import annotations
@@ -36,7 +36,7 @@ DEFAULT_AI_ACCESS = {
     "max_change_pct": 30,
 }
 KPI_TYPES = ("", "cpa", "drr")
-# Ответов маркетолога, которые ИИ помнит по пространству; старые вытесняются.
+# Ответов маркетолога, которые ИИ помнит по проекту; старые вытесняются.
 MAX_AI_FACTS = 30
 # Ключ ответа о механике конверсий за 0 ₽.
 SCHEME_FACT = "zero_cost_scheme"
@@ -123,12 +123,12 @@ def active_projects(user_id: int) -> int:
 
 def ensure_workspaces(user_id: int) -> list[int]:
     """
-    Пространство (проект) на каждый новый видимый счётчик — если все они помещаются в тариф.
+    Проект (проект) на каждый новый видимый счётчик — если все они помещаются в тариф.
 
     Не помещаются — проекты не создаются: пользователь сам выбирает счётчики (counter_choices /
     create_project_for_counter). Счётчик, который уже стал проектом в другом аккаунте, пропускается.
     Счётчик может приходить через несколько логинов; читаем его через включённую строку
-    подключения с ролью Метрики. Возвращает id созданных пространств — в них сразу
+    подключения с ролью Метрики. Возвращает id созданных проектов — в них сразу
     раскладываются кампании, у которых в настройках этот счётчик.
     """
     with pool.connection() as conn:
@@ -174,7 +174,7 @@ def ensure_workspaces(user_id: int) -> list[int]:
 
 
 def _attach_loose(user_id: int) -> None:
-    """Кампании без пространства — по счётчикам из их настроек (после появления новых проектов)."""
+    """Кампании без проекта — по счётчикам из их настроек (после появления новых проектов)."""
     with pool.connection() as conn:
         loose = conn.execute(
             """
@@ -190,11 +190,11 @@ def _attach_loose(user_id: int) -> None:
 
 def auto_attach_campaigns(user_id: int, campaign_row_ids: list[int]) -> int:
     """
-    Раскладывает кампании без пространства по счётчику из их настроек.
+    Раскладывает кампании без проекта по счётчику из их настроек.
 
-    Если счётчиков в кампании несколько, выигрывает пространство, к которому уже подключён
+    Если счётчиков в кампании несколько, выигрывает проект, к которому уже подключён
     её кабинет; иначе первое по номеру счётчика из настроек. Кабинет подключается к
-    пространству автоматически. Возвращает число разложенных кампаний.
+    проекту автоматически. Возвращает число разложенных кампаний.
     """
     if not campaign_row_ids:
         return 0
@@ -432,7 +432,7 @@ def update_workspace(user_id: int, workspace_id: int, **fields) -> dict:
     if "name" in fields:
         name = (fields["name"] or "").strip()[:120]
         if not name:
-            raise YandexError("name", "Укажите название пространства")
+            raise YandexError("name", "Укажите название проекта")
         sets.append("name = %s")
         params.append(name)
     if "site" in fields:
@@ -635,7 +635,7 @@ def _counter_logins(user_id: int, counter_id: int) -> set[str]:
 
 def counter_access(user_id: int, workspace_id: int, account: dict) -> dict:
     """
-    Подсказка про доступ кабинета к счётчику пространства.
+    Подсказка про доступ кабинета к счётчику проекта.
 
     Директ принимает номер любого счётчика, но цели для стратегий и отчётов доступны, только
     если у логина кабинета есть доступ к счётчику в Метрике. Мы знаем это наверняка, когда
@@ -713,8 +713,8 @@ def _require_account(user_id: int, account_id: int) -> dict:
 
 def add_workspace_account(user_id: int, workspace_id: int, account_id: int, *, campaigns: str = "matching") -> dict:
     """
-    Подключает кабинет к пространству. campaigns: matching — забрать кампании со счётчиком
-    пространства, all — все кампании кабинета, которые ещё ни в каком пространстве, none — ничего.
+    Подключает кабинет к проекту. campaigns: matching — забрать кампании со счётчиком
+    проекта, all — все кампании кабинета, которые ещё ни в каком проекте, none — ничего.
     """
     ws = require_workspace(user_id, workspace_id)
     _require_account(user_id, account_id)
@@ -750,7 +750,7 @@ def add_workspace_account(user_id: int, workspace_id: int, account_id: int, *, c
 
 
 def remove_workspace_account(user_id: int, workspace_id: int, account_id: int) -> dict:
-    """Отключает кабинет; его кампании уходят из пространства (в Директе ничего не меняется)."""
+    """Отключает кабинет; его кампании уходят из проекта (в Директе ничего не меняется)."""
     require_workspace(user_id, workspace_id)
     with pool.connection() as conn:
         removed = conn.execute(
@@ -770,7 +770,7 @@ def remove_workspace_account(user_id: int, workspace_id: int, account_id: int) -
 
 
 def account_candidates(user_id: int, workspace_id: int) -> list[dict]:
-    """Все кабинеты пользователя для выбора в настройках пространства."""
+    """Все кабинеты пользователя для выбора в настройках проекта."""
     ws = require_workspace(user_id, workspace_id)
     with pool.connection() as conn:
         rows = conn.execute(
@@ -804,11 +804,11 @@ def account_candidates(user_id: int, workspace_id: int) -> list[dict]:
     ]
 
 
-# --- Кампании пространства ------------------------------------------------------------------
+# --- Кампании проекта ------------------------------------------------------------------
 
 
 def campaign_candidates(user_id: int, workspace_id: int) -> list[dict]:
-    """Кампании всех кабинетов пользователя, сгруппированные по кабинетам, с отметкой пространства."""
+    """Кампании всех кабинетов пользователя, сгруппированные по кабинетам, с отметкой проекта."""
     ws = require_workspace(user_id, workspace_id)
     counter_id = int(ws["counter_id"])
     with pool.connection() as conn:
@@ -863,7 +863,7 @@ def campaign_candidates(user_id: int, workspace_id: int) -> list[dict]:
 def set_workspace_campaigns(
     user_id: int, workspace_id: int, *, add: list[int] | None = None, remove: list[int] | None = None
 ) -> dict:
-    """Добавить (с переносом из другого пространства) и убрать кампании; кабинет подключается сам."""
+    """Добавить (с переносом из другого проекта) и убрать кампании; кабинет подключается сам."""
     require_workspace(user_id, workspace_id)
     add = [int(x) for x in (add or [])]
     remove = [int(x) for x in (remove or [])]
@@ -906,5 +906,5 @@ def set_workspace_campaigns(
 
 
 def attach_campaign(user_id: int, workspace_id: int, campaign_row_id: int) -> None:
-    """Новая кампания, созданная из пространства, сразу в нём."""
+    """Новая кампания, созданная из проекта, сразу в нём."""
     set_workspace_campaigns(user_id, workspace_id, add=[campaign_row_id])

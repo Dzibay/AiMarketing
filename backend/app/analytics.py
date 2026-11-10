@@ -1,7 +1,7 @@
-"""Аналитика и сводка рабочего пространства: кампании пространства (Директ) + счётчик сайта (Метрика).
+"""Аналитика и сводка проекта: кампании проекта (Директ) + счётчик сайта (Метрика).
 
 Считается из stats_daily — данные подтягивают задачи stats_day / stats_range. Конверсии берутся из
-основной цели пространства (Метрика), если она задана и по ней есть данные, иначе — из Директа.
+основной цели проекта (Метрика), если она задана и по ней есть данные, иначе — из Директа.
 """
 
 from __future__ import annotations
@@ -15,7 +15,7 @@ from app.db import pool
 from app.overview import SEVERITY_ORDER, build_overview, kpi_state
 from app.stats import structure_tops
 from app.strategy_info import budget_brief
-from app.workspaces import require_workspace
+from app.workspaces import list_workspaces, require_workspace
 from app.yandex import YandexError
 
 MAX_RANGE_DAYS = 366
@@ -176,7 +176,7 @@ def workspace_analytics(
             if r["bounce_rate"] is not None:
                 bounce_num += float(r["bounce_rate"]) * int(r["visits"] or 0)
 
-    # Цель пространства: итог по сайту (campaign_id NULL) и по кампаниям Директа.
+    # Цель проекта: итог по сайту (campaign_id NULL) и по кампаниям Директа.
     goal_rows = 0
     site_goal: dict = defaultdict(int)
     for r in data["goal"]:
@@ -187,7 +187,7 @@ def workspace_analytics(
             continue
         row_id = by_campaign_id.get(int(r["campaign_id"]))
         if row_id is None:
-            continue  # переходы из кампаний вне пространства
+            continue  # переходы из кампаний вне проекта
         target = cur if r["day"] >= date_from else prev
         target["goal_reaches"] += reaches
         day_sums[r["day"]]["goal_reaches"] += reaches
@@ -275,7 +275,7 @@ def workspace_analytics(
         by_account.append({**meta, "campaigns": sum(1 for c in campaigns if int(c["account_id"]) == acc_id), **m})
     by_account.sort(key=lambda r: -r["cost_kopecks"])
 
-    # KPI пространства, иначе — клиента-папки.
+    # KPI проекта, иначе — клиента-папки.
     kpi_type, kpi_target = ws["kpi_type"], ws["kpi_target"]
     if not kpi_type:
         kpi_type, kpi_target = ws.get("client_kpi_type") or "", ws.get("client_kpi_target")
@@ -322,8 +322,90 @@ def workspace_analytics(
     return out
 
 
+_SUM_KEYS = ("cost_kopecks", "impressions", "clicks", "conversions", "revenue_kopecks", "visits")
+_COMPARE_KEYS = ("cost_kopecks", "clicks", "impressions", "ctr", "cpc_kopecks", "conversions", "cpa_kopecks",
+                 "revenue_kopecks", "drr", "visits")
+
+
+def _combined(rows: list[dict]) -> dict:
+    """Сумма метрик нескольких проектов: счётчики складываются, доли и цены считаются заново из сумм."""
+    s = {key: sum(int(r.get(key) or 0) for r in rows) for key in _SUM_KEYS}
+    cost, clicks, impressions = s["cost_kopecks"], s["clicks"], s["impressions"]
+    conv, revenue = s["conversions"], s["revenue_kopecks"]
+    return {
+        **s,
+        "ctr": round(clicks / impressions * 100, 2) if impressions else None,
+        "cpc_kopecks": round(cost / clicks) if clicks else None,
+        "cr": round(conv / clicks * 100, 2) if clicks else None,
+        "cpa_kopecks": round(cost / conv) if conv else None,
+        "drr": round(cost / revenue * 100, 1) if revenue else None,
+    }
+
+
+def portfolio_analytics(user_id: int, *, date_from: date, date_to: date) -> dict:
+    """Аналитика и кампании при «Все проекты»: сумма проектов с динамикой, строка на проект и все кампании
+    с их проектом. Каждый проект считает конверсии по своей цели (или по Директу) — в сумме они складываются
+    как есть. Проекты в архиве и сверх лимита тарифа не входят."""
+    days = (date_to - date_from).days + 1
+    prev_to = date_from - timedelta(days=1)
+    prev_from = prev_to - timedelta(days=days - 1)
+    projects: list[dict] = []
+    campaigns: list[dict] = []
+    cur_days: dict[str, list[dict]] = defaultdict(list)
+    prev_days: dict[str, list[dict]] = defaultdict(list)
+    for ws in list_workspaces(user_id):
+        if ws["locked"]:
+            continue
+        data = workspace_analytics(user_id, ws["id"], date_from=date_from, date_to=date_to, with_tops=False)
+        project = {"id": ws["id"], "name": ws["name"]}
+        projects.append(
+            {
+                **project,
+                "site": ws["site"],
+                "client_name": ws["client_name"],
+                "conversions_source": data["conversions_source"],
+                "goal_name": data["goal_name"],
+                "kpi": data["kpi"],
+                "totals": data["totals"],
+                "compare": data["compare"],
+                "campaigns": len(data["by_campaign"]),
+                "spark": [d["cost_kopecks"] for d in data["by_day"]],
+            }
+        )
+        campaigns.extend({**c, "project": project} for c in data["by_campaign"])
+        for d in data["by_day"]:
+            cur_days[d["day"]].append(d)
+        for d in data["prev_by_day"]:
+            prev_days[d["day"]].append(d)
+
+    def series(start: date, rows: dict[str, list[dict]]) -> list[dict]:
+        out = []
+        for i in range(days):
+            day = (start + timedelta(days=i)).isoformat()
+            out.append({"day": day, **_combined(rows.get(day, []))})
+        return out
+
+    totals = _combined([p["totals"] for p in projects])
+    previous = _combined([r for rows in prev_days.values() for r in rows])
+    projects.sort(key=lambda p: (-p["totals"]["cost_kopecks"], p["name"].lower()))
+    campaigns.sort(key=lambda c: (-c["cost_kopecks"], c["name"]))
+    return {
+        "date_from": date_from.isoformat(),
+        "date_to": date_to.isoformat(),
+        "prev_from": prev_from.isoformat(),
+        "prev_to": prev_to.isoformat(),
+        "totals": totals,
+        "previous": previous,
+        "compare": {key: _delta(totals[key], previous[key]) for key in _COMPARE_KEYS},
+        "by_day": series(date_from, cur_days),
+        "prev_by_day": series(prev_from, prev_days),
+        "projects": projects,
+        "campaigns": campaigns,
+    }
+
+
 def workspace_summary(user_id: int, workspace_id: int) -> dict:
-    """Главная вкладка пространства: строка сводки, проблемы, неделя к неделе, последние действия."""
+    """Главная вкладка проекта: строка сводки, проблемы, неделя к неделе, последние действия."""
     require_workspace(user_id, workspace_id)
     overview = build_overview(user_id)
     row = next((r for r in overview["workspaces"] if r["id"] == workspace_id), None)

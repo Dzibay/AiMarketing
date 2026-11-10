@@ -13,6 +13,9 @@ def test_facts_come_from_existing_tables(db):
     assert onboarding.load_facts(user) == {
         "dismissed": False,
         "telegram_linked": False,
+        "email_verified": False,
+        "asked_ai": False,
+        "metrika_connections": 0,
         "direct_connections": 0,
         "direct_accounts": 0,
         "direct_loaded": 0,
@@ -36,12 +39,17 @@ def test_facts_come_from_existing_tables(db):
         conn.execute("UPDATE direct_accounts SET enabled = FALSE WHERE id = %s", (off,))
         conn.execute("UPDATE workspaces SET archived_at = NOW() WHERE id = %s", (archived,))
         conn.execute("UPDATE workspaces SET url_template = 'https://site.ru/?ref=Yandex' WHERE id = %s", (ws,))
-        conn.execute("UPDATE users SET telegram_chat_id = '42' WHERE id = %s", (user,))
+        conn.execute("UPDATE users SET telegram_chat_id = '42', email_verified_at = NOW() WHERE id = %s", (user,))
+        chat = conn.execute(
+            "INSERT INTO ai_chats (user_id, workspace_id) VALUES (%s, NULL) RETURNING id", (user,)
+        ).fetchone()["id"]
+        conn.execute("INSERT INTO ai_messages (chat_id, role, content) VALUES (%s, 'user', 'С чего начать?')", (chat,))
 
     facts = onboarding.load_facts(user)
     assert facts["direct_connections"] == 1
     assert facts["direct_accounts"] == 2 and facts["direct_loaded"] == 1 and facts["load_errors"] == 1
-    assert facts["telegram_linked"]
+    assert facts["telegram_linked"] and facts["email_verified"] and facts["asked_ai"]
+    assert facts["metrika_connections"] == 1
     assert facts["workspaces"] == [
         {"id": ws, "name": "site.ru", "campaigns": 1, "has_template": True, "has_goal": True}
     ]
@@ -69,3 +77,26 @@ def test_dismissal_is_stored_per_user(db):
     restored = onboarding.set_onboarding_dismissed(user, False)
     assert not restored["dismissed"] and restored["visible"]
     assert _steps(restored)["direct"]["status"] == "todo"
+
+
+def test_first_login_leads_to_wizard_until_projects_exist(db):
+    user = make_user(db)
+    state = onboarding.get_onboarding(user)
+    assert state["start_wizard"] and state["wizard"]["current"] == "email"
+
+    with db.connection() as conn:
+        conn.execute("UPDATE users SET email_verified_at = NOW() WHERE id = %s", (user,))
+    assert onboarding.get_onboarding(user)["wizard"]["current"] == "yandex"
+
+    conn_id = make_connection(db, user)
+    make_account(db, user, conn_id)
+    state = onboarding.get_onboarding(user)
+    assert state["wizard"]["current"] == "projects" and state["start_wizard"]
+
+    make_workspace(db, user, 1, "site.ru")
+    state = onboarding.get_onboarding(user)
+    # Проекты есть — дальше мастер не навязываем, он ждёт на своей странице.
+    assert state["wizard"]["current"] == "load" and not state["start_wizard"]
+
+    onboarding.set_onboarding_dismissed(user)
+    assert not onboarding.get_onboarding(user)["start_wizard"]

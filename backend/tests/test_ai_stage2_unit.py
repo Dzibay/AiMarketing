@@ -52,7 +52,8 @@ PLAN = {
 
 
 class FakeContext:
-    """Context без БД: пространство из словаря, кампании — из CAMPAIGNS."""
+    """Context без БД: проект из словаря, кампании — из CAMPAIGNS."""
+    general = False  # чат проекта, не общий
 
     require_account = ai_agent.Context.require_account
 
@@ -65,7 +66,7 @@ class FakeContext:
     def campaigns(self, ids: list[int]) -> list[dict]:
         foreign = [i for i in ids if i not in CAMPAIGNS]
         if foreign:
-            raise YandexError("scope", f"Кампании {foreign} не входят в это пространство")
+            raise YandexError("scope", f"Кампании {foreign} не входят в этот проект")
         return [CAMPAIGNS[i] for i in ids]
 
     def campaign(self, campaign_row_id: int) -> dict:

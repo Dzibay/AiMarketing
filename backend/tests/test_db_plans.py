@@ -442,3 +442,56 @@ def test_yandex_login_and_direct_account_unique(db, no_smtp):
     stranger_conn = make_connection(db, stranger, "boris")
     count, _ = yandex.upsert_direct(stranger, stranger_conn, [{"client_login": "shop", "name": "Магазин"}])
     assert count == 0
+
+
+def test_plan_page_usage_by_day_and_history(db, no_smtp):
+    plan = make_plan(name="Старт", days=30, units_limit=10)
+    user = make_user(db)
+    plans.set_subscription(user, plan_id=plan["id"])
+    # Период начался пять дней назад.
+    _sql(db, "UPDATE subscriptions SET starts_at = starts_at - interval '5 days' WHERE user_id = %s", (user,))
+    start = plans.subscription(user)["period_start"]
+    expected: dict = {}
+    for hours, charged in ((1, 1), (2, 0.5), (49, 2)):
+        at = start + timedelta(hours=hours)
+        _sql(
+            db,
+            "INSERT INTO ai_usage (user_id, task, units, charged, created_at) VALUES (%s, 'chat', %s, %s, %s)",
+            (user, charged, charged, at),
+        )
+        day = at.astimezone(MSK).date().isoformat()
+        percent, calls = expected.get(day, (0.0, 0))
+        expected[day] = (percent + charged * 10, calls + 1)
+
+    by_day = billing.user_summary(user)["by_day"]
+    # Дни периода до сегодняшнего включительно, пустые — нулями; доля — от лимита.
+    assert by_day[0]["day"] == start.astimezone(MSK).date().isoformat()
+    assert by_day[-1]["day"] == now_msk().date().isoformat() and len(by_day) in (6, 7)
+    assert {d["day"]: (d["percent"], d["calls"]) for d in by_day if d["calls"]} == expected
+
+    # История: смены тарифа и оплаты, новые сверху; тариф по id из события.
+    plans.set_subscription(user, renew=True)
+    events.record(user, "payment", amount_rub=990, plan_id=plan["id"])
+    events.record(user, "login")
+    history = billing.plan_history(user)
+    assert [h["kind"] for h in history] == ["payment", "plan_changed", "plan_changed"]
+    assert history[0]["amount_rub"] == 990.0 and history[0]["plan_name"] == "Старт"
+    assert history[1]["renew"] and history[1]["last_day"] and history[2]["plan_name"] == "Старт"
+    assert billing.plan_history(make_user(db, "other@example.com")) == []
+
+    res = TestClient(app).get("/api/web/plan", headers=_auth(user))
+    assert res.status_code == 200 and [h["kind"] for h in res.json()["history"]] == ["payment", "plan_changed", "plan_changed"]
+    assert res.json()["usage"]["by_day"][0]["day"] == start.date().isoformat()
+
+
+def test_profile_name_is_editable_even_when_expired(db, no_smtp):
+    plan = make_plan(days=30)
+    user = make_user(db)
+    plans.set_subscription(user, plan_id=plan["id"], until=(now_msk() - timedelta(days=1)).date().isoformat())
+    client = TestClient(app)
+    res = client.patch("/api/web/me", json={"name": "  Анна   Петрова "}, headers=_auth(user))
+    assert res.status_code == 200 and res.json()["user"]["name"] == "Анна Петрова"
+    assert get_user(user)["name"] == "Анна Петрова"
+    assert client.patch("/api/web/me", json={"name": "я" * 121}, headers=_auth(user)).status_code == 400
+    assert client.patch("/api/web/me", json={"name": ""}, headers=_auth(user)).json()["user"]["name"] == ""
+    assert client.patch("/api/web/me", json={"name": "x"}).status_code == 401

@@ -1,6 +1,6 @@
 """Чек-лист первых шагов без БД: статусы, ссылки, обязательные шаги и скрытие."""
 
-from app.onboarding import build_onboarding
+from app.onboarding import build_onboarding, build_wizard
 
 
 def _facts(**over) -> dict:
@@ -43,8 +43,8 @@ def test_new_user_sees_every_step_in_order_and_nothing_done():
     assert result["done"] == 0 and result["total"] == 7
     assert result["visible"] and not result["complete"]
     steps = _steps(result)
-    assert steps["direct"]["status"] == "todo" and steps["direct"]["to"] == "/cabinet/accounts"
-    # Шаги, которым нужно пространство, ждут его и никуда не ведут.
+    assert steps["direct"]["status"] == "todo" and steps["direct"]["to"] == "/cabinet/connections"
+    # Шаги, которым нужно проект, ждут его и никуда не ведут.
     for key in ("campaigns", "link_template", "goals"):
         assert steps[key]["status"] == "blocked" and steps[key]["to"] is None
     assert steps["first_load"]["status"] == "blocked"
@@ -85,7 +85,7 @@ def test_links_lead_to_the_workspace_that_still_needs_the_step():
     assert steps["workspace"]["done"]
     assert steps["campaigns"]["done"] and steps["campaigns"]["to"] == "/w/1/settings"
     assert steps["link_template"]["done"]
-    # Цели нет нигде — ведём в пространство, где уже есть кампании.
+    # Цели нет нигде — ведём в проект, где уже есть кампании.
     assert not steps["goals"]["done"] and steps["goals"]["to"] == "/w/2/settings"
 
 
@@ -105,7 +105,7 @@ def test_telegram_step_is_hidden_when_bot_is_not_configured():
     facts = _done_facts()
     facts["telegram_linked"] = False
     with_bot = build_onboarding(facts, telegram_available=True)
-    assert not with_bot["complete"] and _steps(with_bot)["telegram"]["to"] == "/cabinet/settings#telegram"
+    assert not with_bot["complete"] and _steps(with_bot)["telegram"]["to"] == "/cabinet/settings/notifications#telegram"
 
     without_bot = build_onboarding(facts, telegram_available=False)
     assert "telegram" not in _steps(without_bot)
@@ -122,3 +122,42 @@ def test_done_steps_carry_no_detail_status():
     steps = build_onboarding(_done_facts(), telegram_available=True)["steps"]
     for step in steps:
         assert step["status"] == ("done" if step["done"] else "todo")
+
+
+def _wizard(**over) -> dict:
+    return {s["id"]: s for s in build_wizard(_facts(**over))["steps"]}
+
+
+def test_wizard_walks_email_yandex_projects_load_ai():
+    result = build_wizard(_facts(email_verified=False))
+    assert [s["id"] for s in result["steps"]] == ["email", "yandex", "projects", "load", "ai"]
+    assert result["current"] == "email" and not result["complete"] and result["done"] == 0
+
+    steps = _wizard(email_verified=True)
+    assert steps["yandex"]["status"] == "todo"
+    assert steps["projects"]["status"] == "blocked" and steps["projects"]["detail"] == "Сначала подключите Метрику"
+    assert steps["load"]["status"] == "blocked" and steps["ai"]["status"] == "blocked"
+
+
+def test_wizard_names_the_missing_yandex_role():
+    steps = _wizard(email_verified=True, metrika_connections=1)
+    assert steps["yandex"]["status"] == "progress" and steps["yandex"]["detail"] == "Осталось подключить Директ"
+    assert steps["projects"]["status"] == "todo"
+    steps = _wizard(email_verified=True, direct_connections=1, direct_accounts=2, direct_loaded=1)
+    assert steps["yandex"]["detail"] == "Осталось подключить Метрику" and steps["load"]["done"]
+
+
+def test_wizard_complete_after_first_question():
+    facts = dict(_done_facts(), email_verified=True, metrika_connections=1)
+    assert build_wizard(facts)["current"] == "ai"
+    result = build_wizard(dict(facts, asked_ai=True))
+    assert result["complete"] and result["current"] is None and result["done"] == 5
+    onboarding = build_onboarding(dict(facts, asked_ai=True), telegram_available=True)
+    assert onboarding["wizard"]["complete"] and not onboarding["start_wizard"]
+
+
+def test_start_wizard_only_before_projects_and_not_dismissed():
+    assert build_onboarding(_facts(email_verified=True), telegram_available=True)["start_wizard"]
+    assert not build_onboarding(_facts(email_verified=True, dismissed=True), telegram_available=True)["start_wizard"]
+    with_ws = _facts(email_verified=True, metrika_connections=1, workspaces=[_ws(1)])
+    assert not build_onboarding(with_ws, telegram_available=True)["start_wizard"]

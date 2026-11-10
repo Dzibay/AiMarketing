@@ -12,7 +12,8 @@ SOURCE = {"id": 7, "name": "Поиск Москва", "state": "ON", "status": "
 
 
 class FakeContext:
-    """Context без БД: пространство из словаря и одна кампания в нём."""
+    """Context без БД: проект из словаря и одна кампания в нём."""
+    general = False  # чат проекта, не общий
 
     def __init__(self, ws: dict | None = None):
         self.user_id = 1
@@ -23,7 +24,7 @@ class FakeContext:
 
     def campaign(self, campaign_row_id: int) -> dict:
         if campaign_row_id != SOURCE["id"]:
-            raise YandexError("scope", f"Кампании [{campaign_row_id}] не входят в это пространство")
+            raise YandexError("scope", f"Кампании [{campaign_row_id}] не входят в этот проект")
         return SOURCE
 
 
@@ -329,7 +330,7 @@ class AdsContext(FakeContext):
     def ads(self, ids: list[int]) -> list[dict]:
         foreign = [i for i in ids if i not in ADS]
         if foreign:
-            raise YandexError("scope", f"Объявления {foreign} не входят в это пространство")
+            raise YandexError("scope", f"Объявления {foreign} не входят в этот проект")
         return [ADS[i] for i in ids]
 
 
@@ -721,7 +722,7 @@ def test_project_id_only_on_read_tools():
     }
     assert with_project == set(ai_agent.CROSS_PROJECT_TOOLS) | {"get_project"}
     assert set(ai_agent.CROSS_PROJECT_TOOLS) <= set(ai_agent.READ_TOOLS)
-    # Пишут или стоят денег — только в текущем пространстве.
+    # Пишут или стоят денег — только в текущем проекте.
     for name in ("refresh_search_queries", "remember_fact", "generate_images", "get_wordstat", "check_links"):
         assert name not in ai_agent.CROSS_PROJECT_TOOLS
     assert not set(ai_agent.CROSS_PROJECT_TOOLS) & (set(ai_agent.WRITE_TOOLS) | set(ai_agent.ASK_TOOLS))
@@ -730,7 +731,7 @@ def test_project_id_only_on_read_tools():
 
 
 class ProjectsContext(FakeContext):
-    """Контекст с соседним проектом: читать его можно, пространство чата остаётся текущим."""
+    """Контекст с соседним проектом: читать его можно, проект чата остаётся текущим."""
 
     def __init__(self):
         super().__init__()
@@ -754,7 +755,7 @@ def test_read_with_project_id_reads_the_other_project(monkeypatch):
 
     monkeypatch.setitem(ai_agent.READ_TOOLS, "list_campaigns", read)
     ctx = ProjectsContext()
-    # Без project_id и с id текущего — текущее пространство, без подписи.
+    # Без project_id и с id текущего — текущий проект, без подписи.
     assert ai_agent._read(ctx, "list_campaigns", {}) == {"campaigns": ["Окна"]}
     assert ai_agent._read(ctx, "list_campaigns", {"project_id": 2, "date_from": "2026-10-01"}) == {"campaigns": ["Окна"]}
     # С чужим — данные того проекта, подписанные названием, а project_id инструмент не видит.
@@ -824,5 +825,5 @@ def test_clean_refs():
 
 def test_prompt_says_other_projects_are_read_only(no_memory):
     prompt = ai_agent._system_prompt(FakeContext())
-    assert "Менять можно только кампании и кабинеты этого пространства" in prompt
+    assert "Менять можно только кампании и кабинеты этого проекта" in prompt
     assert "Упомянуты проекты" in prompt and "project_id" in prompt

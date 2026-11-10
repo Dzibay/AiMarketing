@@ -219,7 +219,7 @@ def fetch_metrika_goal_total(access_token: str, counter_id: int, goal_id: int, d
 
 
 def _goals_to_sync(user_id: int, counter_row_id: int) -> list[dict]:
-    """Основная цель пространства, цели из правил пользователя + до 20 целей счётчика."""
+    """Основная цель проекта, цели из правил пользователя + до 20 целей счётчика."""
     with pool.connection() as conn:
         # Цели пишутся одной транзакцией — у всех, что есть в счётчике сейчас, один synced_at.
         # Цели со старым synced_at из Метрики удалены: отчёт с ними она отклоняет целиком.
@@ -263,7 +263,7 @@ def _goals_to_sync(user_id: int, counter_row_id: int) -> list[dict]:
 def canonical_counters(user_id: int | None = None) -> list[dict]:
     """
     Включённые счётчики, по одной строке на номер счётчика у пользователя: один счётчик бывает
-    виден из нескольких подключений — читаем его через строку, к которой привязано пространство.
+    виден из нескольких подключений — читаем его через строку, к которой привязано проект.
     """
     with pool.connection() as conn:
         return conn.execute(
@@ -283,7 +283,7 @@ def sync_metrika_stats_for_user(user_id: int, day: date | None = None) -> dict:
     day = day or (yesterday_msk())
     with pool.connection() as conn:
         # Один номер счётчика может быть виден из нескольких подключений — читаем его один раз,
-        # через строку, к которой привязано пространство.
+        # через строку, к которой привязано проект.
         counters = conn.execute(
             """
             SELECT DISTINCT ON (m.counter_id) m.id, m.connection_id, m.counter_id

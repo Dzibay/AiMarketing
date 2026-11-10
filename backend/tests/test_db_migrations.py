@@ -76,7 +76,7 @@ def test_pre_alembic_db_is_adopted_and_backfilled(db_pool):
     assert client_of(db_pool, "metrika_counters", unlinked) is None
     assert client_of(db_pool, "metrika_counters", shared) is None
 
-    # Связи кабинет ↔ счётчик стали рабочими пространствами: по пространству на счётчик.
+    # Связи кабинет ↔ счётчик стали рабочими проектами: по проекту на счётчик.
     with db_pool.connection() as conn:
         spaces = {
             r["counter_id"]: r

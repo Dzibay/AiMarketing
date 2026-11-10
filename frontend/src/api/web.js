@@ -101,13 +101,13 @@ const del = (path) => request(path, { method: 'DELETE' })
 
 const WS = (id) => `/api/web/workspaces/${id}`
 
-/** Рабочие пространства: пространство = счётчик Метрики + кампании из любых кабинетов Директа. */
+/** Проекты: проект = счётчик Метрики + кампании из любых кабинетов Директа. */
 export const wsApi = {
   list: (archived = false) => request(`/api/web/workspaces${query({ archived })}`),
   refresh: () => post('/api/web/workspaces/refresh'),
   /** Счётчики для выбора проектов по тарифу: { items: [{ counter_id, name, site, login, state, workspace_id, note }], projects_limit, projects_used }. */
   counters: () => request('/api/web/workspaces/counters'),
-  /** Сделать счётчик проектом (или вернуть его архивный проект) → пространство. */
+  /** Сделать счётчик проектом (или вернуть его архивный проект) → проект. */
   fromCounter: (counterId) => post('/api/web/workspaces/from-counter', { counter_id: counterId }),
   get: (id) => request(WS(id)),
   load: (id) => request(`${WS(id)}/load`),
@@ -196,6 +196,9 @@ export const aiApi = {
   chats: (workspaceId) => request(`${WS(workspaceId)}/chats`),
   createChat: (workspaceId, title = '', modelClass = '') =>
     post(`${WS(workspaceId)}/chats`, { title, model_class: modelClass }),
+  /** Общие чаты по всем проектам: ИИ читает любой проект, правки — только после подтверждения. */
+  generalChats: () => request('/api/web/ai/chats'),
+  createGeneralChat: (title = '', modelClass = '') => post('/api/web/ai/chats', { title, model_class: modelClass }),
   chat: (id) => request(`/api/web/ai/chats/${id}`),
   renameChat: (id, title) => patch(`/api/web/ai/chats/${id}`, { title }),
   deleteChat: (id) => del(`/api/web/ai/chats/${id}`),
@@ -216,7 +219,7 @@ export const aiApi = {
   items: (actionId, payload) => post(`/api/web/ai/actions/${actionId}/items`, payload),
   /** Правки на доске сборки: [{ op, kind, group, text, to, to_group }] → чат целиком. */
   board: (chatId, ops) => post(`/api/web/ai/chats/${chatId}/board`, { ops }),
-  /** Картинки из объявлений кампаний пространства: { items: [{ hash, account_id, preview_url, campaigns, ads }], more }. */
+  /** Картинки из объявлений кампаний проекта: { items: [{ hash, account_id, preview_url, campaigns, ads }], more }. */
   wsImages: (workspaceId, accountId = null) => request(`${WS(workspaceId)}/ad-images${query({ account_id: accountId })}`),
   /** Картинки по описанию → библиотека кабинета: { images: [{ hash, preview_url, account_id }], errors }. */
   generateImages: (workspaceId, payload) => post(`${WS(workspaceId)}/ad-images/generate`, payload),
@@ -231,8 +234,12 @@ export const aiApi = {
     post(`${WS(workspaceId)}/experiments/${id}/review`, payload),
   /** Итог вручную: { verdict, conclusion } или { cancel: true } → обновлённый список. */
   finishExperiment: (workspaceId, id, payload) => post(`${WS(workspaceId)}/experiments/${id}/finish`, payload),
-  /** Забыть ответ маркетолога, который ИИ запомнил; возвращает пространство. */
+  /** Забыть ответ маркетолога, который ИИ запомнил; возвращает проект. */
   forgetFact: (workspaceId, key) => post(`${WS(workspaceId)}/ai-facts/forget`, { key }),
+  /** Сколько предложений ИИ ждут решения во всех проектах: { count }. */
+  pendingCount: () => request('/api/web/ai/pending/count'),
+  /** Неподтверждённые предложения ИИ по всем проектам: { items: [...] }; workspaceId — только одного проекта. */
+  pending: (workspaceId = null) => request(`/api/web/ai/pending${query({ workspace_id: workspaceId })}`),
 }
 
 export const webApi = {
@@ -240,6 +247,7 @@ export const webApi = {
   register: (payload) => request('/api/web/register', { method: 'POST', body: JSON.stringify(payload) }),
   login: (payload) => request('/api/web/login', { method: 'POST', body: JSON.stringify(payload) }),
   me: () => request('/api/web/me'),
+  updateProfile: (payload) => request('/api/web/me', { method: 'PATCH', body: JSON.stringify(payload) }),
   /** Тариф, расход лимита за период и тарифы для перехода (цены со скидкой). */
   plan: () => request('/api/web/plan'),
   /** Ссылка из письма открывается и без входа — сессию не отправляем. */
@@ -299,6 +307,10 @@ export const webApi = {
   },
   changePassword: (payload) =>
     request('/api/web/change-password', { method: 'POST', body: JSON.stringify(payload) }),
+  /** «Все проекты»: итоги, динамика, строка на проект и все кампании с проектом. */
+  portfolio: (params = {}) => request(`/api/web/portfolio${query(params)}`),
+  /** «Все проекты»: общая очередь разбора поисковых запросов, у строки — её проект. */
+  queries: (params = {}) => request(`/api/web/queries${query(params)}`),
   bulkAction: (payload) =>
     request('/api/web/direct/campaigns/actions', { method: 'POST', body: JSON.stringify(payload) }),
   createCampaign: (payload) =>
@@ -441,6 +453,7 @@ export const ERRORS = {
   'feature-locked': 'Эта функция не входит в ваш тариф.',
   'project-locked': 'Проект не входит в ваш тариф.',
   'projects-limit': 'На вашем тарифе больше проектов не добавить.',
+  'name-too-long': 'Имя — не длиннее 120 символов.',
   'too-soon': 'Письмо уже отправлено — повторить можно через минуту.',
   'plan-in-use': 'На этом тарифе есть пользователи.',
   'not-found': 'Не найдено.',
@@ -474,7 +487,7 @@ export const ERRORS = {
   archived: 'Кампания в архиве.',
   unsupported: 'Медийные кампании не поддерживают минус-фразы.',
   mode: 'Некорректный режим подключения Яндекса.',
-  scope: 'Это действие не входит в рабочее пространство.',
+  scope: 'Это действие не входит в проект.',
   decided: 'Решение по действию уже принято.',
   forbidden: 'Нет доступа.',
   'ai-not-configured': 'ИИ временно недоступен: администратор ещё не подключил модель.',
@@ -515,7 +528,7 @@ export const JOB_LABELS = {
   apply_negative_list: 'Применение списка минус-фраз',
   ai_chat: 'Ответ ИИ-ассистента',
   duplicate_campaign: 'Копирование кампании',
-  sync_workspace_queries: 'Синк поисковых запросов пространства',
+  sync_workspace_queries: 'Синк поисковых запросов проекта',
   classify_queries: 'Разметка запросов ИИ',
   apply_query_decisions: 'Применение решений по запросам',
   brief_draft: 'Черновик брифа по сайту',

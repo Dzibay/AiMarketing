@@ -1,4 +1,4 @@
-"""Сигналы пространства без ИИ: конверсии за 0 ₽, затухание показов, перезапуски копиями.
+"""Сигналы проекта без ИИ: конверсии за 0 ₽, затухание показов, перезапуски копиями.
 
 Считаются кодом из уже загруженных данных — бесплатно и сразу. По сигналам интерфейс сам
 предлагает помощь, а «Разбор» отдаёт ИИ короткую выжимку вместо сырых таблиц: токены уходят
@@ -335,7 +335,7 @@ def _load(user_id: int, ws_id: int, date_from: date, date_to: date) -> dict:
             """,
             (user_id, account_ids),
         ).fetchall()
-        # Ряды всего кабинета, не только кампаний пространства: по ним видно падение логина целиком.
+        # Ряды всего кабинета, не только кампаний проекта: по ним видно падение логина целиком.
         stats = [] if empty else conn.execute(
             """
             SELECT account_id, campaign_id, day, impressions, clicks, cost_kopecks, conversions, revenue_kopecks
@@ -879,7 +879,7 @@ def signals_digest(signals: dict) -> str:
     period = signals["period"]
     totals = signals["totals"]
     lines = [
-        f"Сигналы пространства «{signals['workspace']['name']}» за {_day(period['date_from'])}–{_day(period['date_to'])} "
+        f"Сигналы проекта «{signals['workspace']['name']}» за {_day(period['date_from'])}–{_day(period['date_to'])} "
         f"({period['days']} дн.). Номера в [скобках] — campaign_row_id. Конверсии — из отчёта Директа; "
         "«по целям» и «платных» — из отчёта по оплачиваемым и ключевым целям.",
         f"Итого: {_campaigns(totals['campaigns'])} ({totals['active']} идут), показы {_num(totals['impressions'])}, "
@@ -888,7 +888,7 @@ def signals_digest(signals: dict) -> str:
         + ".",
     ]
     if signals["workspace"]["goal"]:
-        lines.append(f"Главная цель пространства: {signals['workspace']['goal']}.")
+        lines.append(f"Главная цель проекта: {signals['workspace']['goal']}.")
     # Ответы маркетолога (ai_facts) — в системных правилах чата, здесь не повторяем.
 
     scheme = signals["scheme"]
@@ -1013,7 +1013,7 @@ def campaign_history(user_id: int, ws_id: int, campaign_row_id: int, today: date
     data = _load(user_id, ws_id, date_from, date_to)
     rows = [c for c in data["campaigns"] if int(c["id"]) == campaign_row_id]
     if not rows:
-        raise YandexError("scope", f"Кампания {campaign_row_id} не входит в это пространство")
+        raise YandexError("scope", f"Кампания {campaign_row_id} не входит в этот проект")
     data["campaigns"] = rows
     c = rows[0]
     key = (int(c["account_id"]), int(c["campaign_id"]))

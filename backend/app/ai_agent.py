@@ -1,7 +1,7 @@
-"""ИИ-агент пространства: чат с инструментами (данные и действия в Директе) и согласованием.
+"""ИИ-агент проекта: чат с инструментами (данные и действия в Директе) и согласованием.
 
 Чтение выполняется сразу. Каждое изменение — запись ai_actions: выполняется само, если это
-разрешают настройки доступа пространства, иначе ждёт решения пользователя в чате.
+разрешают настройки доступа проекта, иначе ждёт решения пользователя в чате.
 """
 
 from __future__ import annotations
@@ -129,7 +129,7 @@ def _names(rows: list[dict], limit: int = 3) -> str:
 
 
 def _cname(row: dict) -> str:
-    """«Название» кампании для карточки; у одноимённых в пространстве — с номером кампании, как в Директе."""
+    """«Название» кампании для карточки; у одноимённых в проекте — с номером кампании, как в Директе."""
     return f"«{row['name']}»" + (f" №{row['campaign_id']}" if row.get("twin") and row.get("campaign_id") else "")
 
 
@@ -262,23 +262,36 @@ def _goal_names(ctx) -> dict[int, str]:
     return out
 
 
-# --- Контекст пространства --------------------------------------------------------------------
+# --- Контекст проекта --------------------------------------------------------------------
 
 
 class Context:
-    def __init__(self, user_id: int, workspace_id: int):
+    def __init__(self, user_id: int, workspace_id: int | None):
         self.user_id = user_id
         self.ws_id = workspace_id
-        self.ws = get_workspace(user_id, workspace_id)
-        self.access = normalize_ai_access(self.ws.get("ai_access"))
+        if workspace_id is None:
+            # Общий чат по всем проектам: своего проекта нет, данные и действия — через project_id,
+            # и ни одно действие не выполняется без подтверждения.
+            self.ws = None
+            access = normalize_ai_access(None)
+            access["categories"] = {key: False for key in access["categories"]}
+            self.access = access
+        else:
+            self.ws = get_workspace(user_id, workspace_id)
+            self.access = normalize_ai_access(self.ws.get("ai_access"))
         # Действие ai_actions, которое сейчас выполняется: эксперимент запоминает, из какого чата запущен.
         self.action: dict | None = None
         # Чат, в котором работает модель: новая кампания проверяется по таблицам, согласованным в нём.
         self.chat_id: int | None = None
         # Правки с доски, которые сейчас сохраняются: согласованы, как и строки таблиц.
         self.board_ops: list[dict] = []
-        # Другие проекты пользователя, которые читали в этом ходу. В них ходят только инструменты чтения.
+        # Другие проекты пользователя, которые читали в этом ходу. Из чата проекта в них ходят только
+        # инструменты чтения; из общего чата — и действия, каждое на согласование.
         self._projects: dict[int, Context] = {}
+
+    @property
+    def general(self) -> bool:
+        return self.ws_id is None
 
     def project(self, project_id: int) -> Context:
         """Контекст другого проекта пользователя — читать его данные; чужой или несуществующий — ошибка."""
@@ -288,8 +301,17 @@ class Context:
             try:
                 self._projects[project_id] = Context(self.user_id, project_id)
             except YandexError as exc:
+                if exc.code == "project-locked":
+                    raise YandexError(
+                        "project-locked", f"Проект {project_id} закрыт: он сверх лимита проектов тарифа"
+                    ) from exc
                 raise YandexError("not-found", f"Проект {project_id} не найден среди проектов пользователя") from exc
-        return self._projects[project_id]
+        other = self._projects[project_id]
+        if self.general:
+            # Действие из общего чата проверяется по таблицам и доске этого чата.
+            other.chat_id = self.chat_id
+            other.action = self.action
+        return other
 
     def account_ids(self) -> set[int]:
         return {int(a["id"]) for a in self.ws.get("accounts") or []}
@@ -298,14 +320,14 @@ class Context:
         for account in self.ws.get("accounts") or []:
             if int(account["id"]) == account_id:
                 return account
-        raise YandexError("scope", "Кабинет не подключён к этому пространству")
+        raise YandexError("scope", "Кабинет не подключён к этому проекту")
 
     def campaigns(self, ids: list[int]) -> list[dict]:
-        """Кампании пространства по id строк; чужие — ошибка."""
+        """Кампании проекта по id строк; чужие — ошибка."""
         allowed = set(workspace_campaign_row_ids(self.user_id, self.ws_id))
         foreign = [i for i in ids if i not in allowed]
         if foreign:
-            raise YandexError("scope", f"Кампании {foreign} не входят в это пространство")
+            raise YandexError("scope", f"Кампании {foreign} не входят в этот проект")
         with pool.connection() as conn:
             rows = conn.execute(
                 """
@@ -336,7 +358,7 @@ class Context:
             raise YandexError("not-found", f"{what} {missing} не найдены")
         foreign = [r["id"] for r in rows if r["campaign_row_id"] not in allowed]
         if foreign:
-            raise YandexError("scope", f"{what} {foreign} — из кампаний вне пространства")
+            raise YandexError("scope", f"{what} {foreign} — из кампаний вне проекта")
         return rows
 
     def keywords(self, ids: list[int]) -> list[dict]:
@@ -729,7 +751,7 @@ def _t_experiments(ctx: Context, args: dict) -> dict:
     if args.get("experiment_id") not in (None, ""):
         exp_id = _int(args, "experiment_id")
         if not any(e["id"] == exp_id for e in items):
-            raise YandexError("not-found", f"Эксперимента #{exp_id} нет в этом пространстве")
+            raise YandexError("not-found", f"Эксперимента #{exp_id} нет в этом проекте")
         full = {exp_id}
     return {"digest": experiments.digest(items, full)}
 
@@ -742,7 +764,7 @@ def _days(args: dict, default: int = 30) -> int:
 
 
 def _scope_ids(ctx: Context, args: dict) -> list[int] | None:
-    """campaign_row_ids из аргументов (проверены на пространство) или None — все кампании."""
+    """campaign_row_ids из аргументов (проверены на проект) или None — все кампании."""
     if args.get("campaign_row_ids") in (None, "", []):
         return None
     ids = _ids(args, "campaign_row_ids")
@@ -796,7 +818,7 @@ def _t_links(ctx: Context, args: dict) -> dict:
     for c in out["campaigns"]:
         c.pop("ad_links", None)  # те же объявления, что в ads, — модели хватит одного списка
     if not out["configured"]:
-        out["note"] = "Шаблон ссылки сайта не задан — попроси маркетолога задать его в настройках пространства"
+        out["note"] = "Шаблон ссылки сайта не задан — попроси маркетолога задать его в настройках проекта"
     return out
 
 
@@ -857,7 +879,7 @@ def _workspace_images(ctx: Context, args: dict) -> dict:
         "images": [{k: v for k, v in i.items() if k != "preview_url"} for i in found["items"]],
         "more": found["more"],
         "hint": (
-            "Картинки из объявлений кампаний пространства, чаще используемые — первыми. Самих картинок ты не "
+            "Картинки из объявлений кампаний проекта, чаще используемые — первыми. Самих картинок ты не "
             "видишь — выбирай по кампаниям, где они стоят. Предлагай таблицей propose_items stage=images: строка — "
             "картинка, image {hash, account_id}, section — группа, cells [название, откуда, почему]; в группе до "
             f"{MAX_GROUP_IMAGES}. Картинку из другого кабинета сервис скопирует сам"
@@ -937,12 +959,12 @@ def _workspace_account(user_id: int, workspace_id: int, account_id) -> int:
     except (TypeError, ValueError):
         raise YandexError("args", "Укажите кабинет") from None
     if account_id not in {int(a["id"]) for a in list_workspace_accounts(user_id, workspace_id)}:
-        raise YandexError("scope", "Кабинет не подключён к этому пространству")
+        raise YandexError("scope", "Кабинет не подключён к этому проекту")
     return account_id
 
 
 def workspace_images(user_id: int, workspace_id: int, *, account_id=None) -> dict:
-    """Картинки кампаний пространства для доски: {items: [{hash, account_id, preview_url, campaigns, ads}], more}."""
+    """Картинки кампаний проекта для доски: {items: [{hash, account_id, preview_url, campaigns, ads}], more}."""
     from app.ads import workspace_images as found_images
 
     require_workspace(user_id, workspace_id)
@@ -964,14 +986,14 @@ AUDIENCE_LISTS_MAX = 40
 
 
 def _audience_account(ctx: Context, args: dict) -> dict:
-    """Кабинет для аудиторий: account_id или единственный кабинет пространства."""
+    """Кабинет для аудиторий: account_id или единственный кабинет проекта."""
     if args.get("account_id") not in (None, ""):
         return ctx.require_account(_int(args, "account_id"))
     accounts = ctx.ws.get("accounts") or []
     if len(accounts) == 1:
         return accounts[0]
     if not accounts:
-        raise YandexError("args", "К пространству не подключён кабинет Директа")
+        raise YandexError("args", "К проекту не подключён кабинет Директа")
     raise YandexError("args", "Укажи account_id — кабинет, в котором будет кампания")
 
 
@@ -1068,7 +1090,7 @@ def _t_audiences(ctx: Context, args: dict) -> dict:
 
 # Инструменты чтения, которым можно передать project_id: данные берутся из того проекта. Остальные читают только
 # текущий: refresh_search_queries, remember_fact и generate_images что-то пишут или стоят денег, а справочники
-# (регионы, Вордстат, аудитории, картинки, расширения, ссылки) нужны для сборки в текущем пространстве.
+# (регионы, Вордстат, аудитории, картинки, расширения, ссылки) нужны для сборки в текущем проекте.
 CROSS_PROJECT_TOOLS = (
     "get_workspace_summary",
     "get_analytics",
@@ -1742,7 +1764,7 @@ def _p_create_campaign(ctx: Context, args: dict) -> Plan:
         if isinstance(extras, dict) and isinstance(extras.get("image_hashes"), list):
             group_images += [(name, str(h).strip()) for h in extras["image_hashes"] if str(h or "").strip()]
         if not str(group["ad"].get("href") or "").strip() and not href_default:
-            raise YandexError("args", f"Группа «{name}»: укажи href объявления — шаблона ссылки в пространстве нет")
+            raise YandexError("args", f"Группа «{name}»: укажи href объявления — шаблона ссылки в проекте нет")
         key = (tuple(sorted(variants[0])), tuple(sorted(variants[1])))
         if key in ads:
             raise YandexError(
@@ -1817,7 +1839,7 @@ def _x_create_campaign(ctx: Context, args: dict) -> dict:
 
 
 def _bring_images(ctx: Context, groups: list[dict], account_id: int) -> list[str]:
-    """Картинки групп — в библиотеку кабинета новой кампании: взятые из другого кабинета пространства
+    """Картинки групп — в библиотеку кабинета новой кампании: взятые из другого кабинета проекта
     копируются, хэши заменяются; каких нет нигде — убираются. → предупреждения."""
     extras_list = []
     for group in groups:
@@ -1828,7 +1850,7 @@ def _bring_images(ctx: Context, groups: list[dict], account_id: int) -> list[str
 
 
 def _image_homes(ctx: Context, hashes: set[str]) -> dict[str, set[int]]:
-    """В каких кабинетах пространства картинка стоит в объявлениях: хэш → {account_id}."""
+    """В каких кабинетах проекта картинка стоит в объявлениях: хэш → {account_id}."""
     if not hashes:
         return {}
     with pool.connection() as conn:
@@ -1850,7 +1872,7 @@ def _image_homes(ctx: Context, hashes: set[str]) -> dict[str, set[int]]:
 
 def _bring_extras_images(ctx: Context, extras_list: list[dict], account_id: int, lost_note: str) -> list[str]:
     """image_hashes в extras — в библиотеку кабинета account_id: каких там нет, копируются из другого кабинета
-    пространства (согласованные в чате или стоящие в его объявлениях), хэши заменяются на новые; каких нет
+    проекта (согласованные в чате или стоящие в его объявлениях), хэши заменяются на новые; каких нет
     нигде — убираются (extras без image_hashes картинок объявления не трогает). → предупреждения."""
     from app import ad_extras
     from app.actions import _copy_images
@@ -2635,7 +2657,7 @@ def _links_args(ctx: Context, args: dict) -> tuple[list[dict], dict]:
     rows = ctx.campaigns(_ids(args, "campaign_row_ids"))
     issues = links.workspace_link_issues(ctx.user_id, ctx.ws_id, [r["id"] for r in rows])
     if not issues["configured"]:
-        raise YandexError("args", "Шаблон ссылки сайта не задан — его задают в настройках пространства")
+        raise YandexError("args", "Шаблон ссылки сайта не задан — его задают в настройках проекта")
     bad = {c["campaign_row_id"]: c for c in issues["campaigns"]}
     picked = [r for r in rows if r["id"] in bad]
     if not picked:
@@ -3746,21 +3768,23 @@ def _exclude_rows(user_id: int, row: dict, exclude) -> dict:
     paths = [p for p in paths if p in allowed]
     if not paths:
         return row
-    clean = {k: v for k, v in args.items() if k not in ("_diff", "_items", "_removed")}
+    clean = {k: v for k, v in args.items() if k not in ("_diff", "_items", "_removed", "project_id")}
     new_args = _drop_paths(clean, paths)
     with pool.connection() as conn:
         ws_id = conn.execute("SELECT workspace_id FROM ai_chats WHERE id = %s", (row["chat_id"],)).fetchone()["workspace_id"]
     ctx = Context(user_id, ws_id)
     ctx.chat_id = row["chat_id"]
+    # Действие из общего чата меняет проект, указанный в нём самом.
+    target = ctx.project(_int(args, "project_id")) if ctx.general else ctx
     prepare, _execute = WRITE_TOOLS[row["tool"]]
     try:
-        plan = prepare(ctx, new_args)
+        plan = prepare(target, new_args)
     except YandexError as exc:
         raise YandexError("args", f"Без снятых строк действие не пройдёт: {exc.message or exc.code}") from exc
     top = set(_top_paths(paths))
     removed = [{"section": p["section"], "kind": p["kind"], "text": p["text"]} for p in picks if p["id"] in top]
-    stored = dict(new_args)
-    changes = _changes(ctx, row["tool"], new_args)
+    stored = {**new_args, "project_id": args["project_id"]} if ctx.general else dict(new_args)
+    changes = _changes(target, row["tool"], new_args)
     if changes:
         stored["_diff"] = changes
     stored["_removed"] = removed
@@ -3788,7 +3812,8 @@ def _q_questions(ctx: Context, args: dict) -> dict:
     raw = args.get("questions")
     if isinstance(raw, (str, dict)):
         raw = [raw]
-    known = {f["key"]: f for f in normalize_ai_facts(ctx.ws.get("ai_facts"))}
+    # В общем чате своего проекта нет — и памяти ответов тоже.
+    known = {f["key"]: f for f in normalize_ai_facts(ctx.ws.get("ai_facts"))} if ctx.ws else {}
     questions: list[dict] = []
     answered: list[dict] = []
     keys: set[str] = set()
@@ -4153,7 +4178,7 @@ TOOL_LABELS = {
     "board_edit": "Правки на доске",
     "list_projects": "Проекты пользователя",
     "get_project": "Профиль проекта",
-    "get_workspace_summary": "Сводка пространства",
+    "get_workspace_summary": "Сводка проекта",
     "get_analytics": "Аналитика за период",
     "list_campaigns": "Список кампаний",
     "get_campaign": "Структура кампании",
@@ -4163,7 +4188,7 @@ TOOL_LABELS = {
     "get_structure_tops": "Топы ключей и групп",
     "list_recent_actions": "Журнал действий",
     "get_campaign_options": "Справочник для кампаний",
-    "get_signals": "Сигналы пространства",
+    "get_signals": "Сигналы проекта",
     "get_campaign_history": "Кампания по дням",
     "remember_fact": "Запоминаю ответ",
     "find_regions": "Поиск регионов",
@@ -4246,7 +4271,7 @@ _EXTRAS = {
                 "type": "array",
                 "items": {"type": "string"},
                 "description": "картинки из list_ad_images: у комбинаторного до 5, у текстового одна. Картинку из другого кабинета "
-                "пространства сервис скопирует в кабинет объявления сам",
+                "проекта сервис скопирует в кабинет объявления сам",
             },
         },
     },
@@ -4269,7 +4294,7 @@ _AD_EDIT = {
 TOOLS = [
     _fn(
         "list_projects",
-        "Другие проекты (пространства) пользователя: project_id, название, сайт, клиент, число кампаний. Только "
+        "Другие проекты пользователя: project_id, название, сайт, клиент, число кампаний. Только "
         "для чтения: когда маркетолог ссылается на другой проект по имени, сравнивает проекты или просит взять "
         "пример оттуда. Проекты из пометки «Упомянуты проекты» уже с id — список для них не нужен.",
     ),
@@ -4283,10 +4308,10 @@ TOOLS = [
     _fn("get_workspace_summary", "Сводка: расход сегодня, проблемы («где горит»), неделя к неделе, топ кампаний."),
     _fn(
         "get_analytics",
-        "Итоги пространства за период и сравнение с прошлым таким же периодом, KPI, разрез по кампаниям и кабинетам.",
+        "Итоги проекта за период и сравнение с прошлым таким же периодом, KPI, разрез по кампаниям и кабинетам.",
         {**_RANGE, "include_days": {"type": "boolean", "description": "добавить разбивку по дням"}},
     ),
-    _fn("list_campaigns", "Кампании пространства (campaign_row_id, статус, бюджет, стратегия) с метриками за период.", _RANGE),
+    _fn("list_campaigns", "Кампании проекта (campaign_row_id, статус, бюджет, стратегия) с метриками за период.", _RANGE),
     _fn(
         "get_campaign",
         "Структура кампании: группы (статистика, сколько в них объявлений и фраз), объявления без архивных "
@@ -4330,11 +4355,11 @@ TOOLS = [
         {"campaign_row_id": _ID, "days": {"type": "integer", "description": "1–90, по умолчанию 14"}},
         ["campaign_row_id"],
     ),
-    _fn("get_structure_tops", "Топы ключевых фраз, групп и запросов пространства по расходу и конверсиям."),
-    _fn("list_recent_actions", "Журнал последних изменений в пространстве.", {"limit": {"type": "integer"}}),
+    _fn("get_structure_tops", "Топы ключевых фраз, групп и запросов проекта по расходу и конверсиям."),
+    _fn("list_recent_actions", "Журнал последних изменений в проекте.", {"limit": {"type": "integer"}}),
     _fn(
         "get_campaign_options",
-        "Справочник для создания кампаний: типы, стратегии и их параметры, кабинеты пространства, цели Метрики.",
+        "Справочник для создания кампаний: типы, стратегии и их параметры, кабинеты проекта, цели Метрики.",
     ),
     _fn(
         "get_signals",
@@ -4392,7 +4417,7 @@ TOOLS = [
     ),
     _fn(
         "get_experiments",
-        "Эксперименты пространства: гипотезы, тестовые кампании, лимиты, критерии успеха и прогресс, посчитанный "
+        "Эксперименты проекта: гипотезы, тестовые кампании, лимиты, критерии успеха и прогресс, посчитанный "
         "кодом по загруженной статистике, и выводы прошлых экспериментов. С experiment_id — этот подробно.",
         {"experiment_id": _ID},
     ),
@@ -4403,7 +4428,7 @@ TOOLS = [
         "комбинаторные объявления (mixed) с общими цифрами на все их заголовки. Основа для масштабирования "
         "выгодных заголовков.",
         {
-            "campaign_row_ids": {**_IDS, "description": "кампании; по умолчанию все кампании пространства"},
+            "campaign_row_ids": {**_IDS, "description": "кампании; по умолчанию все кампании проекта"},
             "days": {"type": "integer", "description": "период, дней (1–90, по умолчанию 30)"},
         },
     ),
@@ -4434,10 +4459,10 @@ TOOLS = [
     _fn(
         "list_ad_images",
         "Картинки для объявлений. С campaign_row_id — какие уже стоят в объявлениях кампании и сколько раз, и "
-        "что ещё есть в библиотеке кабинета. Без него — картинки из объявлений всех кампаний пространства (для "
+        "что ещё есть в библиотеке кабинета. Без него — картинки из объявлений всех кампаний проекта (для "
         "новой кампании). Хэш — для extras.image_hashes.",
         {
-            "campaign_row_id": {**_ID, "description": "кампания; без неё — все кампании пространства"},
+            "campaign_row_id": {**_ID, "description": "кампания; без неё — все кампании проекта"},
             "account_id": {**_ID, "description": "без campaign_row_id: только этот кабинет"},
         },
     ),
@@ -4594,7 +4619,7 @@ TOOLS = [
     ),
     _fn(
         "create_campaign",
-        "Создать кампанию (черновик) в кабинете пространства. Сначала посмотри get_campaign_options. spec: type "
+        "Создать кампанию (черновик) в кабинете проекта. Сначала посмотри get_campaign_options. spec: type "
         "(TEXT_CAMPAIGN|UNIFIED_CAMPAIGN), name, start_date, end_date, strategy {search, network, параметры} — "
         "search строкой: HIGHEST_POSITION (ручные ставки) или автостратегия из get_campaign_options (например "
         "PAY_FOR_CONVERSION_MULTIPLE_GOALS), network: NETWORK_DEFAULT|SERVING_OFF, "
@@ -4605,17 +4630,17 @@ TOOLS = [
         "картинки группы, до 5} или extras_from_ad_row_id}, audiences [] — "
         "согласованные аудитории группы объектами audience из таблицы stage=audiences}] (до 20 групп; группа без "
         "фраз — только по аудитории, показы лишь в сетях): "
-        "объявление комбинаторное, второго заголовка в нём нет; href можно не давать, если в пространстве есть "
+        "объявление комбинаторное, второго заголовка в нём нет; href можно не давать, если в проекте есть "
         "шаблон ссылки. Кампания с группами создаётся только после согласованных таблиц propose_items по этапам "
         "(цели, анализ, ключи и группы, аудитории, если они есть, заголовки и тексты, настройки) и только из "
         "согласованных строк. "
-        "Счётчик пространства подставится сам.",
+        "Счётчик проекта подставится сам.",
         {"account_id": _ID, "spec": {"type": "object"}, **_REASON},
         ["account_id", "spec"],
     ),
     _fn(
         "duplicate_campaign",
-        "Копия кампании со структурой, в тот же или другой кабинет пространства.",
+        "Копия кампании со структурой, в тот же или другой кабинет проекта.",
         {"campaign_row_id": _ID, "target_account_id": _ID, "name": {"type": "string"}, **_REASON},
         ["campaign_row_id"],
     ),
@@ -4645,7 +4670,7 @@ TOOLS = [
             "campaign_row_id": _ID,
             "region_ids": {**_IDS, "description": "регионы копии; минус перед id — исключить"},
             "name": {"type": "string", "description": "название копии; по умолчанию «<название> — <регионы>»"},
-            "target_account_id": {**_ID, "description": "другой кабинет пространства; по умолчанию тот же"},
+            "target_account_id": {**_ID, "description": "другой кабинет проекта; по умолчанию тот же"},
             "moderate": {"type": "boolean", "description": "сразу на модерацию (по умолчанию да)"},
             **_REASON,
         },
@@ -4970,8 +4995,47 @@ for _tool in TOOLS:
         _tool["function"]["parameters"]["properties"]["project_id"] = {
             **_ID,
             "description": "другой проект пользователя (list_projects) — прочитать данные оттуда; без него — "
-            "текущее пространство",
+            "текущий проект",
         }
+
+
+# --- Общий чат по всем проектам ----------------------------------------------------------------
+#
+# Своего проекта у чата нет: каждый инструмент данных и каждое действие — с обязательным project_id.
+# Действия — правки существующих кампаний; новые кампании, копии, эксперименты и картинки собирают в
+# чате проекта, где есть доска сборки, бриф и память ответов.
+
+GENERAL_WRITE_TOOLS = (
+    "campaigns_action",
+    "update_campaign_settings",
+    "add_campaign_negatives",
+    "keywords_action",
+    "add_keywords",
+    "search_queries_action",
+    "ads_action",
+    "update_text_ad",
+    "update_text_ads",
+)
+GENERAL_ASK_TOOLS = ("ask_questions", "propose_plan")
+GENERAL_TOOL_NAMES = frozenset(
+    {"list_projects", "get_project", *CROSS_PROJECT_TOOLS, *GENERAL_WRITE_TOOLS, *GENERAL_ASK_TOOLS}
+)
+
+
+def _general_tool(tool: dict) -> dict:
+    out = copy.deepcopy(tool)
+    fn = out["function"]
+    if fn["name"] in CROSS_PROJECT_TOOLS or fn["name"] in GENERAL_WRITE_TOOLS:
+        params = fn["parameters"]
+        params["properties"]["project_id"] = {
+            **_ID,
+            "description": "проект из list_projects: откуда читать данные или где менять кампании",
+        }
+        params["required"] = ["project_id", *[r for r in params["required"] if r != "project_id"]]
+    return out
+
+
+GENERAL_TOOLS = [_general_tool(t) for t in TOOLS if t["function"]["name"] in GENERAL_TOOL_NAMES]
 
 
 def _running_experiments(ctx: Context) -> list[dict]:
@@ -4979,7 +5043,7 @@ def _running_experiments(ctx: Context) -> list[dict]:
     try:
         rows = experiments.running_experiments(ctx.user_id, ctx.ws_id)
     except Exception:
-        log.warning("Идущие эксперименты пространства %s не загружены", ctx.ws_id, exc_info=True)
+        log.warning("Идущие эксперименты проекта %s не загружены", ctx.ws_id, exc_info=True)
         return []
     ids = sorted({int(i) for e in rows for i in e["campaign_row_ids"] or []})
     names: dict[int, str] = {}
@@ -4991,7 +5055,7 @@ def _running_experiments(ctx: Context) -> list[dict]:
                 ).fetchall()
             names = {int(r["id"]): r["name"] for r in found}
         except Exception:
-            log.warning("Названия кампаний экспериментов пространства %s не загружены", ctx.ws_id, exc_info=True)
+            log.warning("Названия кампаний экспериментов проекта %s не загружены", ctx.ws_id, exc_info=True)
     return [{**e, "campaign_names": names} for e in rows]
 
 
@@ -5005,14 +5069,14 @@ def _experiment_campaigns(e: dict) -> str:
 
 
 FIRST_CAMPAIGN_RULE = (
-    "- В пространстве ещё нет ни одной кампании: это первая. Статистики, истории, сигналов и поисковых запросов "
+    "- В проекте ещё нет ни одной кампании: это первая. Статистики, истории, сигналов и поисковых запросов "
     "нет — их не запрашивай и не делай вывода из их отсутствия. Если маркетолог просит «разбор» или оптимизацию, "
     "скажи, что разбирать пока нечего, и предложи собрать первую кампанию. Анализ (этап 2) строй на брифе, сайте "
     "и Вордстате; примеров своих кампаний нет — так и скажи. Бриф бери у маркетолога через ask_questions (продукт "
     "и оффер, гео, бюджет, цель, ссылка), ответы с key запомнятся. Без цели Метрики и накопленных конверсий "
     "Директу нечему учиться: стратегию на конверсии не предлагай, начни с «Максимум кликов» с недельным бюджетом "
     "или с ручных ставок, а переход на конверсии назови следующим шагом, когда конверсии накопятся. Конверсий "
-    "и результата не обещай: цифры — только из Вордстата и данных пространства."
+    "и результата не обещай: цифры — только из Вордстата и данных проекта."
 )
 
 
@@ -5038,15 +5102,70 @@ def _image_gen_ready(ctx: Context) -> bool:
 
 
 def _context_files_block(ctx: Context) -> str:
-    """Файлы контекста пространства для промпта; без них ход не должен падать."""
+    """Файлы контекста проекта для промпта; без них ход не должен падать."""
     try:
         return context_files.prompt_block(ctx.ws_id)
     except Exception:
-        log.warning("Файлы контекста пространства %s не загружены", ctx.ws_id, exc_info=True)
+        log.warning("Файлы контекста проекта %s не загружены", ctx.ws_id, exc_info=True)
         return ""
 
 
+GENERAL_PROMPT_PROJECTS = 40
+
+
+def _general_prompt(ctx: Context) -> str:
+    """Системный промпт общего чата: проекты пользователя списком, данные и действия — через project_id."""
+    projects = [w for w in list_workspaces(ctx.user_id) if not w.get("locked")]
+    rows = []
+    for w in projects[:GENERAL_PROMPT_PROJECTS]:
+        parts = [f"project_id {w['id']}: «{w['name']}»"]
+        if w.get("site"):
+            parts.append(w["site"])
+        if w.get("client_name"):
+            parts.append(f"клиент «{w['client_name']}»")
+        parts.append(f"KPI: {_kpi_text(w)}")
+        parts.append(_count(w["campaigns_count"], "кампания", "кампании", "кампаний"))
+        rows.append("- " + ", ".join(parts))
+    if len(projects) > GENERAL_PROMPT_PROJECTS:
+        rows.append(f"- …и ещё {len(projects) - GENERAL_PROMPT_PROJECTS}: полный список — list_projects")
+    lines = [
+        "Ты — ИИ-ассистент интернет-маркетолога в сервисе AiMarketing (Яндекс Директ + Метрика).",
+        f"Сегодня {today_msk().isoformat()} (Москва).",
+        "Это общий чат по всем проектам маркетолога: своего проекта у чата нет.",
+        "",
+        "Проекты маркетолога:",
+        *(rows or ["- проектов пока нет: сначала их подключают в разделе «Подключения»"]),
+        "",
+        "Правила:",
+        "- Отвечай по-русски, кратко и по делу. Цифры бери только из инструментов, ничего не выдумывай.",
+        "- Каждый инструмент данных и каждое действие вызывай с project_id из списка выше. Не ясно, о каком "
+        "проекте речь, — спроси через ask_questions.",
+        "- Сравнивая проекты, читай каждый отдельно и называй, из какого проекта каждая цифра; цифры разных "
+        "проектов не смешивай. Данные со многими строками показывай markdown-таблицей, а не списком.",
+        "- Общую картину собирай get_workspace_summary по нужным проектам; разбор одного проекта начинай с "
+        "get_signals. id кампаний, групп и объявлений работают только вместе с project_id их проекта.",
+        "- Если ответ инструмента обрезан или в нём есть not_all_shown, ты видел не всё: дозапроси остальное или "
+        "прямо скажи, что смотрел часть.",
+        "- Суммы в инструментах — в рублях. Кампании называй по имени (у одинаковых названий — с campaign_id), "
+        "внутренние id (campaign_row_id и т. п.) в ответах не пиши.",
+        "- Успех кампании — конверсии почти без расхода, много конверсий или высокий CR. CPA ниже KPI — не "
+        "главный признак. Отделяй факты из данных от гипотез.",
+        "- Действия здесь — только правки существующих кампаний: включить или остановить, настройки и бюджеты, "
+        "минус-фразы, ключевые фразы, поисковые запросы, объявления. Каждое уходит маркетологу на подтверждение "
+        "карточкой «Выполнить / Отклонить»: разрешения текстом не спрашивай, в reason коротко объясни зачем.",
+        "- Несколько изменений сразу — сначала propose_plan: шаги «проект: было → станет → зачем»; затем по "
+        "одному инструменту на согласованный шаг, с plan_step.",
+        "- Новую кампанию, копии, перезапуски, эксперименты и картинки делают в чате проекта — там доска сборки, "
+        "бриф и ответы маркетолога. Предложи открыть ИИ-помощника в нужном проекте.",
+        "- Если действие отклонено, не повторяй его без новой просьбы. Если ошибка — объясни её.",
+        "- Если часть согласованного плана не выполнена, прямо скажи, что именно не сделано.",
+    ]
+    return "\n".join(lines)
+
+
 def _system_prompt(ctx: Context) -> str:
+    if ctx.general:
+        return _general_prompt(ctx)
     ws = ctx.ws
     access = ctx.access
     if access["full_access"]:
@@ -5066,11 +5185,11 @@ def _system_prompt(ctx: Context) -> str:
     lines = [
         "Ты — ИИ-ассистент интернет-маркетолога в сервисе AiMarketing (Яндекс Директ + Метрика).",
         f"Сегодня {today_msk().isoformat()} (Москва).",
-        f"Рабочее пространство «{ws['name']}», сайт {ws.get('site') or '—'}, счётчик Метрики {ws['counter_id']}"
+        f"Проект «{ws['name']}», сайт {ws.get('site') or '—'}, счётчик Метрики {ws['counter_id']}"
         + (f", клиент «{ws['client_name']}»" if ws.get("client_name") else "") + ".",
         f"Основная цель: {ws.get('goal_name') or ws.get('goal_id') or 'не выбрана (конверсии Директа)'}. KPI: {kpi}."
         + (f" Бюджет в месяц: {_money(ws['monthly_budget_rub'])}." if ws.get("monthly_budget_rub") else ""),
-        f"Кабинеты Директа пространства: {accounts}.",
+        f"Кабинеты Директа проекта: {accounts}.",
         f"Доступ: {policy}",
         "",
         "Правила:",
@@ -5116,7 +5235,7 @@ def _system_prompt(ctx: Context) -> str:
         "«[Правки на доске]» и полем edited_by_user в ответе таблицы — дальше бери их в таком виде. 1) Цели кампании — сначала "
         "ask_questions, если чего-то не хватает в брифе, затем propose_items stage=goals строками «что — "
         "значение»: что рекламируем и оффер, гео, бюджет, цель (действие на сайте или цель Метрики), посадочная "
-        "ссылка, ограничения. 2) Анализ: похожие кампании пространства (list_campaigns, get_campaign — какие группы, фразы и тексты "
+        "ссылка, ограничения. 2) Анализ: похожие кампании проекта (list_campaigns, get_campaign — какие группы, фразы и тексты "
         "приносили конверсии), get_search_queries с with_conversions, get_wordstat по 1–5 главным фразам с "
         "регионами кампании. Короткий отчёт с цифрами таблицей, затем propose_items stage=analysis — направления, "
         "они станут группами (направление, показов в месяц, откуда идея). 3) Ключи и группы — propose_items "
@@ -5145,7 +5264,7 @@ def _system_prompt(ctx: Context) -> str:
         "описанию» — generate_images по каждой группе (сцена под её оффер, без надписей и логотипов), затем "
         "таблица stage=images. «Без картинок» — этап пропусти. В группе до 5 картинок; в create_campaign "
         "согласованные хэши — в ad.extras.image_hashes своей группы. 7) Ссылка и расширения — "
-        "propose_items stage=extras: ссылка или шаблон пространства; быстрые ссылки — строка на ссылку с "
+        "propose_items stage=extras: ссылка или шаблон проекта; быстрые ссылки — строка на ссылку с "
         "section «Быстрые ссылки» (текст до 30 знаков, ссылка, описание до 60); уточнения — строка на уточнение "
         "с section «Уточнения» (до 25 знаков); или у какого объявления взять расширения. В create_campaign "
         "согласованные быстрые ссылки и уточнения — в ad.extras каждой группы. 8) Настройки — propose_items stage=settings: тип, стратегия, бюджет, "
@@ -5203,7 +5322,7 @@ def _system_prompt(ctx: Context) -> str:
         "(get_ad_extras покажет, что у него есть) или extras; картинки кабинета — list_ad_images. Без них "
         "объявление выйдет без быстрых ссылок, уточнений и картинок. Правку нескольких объявлений делай одним "
         "update_text_ads — маркетолог согласует её одной карточкой.",
-        "- Ссылки: в настройках пространства задаётся шаблон ссылки сайта (адрес и ref — в объявлении, utm — в "
+        "- Ссылки: в настройках проекта задаётся шаблон ссылки сайта (адрес и ref — в объявлении, utm — в "
         "метках кампании). При разборе кампаний вызывай check_links; косяки (другой домен, нет ref, неверные или "
         "задвоенные utm) показывай как проблему с предложением исправить — fix_links после согласия. Новые "
         "кампании, копии и объявления сервис строит по шаблону сам.",
@@ -5224,13 +5343,13 @@ def _system_prompt(ctx: Context) -> str:
         "- Если действие отклонено, не повторяй его без новой просьбы. Если ошибка — объясни её пользователю.",
         "- Если часть согласованного плана не выполнена (ошибка, отклонено, пропущено) или ты её убрал, прямо "
         "скажи, что именно не сделано, — не называй план выполненным.",
-        "- Менять можно только кампании и кабинеты этого пространства. Другие проекты пользователя — только "
+        "- Менять можно только кампании и кабинеты этого проекта. Другие проекты пользователя — только "
         "читать: когда маркетолог ссылается на проект (в сообщении есть пометка «Упомянуты проекты»), сравнивает "
         "проекты или просит взять оттуда пример, читай его инструментами с project_id (get_project — профиль и "
         "бриф, list_projects — какие проекты есть). id кампаний, групп и объявлений другого проекта работают "
         "только вместе с его project_id. Цифры разных проектов не смешивай и называй, из какого проекта каждая. "
         "Действия над кампаниями другого проекта не предлагай — скажи, что их делают в самом проекте; идеи, "
-        "структуру и тексты оттуда можно взять за образец для этого пространства.",
+        "структуру и тексты оттуда можно взять за образец для этого проекта.",
     ]
     facts = normalize_ai_facts(ws.get("ai_facts"))
     first = not ws.get("campaigns_count")
@@ -5774,7 +5893,7 @@ def _build_checks(build: dict, *, link_template: bool) -> list[dict]:
     if groups and all(g["href"] for g in groups):
         add("link", "Ссылка на сайт", "ok", "у каждого объявления")
     elif link_template:
-        add("link", "Ссылка на сайт", "ok", "шаблон ссылки пространства")
+        add("link", "Ссылка на сайт", "ok", "шаблон ссылки проекта")
     elif build["draft"] and build["draft"]["status"] in ("pending", "approved", "done"):
         add("link", "Ссылка на сайт", "bad", "не у всех объявлений есть ссылка")
     elif _LINK_RE.search(facts):
@@ -5830,7 +5949,7 @@ def campaign_build(actions: list[dict], *, link_template: bool = False) -> dict 
     """Как собирается новая кампания в чате; None — новую кампанию здесь не собирают.
 
     Сборка начинается таблицей целей или анализа и заканчивается созданным черновиком: после него
-    новая таблица целей или анализа начинает следующую сборку. link_template — у пространства есть
+    новая таблица целей или анализа начинает следующую сборку. link_template — у проекта есть
     шаблон ссылки (для проверки готовности).
     """
     episodes: list[list[dict]] = [[]]
@@ -6313,6 +6432,8 @@ def edit_board(user_id: int, chat_id: int, ops) -> dict:
         if _chat_out(chat)["status"] == "running":
             raise YandexError("busy", "ИИ ещё отвечает — дождитесь ответа")
         actions = conn.execute("SELECT * FROM ai_actions WHERE chat_id = %s ORDER BY id", (chat_id,)).fetchall()
+    if chat["workspace_id"] is None:
+        raise YandexError("args", "Доска сборки есть только в чате проекта")
     ws = require_workspace(user_id, chat["workspace_id"])
     _board_images(user_id, chat["workspace_id"], ops)
     from app.actions import _ws_link_template
@@ -6412,7 +6533,7 @@ def edit_board(user_id: int, chat_id: int, ops) -> dict:
 
 
 def _board_images(user_id: int, workspace_id: int, ops: list[dict]) -> None:
-    """Картинки, добавленные на доске: кабинет — из пространства, картинка — в его библиотеке; превью — доске."""
+    """Картинки, добавленные на доске: кабинет — из проекта, картинка — в его библиотеке; превью — доске."""
     from app import ad_extras
 
     adds = [op for op in ops if op.get("kind") == "image" and op["op"] == "add"]
@@ -6422,7 +6543,7 @@ def _board_images(user_id: int, workspace_id: int, ops: list[dict]) -> None:
     by_account: dict[int, list[dict]] = {}
     for op in adds:
         if op["image"]["account_id"] not in allowed:
-            raise YandexError("scope", "Кабинет картинки не подключён к этому пространству")
+            raise YandexError("scope", "Кабинет картинки не подключён к этому проекту")
         by_account.setdefault(op["image"]["account_id"], []).append(op)
     for account_id, items in by_account.items():
         token, login = audiences.account_access(user_id, account_id)
@@ -6469,18 +6590,23 @@ _CHAT_SELECT = """
 """
 
 
-def list_chats(user_id: int, workspace_id: int) -> list[dict]:
-    require_workspace(user_id, workspace_id)
+def list_chats(user_id: int, workspace_id: int | None) -> list[dict]:
+    """Чаты проекта; workspace_id None — общие чаты по всем проектам."""
+    if workspace_id is not None:
+        require_workspace(user_id, workspace_id)
     with pool.connection() as conn:
         rows = conn.execute(
-            _CHAT_SELECT + " WHERE ch.user_id = %s AND ch.workspace_id = %s ORDER BY ch.updated_at DESC, ch.id DESC",
+            _CHAT_SELECT
+            + " WHERE ch.user_id = %s AND ch.workspace_id IS NOT DISTINCT FROM %s ORDER BY ch.updated_at DESC, ch.id DESC",
             (user_id, workspace_id),
         ).fetchall()
     return [_chat_out(r) for r in rows]
 
 
-def create_chat(user_id: int, workspace_id: int, title: str = "", model_class: str = "") -> dict:
-    require_workspace(user_id, workspace_id)
+def create_chat(user_id: int, workspace_id: int | None, title: str = "", model_class: str = "") -> dict:
+    """Новый чат проекта; workspace_id None — общий чат по всем проектам."""
+    if workspace_id is not None:
+        require_workspace(user_id, workspace_id)
     model_class = _usable_class(model_class)
     with pool.connection() as conn:
         row = conn.execute(
@@ -6533,6 +6659,17 @@ def get_chat(user_id: int, chat_id: int) -> dict:
         chat = conn.execute(_CHAT_SELECT + " WHERE ch.id = %s", (chat_id,)).fetchone()
         messages = conn.execute("SELECT * FROM ai_messages WHERE chat_id = %s ORDER BY id", (chat_id,)).fetchall()
         actions = conn.execute("SELECT * FROM ai_actions WHERE chat_id = %s ORDER BY id", (chat_id,)).fetchall()
+    if chat["workspace_id"] is None:
+        return {
+            "chat": _chat_out(chat),
+            "messages": [_message_out(m) for m in messages],
+            "actions": [_action_out(a) for a in actions],
+            "build": None,
+            "access": Context(user_id, None).access,
+            "ai": _ai_models(chat),
+            "image_gen": {"configured": False},
+            "projects": _action_projects(user_id, actions),
+        }
     ws = require_workspace(user_id, chat["workspace_id"])
     from app.actions import _ws_link_template
 
@@ -6672,7 +6809,7 @@ def _submit(user_id: int, chat_id: int, marker: str) -> dict:
 
 
 def _clean_refs(conn, user_id: int, workspace_id: int, refs) -> list[dict]:
-    """Проекты из @-упоминаний сообщения: свои, без повторов и без самого пространства чата.
+    """Проекты из @-упоминаний сообщения: свои, без повторов и без самого проекта чата.
 
     Чужой или удалённый проект — ошибка: лучше сказать об этом, чем отправить ИИ ссылку в пустоту.
     """
@@ -6699,9 +6836,11 @@ def _clean_refs(conn, user_id: int, workspace_id: int, refs) -> list[dict]:
     return [{"id": i, "name": names[i]} for i in ids]
 
 
-def _refs_note(refs) -> str:
+def _refs_note(refs, *, general: bool = False) -> str:
     """Пометка к сообщению маркетолога для модели: какие проекты он упомянул и как их читать."""
     items = "; ".join(f"«{_line(r.get('name'), 120)}» (project_id {r.get('id')})" for r in refs or [])
+    if general:
+        return f"\n\n[Упомянуты проекты: {items}. Вызывай инструменты с их project_id]"
     return (
         f"\n\n[Упомянуты проекты: {items}. Это другие проекты маркетолога: читай их инструментами с project_id, "
         "менять их нельзя]"
@@ -6760,7 +6899,7 @@ def retry_chat(user_id: int, chat_id: int) -> dict:
     return {"job": public_job(job)}
 
 
-REVIEW_PROMPT = "Сделай разбор пространства: что работает, что затухает и почему, что стоит повторить"
+REVIEW_PROMPT = "Сделай разбор проекта: что работает, что затухает и почему, что стоит повторить"
 
 
 def start_review(user_id: int, workspace_id: int, *, prompt: str = "", title: str = "", chat_id: int | None = None) -> dict:
@@ -6845,6 +6984,82 @@ def _start_with_digest(
     return {"chat": _chat_out(row), "message": _message_out(message), "job": public_job(job)}
 
 
+def _action_project_id(row: dict, chat_workspace_id: int | None) -> int | None:
+    """Проект, к которому относится действие: проект чата или, в общем чате, project_id из аргументов."""
+    if chat_workspace_id is not None:
+        return int(chat_workspace_id)
+    try:
+        return int((row.get("args") or {}).get("project_id"))
+    except (TypeError, ValueError):
+        return None
+
+
+def _action_projects(user_id: int, actions: list[dict]) -> dict[str, str]:
+    """Названия проектов действий общего чата: {id: название} — подписать карточки."""
+    ids = sorted({pid for a in actions if (pid := _action_project_id(a, None)) is not None})
+    if not ids:
+        return {}
+    with pool.connection() as conn:
+        rows = conn.execute(
+            "SELECT id, name FROM workspaces WHERE user_id = %s AND id = ANY(%s)", (user_id, ids)
+        ).fetchall()
+    return {str(r["id"]): r["name"] for r in rows}
+
+
+PENDING_LIMIT = 200
+
+
+def _pending_rows(user_id: int, workspace_id: int | None = None) -> list[tuple[dict, dict | None]]:
+    """Ждущие решения карточки ИИ во всех чатах, новые сверху, с проектом каждой.
+
+    Проекты в архиве и сверх лимита тарифа пропускаем: решать там сейчас нечего. Вопрос или план общего
+    чата без проекта — в очереди с project None.
+    """
+    with pool.connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT a.*, ch.workspace_id AS chat_workspace_id, ch.title AS chat_title
+            FROM ai_actions a JOIN ai_chats ch ON ch.id = a.chat_id
+            WHERE a.user_id = %s AND a.status = 'pending'
+            ORDER BY a.id DESC
+            """,
+            (user_id,),
+        ).fetchall()
+    if not rows:
+        return []
+    projects = {w["id"]: w for w in list_workspaces(user_id) if not w["locked"]}
+    out = []
+    for row in rows:
+        project_id = _action_project_id(row, row["chat_workspace_id"])
+        if project_id is not None and project_id not in projects:
+            continue
+        if workspace_id is not None and project_id != workspace_id:
+            continue
+        out.append((row, projects.get(project_id) if project_id is not None else None))
+    return out
+
+
+def pending_count(user_id: int) -> dict:
+    """Сколько карточек ИИ ждут решения — счётчик «Ждёт решения» в шапке."""
+    return {"count": len(_pending_rows(user_id))}
+
+
+def pending_actions(user_id: int, workspace_id: int | None = None) -> dict:
+    """Очередь «Ждёт решения»: карточки ИИ из всех чатов с проектом и чатом каждой."""
+    rows = _pending_rows(user_id, workspace_id)
+    items = []
+    for row, ws in rows[:PENDING_LIMIT]:
+        item = _action_out(row)
+        item["project"] = {"id": ws["id"], "name": ws["name"]} if ws else None
+        item["chat"] = {
+            "id": row["chat_id"],
+            "title": row["chat_title"] or "Новый чат",
+            "general": row["chat_workspace_id"] is None,
+        }
+        items.append(item)
+    return {"items": items, "total": len(rows)}
+
+
 def _decide(user_id: int, chat_id: int, action_ids: list[int] | None, approve: bool) -> tuple[list[dict], int]:
     with pool.connection() as conn:
         _require_chat(conn, user_id, chat_id, lock=True)
@@ -6899,7 +7114,8 @@ def decide_action(user_id: int, action_id: int, *, approve: bool, remember: bool
         cats = [c for c in (row["category"] or "").split(",") if c in CATEGORY_LABELS]
         with pool.connection() as conn:
             ws_id = conn.execute("SELECT workspace_id FROM ai_chats WHERE id = %s", (row["chat_id"],)).fetchone()["workspace_id"]
-        if cats:
+        # В общем чате прав ИИ нет: там всё на согласовании.
+        if cats and ws_id is not None:
             update_workspace(user_id, ws_id, ai_access={"categories": {c: True for c in cats}})
     job = _submit(user_id, row["chat_id"], f"a{action_id}") if not left else None
     return {"action": _action_out(rows[0]), "pending": left, "job": public_job(job) if job else None}
@@ -6985,7 +7201,7 @@ def _close_interactive(
 
 
 def _compose_answers(questions: list[dict], answers, caps: set[str] | None = None) -> tuple[list[dict], list[dict]]:
-    """Ответы из карточки → ([{question, answer} | {question, skipped}], факты для памяти пространства).
+    """Ответы из карточки → ([{question, answer} | {question, skipped}], факты для памяти проекта).
 
     Ответ — выбранные варианты (только из предложенных) и свой текст через «; ». Вариант с needs выбирается,
     только если нужное подключено (caps).
@@ -7028,7 +7244,7 @@ def _compose_answers(questions: list[dict], answers, caps: set[str] | None = Non
 
 
 def answer_questions(user_id: int, action_id: int, *, answers=None, comment: str = "", skip: bool = False) -> dict:
-    """Ответы в карточке вопросов: вопросы с key — в память пространства, всё — модели результатом вызова."""
+    """Ответы в карточке вопросов: вопросы с key — в память проекта, всё — модели результатом вызова."""
     from app.jobs import public_job
 
     row = _pending_interactive(user_id, action_id, "ask_questions")
@@ -7054,12 +7270,12 @@ def answer_questions(user_id: int, action_id: int, *, answers=None, comment: str
         if not comment and not any("answer" in a for a in out):
             raise YandexError("args", "Ответьте хотя бы на один вопрос или напишите комментарий")
         remembered: list[str] = []
-        if facts:
+        if facts and row["workspace_id"] is not None:
             try:
                 remember_ai_facts(user_id, row["workspace_id"], facts)
                 remembered = [f["key"] for f in facts]
             except Exception:  # ответ модели важнее памяти: не сохранилось — спросит ещё раз
-                log.warning("Ответы на вопросы ИИ не сохранены в память пространства", exc_info=True)
+                log.warning("Ответы на вопросы ИИ не сохранены в память проекта", exc_info=True)
         result = {"answers": out, "remembered": remembered, "comment": comment}
         reply = {"ok": True, **result}
         if payload.get("answered"):
@@ -7245,7 +7461,7 @@ def _shorten_result(content: str, limit: int = OLD_RESULT_CHARS) -> str:
     return f"{content[:limit]}… [сокращено: было {len(content)} символов; нужны данные — вызови инструмент снова]"
 
 
-def _history(chat_id: int) -> list[dict]:
+def _history(chat_id: int, *, general: bool = False) -> list[dict]:
     with pool.connection() as conn:
         rows = conn.execute(
             "SELECT * FROM ai_messages WHERE chat_id = %s ORDER BY id DESC LIMIT 400", (chat_id,)
@@ -7310,7 +7526,7 @@ def _history(chat_id: int) -> list[dict]:
         if r["role"] in ("user", "assistant"):
             content = r["content"]
             if r["role"] == "user" and r.get("refs"):
-                content += _refs_note(r["refs"])
+                content += _refs_note(r["refs"], general=general)
             out.append({"role": r["role"], "content": content})
         out += board_notes(r["id"])
         i += 1
@@ -7346,10 +7562,13 @@ def _run_action(ctx: Context, action: dict) -> None:
     args.pop("_diff", None)
     args.pop("_items", None)
     removed = args.pop("_removed", None) or []
+    project_id = args.pop("project_id", None)
     result = None
     ctx.action = action
     try:
-        result = execute(ctx, args)
+        # Действие общего чата — в проекте, на который оно предложено.
+        target = ctx.project(_int({"project_id": project_id}, "project_id")) if ctx.general else ctx
+        result = execute(target, args)
         status, error = "done", ""
         payload = {"ok": True, "result": result}
         if removed:
@@ -7412,13 +7631,35 @@ def _handle_call(ctx: Context, chat_id: int, message_id: int, call: dict) -> int
         return reply({"ok": False, "error": "Аргументы должны быть JSON-объектом"})
     args = _normalize_call(name, args)
 
-    # Другие проекты — только для чтения: изменить в них нельзя, даже сославшись на project_id.
-    if args.get("project_id") not in (None, "") and name not in CROSS_PROJECT_TOOLS and name != "get_project":
+    target = ctx
+    if ctx.general:
+        # Общий чат: своего проекта нет — инструменты данных и действия только с project_id.
+        if name not in GENERAL_TOOL_NAMES:
+            return reply(
+                {
+                    "ok": False,
+                    "error": f"В общем чате нет инструмента {name}. Новые кампании, копии, эксперименты и картинки "
+                    "делают в чате проекта — предложи маркетологу открыть его",
+                }
+            )
+        if name in CROSS_PROJECT_TOOLS or name in WRITE_TOOLS:
+            if args.get("project_id") in (None, ""):
+                return reply({"ok": False, "error": "Укажи project_id: проекты есть в системном сообщении и в list_projects"})
+            if name in WRITE_TOOLS:
+                try:
+                    project_id = _int(args, "project_id")
+                    target = ctx.project(project_id)
+                except YandexError as exc:
+                    return reply({"ok": False, "error": exc.message or exc.code})
+                args = {k: v for k, v in args.items() if k != "project_id"}
+
+    # Другие проекты из чата проекта — только для чтения: изменить в них нельзя, даже сославшись на project_id.
+    elif args.get("project_id") not in (None, "") and name not in CROSS_PROJECT_TOOLS and name != "get_project":
         return reply(
             {
                 "ok": False,
                 "error": "project_id есть только у инструментов чтения данных. Менять можно лишь кампании этого "
-                "пространства; для другого проекта скажи маркетологу, что действие нужно сделать в нём самом",
+                "проекта; для другого проекта скажи маркетологу, что действие нужно сделать в нём самом",
             }
         )
 
@@ -7459,13 +7700,16 @@ def _handle_call(ctx: Context, chat_id: int, message_id: int, call: dict) -> int
         return reply({"ok": False, "error": f"Нет инструмента {name}"})
     prepare, _execute = WRITE_TOOLS[name]
     try:
-        plan = prepare(ctx, args)
+        plan = prepare(target, args)
     except YandexError as exc:
         return reply({"ok": False, "error": exc.message or exc.code})
-    changes = _changes(ctx, name, args)
-    auto = _allowed(ctx.access, plan.categories, plan.change_pct)
+    changes = _changes(target, name, args)
+    # Из общего чата — всегда на согласование: права ИИ задаются в каждом проекте, а здесь их нет.
+    auto = not ctx.general and _allowed(ctx.access, plan.categories, plan.change_pct)
     stored = {**args, "_diff": changes} if changes else dict(args)
-    picks = [] if auto else _picks(ctx, name, args)
+    if ctx.general:
+        stored["project_id"] = target.ws_id
+    picks = [] if auto else _picks(target, name, args)
     if picks:
         stored["_items"] = picks
     with pool.connection() as conn:
@@ -7534,15 +7778,16 @@ def run_chat(user_id: int, chat_id: int, progress=None) -> dict:
             return {"status": "waiting"}
 
         system = {"role": "system", "content": _system_prompt(ctx)}
+        tools = GENERAL_TOOLS if ctx.general else TOOLS
         for n in range(MAX_STEPS):
-            history = _history(chat_id)
+            history = _history(chat_id, general=ctx.general)
             if not history or (history[-1]["role"] == "assistant" and not history[-1].get("tool_calls")):
                 break
             step(n, "ИИ думает…")
             _touch(chat_id)
-            request = (ai.estimate_tokens([system, *history], TOOLS), len(history))
+            request = (ai.estimate_tokens([system, *history], tools), len(history))
             try:
-                reply = ai.complete(cfg, [system, *history], TOOLS)
+                reply = ai.complete(cfg, [system, *history], tools)
             except YandexError as exc:
                 return _end_with_error(chat_id, exc.message or exc.code, request)
             except Exception:

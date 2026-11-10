@@ -1,4 +1,4 @@
-"""API рабочего пространства: сводка, аналитика, кампании и действия, настройки, кабинеты."""
+"""API проекта: сводка, аналитика, кампании и действия, настройки, кабинеты."""
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
@@ -224,7 +224,7 @@ def ws_list(archived: bool = False, user_id: int = Depends(require_web_user)) ->
 
 @router.post("/refresh")
 def ws_refresh(user_id: int = Depends(require_web_user)) -> dict:
-    """Пространства для новых счётчиков (после синка подключений)."""
+    """Проекты для новых счётчиков (после синка подключений)."""
     created = ensure_workspaces(user_id)
     return {"created": len(created), "items": list_workspaces(user_id)}
 
@@ -257,7 +257,7 @@ def ws_get(workspace_id: int, user_id: int = Depends(require_web_user)) -> dict:
 
 @router.get("/{workspace_id}/load")
 def ws_load(workspace_id: int, user_id: int = Depends(require_web_user)) -> dict:
-    """Загрузка кабинетов и счётчика пространства: пока идёт — вместо нулей показываем плашку."""
+    """Загрузка кабинетов и счётчика проекта: пока идёт — вместо нулей показываем плашку."""
     ws = _ws(user_id, workspace_id)
     with pool.connection() as conn:
         account_ids = [
@@ -313,7 +313,7 @@ def ws_analytics_sync(
     return _start_job("stats_range", user_id, {"date_from": d_from.isoformat(), "date_to": d_to.isoformat()})
 
 
-# --- Кабинеты и кампании пространства ---------------------------------------------------------
+# --- Кабинеты и кампании проекта ---------------------------------------------------------
 
 
 @router.get("/{workspace_id}/accounts")
@@ -360,7 +360,7 @@ def ws_set_campaigns(workspace_id: int, body: SetCampaignsBody, user_id: int = D
 
 @router.post("/{workspace_id}/campaigns/sync")
 def ws_sync_campaigns(workspace_id: int, user_id: int = Depends(require_web_user)) -> dict:
-    """Перечитать кампании всех кабинетов пространства из Директа."""
+    """Перечитать кампании всех кабинетов проекта из Директа."""
     _ws(user_id, workspace_id)
     jobs = [
         _start_job("sync_account_campaigns", user_id, {"account_id": a["id"]})["job"]
@@ -377,7 +377,7 @@ def ws_campaigns(
     date_to: str = "",
     user_id: int = Depends(require_web_user),
 ) -> dict:
-    """Кампании пространства со статистикой за период (по умолчанию 7 дней)."""
+    """Кампании проекта со статистикой за период (по умолчанию 7 дней)."""
     _ws(user_id, workspace_id)
     try:
         d_from, d_to = parse_range(date_from, date_to)
@@ -397,7 +397,7 @@ def ws_campaigns(
 def ws_campaign_options(workspace_id: int, user_id: int = Depends(require_web_user)) -> dict:
     """
     Справочники мастера кампании + кабинеты и цели счётчика. other_accounts — кабинеты вне
-    пространства: кампанию можно создать и там, кабинет подключится к пространству сам.
+    проекта: кампанию можно создать и там, кабинет подключится к проекту сам.
     """
     ws = _ws(user_id, workspace_id)
     other = [a for a in account_candidates(user_id, workspace_id) if not a["linked"] and a["enabled"]]

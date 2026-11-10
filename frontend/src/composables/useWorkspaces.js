@@ -9,7 +9,7 @@ const loaded = ref(false)
 const loading = ref(false)
 let pending = null
 
-/** Список пространств и папок-клиентов — общий для шапки, обзора и настроек. */
+/** Список проектов и папок-клиентов — общий для шапки, обзора и настроек. */
 export async function loadWorkspaces(force = false) {
   if (loaded.value && !force) return workspaces.value
   if (pending) return pending
@@ -28,7 +28,7 @@ export async function loadWorkspaces(force = false) {
   return pending
 }
 
-/** Обновить одно пространство в списке без перезагрузки (после PATCH). */
+/** Обновить одно проект в списке без перезагрузки (после PATCH). */
 export function patchWorkspaceInList(ws) {
   if (!ws?.id) return
   const idx = workspaces.value.findIndex((w) => w.id === ws.id)
@@ -51,7 +51,7 @@ export function lastWorkspaceId() {
   return workspaces.value.some((w) => w.id === id) ? id : workspaces.value[0]?.id || null
 }
 
-/** Пространства по папкам: сначала папки клиентов по алфавиту, в конце «Без клиента». */
+/** Проекта по папкам: сначала папки клиентов по алфавиту, в конце «Без клиента». */
 const grouped = computed(() => {
   const byClient = new Map()
   for (const ws of workspaces.value) {

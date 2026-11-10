@@ -7,7 +7,7 @@
       </select>
     </div>
     <div v-field class="field">
-      <label>В сетях (РСЯ)</label>
+      <label>В сетях (РСЯ)<TermHint term="rsya" /></label>
       <select :value="model.network" @change="setNetwork($event.target.value)">
         <option v-for="n in networkChoices" :key="n.id" :value="n.id">{{ n.label }}</option>
       </select>
@@ -42,7 +42,7 @@
         Автостратегия: Директ сам управляет ставками в пределах недельного бюджета. Дневной бюджет не используется.
       </template>
       <template v-if="needsGoal && !goals.length">
-        У счётчика нет загруженных целей — обновите цели в настройках пространства.
+        У счётчика нет загруженных целей — обновите цели в настройках проекта.
       </template>
     </p>
   </div>
@@ -50,6 +50,7 @@
 
 <script setup>
 import { computed, watch } from 'vue'
+import TermHint from './TermHint.vue'
 
 const props = defineProps({
   modelValue: { type: Object, required: true },

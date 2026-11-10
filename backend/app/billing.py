@@ -11,7 +11,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime
+from datetime import date, datetime, timedelta
 
 from app import events, plans
 from app.clock import MSK, today_msk
@@ -180,6 +180,14 @@ def user_summary(user_id: int) -> dict:
             """,
             (user_id, start, end),
         ).fetchall()
+        daily = conn.execute(
+            """
+            SELECT (created_at AT TIME ZONE 'Europe/Moscow')::date AS day, SUM(charged) AS charged, COUNT(*) AS n
+            FROM ai_usage WHERE user_id = %s AND created_at >= %s AND created_at < %s
+            GROUP BY 1
+            """,
+            (user_id, start, end),
+        ).fetchall()
     spent = sum(float(r["charged"] or 0) for r in rows)
     base = limit if limit else spent
 
@@ -217,7 +225,60 @@ def user_summary(user_id: int) -> dict:
         "exhausted": limit is not None and spent >= limit,
         "by_kind": group(kind_key),
         "by_project": group(ws_key),
+        "by_day": _days(start.date(), min(end.date(), today_msk() + timedelta(days=1)), daily, base),
     }
+
+
+def _days(first: date, stop: date, daily: list[dict], base: float) -> list[dict]:
+    """Расход по дням периода до сегодняшнего: доля лимита (без лимита — всего расхода) и число вызовов."""
+    by_day = {r["day"]: r for r in daily}
+    out = []
+    day = first
+    while day < stop:
+        r = by_day.get(day)
+        out.append(
+            {
+                "day": day.isoformat(),
+                "percent": (_pct(float(r["charged"] or 0), base) or 0.0) if r else 0.0,
+                "calls": int(r["n"]) if r else 0,
+            }
+        )
+        day += timedelta(days=1)
+    return out
+
+
+HISTORY_KINDS = ("payment", "plan_changed")
+
+
+def plan_history(user_id: int, limit: int = 30) -> list[dict]:
+    """Оплаты и смены тарифа из журнала событий — для страницы «Тариф»."""
+    with pool.connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT e.kind, e.meta, e.created_at, p.name AS plan_name
+            FROM user_events e
+            LEFT JOIN plans p ON p.id = CASE WHEN e.meta->>'plan_id' ~ '^[0-9]+$' THEN (e.meta->>'plan_id')::int END
+            WHERE e.user_id = %s AND e.kind = ANY(%s)
+            ORDER BY e.created_at DESC, e.id DESC LIMIT %s
+            """,
+            (user_id, list(HISTORY_KINDS), limit),
+        ).fetchall()
+    out = []
+    for r in rows:
+        meta = r["meta"] or {}
+        amount = meta.get("amount_rub")
+        out.append(
+            {
+                "kind": r["kind"],
+                "label": events.KINDS.get(r["kind"], r["kind"]),
+                "created_at": r["created_at"].isoformat(),
+                "plan_name": r["plan_name"] or ("без тарифа" if "plan_id" in meta and meta["plan_id"] is None else ""),
+                "last_day": meta.get("last_day"),
+                "renew": bool(meta.get("renew")),
+                "amount_rub": float(amount) if isinstance(amount, (int, float)) else None,
+            }
+        )
+    return out
 
 
 # --- Админка ------------------------------------------------------------------------------------

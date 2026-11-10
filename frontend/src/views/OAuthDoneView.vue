@@ -41,7 +41,7 @@ const text = computed(() => {
 // Аудитории подключают уже вошедшему — назад к логинам, а не ко входу.
 const back = computed(() =>
   errorCode.value.startsWith('audience')
-    ? { to: '/cabinet/accounts', label: 'К аккаунтам' }
+    ? { to: '/cabinet/connections', label: 'К подключениям' }
     : { to: '/login', label: 'Ко входу' },
 )
 
