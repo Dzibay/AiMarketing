@@ -29,19 +29,11 @@
         <article class="connect-card">
           <div class="connect-card__top">
             <span class="connect-card__badge connect-card__badge--direct">Директ</span>
-            <span v-if="liveAccounts.length" class="chip">{{ liveAccounts.length }} {{ plural(liveAccounts.length, 'кабинет', 'кабинета', 'кабинетов') }}</span>
+            <span v-if="accounts.length" class="chip">{{ accounts.length }} {{ plural(accounts.length, 'кабинет', 'кабинета', 'кабинетов') }}</span>
           </div>
           <h3>Яндекс Директ</h3>
           <p>Кабинеты и все их кампании. Источник каждой кампании сохраняется — с ней работаем через её кабинет.</p>
           <YandexConnectButton purpose="connect" mode="direct" label="Добавить аккаунт Директа" return-to="/cabinet/accounts" />
-        </article>
-        <article v-if="sandboxAccounts.length" class="connect-card">
-          <div class="connect-card__top">
-            <span class="connect-card__badge connect-card__badge--sandbox">Песочница</span>
-            <span class="chip">{{ sandboxAccounts.length }}</span>
-          </div>
-          <h3>Песочница Директа</h3>
-          <p>Яндекс отключил песочницу API 15.07.2026: эти кабинеты больше не обновляются — подключение можно удалить.</p>
         </article>
       </div>
       <div class="connect-offers__one">
@@ -84,7 +76,6 @@
             <div>
               <strong>
                 {{ c.display_name || c.yandex_login || c.yandex_uid }}
-                <span v-if="c.sandbox" class="chip chip--info">песочница</span>
               </strong>
               <small>
                 @{{ c.yandex_login || c.yandex_uid }} ·
@@ -105,7 +96,7 @@
                   <input
                     type="checkbox"
                     :checked="c.use_metrika"
-                    :disabled="c.sandbox || busyId === c.id"
+                    :disabled="busyId === c.id"
                     @change="setRole(c, { use_metrika: $event.target.checked }, $event)"
                   />
                   Метрика
@@ -114,7 +105,7 @@
                   <input
                     type="checkbox"
                     :checked="c.use_direct"
-                    :disabled="c.sandbox || busyId === c.id"
+                    :disabled="busyId === c.id"
                     @change="setRole(c, { use_direct: $event.target.checked }, $event)"
                   />
                   Директ
@@ -224,7 +215,6 @@
             <div>
               <strong>
                 {{ a.name || a.client_login }}
-                <span v-if="isSandbox(a)" class="chip chip--info">песочница</span>
               </strong>
               <small>
                 {{ a.client_login }}
@@ -364,8 +354,6 @@ const connections = computed(() => me.value.connections || [])
 const counters = computed(() => me.value.metrika || [])
 const accounts = computed(() => me.value.direct || [])
 const connById = computed(() => new Map(connections.value.map((c) => [c.id, c])))
-const sandboxAccounts = computed(() => accounts.value.filter(isSandbox))
-const liveAccounts = computed(() => accounts.value.filter((a) => !isSandbox(a)))
 const accountLoads = computed(() => new Map(loads.overview.value.accounts.map((a) => [a.id, a])))
 const counterLoads = computed(() => new Map(loads.overview.value.counters.map((c) => [c.id, c])))
 
@@ -384,10 +372,6 @@ function failureLine(load) {
   return `${failure.title}: ${stageErrorText(failure)}`
 }
 
-function isSandbox(account) {
-  return Boolean(connById.value.get(account.connection_id)?.sandbox)
-}
-
 function connectionLogin(id) {
   const c = connById.value.get(id)
   return c ? c.yandex_login || c.yandex_uid : '—'
@@ -403,7 +387,7 @@ function syncClass(status) {
 
 // Яндекс Аудитории (новые LAL из чата ИИ) — отдельное приложение; не задано на сервере — кнопки нет.
 function needsAudience(c) {
-  return Boolean(me.value.audience_oauth && c.use_direct && !c.sandbox && !c.audience)
+  return Boolean(me.value.audience_oauth && c.use_direct && !c.audience)
 }
 
 function textMatch(values, query) {

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 
+from app.auth import is_admin
 from app.db import pool
 from app.passwords import hash_password, verify_password
 
@@ -197,6 +198,7 @@ def public_user(user: dict) -> dict:
         "yandex_uid": user.get("yandex_uid") or "",
         "has_yandex": bool(user.get("yandex_uid")),
         "telegram_linked": bool(user.get("telegram_chat_id")),
+        "is_admin": is_admin(user),
         "created_at": user["created_at"].isoformat() if user.get("created_at") else None,
     }
 

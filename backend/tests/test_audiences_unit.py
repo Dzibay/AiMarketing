@@ -665,9 +665,6 @@ def test_audience_call_errors(monkeypatch):
     assert (other.code, other.message) == ("audience", "Access denied")
     assert "Лимит запросов" in error(429, {"errors": [{"error_type": "quota", "message": "Quota"}]}).message
     assert error(400, {"message": "Bad"}).message == "Bad"
-    with pytest.raises(YandexError) as err:
-        audiences.audience_call(SimpleNamespace(sandbox=True), "GET", "segments")
-    assert err.value.code == "sandbox"
 
 
 def test_prepare_lookalike_needs_rights_and_source(account):

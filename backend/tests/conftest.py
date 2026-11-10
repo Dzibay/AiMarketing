@@ -48,7 +48,10 @@ def db_pool():
 
 @pytest.fixture
 def db(db_pool):
-    """Пустые таблицы перед каждым тестом (users каскадом чистит почти всё)."""
+    """Пустые таблицы перед каждым тестом (users каскадом чистит почти всё) и общие ключи по умолчанию."""
+    from tests.dbutil import reset_services
+
     with db_pool.connection() as conn:
         conn.execute("TRUNCATE users, jobs, job_schedules RESTART IDENTITY CASCADE")
+    reset_services(db_pool)
     return db_pool

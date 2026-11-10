@@ -1,7 +1,8 @@
 """Мост Cloudflare: доступ к зарубежным моделям с сервера в РФ.
 
 OpenAI, Anthropic и Google не принимают запросы с российских IP. Мост — посредник в Cloudflare, который
-отправляет запрос провайдеру со своих адресов. Ключ провайдера остаётся ключом пользователя (Authorization).
+отправляет запрос провайдеру со своих адресов. Ключ провайдера — общий ключ сервиса (Authorization).
+Мост один на весь сервис, настраивается в админке (service_bridge).
 
 Два вида моста (kind):
 - worker — свой Cloudflare Worker, закреплённый в регионе США (placement). Основной: Anthropic отвечает
@@ -57,9 +58,9 @@ _WORKER_ROUTES = {
 }
 
 
-def _row(user_id: int) -> dict | None:
+def _row() -> dict | None:
     with pool.connection() as conn:
-        return conn.execute("SELECT * FROM ai_bridge WHERE user_id = %s", (user_id,)).fetchone()
+        return conn.execute("SELECT * FROM service_bridge WHERE id = 1").fetchone()
 
 
 def _kind(row: dict) -> str:
@@ -108,8 +109,8 @@ def _public(row: dict | None) -> dict:
     }
 
 
-def get_settings(user_id: int) -> dict:
-    return _public(_row(user_id))
+def get_settings() -> dict:
+    return _public(_row())
 
 
 def _check_account(account_id: str) -> str:
@@ -134,7 +135,6 @@ def _secret(value: str | None, current: str) -> str:
 
 
 def save_settings(
-    user_id: int,
     *,
     enabled: bool = False,
     kind: str = "worker",
@@ -153,32 +153,26 @@ def save_settings(
     if gateway_id and not _GATEWAY_RE.match(gateway_id):
         raise YandexError("bridge-gateway", "Имя шлюза — латиница, цифры, дефис и подчёркивание, до 64 символов")
     worker_url = _check_worker_url(worker_url)
-    current = _row(user_id) or {}
+    current = _row() or {}
     token_enc = _secret(token, current.get("token_enc"))
     worker_token_enc = _secret(worker_token, current.get("worker_token_enc"))
     if enabled and kind == "gateway" and not (account_id and gateway_id):
         raise YandexError("bridge-incomplete", "Чтобы включить мост, укажите Account ID и имя шлюза (Gateway ID)")
     if enabled and kind == "worker" and not (worker_url and worker_token_enc):
         raise YandexError("bridge-incomplete", "Чтобы включить мост, разверните Worker или укажите его адрес и секрет")
-    _store(user_id, enabled, kind, account_id, gateway_id, token_enc, worker_url, worker_token_enc, use_chat, use_images)
-    return get_settings(user_id)
+    _store(enabled, kind, account_id, gateway_id, token_enc, worker_url, worker_token_enc, use_chat, use_images)
+    return get_settings()
 
 
-def _store(user_id, enabled, kind, account_id, gateway_id, token_enc, worker_url, worker_token_enc, use_chat, use_images):
+def _store(enabled, kind, account_id, gateway_id, token_enc, worker_url, worker_token_enc, use_chat, use_images):
     with pool.connection() as conn:
         conn.execute(
             """
-            INSERT INTO ai_bridge (user_id, enabled, kind, account_id, gateway_id, token_enc, worker_url,
-                                   worker_token_enc, use_chat, use_images, updated_at)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
-            ON CONFLICT (user_id) DO UPDATE SET
-                enabled = EXCLUDED.enabled, kind = EXCLUDED.kind, account_id = EXCLUDED.account_id,
-                gateway_id = EXCLUDED.gateway_id, token_enc = EXCLUDED.token_enc, worker_url = EXCLUDED.worker_url,
-                worker_token_enc = EXCLUDED.worker_token_enc, use_chat = EXCLUDED.use_chat,
-                use_images = EXCLUDED.use_images, updated_at = NOW()
+            UPDATE service_bridge SET enabled = %s, kind = %s, account_id = %s, gateway_id = %s, token_enc = %s,
+                   worker_url = %s, worker_token_enc = %s, use_chat = %s, use_images = %s, updated_at = NOW()
+            WHERE id = 1
             """,
             (
-                user_id,
                 bool(enabled),
                 kind,
                 account_id,
@@ -221,13 +215,13 @@ def gateway_model(model: str) -> str:
     return model if "/" in model else f"{model_provider(model)}/{model}"
 
 
-def target(user_id: int, use: str, model: str = "") -> dict | None:
+def target(use: str, model: str = "") -> dict | None:
     """Куда слать запрос через мост: {"kind", "base_url", "headers", "model", "anthropic"}; None — мост не для этой задачи.
 
     use: "chat" — chat/completions, "images" — /images/generations OpenAI. anthropic — модель Claude: её
     OpenAI-совместимый слой отвергает temperature ниже 1, её не передаём.
     """
-    row = _row(user_id)
+    row = _row()
     if not _ready(row) or not row.get("use_chat" if use == "chat" else "use_images"):
         return None
     provider = model_provider(model) if use == "chat" else "openai"
@@ -295,8 +289,8 @@ def _cf(method: str, path: str, api_token: str, **kwargs) -> dict:
         return {}
 
 
-def deploy_worker(user_id: int, *, account_id: str, api_token: str) -> dict:
-    """Загружает Worker моста в аккаунт пользователя, включает адрес workers.dev и включает мост.
+def deploy_worker(*, account_id: str, api_token: str) -> dict:
+    """Загружает Worker моста в аккаунт Cloudflare сервиса, включает адрес workers.dev и включает мост.
 
     API-токен Cloudflare нужен только на время развёртывания и не сохраняется.
     """
@@ -304,7 +298,7 @@ def deploy_worker(user_id: int, *, account_id: str, api_token: str) -> dict:
     api_token = (api_token or "").strip()
     if not account_id or not api_token:
         raise YandexError("bridge-incomplete", "Для развёртывания укажите Account ID и API-токен Cloudflare")
-    current = _row(user_id) or {}
+    current = _row() or {}
     secret = secrets.token_urlsafe(32)
     metadata = {
         "main_module": "worker.js",
@@ -331,7 +325,6 @@ def deploy_worker(user_id: int, *, account_id: str, api_token: str) -> dict:
             "чтобы он создался, и нажмите «Развернуть» ещё раз",
         )
     _store(
-        user_id,
         True,
         "worker",
         account_id,
@@ -342,12 +335,12 @@ def deploy_worker(user_id: int, *, account_id: str, api_token: str) -> dict:
         current.get("use_chat", True) is not False,
         current.get("use_images", True) is not False,
     )
-    return get_settings(user_id)
+    return get_settings()
 
 
-def check_worker(user_id: int) -> dict:
+def check_worker() -> dict:
     """Откуда Worker выходит в интернет: {"ok", "country", "colo"} по /cdn-cgi/trace из самого Worker'а."""
-    row = _row(user_id) or {}
+    row = _row() or {}
     if not (row.get("worker_url") and row.get("worker_token_enc")):
         raise YandexError("bridge-incomplete", "Worker не настроен: разверните его или укажите адрес и секрет")
     secret = _decrypt(row["worker_token_enc"], "Секрет Worker'а")

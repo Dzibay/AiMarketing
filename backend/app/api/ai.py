@@ -1,18 +1,11 @@
-"""API ИИ-ассистента: подключение провайдера (BYOK), чаты пространства, согласование действий."""
+"""API ИИ-ассистента: шкала лимита, выбор модели, чаты проекта, согласование действий.
+
+Ключи ИИ, Вордстата и картинок общие — их настраивает администратор (api/admin.py)."""
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
-from app import (
-    ai,
-    ai_agent,
-    ai_bridge,
-    experiments,
-    image_gen,
-    insights,
-    wordstat,
-    workspaces,
-)
+from app import ai, ai_agent, billing, experiments, insights, workspaces
 from app.api.web import _http
 from app.web_auth import require_web_user
 from app.yandex import YandexError
@@ -20,28 +13,15 @@ from app.yandex import YandexError
 router = APIRouter(prefix="/web", tags=["ai"])
 
 
-class AiSettingsBody(BaseModel):
-    provider: str = "openai"
-    base_url: str = ""
-    model: str = ""
-    folder_id: str = ""
-    # None — оставить сохранённый ключ, "" — удалить.
-    api_key: str | None = None
-    temperature: float | None = None
-    # Не переданы — остаются как были; null — очистить. Цены — ₽ за 1 млн токенов.
-    model_fast: str = ""
-    price_in: float | None = None
-    price_out: float | None = None
-    fast_price_in: float | None = None
-    fast_price_out: float | None = None
-    monthly_limit_rub: float | None = None
-
-
-_KEEP_IF_UNSET = ("model_fast", "price_in", "price_out", "fast_price_in", "fast_price_out", "monthly_limit_rub")
-
-
 class ChatBody(BaseModel):
     title: str = ""
+    # Класс модели, выбранный до первого сообщения; пусто — по умолчанию.
+    model_class: str = ""
+
+
+class ChatModelBody(BaseModel):
+    # fast | standard | thinking; пусто — класс по умолчанию.
+    model_class: str = ""
 
 
 class MessageBody(BaseModel):
@@ -120,114 +100,10 @@ def _call(fn, *args, **kwargs):
         raise _http(exc) from exc
 
 
-@router.get("/ai/settings")
-def ai_settings_get(user_id: int = Depends(require_web_user)) -> dict:
-    return ai.get_settings(user_id)
-
-
-@router.put("/ai/settings")
-def ai_settings_put(body: AiSettingsBody, user_id: int = Depends(require_web_user)) -> dict:
-    data = body.model_dump()
-    for name in _KEEP_IF_UNSET:
-        if name not in body.model_fields_set:
-            data.pop(name)
-    return _call(ai.save_settings, user_id, **data)
-
-
-@router.post("/ai/settings/test")
-def ai_settings_test(user_id: int = Depends(require_web_user)) -> dict:
-    return _call(ai.check_connection, user_id)
-
-
-class BridgeSettingsBody(BaseModel):
-    enabled: bool = False
-    # worker — свой Worker в США, gateway — Cloudflare AI Gateway.
-    kind: str = "worker"
-    account_id: str = ""
-    gateway_id: str = ""
-    # None — оставить сохранённый токен шлюза / секрет Worker'а, "" — удалить.
-    token: str | None = None
-    worker_url: str = ""
-    worker_token: str | None = None
-    use_chat: bool = True
-    use_images: bool = True
-
-
-class BridgeDeployBody(BaseModel):
-    account_id: str
-    # API-токен Cloudflare (шаблон «Edit Cloudflare Workers») — только на время развёртывания, не хранится.
-    api_token: str
-
-
-@router.get("/ai/bridge")
-def bridge_settings_get(user_id: int = Depends(require_web_user)) -> dict:
-    return ai_bridge.get_settings(user_id)
-
-
-@router.put("/ai/bridge")
-def bridge_settings_put(body: BridgeSettingsBody, user_id: int = Depends(require_web_user)) -> dict:
-    return _call(ai_bridge.save_settings, user_id, **body.model_dump())
-
-
-@router.post("/ai/bridge/deploy")
-def bridge_deploy(body: BridgeDeployBody, user_id: int = Depends(require_web_user)) -> dict:
-    return _call(ai_bridge.deploy_worker, user_id, account_id=body.account_id, api_token=body.api_token)
-
-
-@router.post("/ai/bridge/test")
-def bridge_test(user_id: int = Depends(require_web_user)) -> dict:
-    return _call(ai_bridge.check_worker, user_id)
-
-
-class WordstatSettingsBody(BaseModel):
-    folder_id: str = ""
-    # None — оставить сохранённый ключ, "" — удалить.
-    api_key: str | None = None
-
-
-@router.get("/ai/wordstat")
-def wordstat_settings_get(user_id: int = Depends(require_web_user)) -> dict:
-    return wordstat.get_settings(user_id)
-
-
-@router.put("/ai/wordstat")
-def wordstat_settings_put(body: WordstatSettingsBody, user_id: int = Depends(require_web_user)) -> dict:
-    return _call(wordstat.save_settings, user_id, folder_id=body.folder_id, api_key=body.api_key)
-
-
-@router.post("/ai/wordstat/test")
-def wordstat_settings_test(user_id: int = Depends(require_web_user)) -> dict:
-    return _call(wordstat.check_connection, user_id)
-
-
-class ImageGenSettingsBody(BaseModel):
-    provider: str = "openai"
-    base_url: str = ""
-    model: str = ""
-    folder_id: str = ""
-    # None — оставить сохранённый ключ, "" — удалить.
-    api_key: str | None = None
-    # Не передана — как была; null — не считать. ₽ за картинку.
-    price_rub: float | None = None
-
-
-@router.get("/ai/image-gen")
-def image_gen_settings_get(user_id: int = Depends(require_web_user)) -> dict:
-    return image_gen.get_settings(user_id)
-
-
-@router.put("/ai/image-gen")
-def image_gen_settings_put(body: ImageGenSettingsBody, user_id: int = Depends(require_web_user)) -> dict:
-    data = body.model_dump()
-    if "price_rub" not in body.model_fields_set:
-        data.pop("price_rub")
-    return _call(image_gen.save_settings, user_id, **data)
-
-
-@router.post("/ai/image-gen/test")
-def image_gen_settings_test(user_id: int = Depends(require_web_user)) -> dict:
-    """Одна настоящая картинка — платно, по цене провайдера."""
-    return _call(image_gen.check_connection, user_id)
+@router.get("/ai/models")
+def ai_models(user_id: int = Depends(require_web_user)) -> dict:
+    """Классы моделей для выбора в чате — без названий моделей и цен."""
+    return ai.chat_classes()
 
 
 class ImageGenerateBody(BaseModel):
@@ -244,14 +120,15 @@ def workspace_ad_images(workspace_id: int, account_id: int | None = None, user_i
 
 @router.post("/workspaces/{workspace_id}/ad-images/generate")
 def workspace_generate_images(workspace_id: int, body: ImageGenerateBody, user_id: int = Depends(require_web_user)) -> dict:
-    """Генерация по API из настроек → библиотека кабинета: [{hash, preview_url, account_id}]."""
+    """Генерация общим ключом сервиса (списывает единицы) → библиотека кабинета: [{hash, preview_url, account_id}]."""
     return _call(ai_agent.generate_images, user_id, workspace_id, account_id=body.account_id, prompt=body.prompt,
                  count=body.count)
 
 
 @router.get("/ai/usage")
-def ai_usage(month: str = "", user_id: int = Depends(require_web_user)) -> dict:
-    return _call(ai.usage_summary, user_id, month or None)
+def ai_usage(user_id: int = Depends(require_web_user)) -> dict:
+    """Шкала лимита за текущий период в процентах: всего и по моделям, Вордстату, картинкам и проектам."""
+    return _call(billing.user_summary, user_id)
 
 
 @router.get("/workspaces/{workspace_id}/chats")
@@ -261,7 +138,7 @@ def chats_list(workspace_id: int, user_id: int = Depends(require_web_user)) -> d
 
 @router.post("/workspaces/{workspace_id}/chats")
 def chats_create(workspace_id: int, body: ChatBody, user_id: int = Depends(require_web_user)) -> dict:
-    return _call(ai_agent.create_chat, user_id, workspace_id, body.title)
+    return _call(ai_agent.create_chat, user_id, workspace_id, body.title, body.model_class)
 
 
 @router.get("/workspaces/{workspace_id}/signals")
@@ -311,6 +188,11 @@ def chat_get(chat_id: int, user_id: int = Depends(require_web_user)) -> dict:
 @router.patch("/ai/chats/{chat_id}")
 def chat_rename(chat_id: int, body: ChatBody, user_id: int = Depends(require_web_user)) -> dict:
     return _call(ai_agent.rename_chat, user_id, chat_id, body.title)
+
+
+@router.put("/ai/chats/{chat_id}/model")
+def chat_model(chat_id: int, body: ChatModelBody, user_id: int = Depends(require_web_user)) -> dict:
+    return _call(ai_agent.set_chat_model, user_id, chat_id, body.model_class)
 
 
 @router.delete("/ai/chats/{chat_id}")

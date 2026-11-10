@@ -411,15 +411,7 @@ def ai_rewrite_ads(user_id: int, payload: dict, progress: Progress | None = None
                 if clean:
                     suggestions[ad_row_id] = clean
     progress(len(items), len(items), "Готово")
-    usage = None
-    if spent["calls"]:
-        usage = {
-            "calls": spent["calls"],
-            "tokens_in": spent["tokens_in"],
-            "tokens_out": spent["tokens_out"],
-            "cost_rub": round(spent["cost_rub"], 4) if spent["priced"] else None,
-            "estimated": spent["estimated"],
-        }
+    usage = ai.usage_out(spent, user_id)
     return {"suggestions": suggestions, "usage": usage, "error": error}
 
 

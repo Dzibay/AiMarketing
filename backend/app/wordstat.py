@@ -5,9 +5,9 @@
 (https://searchapi.api.cloud.yandex.net/v2/wordstat/). OAuth-токен Директа туда не подходит:
 нужен API-ключ сервисного аккаунта с ролью search-api.webSearch.user и каталог (folderId).
 
-Ключ пользователь подключает в настройках (wordstat_settings, ключ зашифрован); без него — ключ
-сервиса из WORDSTAT_API_KEY и WORDSTAT_FOLDER_ID, если он задан.
-Платно: 20 ₽ за 1000 запросов; квота по умолчанию — 100 запросов в час, 10 в секунду.
+Ключ общий для сервиса: администратор подключает его в админке (service_wordstat, ключ зашифрован)
+и задаёт цену запроса в единицах лимита пользователя. Каждый запрос списывает единицы (billing).
+Yandex Cloud берёт 20 ₽ за 1000 запросов; квота по умолчанию — 100 запросов в час, 10 в секунду.
 """
 
 from __future__ import annotations
@@ -16,7 +16,7 @@ import logging
 
 import httpx
 
-from app.config import settings
+from app import billing
 from app.db import pool
 from app.direct_api import post_json
 from app.token_crypto import decrypt_token, encrypt_token
@@ -37,7 +37,7 @@ HOURLY_QUOTA = 100
 # Проверка подключения — один настоящий запрос: так видно и роль, и платёжный аккаунт.
 CHECK_PHRASE = "купить"
 
-NOT_CONFIGURED = "Вордстат не подключён: Настройки → Вордстат — API-ключ Yandex Cloud и id каталога"
+NOT_CONFIGURED = "Вордстат временно недоступен: администратор ещё не подключил его. Напишите в поддержку"
 DENIED = (
     "Yandex Cloud не пустил к Вордстату: у сервисного аккаунта нужна роль search-api.webSearch.user, "
     "у API-ключа — область yc.search-api.execute, у облака — активный платёжный аккаунт"
@@ -45,110 +45,132 @@ DENIED = (
 QUOTA = "Квота Вордстата исчерпана (по умолчанию 100 запросов в час) — повторите позже"
 
 
-# --- Подключение пользователя -------------------------------------------------------------------
+# --- Подключение сервиса (админка) --------------------------------------------------------------
+
+_KEEP = object()
 
 
-def _row(user_id: int) -> dict | None:
+def _row() -> dict:
     with pool.connection() as conn:
-        return conn.execute("SELECT * FROM wordstat_settings WHERE user_id = %s", (user_id,)).fetchone()
+        return conn.execute("SELECT * FROM service_wordstat WHERE id = 1").fetchone() or {}
 
 
-def _service_key() -> tuple[str, str] | None:
-    if settings.wordstat_api_key and settings.wordstat_folder_id:
-        return settings.wordstat_api_key, settings.wordstat_folder_id
-    return None
+def _ready(row: dict) -> bool:
+    return bool(row.get("api_key_enc") and row.get("folder_id"))
 
 
-def _own(row: dict | None) -> bool:
-    return bool(row and row.get("api_key_enc") and row.get("folder_id"))
+def _num(value) -> float | None:
+    return None if value is None else float(value)
 
 
-def _public(row: dict | None) -> dict:
+def is_configured() -> bool:
+    return _ready(_row())
+
+
+def get_settings() -> dict:
     from app.ai import _key_hint
 
-    row = row or {}
-    own = _own(row)
-    service = _service_key() is not None
+    row = _row()
     return {
-        "configured": own or service,
-        # own — ключ пользователя, service — ключ сервиса из .env, "" — не подключён.
-        "source": "own" if own else "service" if service else "",
+        "configured": _ready(row),
         "folder_id": row.get("folder_id") or "",
         "has_key": bool(row.get("api_key_enc")),
         "key_hint": _key_hint(row.get("api_key_enc") or ""),
         "checked_at": row["checked_at"].isoformat() if row.get("checked_at") else None,
         "check_error": row.get("check_error") or "",
+        "units_per_request": _num(row.get("units_per_request")),
+        "cost_per_request": _num(row.get("cost_per_request")),
         "price_rub_per_1000": PRICE_RUB_PER_1000,
         "hourly_quota": HOURLY_QUOTA,
     }
 
 
-def get_settings(user_id: int) -> dict:
-    return _public(_row(user_id))
-
-
-def save_settings(user_id: int, *, folder_id: str = "", api_key: str | None = None) -> dict:
+def save_settings(
+    *, folder_id: str = "", api_key: str | None = None, units_per_request=_KEEP, cost_per_request=_KEEP
+) -> dict:
     """api_key: None — оставить прежний, "" — удалить. Новый ключ или каталог сбрасывает итог проверки."""
+    from app.ai import amount
+
     folder_id = (folder_id or "").strip()
     if len(folder_id) > FOLDER_MAX_LEN or any(ch.isspace() for ch in folder_id):
         raise YandexError("wordstat-folder", "id каталога Yandex Cloud — без пробелов, до 50 символов (b1g…)")
-    current = _row(user_id) or {}
+    current = _row()
     if api_key is None:
         key_enc = current.get("api_key_enc") or ""
     else:
         key_enc = encrypt_token(api_key.strip()) if api_key.strip() else ""
     if key_enc and not folder_id:
         raise YandexError("wordstat-folder", "Укажите id каталога Yandex Cloud, в котором создан ключ")
+    units = _num(current.get("units_per_request")) if units_per_request is _KEEP else amount(units_per_request, "Цена запроса в единицах")
+    cost = _num(current.get("cost_per_request")) if cost_per_request is _KEEP else amount(cost_per_request, "Себестоимость запроса, ₽")
     changed = key_enc != (current.get("api_key_enc") or "") or folder_id != (current.get("folder_id") or "")
     with pool.connection() as conn:
         conn.execute(
             """
-            INSERT INTO wordstat_settings (user_id, folder_id, api_key_enc)
-            VALUES (%s, %s, %s)
-            ON CONFLICT (user_id) DO UPDATE SET
-                folder_id = EXCLUDED.folder_id,
-                api_key_enc = EXCLUDED.api_key_enc,
-                checked_at = CASE WHEN %s THEN NULL ELSE wordstat_settings.checked_at END,
-                check_error = CASE WHEN %s THEN '' ELSE wordstat_settings.check_error END,
-                updated_at = NOW()
+            UPDATE service_wordstat SET folder_id = %s, api_key_enc = %s, units_per_request = %s,
+                   cost_per_request = %s,
+                   checked_at = CASE WHEN %s THEN NULL ELSE checked_at END,
+                   check_error = CASE WHEN %s THEN '' ELSE check_error END,
+                   updated_at = NOW()
+            WHERE id = 1
             """,
-            (user_id, folder_id, key_enc, changed, changed),
+            (folder_id, key_enc, units, cost, changed, changed),
         )
-    return get_settings(user_id)
+    return get_settings()
 
 
-def credentials(user_id: int) -> tuple[str, str]:
-    """(api_key, folder_id): ключ пользователя из настроек, иначе ключ сервиса."""
-    row = _row(user_id)
-    if _own(row):
-        try:
-            return decrypt_token(row["api_key_enc"]), row["folder_id"]
-        except RuntimeError as exc:
-            raise YandexError("wordstat-not-configured", "Ключ Вордстата не расшифровывается — сохраните его заново") from exc
-    found = _service_key()
-    if found:
-        return found
-    raise YandexError("wordstat-not-configured", NOT_CONFIGURED)
+def credentials() -> tuple[str, str]:
+    """(api_key, folder_id) ключа сервиса."""
+    row = _row()
+    if not _ready(row):
+        raise YandexError("wordstat-not-configured", NOT_CONFIGURED)
+    try:
+        return decrypt_token(row["api_key_enc"]), row["folder_id"]
+    except RuntimeError as exc:
+        raise YandexError("wordstat-not-configured", NOT_CONFIGURED) from exc
 
 
-def _remember_check(user_id: int, error: str) -> None:
+def _remember_check(error: str) -> None:
     with pool.connection() as conn:
-        conn.execute(
-            "UPDATE wordstat_settings SET checked_at = NOW(), check_error = %s WHERE user_id = %s",
-            (error[:500], user_id),
-        )
+        conn.execute("UPDATE service_wordstat SET checked_at = NOW(), check_error = %s WHERE id = 1", (error[:500],))
 
 
-def check_connection(user_id: int) -> dict:
-    """Пробный запрос к Вордстату (стоит как обычный, 0,02 ₽); итог запоминается у ключа пользователя."""
-    api_key, folder_id = credentials(user_id)
+def check_connection() -> dict:
+    """Пробный запрос к Вордстату (стоит как обычный, 0,02 ₽), без списания единиц; итог запоминается."""
+    api_key, folder_id = credentials()
     try:
         found = top_requests(api_key, folder_id, CHECK_PHRASE, num_phrases=3)
     except YandexError as exc:
-        _remember_check(user_id, exc.message or exc.code)
+        _remember_check(exc.message or exc.code)
         raise
-    _remember_check(user_id, "")
+    _remember_check("")
     return {"ok": True, "phrase": found["phrase"], "total": found["total"], "sample": found["results"][:3]}
+
+
+class Client:
+    """Запросы пользователя к Вордстату: перед каждым — проверка лимита, после — списание единиц."""
+
+    def __init__(self, user_id: int, workspace_id: int | None = None):
+        row = _row()
+        self.api_key, self.folder_id = credentials()
+        self.user_id = user_id
+        self.workspace_id = workspace_id
+        self.units = _num(row.get("units_per_request")) or 0.0
+        self.cost = _num(row.get("cost_per_request"))
+
+    def top_requests(self, phrase: str, **kwargs) -> dict:
+        billing.check(self.user_id, self.units)
+        found = top_requests(self.api_key, self.folder_id, phrase, **kwargs)
+        billing.record(
+            self.user_id,
+            kind="wordstat",
+            task="wordstat",
+            workspace_id=self.workspace_id,
+            units=1,
+            charged=self.units,
+            cost_rub=self.cost,
+        )
+        return found
 
 
 # --- Запросы ------------------------------------------------------------------------------------

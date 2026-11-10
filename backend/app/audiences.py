@@ -291,7 +291,7 @@ def account_rights(user_id: int, account_id: int) -> dict:
     with pool.connection() as conn:
         row = conn.execute(
             """
-            SELECT c.id, c.yandex_login, c.sandbox, c.audience_token_enc <> '' AS audience, c.audience_scopes
+            SELECT c.id, c.yandex_login, c.audience_token_enc <> '' AS audience, c.audience_scopes
             FROM direct_accounts a
             JOIN yandex_connections c ON c.id = a.connection_id
             WHERE a.id = %s AND a.user_id = %s
@@ -300,7 +300,7 @@ def account_rights(user_id: int, account_id: int) -> dict:
         ).fetchone()
     if row is None:
         return {"login": "", "connection_id": None, "enabled": on, "rights": False}
-    rights = on and bool(row["audience"]) and not row["sandbox"] and has_rights(row["audience_scopes"])
+    rights = on and bool(row["audience"]) and has_rights(row["audience_scopes"])
     return {
         "login": str(row["yandex_login"] or ""),
         "connection_id": int(row["id"]),
@@ -329,8 +329,6 @@ def audience_token(rights: dict) -> str:
 
 def audience_call(token, method: str, path: str, *, body: dict | None = None, params: dict | None = None) -> dict:
     """Запрос к API управления Аудиториями; ошибка — YandexError, нет прав — код audience-scope."""
-    if direct_api.is_sandbox(token):
-        raise YandexError("sandbox", "У песочницы Директа нет Яндекс Аудиторий")
     try:
         response = direct_api._client().request(
             method,

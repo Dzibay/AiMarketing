@@ -296,7 +296,7 @@ import { RouterLink } from 'vue-router'
 import { errorText, jobProgressText, wsApi } from '../../api/web'
 import { askConfirm } from '../../composables/useConfirm'
 import { pushToast } from '../../composables/useToasts'
-import { formatDate, num, pct, plural, rub, rubAi } from '../../utils/format'
+import { aiUsageText, formatDate, num, pct, plural, rub } from '../../utils/format'
 import { useWs } from './context'
 
 const DIMENSIONS = [
@@ -478,12 +478,6 @@ async function loadReport() {
   }
 }
 
-function usageText(usage) {
-  const tokens = usage.tokens_in + usage.tokens_out
-  const cost = usage.cost_rub === null ? '' : `, ${usage.estimated ? '≈ ' : ''}${rubAi(usage.cost_rub)}`
-  return `ИИ: ${usage.calls} ${plural(usage.calls, 'вызов', 'вызова', 'вызовов')}, ${num(tokens)} ${plural(tokens, 'токен', 'токена', 'токенов')}${cost}`
-}
-
 async function askAi() {
   // ИИ смотрит площадки с расходом: остальные ничего не стоили.
   const rows = items.value.filter((r) => r.cost_kopecks > 0 && r.excludable && !excluded.value.has(r.key)).slice(0, 300)
@@ -508,7 +502,7 @@ async function askAi() {
     const toExclude = Object.values(ai.value).filter((v) => v.verdict === 'exclude').length
     aiNote.value = [
       `ИИ предлагает запретить: ${toExclude} из ${rows.length}`,
-      res.usage ? usageText(res.usage) : '',
+      res.usage ? aiUsageText(res.usage) : '',
       res.error ? `часть не разобрана: ${res.error}` : '',
     ]
       .filter(Boolean)

@@ -464,7 +464,7 @@ def web_yandex_start(
     connection_id: int | None = None,
     authorization: str = Header(default=""),
 ) -> dict:
-    """mode: "" — Метрика и Директ, "metrika" / "direct" — одна роль, "sandbox" — песочница Директа.
+    """mode: "" — Метрика и Директ, "metrika" / "direct" — одна роль.
 
     purpose=audience — второе приложение: Яндекс Аудитории логину connection_id."""
     purpose = (purpose or "login").strip().lower()

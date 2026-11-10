@@ -263,7 +263,7 @@ import { RouterLink } from 'vue-router'
 import { errorText, jobProgressText, wsApi } from '../../api/web'
 import { askConfirm } from '../../composables/useConfirm'
 import { pushToast } from '../../composables/useToasts'
-import { formatDate, num, pct, plural, rub, rubAi } from '../../utils/format'
+import { aiUsageText, formatDate, num, pct, plural, rub } from '../../utils/format'
 import { useWs } from './context'
 import HeadlinesPanel from './HeadlinesPanel.vue'
 
@@ -421,12 +421,6 @@ async function loadReport() {
   }
 }
 
-function usageText(usage) {
-  const tokens = usage.tokens_in + usage.tokens_out
-  const cost = usage.cost_rub === null ? '' : `, ${usage.estimated ? '≈ ' : ''}${rubAi(usage.cost_rub)}`
-  return `ИИ: ${usage.calls} ${plural(usage.calls, 'вызов', 'вызова', 'вызовов')}, ${num(tokens)} ${plural(tokens, 'токен', 'токена', 'токенов')}${cost}`
-}
-
 function aiItem(r) {
   // Сеть для промпта: где объявление слабое, иначе — где больше показов.
   const nets = Object.entries(r.nets)
@@ -463,7 +457,7 @@ async function askAi() {
     const n = Object.keys(got).length
     aiNote.value = [
       `ИИ предложил новые тексты: ${n} из ${list.length}`,
-      res.usage ? usageText(res.usage) : '',
+      res.usage ? aiUsageText(res.usage) : '',
       res.error ? `часть не разобрана: ${res.error}` : '',
     ]
       .filter(Boolean)

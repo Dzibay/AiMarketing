@@ -33,7 +33,10 @@ def test_fresh_db_migrates_to_head(db_pool):
         }
     assert _version(db_pool) == _head()
     assert {"users", "clients", "jobs", "job_schedules", "direct_accounts", "metrika_counters"} <= tables
-    assert {"workspaces", "workspace_accounts", "workspace_campaigns", "ai_settings", "ai_chats"} <= tables
+    assert {"workspaces", "workspace_accounts", "workspace_campaigns", "ai_chats"} <= tables
+    # Ключи ИИ, Вордстата и картинок — общие для сервиса, у пользователей их больше нет.
+    assert {"service_ai", "ai_model_classes", "service_wordstat", "service_images", "service_bridge"} <= tables
+    assert not {"ai_settings", "wordstat_settings", "image_gen_settings", "ai_bridge"} & tables
     assert "account_counter_links" not in tables
     run_migrations()  # повторный запуск — no-op
     assert _version(db_pool) == _head()

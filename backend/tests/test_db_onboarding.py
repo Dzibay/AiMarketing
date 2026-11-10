@@ -13,7 +13,6 @@ def test_facts_come_from_existing_tables(db):
     assert onboarding.load_facts(user) == {
         "dismissed": False,
         "telegram_linked": False,
-        "ai_configured": False,
         "direct_connections": 0,
         "direct_accounts": 0,
         "direct_loaded": 0,
@@ -38,22 +37,14 @@ def test_facts_come_from_existing_tables(db):
         conn.execute("UPDATE workspaces SET archived_at = NOW() WHERE id = %s", (archived,))
         conn.execute("UPDATE workspaces SET url_template = 'https://site.ru/?ref=Yandex' WHERE id = %s", (ws,))
         conn.execute("UPDATE users SET telegram_chat_id = '42' WHERE id = %s", (user,))
-        # YandexGPT без каталога — ключ ещё не рабочий.
-        conn.execute(
-            "INSERT INTO ai_settings (user_id, provider, api_key_enc) VALUES (%s, 'yandexgpt', 'enc')", (user,)
-        )
 
     facts = onboarding.load_facts(user)
     assert facts["direct_connections"] == 1
     assert facts["direct_accounts"] == 2 and facts["direct_loaded"] == 1 and facts["load_errors"] == 1
-    assert facts["telegram_linked"] and not facts["ai_configured"]
+    assert facts["telegram_linked"]
     assert facts["workspaces"] == [
         {"id": ws, "name": "site.ru", "campaigns": 1, "has_template": True, "has_goal": True}
     ]
-
-    with db.connection() as conn:
-        conn.execute("UPDATE ai_settings SET folder_id = 'b1g' WHERE user_id = %s", (user,))
-    assert onboarding.load_facts(user)["ai_configured"]
 
 
 def test_other_users_data_does_not_count(db):

@@ -28,7 +28,6 @@
         <div class="chat__title">
           <h2>{{ chat?.title || 'Новый чат' }}</h2>
           <p class="hint">{{ accessText }}</p>
-          <p v-if="modelText" class="hint chat__model">{{ modelText }}</p>
         </div>
         <div class="row-actions">
           <button v-if="build" class="btn btn--ghost chat__chats-toggle" type="button" @click="chatsOpen = true">
@@ -66,9 +65,7 @@
       </div>
 
       <p v-if="!aiConfigured" class="notice notice--warn">
-        ИИ не подключён. Укажите провайдера и ключ в
-        <RouterLink :to="{ path: '/cabinet/settings', hash: '#ai' }">настройках аккаунта</RouterLink> — подойдёт
-        любой OpenAI-совместимый API или YandexGPT.
+        ИИ временно недоступен: администратор ещё не подключил модель. Напишите в поддержку — подключим.
       </p>
 
       <div ref="scroller" class="chat__messages" @scroll="onScroll">
@@ -321,6 +318,17 @@
           />
         </div>
         <div class="chat__send">
+          <select
+            v-if="modelItems.length > 1"
+            class="chat__model-pick"
+            :value="selectedClass"
+            :disabled="modelBusy || status === 'running' || !aiConfigured"
+            aria-label="Модель ответа"
+            title="Модель ответа: больше точек — подробнее думает и быстрее расходует лимит"
+            @change="chooseModel($event.target.value)"
+          >
+            <option v-for="m in modelItems" :key="m.id" :value="m.id">{{ m.name }} {{ dots(m.dots) }}</option>
+          </select>
           <button
             v-if="otherProjects.length"
             class="icon-btn"
@@ -477,18 +485,45 @@ const accessText = computed(() => {
   return `Без согласования (до ${a.max_change_pct}%): ${allowed.join('; ')}. Остальное — после подтверждения.`
 })
 
-/** «Отвечает claude-opus-5-5 · разметка и бриф — claude-haiku-5-5 · через мост Cloudflare». */
-const modelText = computed(() => {
+// Класс модели: у открытого чата — сохранённый, у нового — выбранный здесь до первого сообщения.
+const pickedClass = ref('')
+const modelBusy = ref(false)
+const modelItems = computed(() => aiModels.value?.items || [])
+const selectedClass = computed(() => {
   const m = aiModels.value
-  if (!m?.configured || !m.model) return ''
-  const parts = [`Отвечает ${m.model}`]
-  if (m.model_fast && m.model_fast !== m.model) parts.push(`разметка, бриф и площадки — ${m.model_fast}`)
-  if (m.bridge) parts.push('через мост Cloudflare')
-  return parts.join(' · ')
+  if (!m) return ''
+  if (chat.value) return m.selected || m.default
+  return modelItems.value.some((c) => c.id === pickedClass.value) ? pickedClass.value : m.default
 })
 
+/** Относительный расход класса: ●○○, ●●○, ●●●. */
+function dots(n) {
+  const k = Math.max(1, Math.min(3, Number(n) || 1))
+  return '●'.repeat(k) + '○'.repeat(3 - k)
+}
+
+function fillModels(res) {
+  aiModels.value = res || null
+  aiConfigured.value = !!res?.configured
+}
+
+async function chooseModel(id) {
+  pickedClass.value = id
+  if (!chat.value) return
+  modelBusy.value = true
+  try {
+    const res = await aiApi.setChatModel(chat.value.id, id)
+    if (data.value?.chat?.id === res.chat.id) data.value = { ...data.value, chat: { ...data.value.chat, ...res.chat }, ai: res.ai }
+    fillModels(res.ai)
+  } catch (err) {
+    pushToast(errorText(err), 'error')
+  } finally {
+    modelBusy.value = false
+  }
+}
+
 const placeholder = computed(() => {
-  if (!aiConfigured.value) return 'Сначала подключите ИИ в настройках аккаунта'
+  if (!aiConfigured.value) return 'ИИ временно недоступен'
   if (status.value === 'running') return 'ИИ отвечает…'
   if (pendingActions.value.length && pendingActions.value.every((a) => onBoard.value.has(a.id))) {
     return 'Решите этап на доске или напишите своими словами'
@@ -760,8 +795,7 @@ async function loadChat(id, quiet = false) {
     const res = await aiApi.chat(id)
     if (chatId.value !== id) return
     data.value = res
-    aiConfigured.value = !!res.ai?.configured
-    aiModels.value = res.ai || null
+    fillModels(res.ai)
     const count = res.messages.length + res.actions.length
     if (!quiet || count !== prevCount) scrollDown(!quiet)
     if (prevStatus && prevStatus !== res.chat.status) loadChats()
@@ -893,7 +927,7 @@ async function send(text) {
   try {
     let id = chatId.value
     if (!id) {
-      const created = await aiApi.createChat(ws.value.id)
+      const created = await aiApi.createChat(ws.value.id, '', pickedClass.value)
       id = created.id
       chats.value = [created, ...chats.value]
       await router.replace({ path: `/w/${ws.value.id}/chat/${id}` })
@@ -1096,8 +1130,7 @@ async function handleAsk() {
   if (!prompt) return
   await router.replace({ path: `/w/${ws.value.id}/chat` })
   try {
-    const settings = await aiApi.settings()
-    aiConfigured.value = !!settings.configured
+    fillModels(await aiApi.models())
   } catch {
     // Узнаем при отправке.
   }
@@ -1135,10 +1168,8 @@ onMounted(async () => {
   if (chatId.value) loadChat(chatId.value)
   else
     aiApi
-      .settings()
-      .then((s) => {
-        aiConfigured.value = !!s.configured
-      })
+      .models()
+      .then(fillModels)
       .catch(() => {})
 })
 

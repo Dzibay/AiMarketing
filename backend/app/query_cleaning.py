@@ -18,7 +18,7 @@ import re
 from collections import defaultdict
 from collections.abc import Callable
 
-from app import ai
+from app import ai, billing
 from app.adgroups import _parse_phrases
 from app.brief import brief_prompt
 from app.db import pool
@@ -924,23 +924,11 @@ def _classify_system(user_id: int, plan: dict) -> str:
     )
 
 
-def _usage_out(usage: dict) -> dict | None:
-    if not usage["calls"]:
-        return None
-    return {
-        "calls": usage["calls"],
-        "tokens_in": usage["tokens_in"],
-        "tokens_out": usage["tokens_out"],
-        "cost_rub": round(usage["cost_rub"], 4) if usage["priced"] else None,
-        "estimated": usage["estimated"],
-    }
-
-
 def classify_queries(user_id: int, payload: dict, progress: Progress | None = None) -> dict:
     """Разметка очереди: сначала правила (Директ, память, бриф), остальное — ИИ пачками.
 
-    ИИ — быстрая модель из настроек. Перед каждой пачкой — проверка, что её оценка влезает
-    в остаток месячного лимита: что успели — сохранено, остальное ждёт следующего месяца или лимита.
+    ИИ — класс модели задачи «разметка» из админки. Перед каждой пачкой — проверка, что её оценка влезает
+    в остаток лимита единиц: что успели — сохранено, остальное ждёт следующего периода.
     """
     progress = progress or (lambda *_a: None)
     plan = _classify_plan(user_id, payload)
@@ -972,13 +960,7 @@ def classify_queries(user_id: int, payload: dict, progress: Progress | None = No
                     batch = rest[start : start + AI_BATCH]
                     progress(done, len(rows), f"ИИ размечает запросы: {done} из {len(rows)}")
                     try:
-                        left = ai.budget_left(cfg)
-                        need = ai.cost_rub(cfg, *_batch_tokens(system, batch, ratio, out_per))
-                        if left is not None and need is not None and need > left:
-                            raise YandexError(
-                                "ai-budget",
-                                f"Месячного лимита на ИИ не хватает на следующие запросы: осталось {ai.format_rub(max(left, 0))}",
-                            )
+                        ai.check_budget(cfg, ai.units_for(cfg, *_batch_tokens(system, batch, ratio, out_per)))
                         got = ai_labels(cfg, system, batch)
                     except YandexError as exc:
                         # Что успели — сохранено; ошибку показываем, если не вышло ничего.
@@ -989,7 +971,7 @@ def classify_queries(user_id: int, payload: dict, progress: Progress | None = No
                     suggest_labels(user_id, workspace_id, got)
                     labels += got
                     done += len(batch)
-            usage = _usage_out(spent)
+            usage = ai.usage_out(spent, user_id)
     progress(len(rows), len(rows), "Готово")
     with pool.connection() as conn:
         left = conn.execute(
@@ -1013,15 +995,14 @@ def classify_queries(user_id: int, payload: dict, progress: Progress | None = No
 
 
 def estimate_classify(user_id: int, payload: dict) -> dict:
-    """Оценка до запуска: сколько закроют правила, сколько уйдёт в ИИ, токены, рубли и остаток лимита.
+    """Оценка до запуска: сколько закроют правила, сколько уйдёт в ИИ и какая это доля месячного лимита.
 
     Токены входа — по символам тех же сообщений, что уйдут в модель, и фактическому числу символов
-    на токен у этой модели; выхода — по среднему на запрос в прошлых разметках.
+    на токен у этой модели; выхода — по среднему на запрос в прошлых разметках. Пользователю — только проценты.
     """
     out = {
-        "queries": 0, "rules": 0, "ai": 0, "batches": 0, "model": None, "tokens_in": 0, "tokens_out": 0,
-        "cost_rub": None, "priced": False, "calibrated": False, "limit_rub": None, "spent_rub": None,
-        "remaining_rub": None, "fits": None, "ai_error": None,
+        "queries": 0, "rules": 0, "ai": 0, "batches": 0, "percent": None, "left_percent": None,
+        "calibrated": False, "fits": None, "ai_error": None,
     }
     plan = _classify_plan(user_id, payload)
     if plan is None:
@@ -1039,24 +1020,19 @@ def estimate_classify(user_id: int, payload: dict) -> dict:
     ratio = ai.chars_per_token(cfg)
     out_per = ai.out_tokens_per_unit(cfg, "classify", OUT_TOKENS_PER_QUERY)
     batches = [rest[i : i + AI_BATCH] for i in range(0, len(rest), AI_BATCH)]
-    tokens = [_batch_tokens(system, b, ratio, out_per) for b in batches]
-    cost = ai.cost_rub(cfg, sum(t[0] for t in tokens), sum(t[1] for t in tokens))
+    needs = [ai.units_for(cfg, *_batch_tokens(system, b, ratio, out_per)) for b in batches]
     out.update(
         batches=len(batches),
-        model=cfg["model_name"],
-        tokens_in=sum(t[0] for t in tokens),
-        tokens_out=sum(t[1] for t in tokens),
-        cost_rub=None if cost is None else round(cost, 4),
-        priced=cost is not None,
+        percent=billing.share(user_id, sum(needs)),
         calibrated=ratio != ai.CHARS_PER_TOKEN or out_per != OUT_TOKENS_PER_QUERY,
     )
     left = ai.budget_left(cfg)
-    if left is not None and cost is not None:
-        out.update(limit_rub=cfg["limit_rub"], spent_rub=round(cfg["limit_rub"] - left, 2), remaining_rub=round(left, 2))
+    if left is not None:
+        out["left_percent"] = billing.share(user_id, max(left, 0.0))
         # Пачки идут по порядку и останавливаются на первой, что не влезает в остаток.
         fits, acc = 0, 0.0
-        for b, t in zip(batches, tokens):
-            acc += ai.cost_rub(cfg, *t)
+        for b, need in zip(batches, needs):
+            acc += need
             if acc > left:
                 break
             fits += len(b)

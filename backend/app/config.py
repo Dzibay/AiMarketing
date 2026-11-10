@@ -24,9 +24,12 @@ class Settings(BaseSettings):
 
     public_base_url: str = ""
 
+    # Админка: email пользователей кабинета с правами администратора, через запятую.
+    admin_emails: str = ""
+    # Старые настройки входа в админку по паролю: из них выводится секрет сессий кабинета,
+    # если WEB_SESSION_SECRET не задан (смена разлогинит всех).
     admin_password: str = ""
     admin_token_secret: str = ""
-    admin_token_ttl_hours: int = 12
 
     web_session_secret: str = ""
     web_session_ttl_days: int = 30
@@ -60,11 +63,6 @@ class Settings(BaseSettings):
     telegram_bot_username: str = ""
     # Секрет для setWebhook (заголовок X-Telegram-Bot-Api-Secret-Token).
     telegram_webhook_secret: str = ""
-
-    # Вордстат (Search API Yandex Cloud): API-ключ сервисного аккаунта с ролью search-api.webSearch.user
-    # и id каталога. Ключ сервиса для тех, кто не подключил свой в настройках; пусто — только свои ключи.
-    wordstat_api_key: str = ""
-    wordstat_folder_id: str = ""
 
     # Фоновые циклы внутри процесса API (для локального запуска).
     # В Docker API ставит false, отдельный сервис worker запускает циклы сам.

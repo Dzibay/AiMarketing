@@ -18,7 +18,7 @@ import { pushToast } from '../composables/useToasts'
 
 const props = defineProps({
   purpose: { type: String, default: 'login' },
-  // "" — Метрика и Директ, "metrika" / "direct" — одна роль, "sandbox" — песочница Директа.
+  // "" — Метрика и Директ, "metrika" / "direct" — одна роль.
   mode: { type: String, default: '' },
   label: { type: String, default: 'Продолжить с Яндексом' },
   wide: { type: Boolean, default: true },

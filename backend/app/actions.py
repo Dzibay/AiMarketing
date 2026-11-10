@@ -2108,8 +2108,6 @@ def duplicate_campaign(
     same = target_id == int(src["account_id"])
     src_token = get_connection_access_token(src["connection_id"], user_id)
     dst_token = get_connection_access_token(dst["connection_id"], user_id)
-    if direct_api.is_sandbox(src_token) != direct_api.is_sandbox(dst_token):
-        raise YandexError("sandbox", "Нельзя копировать между песочницей и боевым Директом")
     ws_id = workspace_id or campaign_workspace_id(user_id, campaign_row_id)
     ws = require_workspace(user_id, ws_id) if ws_id else None
     new_name = _name(name or f"{src['name']} (копия)")

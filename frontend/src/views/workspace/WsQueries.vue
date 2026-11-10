@@ -449,20 +449,12 @@
           Уйдёт в ИИ: <strong>{{ num(estimate.est.ai) }}</strong>
           <span class="cell-note">
             {{ estimate.est.batches }} {{ plural(estimate.est.batches, 'вызов', 'вызова', 'вызовов') }} модели
-            {{ estimate.est.model }}
           </span>
         </li>
-        <li>
-          Токенов ≈ <strong>{{ num(estimate.est.tokens_in + estimate.est.tokens_out) }}</strong>
-          <span class="cell-note">вход ≈ {{ num(estimate.est.tokens_in) }}, выход ≈ {{ num(estimate.est.tokens_out) }}</span>
-        </li>
-        <li>
-          Стоимость ≈ <strong>{{ estimate.est.priced ? rubAi(estimate.est.cost_rub) : '—' }}</strong>
-          <span v-if="!estimate.est.priced" class="cell-note">
-            цены модели не заданы — <RouterLink to="/cabinet/settings#ai">укажите в настройках</RouterLink>, чтобы видеть рубли
-          </span>
-          <span v-else-if="estimate.est.remaining_rub !== null" class="cell-note">
-            в месячном лимите осталось {{ rubAi(estimate.est.remaining_rub) }} из {{ rubAi(estimate.est.limit_rub) }}
+        <li v-if="estimate.est.percent !== null">
+          Расход ≈ <strong>{{ limitPct(estimate.est.percent) }}</strong> месячного лимита
+          <span v-if="estimate.est.left_percent !== null" class="cell-note">
+            осталось {{ limitPct(estimate.est.left_percent) }}
           </span>
         </li>
       </ul>
@@ -482,7 +474,7 @@
             ? 'Оценка — по прошлым вызовам этой модели.'
             : 'Оценка приблизительная: после первых разметок станет точнее.'
         }}
-        Фактический расход — в настройках, «Расход ИИ».
+        Остаток лимита — в настройках.
       </p>
     </template>
     <template #footer>
@@ -510,7 +502,7 @@ import { errorText, jobProgressText, wsApi } from '../../api/web'
 import { askConfirm } from '../../composables/useConfirm'
 import { pushToast } from '../../composables/useToasts'
 import { campaignLabel, repeatedNames } from '../../utils/campaignNames'
-import { formatDate, formatDateTime, num, plural, rubAi, rubles } from '../../utils/format'
+import { aiUsageText, formatDate, formatDateTime, limitPct, num, plural, rubles } from '../../utils/format'
 import { useWs } from './context'
 
 const TABS = [
@@ -555,7 +547,7 @@ const rowResults = reactive({})
 const result = ref(null)
 const undoId = ref(null)
 const applyModal = reactive({ open: false, items: [], skipped: 0, bid: '' })
-// Оценка перед массовой разметкой: объём, токены, ₽ и остаток месячного лимита.
+// Оценка перед массовой разметкой: объём, доля и остаток месячного лимита.
 const estimate = reactive({ open: false, est: null, payload: null })
 const estimateShort = computed(() => {
   const est = estimate.est
@@ -864,7 +856,7 @@ async function classify() {
     return
   const payload = { limit: 300, relabel, campaign_row_id: filters.campaign ? Number(filters.campaign) : null }
   busy.value = 'classify'
-  busyText.value = 'Считаем объём и стоимость…'
+  busyText.value = 'Считаем объём и расход…'
   let est
   try {
     est = await wsApi.queriesClassifyEstimate(ws.value.id, payload)
@@ -888,12 +880,6 @@ function confirmClassify() {
   return runClassify(estimate.payload)
 }
 
-function usageText(usage) {
-  const tokens = usage.tokens_in + usage.tokens_out
-  const cost = usage.cost_rub === null ? '' : `, ${usage.estimated ? '≈ ' : ''}${rubAi(usage.cost_rub)}`
-  return `ИИ: ${usage.calls} ${plural(usage.calls, 'вызов', 'вызова', 'вызовов')}, ${num(tokens)} ${plural(tokens, 'токен', 'токена', 'токенов')}${cost}`
-}
-
 async function runClassify(payload) {
   busy.value = 'classify'
   busyText.value = 'Размечаем запросы…'
@@ -907,7 +893,7 @@ async function runClassify(payload) {
       const parts = [`Размечено ${res.labeled}: в минус ${res.negative}, целевых ${res.target}`]
       if (res.rules) parts.push(`по памяти, брифу и Директу — ${res.rules}`)
       if (res.left) parts.push(`ещё без разметки ${res.left}`)
-      if (res.usage) parts.push(usageText(res.usage))
+      if (res.usage) parts.push(aiUsageText(res.usage))
       pushToast(parts.join('; '), 'ok')
       if (res.ai_error) pushToast(`ИИ разобрал не всё: ${res.ai_error}`, 'warn')
     }

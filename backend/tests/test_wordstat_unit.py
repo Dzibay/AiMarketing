@@ -4,8 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from app import ai, ai_agent, wordstat
-from app.config import settings
+from app import ai, ai_agent, billing, wordstat
 from app.yandex import YandexError
 
 
@@ -100,7 +99,7 @@ def test_top_requests_rejects_bad_args_without_request(api, phrase, device):
 
 
 class FakeDb:
-    """pool без БД: строка wordstat_settings по user_id и журнал execute."""
+    """pool без БД: строка service_wordstat (id = 1) и журнал execute."""
 
     def __init__(self, row: dict | None = None):
         self.row = row
@@ -129,87 +128,113 @@ def db(monkeypatch):
     monkeypatch.setattr(wordstat, "pool", fake)
     monkeypatch.setattr(wordstat, "encrypt_token", lambda plain: f"enc:{plain}")
     monkeypatch.setattr(wordstat, "decrypt_token", lambda cipher: cipher.removeprefix("enc:"))
-    monkeypatch.setattr(settings, "wordstat_api_key", "")
-    monkeypatch.setattr(settings, "wordstat_folder_id", "")
     return fake
 
 
-def test_credentials_prefer_own_key_over_service(db, monkeypatch):
-    monkeypatch.setattr(settings, "wordstat_api_key", "SERVICE")
-    monkeypatch.setattr(settings, "wordstat_folder_id", "svc-folder")
-    db.row = {"api_key_enc": "enc:OWN", "folder_id": "b1g"}
-    assert wordstat.credentials(1) == ("OWN", "b1g")
-
-    db.row = {"api_key_enc": "enc:OWN", "folder_id": ""}
-    assert wordstat.credentials(1) == ("SERVICE", "svc-folder")
+def test_credentials_come_from_service_row(db):
+    db.row = {"api_key_enc": "enc:SERVICE", "folder_id": "b1g"}
+    assert wordstat.credentials() == ("SERVICE", "b1g")
+    assert db.executed[0][0] == "SELECT * FROM service_wordstat WHERE id = 1"
 
 
-def test_credentials_without_any_key(db):
+@pytest.mark.parametrize("row", [None, {"api_key_enc": "", "folder_id": "b1g"}, {"api_key_enc": "enc:K", "folder_id": ""}])
+def test_credentials_without_key_or_folder(db, row):
+    db.row = row
     with pytest.raises(YandexError) as err:
-        wordstat.credentials(1)
+        wordstat.credentials()
     assert err.value.code == "wordstat-not-configured"
-    assert "Настройки" in err.value.message
+    assert "администратор" in err.value.message
+    assert wordstat.is_configured() is False
 
 
-def test_public_settings_hide_key_and_show_source(db, monkeypatch):
+def test_public_settings_hide_key(db, monkeypatch):
     monkeypatch.setattr(ai, "decrypt_token", lambda cipher: "AQVN-secret-1234")
-    assert wordstat.get_settings(1)["configured"] is False
-    db.row = {"api_key_enc": "enc:x", "folder_id": "b1g", "checked_at": None, "check_error": ""}
-    out = wordstat.get_settings(1)
-    assert (out["configured"], out["source"], out["key_hint"]) == (True, "own", "…1234")
+    assert wordstat.get_settings()["configured"] is False
+    db.row = {
+        "api_key_enc": "enc:x",
+        "folder_id": "b1g",
+        "checked_at": None,
+        "check_error": "",
+        "units_per_request": 2,
+        "cost_per_request": 0.02,
+    }
+    out = wordstat.get_settings()
+    assert (out["configured"], out["has_key"], out["key_hint"]) == (True, True, "…1234")
+    assert (out["units_per_request"], out["cost_per_request"]) == (2.0, 0.02)
     assert "AQVN-secret-1234" not in str(out)
-
-    monkeypatch.setattr(settings, "wordstat_api_key", "SERVICE")
-    monkeypatch.setattr(settings, "wordstat_folder_id", "svc")
-    db.row = None
-    assert wordstat.get_settings(1)["source"] == "service"
 
 
 def test_save_encrypts_new_key_and_resets_check(db):
-    db.row = {"api_key_enc": "enc:old", "folder_id": "b1g"}
-    wordstat.save_settings(1, folder_id=" b1g ", api_key=" NEW ")
+    db.row = {"api_key_enc": "enc:old", "folder_id": "b1g", "units_per_request": 2, "cost_per_request": None}
+    wordstat.save_settings(folder_id=" b1g ", api_key=" NEW ")
     sql, params = db.executed[1]
-    assert sql.startswith("INSERT INTO wordstat_settings")
-    assert params == (1, "b1g", "enc:NEW", True, True)
+    assert sql.startswith("UPDATE service_wordstat SET") and sql.endswith("WHERE id = 1")
+    assert params == ("b1g", "enc:NEW", 2.0, None, True, True)
 
 
 def test_save_keeps_key_when_not_sent(db):
-    db.row = {"api_key_enc": "enc:old", "folder_id": "b1g"}
-    wordstat.save_settings(1, folder_id="b1g", api_key=None)
-    assert db.executed[1][1] == (1, "b1g", "enc:old", False, False)
+    db.row = {"api_key_enc": "enc:old", "folder_id": "b1g", "units_per_request": None, "cost_per_request": None}
+    wordstat.save_settings(folder_id="b1g", api_key=None)
+    assert db.executed[1][1] == ("b1g", "enc:old", None, None, False, False)
+
+
+def test_save_prices_without_touching_key(db):
+    db.row = {"api_key_enc": "enc:old", "folder_id": "b1g", "units_per_request": 1, "cost_per_request": 0.02}
+    wordstat.save_settings(folder_id="b1g", units_per_request="2,5", cost_per_request="")
+    assert db.executed[1][1] == ("b1g", "enc:old", 2.5, None, False, False)
+
+    with pytest.raises(YandexError) as err:
+        wordstat.save_settings(folder_id="b1g", units_per_request="-1")
+    assert err.value.code == "ai-price"
 
 
 @pytest.mark.parametrize("folder, key", [("", "KEY"), ("b1g folder", "KEY"), ("x" * 51, None)])
 def test_save_rejects_bad_folder(db, folder, key):
     with pytest.raises(YandexError) as err:
-        wordstat.save_settings(1, folder_id=folder, api_key=key)
+        wordstat.save_settings(folder_id=folder, api_key=key)
     assert err.value.code == "wordstat-folder"
-    assert not any(sql.startswith("INSERT") for sql, _ in db.executed)
+    assert not any(sql.startswith("UPDATE") for sql, _ in db.executed)
 
 
 def test_check_connection_makes_one_request_and_remembers_result(db, api):
-    db.row = {"api_key_enc": "enc:OWN", "folder_id": "b1g"}
+    db.row = {"api_key_enc": "enc:SERVICE", "folder_id": "b1g"}
     api.responses["купить"] = FakeResponse(
         200, {"totalCount": "900", "results": [{"phrase": f"купить {i}", "count": "10"} for i in range(5)]}
     )
-    out = wordstat.check_connection(1)
+    out = wordstat.check_connection()
     assert out == {"ok": True, "phrase": "купить", "total": 900, "sample": [{"phrase": f"купить {i}", "count": 10} for i in range(3)]}
-    assert api.calls[0]["headers"]["Authorization"] == "Api-Key OWN" and api.calls[0]["body"]["numPhrases"] == 3
-    assert db.executed[-1] == ("UPDATE wordstat_settings SET checked_at = NOW(), check_error = %s WHERE user_id = %s", ("", 1))
+    assert api.calls[0]["headers"]["Authorization"] == "Api-Key SERVICE" and api.calls[0]["body"]["numPhrases"] == 3
+    assert db.executed[-1] == ("UPDATE service_wordstat SET checked_at = NOW(), check_error = %s WHERE id = 1", ("",))
 
 
 def test_check_connection_remembers_error(db, api):
-    db.row = {"api_key_enc": "enc:OWN", "folder_id": "b1g"}
+    db.row = {"api_key_enc": "enc:SERVICE", "folder_id": "b1g"}
     api.responses["купить"] = FakeResponse(403, {"message": "Permission denied"})
     with pytest.raises(YandexError) as err:
-        wordstat.check_connection(1)
+        wordstat.check_connection()
     assert err.value.code == "wordstat-denied"
     assert "search-api.webSearch.user" in db.executed[-1][1][0]
 
 
 @pytest.fixture
-def tool(api, monkeypatch):
-    monkeypatch.setattr(wordstat, "credentials", lambda user_id: ("KEY", "f"))
+def billed(monkeypatch):
+    """Учёт единиц без БД: проверки и списания — в журнал; exhausted=True — лимит исчерпан."""
+    state = SimpleNamespace(checks=[], records=[], exhausted=False)
+
+    def check(user_id, need=0.0):
+        state.checks.append((user_id, need))
+        if state.exhausted:
+            raise YandexError("units-exhausted", billing.EXHAUSTED)
+
+    monkeypatch.setattr(billing, "check", check)
+    monkeypatch.setattr(billing, "record", lambda user_id, **kw: state.records.append({"user_id": user_id, **kw}))
+    return state
+
+
+@pytest.fixture
+def tool(api, billed, monkeypatch):
+    monkeypatch.setattr(wordstat, "credentials", lambda: ("KEY", "f"))
+    monkeypatch.setattr(wordstat, "_row", lambda: {"units_per_request": 2, "cost_per_request": 0.02})
     return lambda args: ai_agent._t_wordstat(SimpleNamespace(user_id=1, ws_id=2), args)
 
 
@@ -231,6 +256,23 @@ def test_tool_queries_each_phrase_once_and_trims(api, tool):
     assert len(out["items"][0]["associations"]) == 3
     assert out["items"][0]["total"] == 100
     assert "errors" not in out
+
+
+def test_tool_charges_units_for_each_request(api, billed, tool):
+    tool({"phrases": ["диван", "кресло"]})
+    assert billed.checks == [(1, 2.0), (1, 2.0)]
+    assert [(r["user_id"], r["kind"], r["workspace_id"], r["units"], r["charged"], r["cost_rub"]) for r in billed.records] == [
+        (1, "wordstat", 2, 1, 2.0, 0.02),
+        (1, "wordstat", 2, 1, 2.0, 0.02),
+    ]
+
+
+def test_tool_stops_before_request_when_limit_is_exhausted(api, billed, tool):
+    billed.exhausted = True
+    with pytest.raises(YandexError) as err:
+        tool({"phrases": ["диван"]})
+    assert err.value.code == "units-exhausted"
+    assert api.calls == [] and billed.records == []
 
 
 def test_tool_keeps_going_after_rejected_phrase(api, tool):

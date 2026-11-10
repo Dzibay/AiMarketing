@@ -1,7 +1,7 @@
 """Чек-лист первых шагов в обзоре кабинета: что уже сделано — по настоящим данным.
 
 Факты собираются одним запросом из уже существующих таблиц (подключения, кабинеты, пространства,
-Telegram, ключ ИИ); шаги из них строит чистая функция build_onboarding — её и тестируем.
+Telegram); шаги из них строит чистая функция build_onboarding — её и тестируем.
 Чек-лист прячется сам, когда обязательные шаги сделаны, или когда пользователь его скрыл.
 """
 
@@ -20,11 +20,7 @@ SELECT
         WHERE a.user_id = u.id AND a.enabled AND a.loaded_at IS NOT NULL) AS direct_loaded,
     (SELECT COUNT(*) FROM direct_accounts a
         WHERE a.user_id = u.id AND a.enabled AND a.loaded_at IS NULL
-          AND jsonb_path_exists(a.load_state, '$.* ? (@.status == "error")')) AS load_errors,
-    EXISTS (
-        SELECT 1 FROM ai_settings s
-        WHERE s.user_id = u.id AND s.api_key_enc <> '' AND (s.provider <> 'yandexgpt' OR s.folder_id <> '')
-    ) AS ai_configured
+          AND jsonb_path_exists(a.load_state, '$.* ? (@.status == "error")')) AS load_errors
 FROM users u
 WHERE u.id = %s
 """
@@ -49,7 +45,6 @@ def load_facts(user_id: int) -> dict:
     facts = {
         "dismissed": bool(row.get("dismissed")),
         "telegram_linked": bool(row.get("telegram_linked")),
-        "ai_configured": bool(row.get("ai_configured")),
     }
     for key in ("direct_connections", "direct_accounts", "direct_loaded", "load_errors"):
         facts[key] = int(row.get(key) or 0)
@@ -181,17 +176,6 @@ def build_onboarding(facts: dict, *, telegram_available: bool) -> dict:
                 "/cabinet/settings#telegram",
             )
         )
-
-    steps.append(
-        _step(
-            "ai",
-            "Добавить ключ ИИ",
-            "Свой ключ OpenAI-совместимого API или YandexGPT — для ассистента и разборов",
-            facts["ai_configured"],
-            "/cabinet/settings#ai",
-            optional=True,
-        )
-    )
 
     required = [s for s in steps if not s["optional"]]
     complete = all(s["done"] for s in required)

@@ -492,8 +492,6 @@ def counter_access(user_id: int, workspace_id: int, account: dict) -> dict:
     """
     ws = require_workspace(user_id, workspace_id)
     login = (account.get("client_login") or "").lower()
-    if account.get("sandbox"):
-        return {"status": "sandbox", "hint": "Песочница Директа не связана с Метрикой: цели в стратегиях недоступны"}
     if login and login in _counter_logins(user_id, int(ws["counter_id"])):
         return {"status": "ok", "hint": ""}
     return {
@@ -513,7 +511,7 @@ def list_workspace_accounts(user_id: int, workspace_id: int) -> list[dict]:
             SELECT a.id, a.client_login, COALESCE(NULLIF(a.name, ''), a.client_login) AS name,
                    a.enabled, a.currency, a.balance_kopecks, a.balance_currency,
                    a.last_sync_status, a.last_sync_error, a.last_sync_at,
-                   y.yandex_login AS connection_login, y.sandbox,
+                   y.yandex_login AS connection_login,
                    (SELECT COUNT(*) FROM workspace_campaigns wc
                       JOIN direct_campaigns c ON c.id = wc.campaign_row_id
                       WHERE wc.workspace_id = wa.workspace_id AND c.account_id = a.id) AS campaigns_in_workspace,
@@ -533,7 +531,6 @@ def list_workspace_accounts(user_id: int, workspace_id: int) -> list[dict]:
             "client_login": r["client_login"],
             "name": r["name"],
             "enabled": r["enabled"],
-            "sandbox": r["sandbox"],
             "connection_login": r["connection_login"],
             "currency": r["currency"] or r["balance_currency"] or "",
             "balance_kopecks": r["balance_kopecks"],
@@ -552,8 +549,8 @@ def _require_account(user_id: int, account_id: int) -> dict:
     with pool.connection() as conn:
         row = conn.execute(
             """
-            SELECT a.id, a.client_login, a.enabled, y.sandbox
-            FROM direct_accounts a JOIN yandex_connections y ON y.id = a.connection_id
+            SELECT a.id, a.client_login, a.enabled
+            FROM direct_accounts a
             WHERE a.id = %s AND a.user_id = %s
             """,
             (account_id, user_id),
@@ -628,7 +625,7 @@ def account_candidates(user_id: int, workspace_id: int) -> list[dict]:
         rows = conn.execute(
             """
             SELECT a.id, a.client_login, COALESCE(NULLIF(a.name, ''), a.client_login) AS name,
-                   a.enabled, y.yandex_login AS connection_login, y.sandbox,
+                   a.enabled, y.yandex_login AS connection_login,
                    EXISTS (SELECT 1 FROM workspace_accounts wa
                            WHERE wa.workspace_id = %s AND wa.account_id = a.id) AS linked,
                    (SELECT COUNT(*) FROM direct_campaigns c WHERE c.account_id = a.id) AS campaigns_total,
@@ -648,7 +645,6 @@ def account_candidates(user_id: int, workspace_id: int) -> list[dict]:
             "name": r["name"],
             "enabled": r["enabled"],
             "connection_login": r["connection_login"],
-            "sandbox": r["sandbox"],
             "linked": r["linked"],
             "campaigns_total": int(r["campaigns_total"] or 0),
             "campaigns_matching": int(r["campaigns_matching"] or 0),
@@ -669,7 +665,7 @@ def campaign_candidates(user_id: int, workspace_id: int) -> list[dict]:
             """
             SELECT c.id, c.campaign_id, c.name, c.campaign_type, c.state, c.status, c.counter_ids,
                    a.id AS account_id, COALESCE(NULLIF(a.name, ''), a.client_login) AS account_name,
-                   a.client_login, y.sandbox,
+                   a.client_login,
                    wc.workspace_id, w.name AS workspace_name,
                    EXISTS (SELECT 1 FROM workspace_accounts wa
                            WHERE wa.workspace_id = %s AND wa.account_id = a.id) AS account_linked
@@ -691,7 +687,6 @@ def campaign_candidates(user_id: int, workspace_id: int) -> list[dict]:
                 "account_id": r["account_id"],
                 "account_name": r["account_name"],
                 "client_login": r["client_login"],
-                "sandbox": r["sandbox"],
                 "linked": r["account_linked"],
                 "campaigns": [],
             }

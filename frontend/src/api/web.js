@@ -9,7 +9,7 @@ export class ApiError extends Error {
   }
 }
 
-async function request(path, options = {}) {
+export async function request(path, options = {}) {
   const headers = { ...(options.headers || {}) }
   if (!headers['Content-Type'] && options.body) headers['Content-Type'] = 'application/json'
   const session = getSession()
@@ -160,31 +160,17 @@ export const undoApi = {
   run: (logId, onProgress) => runJob(`/api/web/actions/${logId}/undo`, undefined, onProgress),
 }
 
-/** ИИ-ассистент: свой ключ пользователя (BYOK), чаты пространства, согласование действий. */
+/** ИИ-ассистент: общие модели сервиса, шкала лимита, чаты проекта, согласование действий. */
 export const aiApi = {
-  settings: () => request('/api/web/ai/settings'),
-  saveSettings: (payload) => put('/api/web/ai/settings', payload),
-  test: () => post('/api/web/ai/settings/test'),
-  /** Мост Cloudflare AI Gateway: зарубежные модели (Claude, GPT, Gemini) с сервера в РФ — для чата и картинок. */
-  bridge: () => request('/api/web/ai/bridge'),
-  saveBridge: (payload) => put('/api/web/ai/bridge', payload),
-  /** Разворачивает Worker моста в аккаунте Cloudflare пользователя (API-токен не сохраняется). */
-  deployBridge: (payload) => post('/api/web/ai/bridge/deploy', payload),
-  /** Откуда Worker выходит в интернет: { country, colo, blocked }. */
-  testBridge: () => post('/api/web/ai/bridge/test'),
-  /** Вордстат для ассистента: свой API-ключ Search API Yandex Cloud и каталог. */
-  wordstat: () => request('/api/web/ai/wordstat'),
-  saveWordstat: (payload) => put('/api/web/ai/wordstat', payload),
-  testWordstat: () => post('/api/web/ai/wordstat/test'),
-  /** Генерация картинок для объявлений: свой API — OpenAI-совместимый или YandexART. */
-  imageGen: () => request('/api/web/ai/image-gen'),
-  saveImageGen: (payload) => put('/api/web/ai/image-gen', payload),
-  /** Одна настоящая картинка — платно, по тарифу провайдера: { ok, model, image (data URL) }. */
-  testImageGen: () => post('/api/web/ai/image-gen/test'),
-  /** Расход за месяц (ГГГГ-ММ, по умолчанию текущий): итог, лимит, по задачам, пространствам и моделям. */
-  usage: (month = '') => request(`/api/web/ai/usage${query({ month })}`),
+  /** Классы моделей для выбора в чате: { configured, default, items: [{ id, name, dots }] }. */
+  models: () => request('/api/web/ai/models'),
+  /** Шкала лимита за текущий период в процентах: всего, по моделям / Вордстату / картинкам и по проектам. */
+  usage: () => request('/api/web/ai/usage'),
+  /** Класс модели чата (fast | standard | thinking) → { chat, ai }. */
+  setChatModel: (id, modelClass) => put(`/api/web/ai/chats/${id}/model`, { model_class: modelClass }),
   chats: (workspaceId) => request(`${WS(workspaceId)}/chats`),
-  createChat: (workspaceId, title = '') => post(`${WS(workspaceId)}/chats`, { title }),
+  createChat: (workspaceId, title = '', modelClass = '') =>
+    post(`${WS(workspaceId)}/chats`, { title, model_class: modelClass }),
   chat: (id) => request(`/api/web/ai/chats/${id}`),
   renameChat: (id, title) => patch(`/api/web/ai/chats/${id}`, { title }),
   deleteChat: (id) => del(`/api/web/ai/chats/${id}`),
@@ -451,7 +437,13 @@ export const ERRORS = {
   mode: 'Некорректный режим подключения Яндекса.',
   scope: 'Это действие не входит в рабочее пространство.',
   decided: 'Решение по действию уже принято.',
-  'ai-not-configured': 'Подключите ИИ: Настройки → ИИ-ассистент.',
+  forbidden: 'Нет доступа.',
+  'ai-not-configured': 'ИИ временно недоступен: администратор ещё не подключил модель.',
+  'units-exhausted': 'Лимит ИИ на этот месяц исчерпан.',
+  'model-class': 'Эта модель сейчас недоступна.',
+  'units-limit': 'Лимит — число единиц от 0.',
+  'wordstat-not-configured': 'Вордстат временно недоступен.',
+  'image-not-configured': 'Генерация картинок временно недоступна.',
   'ai-url': 'Адрес API ИИ должен быть публичным https-адресом.',
   'ai-provider': 'Неизвестный провайдер ИИ.',
   'ai-folder': 'Для YandexGPT укажите каталог Yandex Cloud.',

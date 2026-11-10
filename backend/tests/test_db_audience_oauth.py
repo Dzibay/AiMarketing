@@ -113,10 +113,7 @@ def test_audience_connect_and_token(db, oauth):
 def test_audience_connect_checks(db, oauth):
     s = _seed(db)
     other = make_user(db, "x@example.com")
-    sandbox = make_connection(db, s["user"], "sandbox-login")
-    with db.connection() as c:
-        c.execute("UPDATE yandex_connections SET sandbox = TRUE WHERE id = %s", (sandbox,))
-    for user, conn, code in ((other, s["conn"], "not-found"), (s["user"], sandbox, "sandbox"), (s["user"], None, "not-found")):
+    for user, conn, code in ((other, s["conn"], "not-found"), (s["user"], None, "not-found")):
         with pytest.raises(YandexError) as err:
             yandex.start_oauth(purpose="audience", user_id=user, connection_id=conn)
         assert err.value.code == code

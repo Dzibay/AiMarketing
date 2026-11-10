@@ -283,14 +283,11 @@ def test_image_download_only_from_yandex_hosts(monkeypatch):
     assert _download_image("https://avatars.yandex.net.evil.com/a.png") is None
 
 
-def test_sandbox_token_fails_fast(monkeypatch):
-    monkeypatch.setattr(direct_api, "post_json", lambda *a, **k: (_ for _ in ()).throw(AssertionError("запрос")))
-    with pytest.raises(YandexError) as exc:
-        direct_api.call(direct_api.AccessToken("t", sandbox=True), None, "campaigns", "get", {})
-    assert exc.value.code == "sandbox"
+def test_sandbox_mode_is_gone():
+    # Песочницы Директа больше нет: подключить её нельзя.
     with pytest.raises(YandexError) as exc:
         create_oauth_state(purpose="connect", user_id=1, mode="sandbox")
-    assert exc.value.code == "sandbox"
+    assert exc.value.code == "mode"
 
 
 def test_keyword_bids_go_through_keywordbids(monkeypatch):
@@ -330,7 +327,7 @@ def test_busy_direct_is_retried_even_for_add(monkeypatch):
 
     monkeypatch.setattr(direct_api, "post_json", fake_post)
     monkeypatch.setattr(direct_api, "BUSY_DELAY", 0)
-    token = direct_api.AccessToken("t")
+    token = "t"
     assert direct_api.call(token, None, "campaigns", "add", {}) == {"AddResults": [{"Id": 7}]}
     assert len(calls) == 2
 

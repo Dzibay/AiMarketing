@@ -24,12 +24,12 @@
         <label>Кабинет Директа</label>
         <select v-model.number="form.target_account_id" required>
           <optgroup v-if="accounts.length" label="Кабинеты пространства">
-            <option v-for="a in accounts" :key="a.id" :value="a.id" :disabled="!a.enabled || !!a.sandbox !== sourceSandbox">
+            <option v-for="a in accounts" :key="a.id" :value="a.id" :disabled="!a.enabled">
               {{ accountLabel(a) }}
             </option>
           </optgroup>
           <optgroup v-if="otherAccounts.length" label="Другие кабинеты — подключатся к пространству">
-            <option v-for="a in otherAccounts" :key="a.id" :value="a.id" :disabled="!!a.sandbox !== sourceSandbox">
+            <option v-for="a in otherAccounts" :key="a.id" :value="a.id">
               {{ accountLabel(a) }}
             </option>
           </optgroup>
@@ -74,7 +74,6 @@ const form = reactive({ name: '', target_workspace_id: null, target_account_id: 
 const accounts = ref([])
 const otherAccounts = ref([])
 const accountsError = ref('')
-const sourceSandbox = ref(false)
 const running = ref(false)
 const progressText = ref('')
 const formError = ref('')
@@ -89,7 +88,7 @@ const targetAccount = computed(
 
 function accountLabel(a) {
   const name = a.name && a.name !== a.client_login ? ` — ${a.name}` : ''
-  return `${a.client_login}${name}${a.sandbox ? ' (песочница)' : ''}${a.id === props.campaign?.account_id ? ' — тот же кабинет' : ''}`
+  return `${a.client_login}${name}${a.id === props.campaign?.account_id ? ' — тот же кабинет' : ''}`
 }
 
 async function loadAccounts(wsId) {
@@ -100,7 +99,7 @@ async function loadAccounts(wsId) {
     if (form.target_workspace_id !== wsId) return
     accounts.value = data.accounts || []
     otherAccounts.value = data.other_accounts || []
-    const usable = accounts.value.filter((a) => a.enabled && !!a.sandbox === sourceSandbox.value)
+    const usable = accounts.value.filter((a) => a.enabled)
     const same = usable.find((a) => a.id === props.campaign?.account_id)
     form.target_account_id = (same || usable[0])?.id ?? null
   } catch (err) {
@@ -121,12 +120,6 @@ watch(
     form.target_workspace_id = props.workspace.id
     form.target_account_id = null
     loadWorkspaces().catch(() => {})
-    try {
-      const own = await wsApi.accounts(props.workspace.id)
-      sourceSandbox.value = !!(own.items || []).find((a) => a.id === props.campaign.account_id)?.sandbox
-    } catch {
-      sourceSandbox.value = false
-    }
     loadAccounts(props.workspace.id)
   },
   { immediate: true },

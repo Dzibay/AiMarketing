@@ -94,7 +94,8 @@ def test_worker_region_error_is_retried_and_explained(monkeypatch):
         ai.complete(WORKER_CFG, PING)
     assert len(calls) == 3 and err.value.code == "ai-region"
     message = err.value.message
-    assert "Worker моста не в США" in message and "local-DME" in message and "Проверить мост" in message
+    assert "Worker моста не в США" in message and "local-DME" in message
+    assert "админка → ИИ и сервисы → Мост Cloudflare" in message
     # Совет «переключитесь на свой Worker» — только для AI Gateway: Worker и так включён.
     assert "Переключите" not in message and message.endswith("(попыток: 3)")
 

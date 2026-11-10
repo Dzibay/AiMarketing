@@ -25,8 +25,9 @@ NON_RETRYABLE_CODES = frozenset(
         "date",
         "unknown-kind",
         "payload",
-        # ИИ не подключён или ответил не по формату, сайт недоступен, неверные данные задачи.
+        # ИИ не подключён или ответил не по формату, лимит единиц исчерпан, сайт недоступен, неверные данные задачи.
         "ai-not-configured",
+        "units-exhausted",
         "ai-auth",
         "ai-url",
         "ai-json",

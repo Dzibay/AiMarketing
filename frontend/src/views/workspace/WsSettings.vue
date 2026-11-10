@@ -100,7 +100,6 @@
         <div>
           <strong>
             {{ a.name || a.client_login }}
-            <span v-if="a.sandbox" class="chip">песочница</span>
             <span v-if="!a.enabled" class="chip">выключен</span>
           </strong>
           <small>
@@ -124,7 +123,7 @@
         <select v-model="addForm.account_id" required aria-label="Кабинет">
           <option :value="null" disabled>Кабинет…</option>
           <option v-for="a in available" :key="a.id" :value="a.id" :disabled="!a.enabled">
-            {{ a.name || a.client_login }}{{ a.sandbox ? ' (песочница)' : '' }} · кампаний {{ a.campaigns_total
+            {{ a.name || a.client_login }} · кампаний {{ a.campaigns_total
             }}{{ a.campaigns_matching ? `, со счётчиком ${a.campaigns_matching}` : '' }}
           </option>
         </select>
@@ -187,7 +186,7 @@
             <strong>{{ g.account_name }}</strong>
           </label>
           <small>
-            {{ g.client_login }}<template v-if="g.sandbox"> · песочница</template>
+            {{ g.client_login }}
             <template v-if="!g.linked"> · кабинет подключится автоматически</template>
           </small>
         </div>
@@ -229,7 +228,7 @@
         <h2>Доступ ИИ</h2>
         <p class="hint">
           Что ИИ-помощник может менять в Директе сам. Всё остальное он предлагает в чате, и действие выполняется только
-          после вашего «Выполнить». Подключение модели — в <RouterLink to="/cabinet/settings">настройках аккаунта</RouterLink>.
+          после вашего «Выполнить».
         </p>
       </div>
     </div>
@@ -339,7 +338,7 @@ import ContextFilesPanel from './ContextFilesPanel.vue'
 import LinkTemplatePanel from './LinkTemplatePanel.vue'
 import { useWs } from './context'
 
-const COUNTER_TONES = { ok: 'tone-ok', unknown: 'tone-warn', sandbox: 'tone-warn' }
+const COUNTER_TONES = { ok: 'tone-ok', unknown: 'tone-warn' }
 
 const { ws, reload, patch } = useWs()
 const { clients } = useWorkspaces()

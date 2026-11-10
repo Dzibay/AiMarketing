@@ -1,4 +1,4 @@
-"""Картинки объявлений новой кампании: генерация по API пользователя, вопрос об источнике, этап «Картинки»
+"""Картинки объявлений новой кампании: генерация на ключе сервиса, вопрос об источнике, этап «Картинки»
 в чате, доска и создание кампании — без БД и сети."""
 
 import base64
@@ -7,7 +7,7 @@ from types import SimpleNamespace
 import httpx
 import pytest
 
-from app import actions, ad_extras, ai, ai_agent, audiences, image_gen
+from app import actions, ad_extras, ai_agent, audiences, billing, image_gen
 from app.workspaces import normalize_ai_access
 from app.yandex import YandexError
 
@@ -54,13 +54,14 @@ def library(monkeypatch):
     return state
 
 
-# --- Генерация по API пользователя ------------------------------------------------------------------
+# --- Генерация на ключе сервиса ---------------------------------------------------------------------
 
 
 def _cfg(provider="openai", model="gpt-image-1", **extra):
     base = image_gen.YANDEX_BASE if provider == "yandexart" else image_gen.OPENAI_BASE
     return {"provider": provider, "base_url": base, "model": model, "model_name": model, "headers": {},
-            "check_host": False, "user_id": 1, "workspace_id": 2, "task": "images", "price": None, "limit_rub": None, **extra}
+            "check_host": False, "bridge": False, "user_id": 1, "workspace_id": 2, "task": "images", "units": 0.0,
+            "cost": None, **extra}
 
 
 def _reply(status=200, data=None):
@@ -102,10 +103,10 @@ def test_request_errors(monkeypatch, reply, code):
 
 
 def test_generate_counts_budget_and_partial_errors(monkeypatch):
-    cfg = _cfg(price=40.0)
+    cfg = _cfg(units=40.0)
     monkeypatch.setattr(image_gen, "load_config", lambda user_id, workspace_id=None: cfg)
-    monkeypatch.setattr(ai, "check_budget", lambda c: None)
-    monkeypatch.setattr(ai, "budget_left", lambda c: 100.0)
+    monkeypatch.setattr(billing, "check", lambda user_id, need=0.0: None)
+    monkeypatch.setattr(billing, "units_left", lambda user_id: 100.0)
     recorded = []
     monkeypatch.setattr(image_gen, "_record", lambda c, prompt: recorded.append(prompt))
     calls = []
@@ -117,7 +118,7 @@ def test_generate_counts_budget_and_partial_errors(monkeypatch):
         return JPEG
 
     monkeypatch.setattr(image_gen, "_request", request)
-    # Просили 4, а лимита хватает на 2 (100 ₽ / 40 ₽); одна не получилась — учтена только удачная.
+    # Просили 4, а лимита хватает на 2 (100 ед. / 40 ед.); одна не получилась — учтена только удачная.
     out = image_gen.generate(1, "  окно   в доме ", count=4)
     assert (len(calls), out["images"], out["errors"], out["model"]) == (2, [JPEG], ["Генератор вернул не JPG"], "gpt-image-1")
     assert recorded == ["окно в доме"]
@@ -148,12 +149,12 @@ def test_upload_keeps_paid_images(monkeypatch):
 
 
 def test_generate_tool_guards(monkeypatch, library):
-    monkeypatch.setattr(image_gen, "is_configured", lambda user_id: False)
+    monkeypatch.setattr(image_gen, "is_configured", lambda: False)
     with pytest.raises(YandexError) as err:
         ai_agent._t_generate_images(FakeContext(), {"prompt": "окно"})
     assert err.value.code == "image-not-configured" and "из других кампаний" in err.value.message
 
-    monkeypatch.setattr(image_gen, "is_configured", lambda user_id: True)
+    monkeypatch.setattr(image_gen, "is_configured", lambda: True)
     monkeypatch.setattr(ai_agent, "_wants_generation", lambda ctx: False)
     with pytest.raises(YandexError) as err:
         ai_agent._t_generate_images(FakeContext(), {"prompt": "окно"})
@@ -218,7 +219,7 @@ def test_answer_needs_connected_generation():
     generate = {"n": 1, "selected": ["Сгенерировать по описанию", "Загружу свои"]}
     with pytest.raises(YandexError) as err:
         ai_agent._compose_answers(question, [generate])
-    assert "недоступно" in err.value.message and "Настройки → Генерация картинок" in err.value.message
+    assert "недоступно" in err.value.message and "администратор" in err.value.message
     out, facts = ai_agent._compose_answers(question, [generate], {"image_gen"})
     assert out == [{"question": "Картинки?", "answer": "Сгенерировать по описанию; Загружу свои"}] and facts == []
     out, _ = ai_agent._compose_answers(question, [{"n": 1, "selected": ["Взять из других кампаний"], "text": "из летней"}])

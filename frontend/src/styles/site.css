@@ -859,6 +859,85 @@ button.stat-card[aria-pressed='true'] {
   overflow-wrap: anywhere;
 }
 
+/* Шкала лимита в настройках: доли по видам и по проектам, рядом на широком экране. */
+.usage-split {
+  display: grid;
+  gap: 0 1.5rem;
+}
+
+@media (min-width: 720px) {
+  .usage-split {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+.usage-shares {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.usage-shares li {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.45rem 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.usage-shares li:last-child {
+  border-bottom: 0;
+}
+
+.usage-shares small {
+  display: block;
+  color: var(--muted);
+}
+
+.usage-shares strong {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Админка: таблица классов моделей с полями прямо в ячейках. */
+.form-grid > .table-scroll {
+  grid-column: 1 / -1;
+  margin-bottom: 0.9rem;
+}
+
+.admin-classes input[type='text'],
+.admin-classes input[type='number'] {
+  width: 100%;
+  min-width: 0;
+}
+
+.admin-classes td.num input {
+  max-width: 7rem;
+  text-align: right;
+}
+
+.model-dots {
+  letter-spacing: 0.08em;
+  color: var(--accent);
+}
+
+.admin-users td {
+  vertical-align: top;
+}
+
+.admin-users td .btn {
+  margin-top: 0.3rem;
+}
+
+.admin-users__usage .meter {
+  margin-top: 0.35rem;
+  min-width: 7rem;
+}
+
+.table tr.is-muted td {
+  opacity: 0.6;
+}
+
 .filters {
   display: flex;
   flex-wrap: wrap;
@@ -3804,11 +3883,6 @@ tr.is-link:hover td {
   }
 }
 
-.connect-card__badge--sandbox {
-  background: var(--warn-soft);
-  color: var(--warn);
-}
-
 .conn-row {
   align-items: flex-start;
 }
@@ -4573,13 +4647,6 @@ body.has-modal {
   margin: 0.25rem 0 0 0.6rem;
   color: var(--muted);
   font-size: 0.75rem;
-}
-
-.chat__title .chat__model {
-  margin-top: 0.15rem;
-  color: var(--muted);
-  font-size: 0.78rem;
-  overflow-wrap: anywhere;
 }
 
 .msg__bubble--thinking {
@@ -6629,6 +6696,14 @@ button.board-chips__text:disabled {
   display: flex;
   gap: 0.5rem;
   align-items: center;
+}
+
+/* Класс модели у кнопки отправки: «Стандартная ●●○». */
+.chat__send .chat__model-pick {
+  width: auto;
+  min-width: 0;
+  max-width: 11rem;
+  font-size: 0.85rem;
 }
 
 /* @-упоминания: список проектов над полем ввода и чипы в сообщении. */

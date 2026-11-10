@@ -24,7 +24,7 @@ YANDEX_INFO = "https://login.yandex.ru/info"
 METRIKA_COUNTERS = "https://api-metrika.yandex.net/management/v1/counters"
 
 # Режим входа «подключить»: что берём из этого логина.
-OAUTH_MODES = ("", "metrika", "direct", "sandbox")
+OAUTH_MODES = ("", "metrika", "direct")
 # login / connect — основное приложение (вход, Метрика, Директ); audience — второе, Яндекс Аудитории.
 OAUTH_PURPOSES = ("login", "connect", "audience")
 
@@ -146,8 +146,6 @@ def create_oauth_state(
         raise YandexError("purpose")
     if mode not in OAUTH_MODES or (mode and purpose == "audience"):
         raise YandexError("mode")
-    if mode == "sandbox":
-        raise YandexError("sandbox", direct_api.SANDBOX_CLOSED)
     if purpose in ("connect", "audience") and user_id is None:
         raise YandexError("unauthorized")
     if purpose == "audience" and connection_id is None:
@@ -219,18 +217,16 @@ def start_oauth(
 
 
 def _audience_connection(user_id: int, connection_id: int | None) -> dict:
-    """Логин, которому подключают Аудитории: свой и не песочница."""
+    """Логин, которому подключают Аудитории: только свой."""
     if connection_id is None:
         raise YandexError("not-found")
     with pool.connection() as conn:
         row = conn.execute(
-            "SELECT id, yandex_uid, yandex_login, sandbox FROM yandex_connections WHERE id = %s AND user_id = %s",
+            "SELECT id, yandex_uid, yandex_login FROM yandex_connections WHERE id = %s AND user_id = %s",
             (connection_id, user_id),
         ).fetchone()
     if row is None:
         raise YandexError("not-found")
-    if row["sandbox"]:
-        raise YandexError("sandbox", "У песочницы Директа нет Яндекс Аудиторий")
     return row
 
 
@@ -328,9 +324,8 @@ def save_connection(*, user_id: int, profile: dict, token_payload: dict, mode: s
     Повторный вход того же логина добавляет роль режима и не снимает уже включённые.
     """
     access = token_payload.get("access_token") or ""
-    sandbox = mode == "sandbox"
     new_metrika = mode in ("", "metrika")
-    new_direct = mode in ("", "direct", "sandbox")
+    new_direct = mode in ("", "direct")
     refresh = token_payload.get("refresh_token") or ""
     scopes = token_payload.get("scope") or settings.yandex_oauth_scopes
     with pool.connection() as conn:
@@ -339,10 +334,10 @@ def save_connection(*, user_id: int, profile: dict, token_payload: dict, mode: s
             INSERT INTO yandex_connections (
                 user_id, yandex_uid, yandex_login, display_name,
                 access_token_enc, refresh_token_enc, expires_at, scopes,
-                use_metrika, use_direct, sandbox, updated_at
+                use_metrika, use_direct, updated_at
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
-            ON CONFLICT (user_id, yandex_uid, sandbox) DO UPDATE SET
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
+            ON CONFLICT (user_id, yandex_uid) DO UPDATE SET
                 use_metrika = yandex_connections.use_metrika OR %s,
                 use_direct = yandex_connections.use_direct OR %s,
                 yandex_login = EXCLUDED.yandex_login,
@@ -357,7 +352,7 @@ def save_connection(*, user_id: int, profile: dict, token_payload: dict, mode: s
                 updated_at = NOW()
             RETURNING id, user_id, yandex_uid, yandex_login, display_name, scopes,
                       expires_at, last_sync_at, last_sync_status, last_sync_error,
-                      use_metrika, use_direct, sandbox, created_at, updated_at
+                      use_metrika, use_direct, created_at, updated_at
             """,
             (
                 user_id,
@@ -368,11 +363,10 @@ def save_connection(*, user_id: int, profile: dict, token_payload: dict, mode: s
                 encrypt_token(refresh) if refresh else "",
                 _expires_at(token_payload),
                 scopes,
-                new_metrika and not sandbox,
+                new_metrika,
                 new_direct,
-                sandbox,
                 mode == "metrika",
-                mode in ("direct", "sandbox"),
+                mode == "direct",
             ),
         ).fetchone()
     return row
@@ -415,16 +409,13 @@ def _update_connection_tokens(connection_id: int, token_payload: dict) -> None:
             )
 
 
-def get_connection_access_token(connection_id: int, user_id: int | None = None) -> direct_api.AccessToken:
-    """Возвращает валидный access token; при необходимости обновляет через refresh.
-
-    Токен подключения-песочницы помечен — запросы Директа с ним уходят в песочницу.
-    """
+def get_connection_access_token(connection_id: int, user_id: int | None = None) -> str:
+    """Возвращает валидный access token; при необходимости обновляет через refresh."""
     with pool.connection() as conn:
         if user_id is None:
             row = conn.execute(
                 """
-                SELECT id, access_token_enc, refresh_token_enc, expires_at, sandbox
+                SELECT id, access_token_enc, refresh_token_enc, expires_at
                 FROM yandex_connections WHERE id = %s
                 """,
                 (connection_id,),
@@ -432,7 +423,7 @@ def get_connection_access_token(connection_id: int, user_id: int | None = None) 
         else:
             row = conn.execute(
                 """
-                SELECT id, access_token_enc, refresh_token_enc, expires_at, sandbox
+                SELECT id, access_token_enc, refresh_token_enc, expires_at
                 FROM yandex_connections WHERE id = %s AND user_id = %s
                 """,
                 (connection_id, user_id),
@@ -447,20 +438,19 @@ def get_connection_access_token(connection_id: int, user_id: int | None = None) 
             expires = expires.replace(tzinfo=timezone.utc)
         need_refresh = expires <= datetime.now(timezone.utc) + timedelta(minutes=5)
 
-    sandbox = bool(row.get("sandbox"))
     if not need_refresh:
-        return direct_api.AccessToken(decrypt_token(row["access_token_enc"]), sandbox)
+        return decrypt_token(row["access_token_enc"])
 
     refresh_plain = decrypt_token(row["refresh_token_enc"]) if row.get("refresh_token_enc") else ""
     if not refresh_plain:
         # Токен без срока / без refresh — пробуем старый
         if expires is None:
-            return direct_api.AccessToken(decrypt_token(row["access_token_enc"]), sandbox)
+            return decrypt_token(row["access_token_enc"])
         raise YandexError("token-expired")
 
     payload = refresh_access_token(refresh_plain)
     _update_connection_tokens(connection_id, payload)
-    return direct_api.AccessToken(payload["access_token"], sandbox)
+    return payload["access_token"]
 
 
 def save_audience_token(connection_id: int, token_payload: dict) -> None:
@@ -548,7 +538,7 @@ def list_connections(user_id: int) -> list[dict]:
             """
             SELECT c.id, c.yandex_uid, c.yandex_login, c.display_name, c.scopes, c.expires_at,
                    c.last_sync_at, c.last_sync_status, c.last_sync_error, c.created_at, c.updated_at,
-                   c.use_metrika, c.use_direct, c.sandbox, c.audience_token_enc <> '' AS audience,
+                   c.use_metrika, c.use_direct, c.audience_token_enc <> '' AS audience,
                    (SELECT COUNT(*) FROM metrika_counters m WHERE m.connection_id = c.id) AS counters,
                    (SELECT COUNT(*) FROM direct_accounts d WHERE d.connection_id = c.id) AS accounts,
                    (SELECT COUNT(*) FROM direct_campaigns dc
@@ -556,7 +546,7 @@ def list_connections(user_id: int) -> list[dict]:
                      WHERE d.connection_id = c.id) AS campaigns
             FROM yandex_connections c
             WHERE c.user_id = %s
-            ORDER BY c.sandbox, c.created_at ASC
+            ORDER BY c.created_at ASC
             """,
             (user_id,),
         ).fetchall()
@@ -569,7 +559,6 @@ def list_connections(user_id: int) -> list[dict]:
             "scopes": row["scopes"],
             "use_metrika": row["use_metrika"],
             "use_direct": row["use_direct"],
-            "sandbox": row["sandbox"],
             "audience": bool(row["audience"]),
             "counters": int(row["counters"] or 0),
             "accounts": int(row["accounts"] or 0),
@@ -594,17 +583,13 @@ def set_connection_roles(
     """
     with pool.connection() as conn:
         row = conn.execute(
-            "SELECT id, use_metrika, use_direct, sandbox FROM yandex_connections WHERE id = %s AND user_id = %s",
+            "SELECT id, use_metrika, use_direct FROM yandex_connections WHERE id = %s AND user_id = %s",
             (connection_id, user_id),
         ).fetchone()
         if row is None:
             raise YandexError("not-found")
         metrika = row["use_metrika"] if use_metrika is None else bool(use_metrika)
         direct = row["use_direct"] if use_direct is None else bool(use_direct)
-        if row["sandbox"]:
-            metrika = False
-            if not direct:
-                raise YandexError("roles", "Песочница — только Директ")
         if not metrika and not direct:
             raise YandexError("roles", "Оставьте Метрику или Директ — или удалите подключение")
         conn.execute(
@@ -615,7 +600,7 @@ def set_connection_roles(
             conn.execute("UPDATE metrika_counters SET enabled = %s WHERE connection_id = %s", (metrika, connection_id))
         if direct != row["use_direct"]:
             conn.execute("UPDATE direct_accounts SET enabled = %s WHERE connection_id = %s", (direct, connection_id))
-    return {"id": connection_id, "use_metrika": metrika, "use_direct": direct, "sandbox": row["sandbox"]}
+    return {"id": connection_id, "use_metrika": metrika, "use_direct": direct}
 
 
 def delete_connection(user_id: int, connection_id: int) -> None:
@@ -667,8 +652,6 @@ CLIENT_FIELDS = ["ClientId", "ClientInfo", "Login", "Currency", "Type"]
 
 def _direct_get(access_token: str, service: str, params: dict) -> tuple[list[dict], str]:
     """get в clients / agencyclients: (элементы, ошибка_или_пусто) — ошибка в формате ``direct_sync_error``."""
-    if direct_api.is_sandbox(access_token):
-        return [], f"direct-denied|{direct_api.SANDBOX_CLOSED}"
     url = direct_api.v5_url(access_token, service)
     try:
         response = direct_api.post_json(
@@ -815,7 +798,7 @@ def sync_connection(user_id: int, connection_id: int) -> dict:
     with pool.connection() as conn:
         conn_row = conn.execute(
             """
-            SELECT yandex_login, display_name, use_metrika, use_direct, sandbox
+            SELECT yandex_login, display_name, use_metrika, use_direct
             FROM yandex_connections WHERE id = %s AND user_id = %s
             """,
             (connection_id, user_id),
@@ -824,7 +807,7 @@ def sync_connection(user_id: int, connection_id: int) -> dict:
         finish_run(run_id, status="error", error="not-found")
         raise YandexError("not-found")
 
-    if conn_row["use_metrika"] and not conn_row["sandbox"]:
+    if conn_row["use_metrika"]:
         try:
             counters = fetch_metrika_counters(token)
         except YandexError as exc:

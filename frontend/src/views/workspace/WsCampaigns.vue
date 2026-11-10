@@ -31,7 +31,7 @@
         <select v-model="filters.account">
           <option value="">Все кабинеты</option>
           <option v-for="a in accounts" :key="a.id" :value="String(a.id)">
-            {{ a.client_login }}{{ a.sandbox ? ' (песочница)' : '' }}
+            {{ a.client_login }}
           </option>
         </select>
       </div>

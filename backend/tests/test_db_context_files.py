@@ -13,7 +13,7 @@ from app import ai, ai_agent, context_files
 from app.config import settings
 from app.main import app
 from app.web_auth import make_session
-from tests.dbutil import make_account, make_connection, make_user, make_workspace
+from tests.dbutil import make_account, make_connection, make_user, make_workspace, setup_ai
 
 # Заведомо ненастоящий ключ модели.
 AI_KEY = "test-ai-key-1234"
@@ -200,7 +200,7 @@ def test_workspace_prompt_limit_setting(db):
 
 def test_chat_sees_files_in_system_prompt(db, monkeypatch):
     user, ws, other_ws, client, auth = _seed(db)
-    ai.save_settings(user, provider="openai", api_key=AI_KEY, model="gpt-test")
+    setup_ai(api_key=AI_KEY)
     client.post(
         _url(ws),
         json={"filename": "gpt.zip", "data": _b64(_zip([("итоги.txt", "Оффер: замер бесплатно, монтаж за 1 день".encode())]))},

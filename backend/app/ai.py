@@ -1,11 +1,12 @@
-"""ИИ пользователя (BYOK): настройки провайдера и вызов OpenAI-совместимого chat/completions.
+"""ИИ сервиса: общее подключение (настраивает администратор) и вызов OpenAI-совместимого chat/completions.
 
-Поддерживаются OpenAI и любые совместимые API (прокси, локальные шлюзы с публичным https-адресом)
-и YandexGPT через его OpenAI-совместимый эндпоинт Yandex Cloud.
+Поддерживаются YandexGPT (OpenAI-совместимый эндпоинт Yandex Cloud) и любые OpenAI-совместимые API
+с публичным https-адресом — к зарубежным через мост Cloudflare (ai_bridge).
 
-Модель на задачу: умная — чат с инструментами, быстрая — массовые задачи (разметка запросов, бриф).
-Каждый вызов пишется в ai_usage (токены от провайдера или оценка по символам, стоимость по ценам
-из настроек); месячный лимит в рублях останавливает вызовы, когда он исчерпан.
+Модели — три класса: быстрая, стандартная, думающая (ai_model_classes). Чат работает классом, который
+выбрал пользователь; фоновые задачи (разметка запросов, бриф, площадки) — классом из настроек сервиса.
+Каждый вызов списывает единицы по цене класса (за 1 млн токенов входа и выхода) и пишется в ai_usage
+вместе с себестоимостью в рублях; перед вызовом — проверка лимита единиц пользователя (billing).
 """
 
 from __future__ import annotations
@@ -18,13 +19,11 @@ import socket
 import time
 from contextlib import contextmanager
 from contextvars import ContextVar
-from datetime import datetime
 from urllib.parse import urlsplit
 
 import httpx
 
-from app import ai_bridge
-from app.clock import MSK, today_msk
+from app import ai_bridge, billing
 from app.db import pool
 from app.token_crypto import decrypt_token, encrypt_token
 from app.yandex import YandexError
@@ -49,22 +48,23 @@ RETRY_AFTER_MAX = 20
 # 524 — шлюз не дождался модели, тот же таймаут: не повторяем.
 RETRY_STATUSES = {500, 502, 503, 504, 520, 521, 522, 523, 529}
 
-# Какая модель на какую задачу: smart — основная, fast — «быстрая» из настроек (пусто — та же).
+# Классы моделей: точки — относительный расход для пользователя (●○○ … ●●●).
+CLASSES = ("fast", "standard", "thinking")
+CLASS_DOTS = {"fast": 1, "standard": 2, "thinking": 3}
+# Задачи и класс модели по умолчанию; администратор переназначает их в настройках сервиса.
 TASKS = {
-    "chat": {"label": "ИИ-чат", "tier": "smart"},
-    "classify": {"label": "Разметка запросов", "tier": "fast"},
-    "brief": {"label": "Черновик брифа", "tier": "fast"},
-    "placements": {"label": "Разбор площадок РСЯ", "tier": "fast"},
-    "ads": {"label": "Тексты объявлений", "tier": "smart"},
-    "test": {"label": "Проверка подключения", "tier": "smart"},
-    # Картинки рисует свой провайдер (image_gen); здесь — только подпись в расходе.
-    "images": {"label": "Картинки объявлений", "tier": "smart"},
+    "chat": {"label": "ИИ-чат (пока пользователь не выбрал модель)", "class": "standard"},
+    "classify": {"label": "Разметка поисковых запросов", "class": "fast"},
+    "brief": {"label": "Черновик брифа проекта", "class": "fast"},
+    "placements": {"label": "Разбор площадок РСЯ", "class": "fast"},
+    "ads": {"label": "Тексты объявлений", "class": "standard"},
 }
-# Проверку подключения лимит не останавливает: иначе после исчерпания не проверить новый ключ.
-UNLIMITED_TASKS = {"test"}
+# Подписи задач в журнале расхода, включая проверку подключения и картинки.
+TASK_LABELS = {**{k: v["label"] for k, v in TASKS.items()}, "chat": "ИИ-чат", "test": "Проверка подключения", "images": "Картинки"}
 # Русский текст у большинства токенизаторов — 2–3 символа на токен; дальше калибруемся по факту.
 CHARS_PER_TOKEN = 2.5
 PRICE_MAX = 1_000_000
+NOT_CONFIGURED = "ИИ временно недоступен: администратор ещё не подключил модель. Напишите в поддержку"
 _KEEP = object()
 
 
@@ -83,44 +83,112 @@ def _num(value) -> float | None:
 
 
 def format_rub(value: float) -> str:
-    text = f"{value:,.2f}".replace(",", "\u00a0").replace(".", ",")
-    return (text[:-3] if text.endswith(",00") else text) + "\u00a0₽"
+    text = f"{value:,.2f}".replace(",", " ").replace(".", ",")
+    return (text[:-3] if text.endswith(",00") else text) + " ₽"
 
 
-def _public(row: dict | None) -> dict:
-    row = row or {}
-    provider = row.get("provider") or "openai"
-    has_key = bool(row.get("api_key_enc"))
-    configured = has_key and (provider != "yandexgpt" or bool(row.get("folder_id")))
+def amount(value, what: str, *, maximum: float = PRICE_MAX, digits: int = 4) -> float | None:
+    """Цена или лимит из формы: пусто — None, иначе неотрицательное число не больше maximum."""
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return None
+    try:
+        number = float(str(value).replace(",", ".").replace(" ", ""))
+    except ValueError as exc:
+        raise YandexError("ai-price", f"{what} — число") from exc
+    if math.isnan(number) or not 0 <= number <= maximum:
+        raise YandexError("ai-price", f"{what} — от 0 до {maximum:,.0f}".replace(",", " "))
+    return round(number, digits)
+
+
+# --- Настройки сервиса (админка) ----------------------------------------------------------------
+
+
+def _service() -> dict:
+    with pool.connection() as conn:
+        return conn.execute("SELECT * FROM service_ai WHERE id = 1").fetchone() or {}
+
+
+def _class_public(row: dict) -> dict:
     return {
-        "provider": provider,
-        "base_url": row.get("base_url") or "",
+        "id": row["id"],
+        "name": row["name"],
         "model": row.get("model") or "",
-        "model_fast": row.get("model_fast") or "",
-        "folder_id": row.get("folder_id") or "",
-        "temperature": float(row["temperature"]) if row.get("temperature") is not None else 0.3,
-        "price_in": _num(row.get("price_in")),
-        "price_out": _num(row.get("price_out")),
-        "fast_price_in": _num(row.get("fast_price_in")),
-        "fast_price_out": _num(row.get("fast_price_out")),
-        "monthly_limit_rub": _num(row.get("monthly_limit_rub")),
-        "has_key": has_key,
-        "key_hint": _key_hint(row.get("api_key_enc") or ""),
-        "configured": configured,
-        "updated_at": row["updated_at"].isoformat() if row.get("updated_at") else None,
-        "providers": [{"id": k, "label": v["label"], "default_model": v["default_model"]} for k, v in PROVIDERS.items()],
-        "tasks": [{"id": k, "label": v["label"], "tier": v["tier"]} for k, v in TASKS.items() if k not in ("test", "images")],
-        "default_base_url": OPENAI_BASE,
+        "units_in": _num(row.get("units_in")),
+        "units_out": _num(row.get("units_out")),
+        "cost_in": _num(row.get("cost_in")),
+        "cost_out": _num(row.get("cost_out")),
+        "enabled": bool(row.get("enabled")),
+        "dots": CLASS_DOTS.get(row["id"], 2),
     }
 
 
-def _row(user_id: int) -> dict | None:
+def model_classes() -> list[dict]:
     with pool.connection() as conn:
-        return conn.execute("SELECT * FROM ai_settings WHERE user_id = %s", (user_id,)).fetchone()
+        rows = conn.execute("SELECT * FROM ai_model_classes ORDER BY position").fetchall()
+    return [_class_public(r) for r in rows]
 
 
-def get_settings(user_id: int) -> dict:
-    return _public(_row(user_id))
+def _usable(cls: dict | None) -> bool:
+    return bool(cls and cls["enabled"] and cls["model"])
+
+
+def _has_key(row: dict) -> bool:
+    return bool(row.get("api_key_enc")) and (row.get("provider") != "yandexgpt" or bool(row.get("folder_id")))
+
+
+def is_configured() -> bool:
+    return _has_key(_service()) and any(_usable(c) for c in model_classes())
+
+
+def _task_classes(row: dict) -> dict:
+    stored = row.get("task_classes") or {}
+    return {task: stored.get(task) if stored.get(task) in CLASSES else spec["class"] for task, spec in TASKS.items()}
+
+
+def _resolve_class(wanted: str | None, task: str, classes: dict[str, dict], row: dict) -> dict | None:
+    """Класс для вызова: выбранный, если включён и с моделью, иначе класс задачи, иначе ближайший рабочий."""
+    order = [wanted, _task_classes(row).get(task) or TASKS["chat"]["class"], "standard", "fast", "thinking"]
+    for cid in order:
+        if cid and _usable(classes.get(cid)):
+            return classes[cid]
+    return None
+
+
+def chat_classes() -> dict:
+    """Для выбора модели в чате: включённые классы без моделей и цен и класс по умолчанию."""
+    row = _service()
+    classes = {c["id"]: c for c in model_classes()}
+    default = _resolve_class(None, "chat", classes, row)
+    return {
+        "configured": _has_key(row) and default is not None,
+        "default": default["id"] if default else "",
+        "items": [{"id": c["id"], "name": c["name"], "dots": c["dots"]} for c in classes.values() if _usable(c)],
+    }
+
+
+def class_names() -> dict[str, str]:
+    return {c["id"]: c["name"] for c in model_classes()}
+
+
+def get_service_settings() -> dict:
+    row = _service()
+    classes = model_classes()
+    return {
+        "provider": row.get("provider") or "yandexgpt",
+        "base_url": row.get("base_url") or "",
+        "folder_id": row.get("folder_id") or "",
+        "temperature": float(row["temperature"]) if row.get("temperature") is not None else 0.3,
+        "has_key": bool(row.get("api_key_enc")),
+        "key_hint": _key_hint(row.get("api_key_enc") or ""),
+        "configured": _has_key(row) and any(_usable(c) for c in classes),
+        "classes": classes,
+        "task_classes": _task_classes(row),
+        "tasks": [{"id": k, "label": v["label"], "default": v["class"]} for k, v in TASKS.items()],
+        "default_units_limit": _num(row.get("default_units_limit")),
+        "providers": [{"id": k, "label": v["label"], "default_model": v["default_model"]} for k, v in PROVIDERS.items()],
+        "default_base_url": OPENAI_BASE,
+        "updated_at": row["updated_at"].isoformat() if row.get("updated_at") else None,
+    }
 
 
 def _check_url_syntax(url: str) -> str:
@@ -144,7 +212,7 @@ def _check_url_syntax(url: str) -> str:
 
 
 def _check_url_resolves_public(url: str) -> None:
-    """Защита от SSRF: сервер не ходит по пользовательскому адресу во внутреннюю сеть."""
+    """Защита от SSRF: сервер не ходит по заданному адресу во внутреннюю сеть."""
     parts = urlsplit(url)
     try:
         infos = socket.getaddrinfo(parts.hostname, parts.port or 443, proto=socket.IPPROTO_TCP)
@@ -156,43 +224,50 @@ def _check_url_resolves_public(url: str) -> None:
             raise YandexError("ai-url", "Адрес API указывает во внутреннюю сеть")
 
 
-def _money(value, what: str) -> float | None:
-    if value is None or (isinstance(value, str) and not value.strip()):
-        return None
-    try:
-        amount = float(str(value).replace(",", ".").replace(" ", ""))
-    except ValueError as exc:
-        raise YandexError("ai-price", f"{what} — число в рублях") from exc
-    if math.isnan(amount) or not 0 <= amount <= PRICE_MAX:
-        raise YandexError("ai-price", f"{what} — от 0 до {PRICE_MAX:,} ₽".replace(",", " "))
-    return round(amount, 2)
+def _save_classes(conn, classes: list[dict]) -> None:
+    known = {r["id"]: r for r in conn.execute("SELECT * FROM ai_model_classes").fetchall()}
+    for item in classes or []:
+        cid = str(item.get("id") or "")
+        if cid not in known:
+            raise YandexError("ai-class", "Неизвестный класс модели")
+        name = (str(item.get("name") or "").strip() or known[cid]["name"])[:40]
+        model = str(item.get("model") or "").strip()[:200]
+        units_in = amount(item.get("units_in"), f"{name}: единиц за 1 млн токенов входа")
+        units_out = amount(item.get("units_out"), f"{name}: единиц за 1 млн токенов выхода")
+        cost_in = amount(item.get("cost_in"), f"{name}: себестоимость входа, ₽", digits=2)
+        cost_out = amount(item.get("cost_out"), f"{name}: себестоимость выхода, ₽", digits=2)
+        enabled = bool(item.get("enabled"))
+        for a, b, what in ((units_in, units_out, "цены в единицах"), (cost_in, cost_out, "себестоимости")):
+            if (a is None) != (b is None):
+                raise YandexError("ai-price", f"{name}: укажите обе {what} — за вход и за выход")
+        if enabled and not model:
+            raise YandexError("ai-class", f"{name}: укажите модель или выключите класс")
+        conn.execute(
+            """
+            UPDATE ai_model_classes SET name = %s, model = %s, units_in = %s, units_out = %s, cost_in = %s,
+                   cost_out = %s, enabled = %s, updated_at = NOW()
+            WHERE id = %s
+            """,
+            (name, model, units_in, units_out, cost_in, cost_out, enabled, cid),
+        )
 
 
-def save_settings(
-    user_id: int,
+def save_service_settings(
     *,
     provider: str,
     base_url: str = "",
-    model: str = "",
     folder_id: str = "",
     api_key: str | None = None,
     temperature: float | None = None,
-    model_fast=_KEEP,
-    price_in=_KEEP,
-    price_out=_KEEP,
-    fast_price_in=_KEEP,
-    fast_price_out=_KEEP,
-    monthly_limit_rub=_KEEP,
+    classes: list[dict] | None = None,
+    task_classes: dict | None = None,
+    default_units_limit=_KEEP,
 ) -> dict:
-    """api_key: None — оставить прежний, "" — удалить. Быстрая модель, цены и лимит: не переданы — как были.
-
-    Цены — рубли за 1 млн токенов (вход и выход), у быстрой модели пусто — как у основной.
-    """
-    provider = (provider or "openai").strip().lower()
+    """api_key: None — оставить прежний, "" — удалить. classes — [{id, name, model, units_*, cost_*, enabled}]."""
+    provider = (provider or "yandexgpt").strip().lower()
     if provider not in PROVIDERS:
         raise YandexError("ai-provider", "Неизвестный провайдер ИИ")
     base_url = _check_url_syntax(base_url) if provider == "openai" else ""
-    model = (model or "").strip()[:200]
     folder_id = (folder_id or "").strip()[:100]
     if provider == "yandexgpt" and not folder_id:
         raise YandexError("ai-folder", "Для YandexGPT укажите идентификатор каталога Yandex Cloud")
@@ -201,83 +276,65 @@ def save_settings(
     except (TypeError, ValueError) as exc:
         raise YandexError("ai-temperature", "Температура — число от 0 до 1") from exc
     temp = max(0.0, min(temp, 1.0))
-    current = _row(user_id) or {}
+    current = _service()
     if api_key is None:
         key_enc = current.get("api_key_enc") or ""
     else:
         key_enc = encrypt_token(api_key.strip()) if api_key.strip() else ""
-
-    def pick(name: str, value, what: str):
-        return _num(current.get(name)) if value is _KEEP else _money(value, what)
-
-    fast = (current.get("model_fast") or "") if model_fast is _KEEP else (model_fast or "").strip()[:200]
-    if fast == model:
-        fast = ""
-    p_in, p_out = pick("price_in", price_in, "Цена входа"), pick("price_out", price_out, "Цена выхода")
-    f_in = pick("fast_price_in", fast_price_in, "Цена входа быстрой модели")
-    f_out = pick("fast_price_out", fast_price_out, "Цена выхода быстрой модели")
-    limit = pick("monthly_limit_rub", monthly_limit_rub, "Месячный лимит")
-    for a, b, who in ((p_in, p_out, "модели"), (f_in, f_out, "быстрой модели")):
-        if (a is None) != (b is None):
-            raise YandexError("ai-price", f"Укажите обе цены {who}: за входные и за выходные токены")
-    if limit is not None and limit <= 0:
-        raise YandexError("ai-price", "Месячный лимит — сумма больше нуля или пусто")
-    if limit is not None and p_in is None:
-        raise YandexError("ai-price", "Чтобы считать месячный лимит, укажите цены модели")
+    stored = dict(current.get("task_classes") or {})
+    for task, cid in (task_classes or {}).items():
+        if task in TASKS and cid in CLASSES:
+            stored[task] = cid
+    if default_units_limit is _KEEP:
+        limit = _num(current.get("default_units_limit"))
+    else:
+        limit = amount(default_units_limit, "Лимит единиц по умолчанию", maximum=1_000_000_000, digits=2)
     with pool.connection() as conn:
+        _save_classes(conn, classes or [])
         conn.execute(
             """
-            INSERT INTO ai_settings (user_id, provider, base_url, model, model_fast, folder_id, api_key_enc,
-                                     temperature, price_in, price_out, fast_price_in, fast_price_out,
-                                     monthly_limit_rub, updated_at)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
-            ON CONFLICT (user_id) DO UPDATE SET
-                provider = EXCLUDED.provider, base_url = EXCLUDED.base_url, model = EXCLUDED.model,
-                model_fast = EXCLUDED.model_fast, folder_id = EXCLUDED.folder_id,
-                api_key_enc = EXCLUDED.api_key_enc, temperature = EXCLUDED.temperature,
-                price_in = EXCLUDED.price_in, price_out = EXCLUDED.price_out,
-                fast_price_in = EXCLUDED.fast_price_in, fast_price_out = EXCLUDED.fast_price_out,
-                monthly_limit_rub = EXCLUDED.monthly_limit_rub, updated_at = NOW()
+            UPDATE service_ai SET provider = %s, base_url = %s, folder_id = %s, api_key_enc = %s,
+                   temperature = %s, task_classes = %s, default_units_limit = %s, updated_at = NOW()
+            WHERE id = 1
             """,
-            (user_id, provider, base_url, model, fast, folder_id, key_enc, temp, p_in, p_out, f_in, f_out, limit),
+            (provider, base_url, folder_id, key_enc, temp, json.dumps(stored), limit),
         )
-    return get_settings(user_id)
+    return get_service_settings()
 
 
-def load_config(user_id: int, task: str = "chat", workspace_id: int | None = None, *, tier: str | None = None) -> dict:
-    """Готовая конфигурация вызова задачи: адрес, модель её уровня, заголовки, цены и лимит.
+def load_config(
+    user_id: int | None, task: str = "chat", workspace_id: int | None = None, *, model_class: str | None = None
+) -> dict:
+    """Готовая конфигурация вызова: адрес, модель класса, заголовки и цены класса.
 
-    Ошибка, если ИИ не подключён. tier — принудительно "smart" / "fast" (проверка обеих моделей).
+    user_id — с кого списывать единицы (None — проверка в админке, без списания). model_class — выбор
+    пользователя в чате; выключенный или пустой класс заменяется классом задачи.
     """
-    row = _row(user_id)
-    if not row or not row.get("api_key_enc"):
-        raise YandexError("ai-not-configured", "Подключите ИИ: Настройки → ИИ-ассистент")
+    row = _service()
+    if not _has_key(row):
+        raise YandexError("ai-not-configured", NOT_CONFIGURED)
     try:
         key = decrypt_token(row["api_key_enc"])
     except RuntimeError as exc:
-        raise YandexError("ai-not-configured", "Ключ ИИ не расшифровывается — сохраните его заново") from exc
+        raise YandexError("ai-not-configured", NOT_CONFIGURED) from exc
+    classes = {c["id"]: c for c in model_classes()}
+    cls = _resolve_class(model_class, task, classes, row)
+    if cls is None:
+        raise YandexError("ai-not-configured", NOT_CONFIGURED)
     provider = row["provider"]
-    tier = tier or (TASKS.get(task) or TASKS["chat"])["tier"]
-    fast = tier == "fast" and bool(row.get("model_fast"))
-    model = (row.get("model_fast") if fast else row.get("model")) or PROVIDERS[provider]["default_model"]
+    model = cls["model"]
     model_name = model
-    # Без своих цен быстрая модель считается по ценам основной — оценка с запасом, а не «бесплатно».
-    has_fast_prices = fast and row.get("fast_price_in") is not None
-    prices = ("fast_price_in", "fast_price_out") if has_fast_prices else ("price_in", "price_out")
     headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
     if provider == "yandexgpt":
-        folder = row.get("folder_id") or ""
-        if not folder:
-            raise YandexError("ai-not-configured", "Для YandexGPT укажите каталог Yandex Cloud")
+        folder = row["folder_id"]
         base = YANDEX_BASE
         if not model.startswith("gpt://"):
             model = f"gpt://{folder}/{model.lstrip('/')}"
         headers["OpenAI-Project"] = folder
     else:
         base = row.get("base_url") or OPENAI_BASE
-    bridge = ai_bridge.target(user_id, "chat", model) if provider == "openai" else None
-    temperature = float(row.get("temperature") or 0.3)
-    bridge_kind = bridge["kind"] if bridge else ""
+    bridge = ai_bridge.target("chat", model) if provider == "openai" else None
+    temperature = float(row["temperature"]) if row.get("temperature") is not None else 0.3
     if bridge:
         # Через мост Cloudflare: свой адрес API не используется, модель — в виде, понятном мосту.
         base = bridge["base_url"]
@@ -292,17 +349,19 @@ def load_config(user_id: int, task: str = "chat", workspace_id: int | None = Non
         "model": model,
         "headers": headers,
         "bridge": bool(bridge),
-        "bridge_kind": bridge_kind,
+        "bridge_kind": bridge["kind"] if bridge else "",
         "temperature": temperature,
         "check_host": base != OPENAI_BASE,
         "user_id": user_id,
         "workspace_id": workspace_id,
         "task": task,
-        "tier": "fast" if fast else "smart",
+        "model_class": cls["id"],
+        "class_name": cls["name"],
         "model_name": model_name,
-        "price_in": _num(row.get(prices[0])),
-        "price_out": _num(row.get(prices[1])),
-        "limit_rub": None if task in UNLIMITED_TASKS else _num(row.get("monthly_limit_rub")),
+        "units_in": cls["units_in"],
+        "units_out": cls["units_out"],
+        "cost_in": cls["cost_in"],
+        "cost_out": cls["cost_out"],
     }
 
 
@@ -313,8 +372,8 @@ _meters: ContextVar[tuple] = ContextVar("ai_meters", default=())
 
 @contextmanager
 def meter():
-    """Сколько потратили вызовы внутри блока: {"calls", "tokens_in", "tokens_out", "cost_rub", "priced"}."""
-    acc = {"calls": 0, "tokens_in": 0, "tokens_out": 0, "cost_rub": 0.0, "priced": True, "estimated": False}
+    """Сколько списали вызовы внутри блока: {"calls", "tokens_in", "tokens_out", "units", "estimated"}."""
+    acc = {"calls": 0, "tokens_in": 0, "tokens_out": 0, "units": 0.0, "estimated": False}
     token = _meters.set((*_meters.get(), acc))
     try:
         yield acc
@@ -322,40 +381,47 @@ def meter():
         _meters.reset(token)
 
 
-def cost_rub(cfg: dict, tokens_in: float, tokens_out: float) -> float | None:
-    if cfg.get("price_in") is None or cfg.get("price_out") is None:
+def usage_out(acc: dict, user_id: int | None) -> dict | None:
+    """Расход операции для пользователя: без токенов и денег — доля месячного лимита в процентах."""
+    if not acc["calls"]:
         return None
-    return (tokens_in * cfg["price_in"] + tokens_out * cfg["price_out"]) / 1_000_000
+    return {
+        "calls": acc["calls"],
+        "percent": billing.share(user_id, acc["units"]) if user_id else None,
+        "estimated": acc["estimated"],
+    }
 
 
-def month_start(year: int | None = None, month: int | None = None) -> datetime:
-    today = today_msk()
-    return datetime(year or today.year, month or today.month, 1, tzinfo=MSK)
+def units_for(cfg: dict, tokens_in: float, tokens_out: float) -> float:
+    """Единиц за вызов по цене класса модели; цена не задана — 0."""
+    if cfg.get("units_in") is None or cfg.get("units_out") is None:
+        return 0.0
+    return (tokens_in * cfg["units_in"] + tokens_out * cfg["units_out"]) / 1_000_000
 
 
-def spent_this_month(user_id: int) -> float:
-    with pool.connection() as conn:
-        row = conn.execute(
-            "SELECT COALESCE(SUM(cost_rub), 0) AS s FROM ai_usage WHERE user_id = %s AND created_at >= %s",
-            (user_id, month_start()),
-        ).fetchone()
-    return float(row["s"])
+def cost_rub(cfg: dict, tokens_in: float, tokens_out: float) -> float | None:
+    """Себестоимость вызова в рублях; None — не задана."""
+    if cfg.get("cost_in") is None or cfg.get("cost_out") is None:
+        return None
+    return (tokens_in * cfg["cost_in"] + tokens_out * cfg["cost_out"]) / 1_000_000
 
 
 def budget_left(cfg: dict) -> float | None:
-    """Остаток месячного лимита в рублях; None — лимита нет."""
-    if cfg.get("limit_rub") is None or not cfg.get("user_id"):
+    """Остаток единиц пользователя в периоде; None — без лимита или вызов без списания."""
+    if not cfg.get("user_id"):
         return None
-    return cfg["limit_rub"] - spent_this_month(cfg["user_id"])
+    return billing.units_left(cfg["user_id"])
 
 
-def check_budget(cfg: dict) -> None:
-    left = budget_left(cfg)
-    if left is not None and left <= 0:
-        raise YandexError(
-            "ai-budget",
-            f"Месячный лимит на ИИ исчерпан ({format_rub(cfg['limit_rub'])}). Поднять его — Настройки → ИИ-ассистент",
-        )
+def check_budget(cfg: dict, need: float = 0.0) -> None:
+    billing.check(cfg.get("user_id"), need)
+
+
+def require_ready(user_id: int, task: str = "chat") -> dict:
+    """Перед постановкой задачи: ИИ подключён и лимит не исчерпан — иначе сразу понятная ошибка."""
+    cfg = load_config(user_id, task)
+    check_budget(cfg)
+    return cfg
 
 
 def estimate_tokens(messages: list[dict], tools: list[dict] | None = None) -> int:
@@ -385,47 +451,35 @@ def _usage(cfg: dict, data: dict, messages: list[dict], tools, content: str, cal
         "chars_in": chars_in,
         "chars_out": chars_out,
         "estimated": estimated,
+        "charged": units_for(cfg, tokens_in, tokens_out),
         "cost_rub": cost_rub(cfg, tokens_in, tokens_out),
     }
 
 
 def _record(cfg: dict, usage: dict) -> None:
-    """Запись вызова в ai_usage и в открытые meter(). Ошибка учёта не роняет ответ модели."""
+    """Списание за вызов в ai_usage и в открытые meter(). Ошибка учёта не роняет ответ модели."""
     for acc in _meters.get():
         acc["calls"] += 1
         acc["tokens_in"] += usage["tokens_in"]
         acc["tokens_out"] += usage["tokens_out"]
+        acc["units"] += usage["charged"]
         acc["estimated"] = acc["estimated"] or usage["estimated"]
-        if usage["cost_rub"] is None:
-            acc["priced"] = False
-        else:
-            acc["cost_rub"] += usage["cost_rub"]
-    if not cfg.get("user_id"):
-        return
-    try:
-        with pool.connection() as conn:
-            conn.execute(
-                """
-                INSERT INTO ai_usage (user_id, workspace_id, task, model, tokens_in, tokens_out,
-                                      chars_in, chars_out, units, estimated, cost_rub)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                """,
-                (
-                    cfg["user_id"],
-                    cfg.get("workspace_id"),
-                    cfg.get("task") or "chat",
-                    cfg.get("model_name") or cfg.get("model") or "",
-                    usage["tokens_in"],
-                    usage["tokens_out"],
-                    usage["chars_in"],
-                    usage["chars_out"],
-                    int(cfg.get("units") or 0),
-                    usage["estimated"],
-                    usage["cost_rub"],
-                ),
-            )
-    except Exception:  # noqa: BLE001 — учёт вторичен, ответ модели уже получен
-        log.exception("Не удалось записать расход ИИ")
+    billing.record(
+        cfg.get("user_id"),
+        kind="model",
+        task=cfg.get("task") or "chat",
+        workspace_id=cfg.get("workspace_id"),
+        model=cfg.get("model_name") or cfg.get("model") or "",
+        model_class=cfg.get("model_class") or "",
+        tokens_in=usage["tokens_in"],
+        tokens_out=usage["tokens_out"],
+        chars_in=usage["chars_in"],
+        chars_out=usage["chars_out"],
+        units=int(cfg.get("units") or 0),
+        estimated=usage["estimated"],
+        charged=usage["charged"],
+        cost_rub=usage["cost_rub"],
+    )
 
 
 _GATEWAY_TEXT = {
@@ -550,14 +604,14 @@ def _region_error(cfg: dict, response: httpx.Response) -> YandexError:
         return _transient(
             "ai-region",
             f"Провайдер отклонил запрос по региону: Cloudflare выполнил Worker моста не в США{where}. Обычно это "
-            "разовый сбой — повторите запрос. Если повторяется часто, нажмите «Проверить мост»: Настройки → "
+            "разовый сбой — повторите запрос. Если повторяется часто, проверьте мост: админка → ИИ и сервисы → "
             "Мост Cloudflare",
         )
     # AI Gateway выходит из ближайшего дата-центра — помогает свой Worker в США.
     return _transient(
         "ai-region",
         "Провайдер не принимает запросы из региона, через который прошёл мост. Переключите мост на "
-        "«Свой Worker» в США: Настройки → Мост Cloudflare",
+        "«Свой Worker» в США: админка → ИИ и сервисы → Мост Cloudflare",
     )
 
 
@@ -700,119 +754,31 @@ def complete_json(cfg: dict, messages: list[dict], *, retries: int = 1) -> dict:
     raise YandexError("ai-json", "ИИ вернул ответ не в том формате — попробуйте ещё раз или смените модель")
 
 
-def check_connection(user_id: int) -> dict:
-    """Пробный вызов основной модели и, если задана отдельно, быстрой — каждая со своим итогом.
+def check_connection() -> dict:
+    """Пробный вызов каждого включённого класса — каждый со своим итогом. Без списания единиц.
 
-    → {"ok": все ответили, "bridge", "models": [{"tier", "label", "model", "sent", "answered_by", "reply" | "error"}]}.
+    → {"ok": все ответили, "bridge", "models": [{"id", "label", "model", "sent", "answered_by", "reply" | "error"}]}.
     model — как в настройках, sent — что ушло провайдеру (через мост — с префиксом), answered_by — что он вернул.
     """
     ping = [{"role": "user", "content": "Ответь одним словом: готов"}]
-    smart = load_config(user_id, task="test")
-    cfgs = [("smart", "Основная", smart)]
-    fast = load_config(user_id, task="test", tier="fast")
-    if fast["model"] != smart["model"]:
-        cfgs.append(("fast", "Быстрая", fast))
-    models = []
-    for tier, label, cfg in cfgs:
-        item = {"tier": tier, "label": label, "model": cfg["model_name"], "sent": cfg["model"]}
+    usable = [c for c in model_classes() if _usable(c)]
+    if not usable:
+        raise YandexError("ai-not-configured", "Включите хотя бы один класс модели и укажите модель")
+    models, bridge = [], False
+    for cls in usable:
+        cfg = load_config(None, task="test", model_class=cls["id"])
+        bridge = bridge or cfg["bridge"]
+        item = {"id": cls["id"], "label": cls["name"], "model": cfg["model_name"], "sent": cfg["model"]}
         try:
             reply = complete(cfg, ping)
             item.update(reply=(reply["content"] or "").strip()[:200], answered_by=reply.get("model") or "")
         except YandexError as exc:
             item["error"] = exc.message or exc.code
         models.append(item)
-    return {"ok": all("error" not in m for m in models), "bridge": smart["bridge"], "models": models}
+    return {"ok": all("error" not in m for m in models), "bridge": bridge, "models": models}
 
 
-# --- Сводка и оценка ----------------------------------------------------------------------------
-
-
-def _month_bounds(month: str | None) -> tuple[str, datetime, datetime]:
-    today = today_msk()
-    year, mon = today.year, today.month
-    if month:
-        try:
-            year, mon = (int(x) for x in month.split("-", 1))
-            if not (2000 <= year <= 2100 and 1 <= mon <= 12):
-                raise ValueError
-        except ValueError as exc:
-            raise YandexError("ai-month", "Месяц в формате ГГГГ-ММ") from exc
-    start = month_start(year, mon)
-    end = month_start(year + mon // 12, mon % 12 + 1)
-    return f"{year:04d}-{mon:02d}", start, end
-
-
-def _usage_item(row: dict) -> dict:
-    return {
-        "calls": int(row["calls"] or 0),
-        "tokens_in": int(row["tokens_in"] or 0),
-        "tokens_out": int(row["tokens_out"] or 0),
-        "cost_rub": _num(row["cost_rub"]),
-    }
-
-
-def usage_summary(user_id: int, month: str | None = None) -> dict:
-    """Расход за календарный месяц по Москве: итог, по задачам, пространствам и моделям."""
-    key, start, end = _month_bounds(month)
-    this_month = _month_bounds(None)[0]
-    agg = """COUNT(*) AS calls, SUM(u.tokens_in) AS tokens_in, SUM(u.tokens_out) AS tokens_out,
-             SUM(u.cost_rub) AS cost_rub"""
-    where = "u.user_id = %s AND u.created_at >= %s AND u.created_at < %s"
-    order = "ORDER BY SUM(u.tokens_in + u.tokens_out) DESC"
-    params = (user_id, start, end)
-    with pool.connection() as conn:
-        total = conn.execute(
-            f"""
-            SELECT {agg}, COUNT(*) FILTER (WHERE u.estimated) AS estimated,
-                   COUNT(*) FILTER (WHERE u.cost_rub IS NULL) AS unpriced
-            FROM ai_usage u WHERE {where}
-            """,
-            params,
-        ).fetchone()
-        by_task = conn.execute(f"SELECT u.task, {agg} FROM ai_usage u WHERE {where} GROUP BY u.task {order}", params).fetchall()
-        by_ws = conn.execute(
-            f"""
-            SELECT u.workspace_id, w.name, {agg}
-            FROM ai_usage u LEFT JOIN workspaces w ON w.id = u.workspace_id
-            WHERE {where} GROUP BY u.workspace_id, w.name {order}
-            """,
-            params,
-        ).fetchall()
-        by_model = conn.execute(f"SELECT u.model, {agg} FROM ai_usage u WHERE {where} GROUP BY u.model {order}", params).fetchall()
-        months = conn.execute(
-            """
-            SELECT DISTINCT to_char(created_at AT TIME ZONE 'Europe/Moscow', 'YYYY-MM') AS m
-            FROM ai_usage WHERE user_id = %s ORDER BY m DESC LIMIT 12
-            """,
-            (user_id,),
-        ).fetchall()
-    settings = _row(user_id) or {}
-    limit = _num(settings.get("monthly_limit_rub"))
-    current = key == this_month
-    spent = _num(total["cost_rub"]) or 0.0
-    return {
-        "month": key,
-        "months": sorted({key, this_month, *(r["m"] for r in months)}, reverse=True),
-        "current": current,
-        "total": {**_usage_item(total), "estimated": int(total["estimated"]), "unpriced": int(total["unpriced"])},
-        "limit_rub": limit,
-        "spent_rub": round(spent, 2),
-        "remaining_rub": round(limit - spent, 2) if limit is not None and current else None,
-        "priced": settings.get("price_in") is not None,
-        "by_task": [
-            {"task": r["task"], "label": (TASKS.get(r["task"]) or {}).get("label") or r["task"], **_usage_item(r)}
-            for r in by_task
-        ],
-        "by_workspace": [
-            {
-                "workspace_id": r["workspace_id"],
-                "name": r["name"] or ("Без пространства" if r["workspace_id"] is None else "Удалённое пространство"),
-                **_usage_item(r),
-            }
-            for r in by_ws
-        ],
-        "by_model": [{"model": r["model"] or "—", **_usage_item(r)} for r in by_model],
-    }
+# --- Калибровка оценок по прошлым вызовам всего сервиса ------------------------------------------
 
 
 def chars_per_token(cfg: dict) -> float:
@@ -822,11 +788,11 @@ def chars_per_token(cfg: dict) -> float:
             """
             SELECT SUM(chars_in) AS c, SUM(tokens_in) AS t FROM (
                 SELECT chars_in, tokens_in FROM ai_usage
-                WHERE user_id = %s AND model = %s AND NOT estimated AND tokens_in > 0 AND chars_in > 0
+                WHERE kind = 'model' AND model = %s AND NOT estimated AND tokens_in > 0 AND chars_in > 0
                 ORDER BY id DESC LIMIT 100
             ) x
             """,
-            (cfg.get("user_id"), cfg.get("model_name") or cfg.get("model")),
+            (cfg.get("model_name") or cfg.get("model"),),
         ).fetchone()
     if not row or not row["t"] or int(row["t"]) < 2000:
         return CHARS_PER_TOKEN
@@ -840,11 +806,11 @@ def out_tokens_per_unit(cfg: dict, task: str, default: float) -> float:
             """
             SELECT SUM(tokens_out) AS t, SUM(units) AS u FROM (
                 SELECT tokens_out, units FROM ai_usage
-                WHERE user_id = %s AND model = %s AND task = %s AND units > 0
+                WHERE kind = 'model' AND model = %s AND task = %s AND units > 0
                 ORDER BY id DESC LIMIT 50
             ) x
             """,
-            (cfg.get("user_id"), cfg.get("model_name") or cfg.get("model"), task),
+            (cfg.get("model_name") or cfg.get("model"), task),
         ).fetchone()
     if not row or not row["u"] or int(row["u"]) < 20:
         return default

@@ -14,7 +14,7 @@ from app.config import settings
 from app.main import app
 from app.web_auth import make_session
 from app.yandex import YandexError
-from tests.dbutil import make_account, make_campaign, make_connection, make_counter, make_user, make_workspace
+from tests.dbutil import make_account, make_campaign, make_connection, make_counter, make_user, make_workspace, setup_ai
 from tests.test_db_ai import FakeModel, _call, _start, _text
 
 TODAY = date(2026, 10, 28)  # среда: неделя Директа идёт с понедельника 26.10
@@ -43,7 +43,7 @@ def _seed(db):
     kazan = make_campaign(db, user, acc, 12, "Казань копия", state="OFF", status="MODERATION")
     samara = make_campaign(db, user, acc, 13, "Самара копия", state="OFF", status="DRAFT")
     ws = make_workspace(db, user, 555, "Окна", counter_row_id=counter, accounts=[acc], campaigns=[source, kazan, samara])
-    ai.save_settings(user, provider="openai", api_key="sk-test-1234abcd", model="gpt-test")
+    setup_ai()
     chat = ai_agent.create_chat(user, ws)
     return {"user": user, "acc": acc, "ws": ws, "source": source, "kazan": kazan, "samara": samara, "chat": chat["id"]}
 

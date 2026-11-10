@@ -119,3 +119,58 @@ def make_workspace(
                 (ws, campaign_row_id, user_id),
             )
     return ws
+
+
+SERVICE_TABLES = ("service_ai", "service_wordstat", "service_images", "service_bridge")
+
+
+def reset_services(pool) -> None:
+    """Общие ключи и классы моделей — как после миграции: TRUNCATE users их не трогает."""
+    with pool.connection() as conn:
+        for table in SERVICE_TABLES:
+            conn.execute(f"DELETE FROM {table}")
+            conn.execute(f"INSERT INTO {table} (id) VALUES (1)")
+        conn.execute("DELETE FROM ai_model_classes")
+        conn.execute(
+            """
+            INSERT INTO ai_model_classes (id, position, name, model, enabled) VALUES
+                ('fast', 1, 'Быстрая', 'yandexgpt-lite/latest', TRUE),
+                ('standard', 2, 'Стандартная', 'yandexgpt/latest', TRUE),
+                ('thinking', 3, 'Думающая', '', FALSE)
+            """
+        )
+
+
+def setup_ai(
+    *,
+    provider: str = "openai",
+    api_key: str | None = "sk-test-1234abcd",
+    model: str = "gpt-test",
+    fast: str = "",
+    thinking: str = "",
+    folder_id: str = "",
+    base_url: str = "",
+    prices: dict | None = None,
+    limit: float | None = None,
+) -> dict:
+    """Общий ключ ИИ сервиса (админка): стандартная модель model, быстрая и думающая — если заданы.
+
+    prices — {класс: {"units_in", "units_out", "cost_in", "cost_out"}}; limit — лимит единиц по умолчанию.
+    """
+    from app import ai
+
+    classes = [
+        {"id": "fast", "name": "Быстрая", "model": fast, "enabled": bool(fast)},
+        {"id": "standard", "name": "Стандартная", "model": model, "enabled": bool(model)},
+        {"id": "thinking", "name": "Думающая", "model": thinking, "enabled": bool(thinking)},
+    ]
+    for item in classes:
+        item.update((prices or {}).get(item["id"], {}))
+    return ai.save_service_settings(
+        provider=provider,
+        api_key=api_key,
+        base_url=base_url,
+        folder_id=folder_id,
+        classes=classes,
+        default_units_limit=limit,
+    )

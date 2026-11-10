@@ -1,4 +1,4 @@
-"""ИИ-ассистент: настройки BYOK, ход агента с инструментами, согласование действий — с фейковой моделью."""
+"""ИИ-ассистент: общий ключ сервиса и классы моделей, ход агента с инструментами, согласование действий — с фейковой моделью."""
 
 import json
 
@@ -10,7 +10,7 @@ from app.config import settings
 from app.main import app
 from app.web_auth import make_session
 from app.yandex import YandexError
-from tests.dbutil import make_account, make_campaign, make_connection, make_counter, make_user, make_workspace
+from tests.dbutil import make_account, make_campaign, make_connection, make_counter, make_user, make_workspace, setup_ai
 
 
 @pytest.fixture(autouse=True)
@@ -32,7 +32,7 @@ def _seed(db):
         conn.execute("UPDATE direct_campaigns SET daily_budget_kopecks = 100000 WHERE id = %s", (search,))
     ws = make_workspace(db, user, 555, "Магазин", counter_row_id=counter, accounts=[acc], campaigns=[search, network])
     make_workspace(db, user, 777, "Блог", counter_row_id=other_counter, accounts=[other_acc], campaigns=[foreign])
-    ai.save_settings(user, provider="openai", api_key="sk-test-1234abcd", model="gpt-test")
+    setup_ai()
     chat = ai_agent.create_chat(user, ws)
     return {"user": user, "acc": acc, "ws": ws, "search": search, "network": network, "foreign": foreign, "chat": chat["id"]}
 
@@ -66,21 +66,43 @@ def _start(user, chat, text, monkeypatch, *replies):
 
 def test_settings_validation_and_yandex_config(db):
     user = make_user(db)
-    saved = ai.save_settings(user, provider="openai", api_key="sk-abcdef123456")
-    assert saved["has_key"] and saved["configured"] and saved["key_hint"] == "…3456"
-    kept = ai.save_settings(user, provider="openai", model="gpt-4o", api_key=None)
-    assert kept["has_key"] and kept["model"] == "gpt-4o"
+    # После миграции ключа нет: ИИ недоступен, хотя классы с моделями YandexGPT уже есть.
+    assert not ai.is_configured() and ai.chat_classes()["configured"] is False
+    with pytest.raises(YandexError) as err:
+        ai.load_config(user)
+    assert err.value.code == "ai-not-configured" and "администратор" in err.value.message
+
+    saved = setup_ai(api_key="sk-abcdef123456", model="")
+    assert saved["has_key"] and saved["key_hint"] == "…3456" and not saved["configured"]  # нет ни одной модели
+    saved = setup_ai(api_key=None, model="gpt-4o")
+    assert saved["has_key"] and saved["configured"]
+    assert [(c["id"], c["model"], c["enabled"]) for c in saved["classes"]] == [
+        ("fast", "", False), ("standard", "gpt-4o", True), ("thinking", "", False)
+    ]
     for url in ("http://api.example.com/v1", "https://10.1.2.3/v1", "https://localhost/v1"):
         with pytest.raises(YandexError):
-            ai.save_settings(user, provider="openai", base_url=url)
-    with pytest.raises(YandexError):
-        ai.save_settings(user, provider="yandexgpt")
-    ai.save_settings(user, provider="yandexgpt", folder_id="b1gfolder", model="yandexgpt/latest")
+            ai.save_service_settings(provider="openai", base_url=url)
+    with pytest.raises(YandexError) as err:
+        ai.save_service_settings(provider="yandexgpt")
+    assert err.value.code == "ai-folder"
+    with pytest.raises(YandexError) as err:
+        ai.save_service_settings(provider="openai", classes=[{"id": "fast", "model": "", "enabled": True}])
+    assert err.value.code == "ai-class"
+    with pytest.raises(YandexError) as err:
+        ai.save_service_settings(provider="openai", classes=[{"id": "fast", "model": "m", "units_in": 1}])
+    assert err.value.code == "ai-price"
+
+    setup_ai(provider="yandexgpt", api_key=None, folder_id="b1gfolder", model="yandexgpt/latest", fast="yandexgpt-lite/latest")
     cfg = ai.load_config(user)
-    assert cfg["model"] == "gpt://b1gfolder/yandexgpt/latest"
+    assert cfg["model"] == "gpt://b1gfolder/yandexgpt/latest" and cfg["model_class"] == "standard"
     assert cfg["headers"]["OpenAI-Project"] == "b1gfolder"
     assert cfg["base_url"] == ai.YANDEX_BASE
-    cleared = ai.save_settings(user, provider="openai", api_key="")
+    # Фоновая разметка — на быстром классе; выбор в чате важнее класса задачи.
+    assert ai.load_config(user, "classify")["model"] == "gpt://b1gfolder/yandexgpt-lite/latest"
+    assert ai.load_config(user, "chat", model_class="fast")["model_class"] == "fast"
+    # Выключенный «Думающий» не выбрать — берётся класс задачи.
+    assert ai.load_config(user, "chat", model_class="thinking")["model_class"] == "standard"
+    cleared = ai.save_service_settings(provider="yandexgpt", folder_id="b1gfolder", api_key="")
     assert not cleared["has_key"] and not cleared["configured"]
     with pytest.raises(YandexError):
         ai.load_config(user)
@@ -251,12 +273,21 @@ def test_ai_api(db, monkeypatch):
     auth = {"Authorization": f"Bearer {make_session(s['user'])}"}
     other = {"Authorization": f"Bearer {make_session(make_user(db, 'x@example.com'))}"}
 
-    got = client.get("/api/web/ai/settings", headers=auth).json()
-    assert got["configured"] and got["key_hint"] == "…abcd" and "api_key_enc" not in got
-    put = client.put("/api/web/ai/settings", headers=auth, json={"provider": "openai", "model": "gpt-x"})
-    assert put.json()["has_key"] and put.json()["model"] == "gpt-x"
-    bad = client.put("/api/web/ai/settings", headers=auth, json={"provider": "openai", "base_url": "http://x"})
+    # Пользователю — только классы, без моделей, ключа и цен; настройки ИИ — в админке.
+    models = client.get("/api/web/ai/models", headers=auth).json()
+    assert models == {"configured": True, "default": "standard", "items": [{"id": "standard", "name": "Стандартная", "dots": 2}]}
+    assert client.get("/api/web/ai/settings", headers=auth).status_code == 404
+    assert client.get("/api/admin/ai", headers=auth).status_code == 403
+    monkeypatch.setattr(settings, "admin_emails", "U@example.com")
+    got = client.get("/api/admin/ai", headers=auth).json()
+    assert got["configured"] and got["key_hint"] == "…abcd" and "api_key_enc" not in str(got)
+    put = client.put("/api/admin/ai", headers=auth, json={"provider": "openai", "classes": [
+        {"id": "standard", "name": "Стандартная", "model": "gpt-x", "enabled": True},
+    ]})
+    assert put.json()["has_key"] and put.json()["classes"][1]["model"] == "gpt-x"
+    bad = client.put("/api/admin/ai", headers=auth, json={"provider": "openai", "base_url": "http://x"})
     assert bad.status_code == 400 and bad.json()["detail"]["code"] == "ai-url"
+    assert client.get("/api/admin/ai", headers=other).status_code == 403
 
     created = client.post(f"/api/web/workspaces/{s['ws']}/chats", headers=auth, json={}).json()
     assert created["title"] == "Новый чат"
@@ -618,7 +649,7 @@ def _empty_workspace(db):
     acc = make_account(db, user, conn_id, name="Новый кабинет", login="new-acc")
     counter = make_counter(db, user, conn_id, 888, site="sofa.ru")
     ws = make_workspace(db, user, 888, "Диваны", counter_row_id=counter, accounts=[acc], campaigns=[])
-    ai.save_settings(user, provider="openai", api_key="sk-test-1234abcd", model="gpt-test")
+    setup_ai()
     chat = ai_agent.create_chat(user, ws)
     return {"user": user, "acc": acc, "ws": ws, "chat": chat["id"]}
 
@@ -648,7 +679,7 @@ def test_first_campaign_in_empty_workspace(db, monkeypatch):
     # Пустое пространство отдаёт пустые данные, а не падает.
     assert json.loads(fake.calls[1][-1]["content"])["campaigns"] == []
     assert "Итого: 0 кампаний" in json.loads(fake.calls[2][-1]["content"])["digest"]
-    assert "Вордстат не подключён" in json.loads(fake.calls[3][-1]["content"])["error"]
+    assert "Вордстат временно недоступен" in json.loads(fake.calls[3][-1]["content"])["error"]
 
     # Дальше — те же согласуемые этапы, что и для любой новой кампании.
     ai_agent.decide_items(user, _pending(user, chat, "propose_items")["id"], rows=[1, 2])
@@ -796,13 +827,41 @@ def test_chat_model_calls_are_streamed(db, monkeypatch):
     assert cfgs and all(c["stream"] is True and c["timeout"] == ai_agent.CHAT_TIMEOUT_SECONDS for c in cfgs)
 
 
-def test_chat_shows_which_model_answers(db, monkeypatch):
+def test_chat_model_class_is_picked_per_chat(db, monkeypatch):
     s = _seed(db)
-    ai.save_settings(s["user"], provider="openai", model="gpt-test", model_fast="gpt-fast")
-    monkeypatch.setattr(ai, "complete", lambda cfg, messages, tools=None: _text("Готово."))
+    setup_ai(api_key=None, model="gpt-test", fast="gpt-fast")
+    models = []
+
+    def complete(cfg, messages, tools=None):
+        models.append(cfg["model"])
+        return _text("Готово.")
+
+    monkeypatch.setattr(ai, "complete", complete)
     ai_agent.post_message(s["user"], s["chat"], "привет")
     ai_agent.run_chat(s["user"], s["chat"])
     got = ai_agent.get_chat(s["user"], s["chat"])
     answer = [m for m in got["messages"] if m["role"] == "assistant"][-1]
-    assert answer["model"] == "gpt-test"
-    assert got["ai"] == {"configured": True, "model": "gpt-test", "model_fast": "gpt-fast", "bridge": False}
+    # Пользователь видит класс, а не модель.
+    assert answer["model"] == "Стандартная" and models == ["gpt-test"]
+    assert got["ai"] == {
+        "configured": True,
+        "default": "standard",
+        "items": [{"id": "fast", "name": "Быстрая", "dots": 1}, {"id": "standard", "name": "Стандартная", "dots": 2}],
+        "selected": "standard",
+    }
+
+    picked = ai_agent.set_chat_model(s["user"], s["chat"], "fast")
+    assert picked["chat"]["model_class"] == "fast" and picked["ai"]["selected"] == "fast"
+    ai_agent.post_message(s["user"], s["chat"], "ещё")
+    ai_agent.run_chat(s["user"], s["chat"])
+    answer = [m for m in ai_agent.get_chat(s["user"], s["chat"])["messages"] if m["role"] == "assistant"][-1]
+    assert answer["model"] == "Быстрая" and models[-1] == "gpt-fast"
+    with pytest.raises(YandexError) as err:
+        ai_agent.set_chat_model(s["user"], s["chat"], "thinking")
+    assert err.value.code == "model-class"
+
+    # Класс, выбранный до первого сообщения, сохраняется в новом чате; админ выключил его — чат на классе по умолчанию.
+    chat = ai_agent.create_chat(s["user"], s["ws"], model_class="fast")
+    assert chat["model_class"] == "fast"
+    setup_ai(api_key=None, model="gpt-test")
+    assert ai_agent.get_chat(s["user"], chat["id"])["ai"]["selected"] == "standard"

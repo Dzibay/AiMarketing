@@ -48,8 +48,7 @@ jobs:
           PUBLIC_BASE_URL: http://127.0.0.1:8000
           WEB_SESSION_SECRET: ci-session-secret-at-least-16
           TOKEN_ENCRYPT_SECRET: ci-token-encrypt-secret-32chars!!
-          ADMIN_PASSWORD: ci-admin
-          ADMIN_TOKEN_SECRET: ci-admin-token-secret
+          ADMIN_EMAILS: admin@example.com
 
   smoke:
     runs-on: ubuntu-latest
@@ -65,8 +64,7 @@ jobs:
           PUBLIC_BASE_URL=http://127.0.0.1:8001
           WEB_SESSION_SECRET=ci-session-secret-at-least-16chars
           TOKEN_ENCRYPT_SECRET=ci-token-encrypt-secret-32charsxx
-          ADMIN_PASSWORD=ci-admin
-          ADMIN_TOKEN_SECRET=ci-admin-token-secret-xx
+          ADMIN_EMAILS=admin@example.com
           EOF
           # убрать отступы YAML из значений
           sed -i 's/^[[:space:]]*//' .env

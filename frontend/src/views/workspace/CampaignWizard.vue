@@ -223,7 +223,7 @@
         <div v-show="step === 4">
           <dl class="summary-list">
             <dt>Кабинет</dt>
-            <dd>{{ account ? account.client_login : '—' }}{{ account?.sandbox ? ' (песочница)' : '' }}</dd>
+            <dd>{{ account ? account.client_login : '—' }}</dd>
             <dt>Кампания</dt>
             <dd>{{ form.name }} · {{ typeLabel }}</dd>
             <dt>Период</dt>
@@ -285,7 +285,7 @@ const REGIONS = [
   { id: '2', label: 'Санкт-Петербург', ids: [2] },
   { id: '225-1', label: 'Россия без Москвы и области', ids: [225, -1] },
 ]
-const COUNTER_TONES = { ok: 'tone-ok', unknown: 'tone-warn', sandbox: '' }
+const COUNTER_TONES = { ok: 'tone-ok', unknown: 'tone-warn' }
 
 const options = ref(null)
 const loadError = ref('')
@@ -341,7 +341,7 @@ const account = computed(
 )
 
 function accountLabel(a) {
-  return `${a.client_login}${a.name && a.name !== a.client_login ? ` — ${a.name}` : ''}${a.sandbox ? ' (песочница)' : ''}`
+  return `${a.client_login}${a.name && a.name !== a.client_login ? ` — ${a.name}` : ''}`
 }
 const manual = computed(
   () =>

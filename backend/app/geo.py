@@ -52,13 +52,13 @@ _cache: dict = {"regions": {}, "next": 0.0}
 
 
 def _any_token(user_id: int):
-    """Токен любого включённого кабинета пользователя, кроме песочницы; None — кабинетов нет."""
+    """Токен любого включённого кабинета пользователя; None — кабинетов нет."""
     with pool.connection() as conn:
         rows = conn.execute(
             """
             SELECT DISTINCT a.connection_id
             FROM direct_accounts a JOIN yandex_connections y ON y.id = a.connection_id
-            WHERE a.user_id = %s AND a.enabled AND NOT y.sandbox
+            WHERE a.user_id = %s AND a.enabled
             ORDER BY a.connection_id
             """,
             (user_id,),

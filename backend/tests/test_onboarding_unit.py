@@ -7,7 +7,6 @@ def _facts(**over) -> dict:
     facts = {
         "dismissed": False,
         "telegram_linked": False,
-        "ai_configured": False,
         "direct_connections": 0,
         "direct_accounts": 0,
         "direct_loaded": 0,
@@ -39,9 +38,9 @@ def _done_facts() -> dict:
 def test_new_user_sees_every_step_in_order_and_nothing_done():
     result = build_onboarding(_facts(), telegram_available=True)
     assert [s["id"] for s in result["steps"]] == [
-        "direct", "first_load", "workspace", "campaigns", "link_template", "goals", "telegram", "ai",
+        "direct", "first_load", "workspace", "campaigns", "link_template", "goals", "telegram",
     ]
-    assert result["done"] == 0 and result["total"] == 8
+    assert result["done"] == 0 and result["total"] == 7
     assert result["visible"] and not result["complete"]
     steps = _steps(result)
     assert steps["direct"]["status"] == "todo" and steps["direct"]["to"] == "/cabinet/accounts"
@@ -49,7 +48,8 @@ def test_new_user_sees_every_step_in_order_and_nothing_done():
     for key in ("campaigns", "link_template", "goals"):
         assert steps[key]["status"] == "blocked" and steps[key]["to"] is None
     assert steps["first_load"]["status"] == "blocked"
-    assert steps["ai"]["optional"] and not steps["direct"]["optional"]
+    # ИИ — общий для всех клиентов: ключ добавлять не нужно.
+    assert "ai" not in steps and not steps["direct"]["optional"]
 
 
 def test_first_load_progress_and_error():
@@ -95,11 +95,10 @@ def test_link_template_points_to_the_links_panel():
     assert steps["link_template"]["status"] == "todo"
 
 
-def test_complete_without_optional_ai_hides_the_card():
+def test_complete_hides_the_card():
     result = build_onboarding(_done_facts(), telegram_available=True)
     assert result["complete"] and not result["visible"]
-    assert not _steps(result)["ai"]["done"]
-    assert result["done"] == result["total"] - 1
+    assert result["done"] == result["total"]
 
 
 def test_telegram_step_is_hidden_when_bot_is_not_configured():

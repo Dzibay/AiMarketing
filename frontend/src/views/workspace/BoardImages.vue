@@ -74,14 +74,12 @@
         :class="{ active: mode === 'generate' }"
         :aria-pressed="mode === 'generate'"
         :disabled="!canAdd || !images.canGenerate.value"
-        :title="images.canGenerate.value ? '' : 'Генерация картинок не подключена'"
+        :title="images.canGenerate.value ? '' : 'Генерация картинок временно недоступна'"
         @click="open('generate')"
       >
         Сгенерировать
       </button>
-      <RouterLink v-if="!images.canGenerate.value" class="ai-check__link" to="/cabinet/settings#image-gen">
-        подключить генерацию
-      </RouterLink>
+      <span v-if="!images.canGenerate.value" class="hint">генерация временно недоступна</span>
       <span v-if="busy" class="hint"><span class="spinner" /> {{ busy }}</span>
     </div>
 

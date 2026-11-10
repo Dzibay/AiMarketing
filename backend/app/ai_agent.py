@@ -16,7 +16,7 @@ from datetime import date, datetime, timedelta, timezone
 
 from psycopg.types.json import Jsonb
 
-from app import ai, ai_bridge, audiences, context_files, experiments, image_gen
+from app import ai, audiences, context_files, experiments, image_gen
 from app.actions import BULK_ACTIONS, SETTINGS_LABELS, campaign_options
 from app.brief import brief_filled, normalize_brief
 from app.clock import today_msk
@@ -630,7 +630,6 @@ def _t_options(ctx: Context, args: dict) -> dict:
                 "id": a["id"],
                 "client_login": a["client_login"],
                 "name": a["name"],
-                "sandbox": a.get("sandbox"),
                 "counter_access": a.get("counter_access"),
             }
             for a in ctx.ws.get("accounts") or []
@@ -703,11 +702,11 @@ def _t_wordstat(ctx: Context, args: dict) -> dict:
         limit = max(1, min(int(args.get("limit") or WORDSTAT_LIMIT), WORDSTAT_LIMIT_MAX))
     except (TypeError, ValueError):
         limit = WORDSTAT_LIMIT
-    api_key, folder_id = wordstat.credentials(ctx.user_id)
+    client = wordstat.Client(ctx.user_id, ctx.ws_id)
     items, errors = [], []
     for phrase in phrases:
         try:
-            found = wordstat.top_requests(api_key, folder_id, phrase, regions=regions, device=device, num_phrases=limit)
+            found = client.top_requests(phrase, regions=regions, device=device, num_phrases=limit)
         except YandexError as exc:
             # Доступ и квота одинаковы для всех фраз — дальше спрашивать бессмысленно.
             if exc.code != "args":
@@ -905,7 +904,7 @@ def _generate_into(user_id: int, workspace_id: int, account_id: int, prompt, cou
 
 
 def _t_generate_images(ctx: Context, args: dict) -> dict:
-    if not image_gen.is_configured(ctx.user_id):
+    if not image_gen.is_configured():
         raise YandexError(
             "image-not-configured",
             image_gen.NOT_CONFIGURED + " — предложи взять картинки из других кампаний или загрузить свои",
@@ -5031,7 +5030,7 @@ def _lal_prompt() -> str:
 
 
 def _image_gen_ready(ctx: Context) -> bool:
-    return image_gen.is_configured(ctx.user_id)
+    return image_gen.is_configured()
 
 
 def _context_files_block(ctx: Context) -> str:
@@ -5057,7 +5056,7 @@ def _system_prompt(ctx: Context) -> str:
         )
     kpi = _kpi_text(ws)
     accounts = "; ".join(
-        f"id {a['id']}: {a['client_login']}" + (" (песочница)" if a.get("sandbox") else "")
+        f"id {a['id']}: {a['client_login']}"
         for a in ws.get("accounts") or []
     ) or "нет"
     lines = [
@@ -5300,6 +5299,7 @@ def _chat_out(row: dict) -> dict:
         "created_at": _iso(row.get("created_at")),
         "updated_at": _iso(updated),
         "pending_actions": int(row.get("pending_actions") or 0),
+        "model_class": row.get("model_class") or "",
     }
 
 
@@ -6475,14 +6475,23 @@ def list_chats(user_id: int, workspace_id: int) -> list[dict]:
     return [_chat_out(r) for r in rows]
 
 
-def create_chat(user_id: int, workspace_id: int, title: str = "") -> dict:
+def create_chat(user_id: int, workspace_id: int, title: str = "", model_class: str = "") -> dict:
     require_workspace(user_id, workspace_id)
+    model_class = _usable_class(model_class)
     with pool.connection() as conn:
         row = conn.execute(
-            "INSERT INTO ai_chats (user_id, workspace_id, title) VALUES (%s, %s, %s) RETURNING *",
-            (user_id, workspace_id, (title or "").strip()[:120]),
+            "INSERT INTO ai_chats (user_id, workspace_id, title, model_class) VALUES (%s, %s, %s, %s) RETURNING *",
+            (user_id, workspace_id, (title or "").strip()[:120], model_class),
         ).fetchone()
     return _chat_out(row)
+
+
+def _usable_class(model_class: str) -> str:
+    """Класс, который сейчас можно выбрать в чате; пустая строка — по умолчанию."""
+    model_class = (model_class or "").strip()
+    if model_class and model_class not in {c["id"] for c in ai.chat_classes()["items"]}:
+        raise YandexError("model-class", "Эта модель сейчас недоступна")
+    return model_class
 
 
 def _require_chat(conn, user_id: int, chat_id: int, *, lock: bool = False) -> dict:
@@ -6495,18 +6504,23 @@ def _require_chat(conn, user_id: int, chat_id: int, *, lock: bool = False) -> di
     return row
 
 
-def _ai_models(user_id: int) -> dict:
-    """Какими моделями сейчас работает ИИ: чат — основной, разметка, бриф и площадки — быстрой."""
-    s = ai.get_settings(user_id)
-    default = next((p["default_model"] for p in s["providers"] if p["id"] == s["provider"]), "")
-    main = s["model"] or default
-    bridge = ai_bridge.get_settings(user_id)
-    return {
-        "configured": s["configured"],
-        "model": main,
-        "model_fast": s["model_fast"] or main,
-        "bridge": s["provider"] == "openai" and bridge["active"] and bridge["use_chat"],
-    }
+def _ai_models(chat: dict) -> dict:
+    """Выбор модели в чате: доступные классы (без названий моделей и цен), класс по умолчанию и выбранный."""
+    out = ai.chat_classes()
+    picked = chat.get("model_class") or ""
+    out["selected"] = picked if any(c["id"] == picked for c in out["items"]) else out["default"]
+    return out
+
+
+def set_chat_model(user_id: int, chat_id: int, model_class: str) -> dict:
+    """Класс модели для следующих ответов чата; пустая строка — по умолчанию."""
+    model_class = _usable_class(model_class)
+    with pool.connection() as conn:
+        _require_chat(conn, user_id, chat_id, lock=True)
+        row = conn.execute(
+            "UPDATE ai_chats SET model_class = %s WHERE id = %s RETURNING *", (model_class, chat_id)
+        ).fetchone()
+    return {"chat": _chat_out(row), "ai": _ai_models(row)}
 
 
 def get_chat(user_id: int, chat_id: int) -> dict:
@@ -6534,8 +6548,8 @@ def get_chat(user_id: int, chat_id: int) -> dict:
         "actions": [_action_out(a) for a in actions],
         "build": build,
         "access": normalize_ai_access(ws.get("ai_access")),
-        "ai": _ai_models(user_id),
-        "image_gen": {"configured": image_gen.is_configured(user_id)},
+        "ai": _ai_models(chat),
+        "image_gen": {"configured": image_gen.is_configured()},
     }
 
 
@@ -6698,8 +6712,8 @@ def post_message(user_id: int, chat_id: int, text: str, refs: list[int] | None =
         raise YandexError("empty", "Пустое сообщение")
     if len(text) > 8000:
         raise YandexError("too-long", "Сообщение длиннее 8000 символов")
-    # Сразу понятная ошибка, а не чат в статусе «ошибка»: ИИ не подключён или лимит месяца исчерпан.
-    ai.check_budget(ai.load_config(user_id, "chat"))
+    # Сразу понятная ошибка, а не чат в статусе «ошибка»: ИИ не подключён или единицы закончились.
+    ai.require_ready(user_id)
     with pool.connection() as conn:
         chat = _require_chat(conn, user_id, chat_id, lock=True)
         if _chat_out(chat)["status"] == "running":
@@ -6727,8 +6741,8 @@ def retry_chat(user_id: int, chat_id: int) -> dict:
     """
     from app.jobs import public_job
 
-    # Как при отправке: ИИ отключили или кончился лимит — сразу понятная ошибка, а не новый сбой в ленте.
-    ai.check_budget(ai.load_config(user_id, "chat"))
+    # Как при отправке: ИИ отключили или кончились единицы — сразу понятная ошибка, а не новый сбой в ленте.
+    ai.require_ready(user_id)
     with pool.connection() as conn:
         chat = _require_chat(conn, user_id, chat_id, lock=True)
         status = _chat_out(chat)["status"]
@@ -6755,7 +6769,7 @@ def start_review(user_id: int, workspace_id: int, *, prompt: str = "", title: st
 
     text = (prompt or "").strip()[:2000] or REVIEW_PROMPT
     title = (title or "").strip()[:120] or f"Разбор {today_msk():%d.%m}"
-    ai.check_budget(ai.load_config(user_id, "chat"))
+    ai.require_ready(user_id)
     require_workspace(user_id, workspace_id)
     digest = signals_digest(get_signals(user_id, workspace_id))
     return _start_with_digest(
@@ -6766,7 +6780,7 @@ def start_review(user_id: int, workspace_id: int, *, prompt: str = "", title: st
 
 def start_experiment_review(user_id: int, workspace_id: int, experiment_id: int, *, chat_id: int | None = None) -> dict:
     """«Разобрать итоги» эксперимента по кнопке: прогресс считает код и кладёт в чат ответом get_experiments."""
-    ai.check_budget(ai.load_config(user_id, "chat"))
+    ai.require_ready(user_id)
     items = experiments.experiments_overview(user_id, workspace_id)["items"]
     exp = next((e for e in items if e["id"] == experiment_id), None)
     if exp is None:
@@ -7031,7 +7045,7 @@ def answer_questions(user_id: int, action_id: int, *, answers=None, comment: str
     else:
         questions = payload.get("questions") or []
         needs = {n for q in questions for n in (q.get("needs") or {}).values()}
-        caps = {"image_gen"} if "image_gen" in needs and image_gen.is_configured(user_id) else set()
+        caps = {"image_gen"} if "image_gen" in needs and image_gen.is_configured() else set()
         out, facts = _compose_answers(questions, answers, caps)
         if not comment and not any("answer" in a for a in out):
             raise YandexError("args", "Ответьте хотя бы на один вопрос или напишите комментарий")
@@ -7489,7 +7503,11 @@ def run_chat(user_id: int, chat_id: int, progress=None) -> dict:
     try:
         # Потоком: запрос на десятки тысяч токенов модель читает дольше минуты, и шлюз провайдера рвёт
         # молчащее соединение (524). timeout здесь — паузы между кусками ответа.
-        cfg = {**ai.load_config(user_id, "chat", chat["workspace_id"]), "timeout": CHAT_TIMEOUT_SECONDS, "stream": True}
+        cfg = {
+            **ai.load_config(user_id, "chat", chat["workspace_id"], model_class=chat.get("model_class") or None),
+            "timeout": CHAT_TIMEOUT_SECONDS,
+            "stream": True,
+        }
         ctx = Context(user_id, chat["workspace_id"])
         ctx.chat_id = chat_id
     except YandexError as exc:
@@ -7529,7 +7547,7 @@ def run_chat(user_id: int, chat_id: int, progress=None) -> dict:
             calls = [c for c in reply["tool_calls"] if c.get("name")]
             with pool.connection() as conn:
                 message = _insert_message(
-                    conn, chat_id, "assistant", reply["content"], tool_calls=calls or None, model=cfg["model_name"]
+                    conn, chat_id, "assistant", reply["content"], tool_calls=calls or None, model=cfg["class_name"]
                 )
             if not calls:
                 break

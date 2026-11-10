@@ -34,6 +34,21 @@ export function pct(value, digits = 1) {
   return `${Number(value).toLocaleString('ru-RU', { maximumFractionDigits: digits })}%`
 }
 
+/** Доля месячного лимита ИИ: «0,4%», совсем мало — «< 0,1%». */
+export function limitPct(value) {
+  if (value === null || value === undefined || value === '') return '—'
+  const v = Number(value)
+  if (v > 0 && v < 0.1) return '< 0,1%'
+  return pct(v, 1)
+}
+
+/** Итог операции с ИИ для подсказки: «ИИ: 3 вызова, ≈ 0,4% месячного лимита». Без лимита — только вызовы. */
+export function aiUsageText(usage) {
+  const calls = `ИИ: ${usage.calls} ${plural(usage.calls, 'вызов', 'вызова', 'вызовов')}`
+  if (usage.percent === null || usage.percent === undefined) return calls
+  return `${calls}, ${usage.estimated ? '≈ ' : ''}${limitPct(usage.percent)} месячного лимита`
+}
+
 /** Изменение к прошлому периоду: «+12%», «−4%». */
 export function delta(value) {
   if (value === null || value === undefined) return ''

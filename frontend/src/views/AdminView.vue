@@ -1,163 +1,103 @@
 <template>
-  <div class="site">
-    <SiteHeader solid />
-    <main class="admin">
-      <div class="wrap">
+  <AppShell>
+    <div class="cabinet__head">
+      <div>
         <h1>Админка</h1>
-
-        <form v-if="!isLoggedIn" class="auth-card" style="margin: 0" @submit.prevent="login">
-          <p class="sub">Вход оператора</p>
-          <p v-if="error" class="form-error">{{ error }}</p>
-          <div class="field">
-            <label for="password">Пароль</label>
-            <input id="password" v-model="password" type="password" autocomplete="current-password" required />
-          </div>
-          <button class="btn btn--wide" type="submit" :disabled="busy">Войти</button>
-        </form>
-
-        <template v-else>
-          <div class="panel">
-            <h2>Сводка</h2>
-            <p class="hint">
-              Пользователей: {{ summary?.users_total ?? '—' }}.
-              OAuth Яндекса: {{ summary?.yandex_oauth ? 'настроен' : 'не настроен' }}.
-            </p>
-            <button class="btn btn--ghost" type="button" @click="logout">Выйти</button>
-          </div>
-
-          <div class="panel">
-            <h2>Пользователи</h2>
-            <table v-if="users.length" class="table">
-              <thead>
-                <tr>
-                  <th>ID</th>
-                  <th>Почта</th>
-                  <th>Имя</th>
-                  <th>Яндекс</th>
-                  <th>Статус</th>
-                  <th></th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr v-for="user in users" :key="user.id">
-                  <td>{{ user.id }}</td>
-                  <td>{{ user.email || '—' }}</td>
-                  <td>{{ user.name || '—' }}</td>
-                  <td>{{ user.has_yandex ? 'да' : 'нет' }}</td>
-                  <td>
-                    <span v-if="user.blocked">блок{{ user.blocked_reason ? `: ${user.blocked_reason}` : '' }}</span>
-                    <span v-else>активен</span>
-                  </td>
-                  <td>
-                    <button
-                      v-if="!user.blocked"
-                      class="btn btn--ghost"
-                      type="button"
-                      :disabled="busyId === user.id"
-                      @click="blockUser(user)"
-                    >
-                      Блок
-                    </button>
-                    <button
-                      v-else
-                      class="btn btn--ghost"
-                      type="button"
-                      :disabled="busyId === user.id"
-                      @click="unblockUser(user)"
-                    >
-                      Разблок
-                    </button>
-                  </td>
-                </tr>
-              </tbody>
-            </table>
-            <p v-else class="empty">Пользователей пока нет.</p>
-          </div>
-        </template>
+        <p>Пользователи и их лимиты, общие ИИ, Вордстат и картинки, расход сервиса.</p>
       </div>
-    </main>
-  </div>
+    </div>
+
+    <div v-if="loading" class="panel"><p class="empty">Загружаем…</p></div>
+
+    <section v-else-if="denied" class="panel">
+      <h2>Нет доступа</h2>
+      <p class="hint">
+        Админка открыта только владельцу сервиса: почта аккаунта должна быть в ADMIN_EMAILS в настройках сервера.
+      </p>
+      <RouterLink class="btn btn--ghost" to="/cabinet">В кабинет</RouterLink>
+    </section>
+
+    <template v-else-if="summary">
+      <div class="stats-grid">
+        <div class="stat-card">
+          <small>Пользователей</small>
+          <strong>{{ num(summary.users_total) }}</strong>
+        </div>
+        <div v-for="s in services" :key="s.key" class="stat-card">
+          <small>{{ s.label }}</small>
+          <strong :class="s.ok ? 'tone-ok' : 'tone-warn'">{{ s.ok ? 'работает' : 'не подключено' }}</strong>
+        </div>
+      </div>
+
+      <nav class="seg seg--tabs" aria-label="Разделы админки">
+        <button v-for="t in TABS" :key="t.id" type="button" :class="{ active: tab === t.id }" @click="setTab(t.id)">
+          {{ t.label }}
+        </button>
+      </nav>
+
+      <AdminUsers v-if="tab === 'users'" />
+      <template v-else-if="tab === 'services'">
+        <AdminServices :bridge="bridge" @changed="loadSummary" />
+        <AdminBridge @update="bridge = $event" />
+      </template>
+      <AdminUsage v-else-if="tab === 'usage'" />
+    </template>
+  </AppShell>
 </template>
 
 <script setup>
-import { onMounted, ref } from 'vue'
-import SiteHeader from '../components/SiteHeader.vue'
+import { computed, onMounted, ref } from 'vue'
+import { RouterLink, useRoute, useRouter } from 'vue-router'
+import AppShell from '../components/AppShell.vue'
+import AdminBridge from './admin/AdminBridge.vue'
+import AdminServices from './admin/AdminServices.vue'
+import AdminUsage from './admin/AdminUsage.vue'
+import AdminUsers from './admin/AdminUsers.vue'
 import { adminApi } from '../api/admin'
-import { clearAdminSession, setAdminSession, useAdminSession } from '../composables/useAdminSession'
-import { askText } from '../composables/useConfirm'
+import { errorText } from '../api/web'
+import { pushToast } from '../composables/useToasts'
 import { useHead } from '../utils/useHead'
+import { num } from '../utils/format'
 
 useHead('Админка — AiMarketing', true)
 
-const { isLoggedIn } = useAdminSession()
-const password = ref('')
-const error = ref('')
-const busy = ref(false)
-const busyId = ref(null)
-const summary = ref(null)
-const users = ref([])
+const TABS = [
+  { id: 'users', label: 'Пользователи' },
+  { id: 'services', label: 'ИИ и сервисы' },
+  { id: 'usage', label: 'Расход' },
+]
 
-async function load() {
-  if (!isLoggedIn.value) return
+const route = useRoute()
+const router = useRouter()
+const loading = ref(true)
+const denied = ref(false)
+const summary = ref(null)
+const bridge = ref(null)
+const tab = ref(TABS.some((t) => t.id === route.query.tab) ? route.query.tab : 'users')
+
+const services = computed(() => [
+  { key: 'ai', label: 'ИИ', ok: summary.value?.ai_configured },
+  { key: 'wordstat', label: 'Вордстат', ok: summary.value?.wordstat_configured },
+  { key: 'images', label: 'Картинки', ok: summary.value?.images_configured },
+  { key: 'oauth', label: 'Вход через Яндекс', ok: summary.value?.yandex_oauth },
+])
+
+function setTab(id) {
+  tab.value = id
+  router.replace({ query: id === 'users' ? {} : { tab: id } })
+}
+
+async function loadSummary() {
   try {
     summary.value = await adminApi.me()
-    const data = await adminApi.users()
-    users.value = data.items || []
-  } catch {
-    clearAdminSession()
+  } catch (err) {
+    if (err.status === 403) denied.value = true
+    else pushToast(errorText(err), 'error')
   }
 }
 
-async function login() {
-  busy.value = true
-  error.value = ''
-  try {
-    const data = await adminApi.login(password.value)
-    setAdminSession(data.token)
-    password.value = ''
-    await load()
-  } catch {
-    error.value = 'Неверный пароль.'
-  } finally {
-    busy.value = false
-  }
-}
-
-function logout() {
-  clearAdminSession()
-  summary.value = null
-  users.value = []
-}
-
-async function blockUser(user) {
-  const reason = await askText('Причина (необязательно)', {
-    title: `Заблокировать ${user.email || 'пользователя'}?`,
-    confirmText: 'Заблокировать',
-    danger: true,
-  })
-  if (reason == null) return
-  busyId.value = user.id
-  try {
-    const updated = await adminApi.blockUser(user.id, reason)
-    users.value = users.value.map((u) => (u.id === user.id ? updated : u))
-  } catch {
-    error.value = 'Не удалось заблокировать.'
-  } finally {
-    busyId.value = null
-  }
-}
-
-async function unblockUser(user) {
-  busyId.value = user.id
-  try {
-    const updated = await adminApi.unblockUser(user.id)
-    users.value = users.value.map((u) => (u.id === user.id ? updated : u))
-  } catch {
-    error.value = 'Не удалось разблокировать.'
-  } finally {
-    busyId.value = null
-  }
-}
-
-onMounted(load)
+onMounted(async () => {
+  await loadSummary()
+  loading.value = false
+})
 </script>

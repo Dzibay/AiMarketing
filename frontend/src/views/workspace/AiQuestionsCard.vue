@@ -36,7 +36,7 @@
           </button>
         </div>
         <small v-for="need in missing(q)" :key="need" class="hint">
-          {{ NEED_TEXT[need] }} — <RouterLink :to="NEED_LINK[need]">подключить в настройках</RouterLink>
+          {{ NEED_TEXT[need] }}
         </small>
         <input
           v-model="texts[q.n]"
@@ -102,8 +102,7 @@ const emit = defineEmits(['submit'])
 
 const STATUS = { pending: 'ждёт ответа', done: 'отвечено', rejected: 'без ответа' }
 const CHIPS = { pending: 'chip--warning', done: 'chip--ok' }
-const NEED_TEXT = { image_gen: 'Генерация картинок не подключена' }
-const NEED_LINK = { image_gen: '/cabinet/settings#image-gen' }
+const NEED_TEXT = { image_gen: 'Генерация картинок временно недоступна' }
 
 function locked(q, option) {
   const need = q.needs?.[option]

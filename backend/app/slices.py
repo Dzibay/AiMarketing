@@ -907,13 +907,5 @@ def ai_placements(user_id: int, payload: dict, progress: Progress | None = None)
                 if key and verdict in ("exclude", "watch", "keep"):
                     verdicts[key] = {"verdict": verdict, "reason": str(got.get("r") or "").strip()[:120]}
     progress(len(items), len(items), "Готово")
-    usage = None
-    if spent["calls"]:
-        usage = {
-            "calls": spent["calls"],
-            "tokens_in": spent["tokens_in"],
-            "tokens_out": spent["tokens_out"],
-            "cost_rub": round(spent["cost_rub"], 4) if spent["priced"] else None,
-            "estimated": spent["estimated"],
-        }
+    usage = ai.usage_out(spent, user_id)
     return {"verdicts": verdicts, "usage": usage, "error": error}

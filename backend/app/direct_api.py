@@ -1,8 +1,4 @@
-"""Общий клиент API Директа.
-
-Токен подключения-песочницы — строка с признаком ``sandbox``. Песочницу Яндекс отключил
-15.07.2026: вызовы с таким токеном сразу падают с понятной ошибкой, а не уходят на мёртвый адрес.
-"""
+"""Общий клиент API Директа."""
 
 from __future__ import annotations
 
@@ -14,7 +10,7 @@ import httpx
 
 log = logging.getLogger("app.direct_api")
 
-# Шлюз Директа (особенно песочница) часто отвечает так на живой запрос. Повтор уместен
+# Шлюз Директа иногда отвечает так на живой запрос. Повтор уместен
 # только для чтения: add при 504 мог уже создать объект.
 TRANSIENT_STATUS = frozenset({502, 503, 504})
 # «Сервер авторизации временно недоступен» (52), «сервис временно недоступен» (1000) и «слишком много
@@ -22,44 +18,25 @@ TRANSIENT_STATUS = frozenset({502, 503, 504})
 BUSY_CODES, BUSY_ATTEMPTS, BUSY_DELAY = frozenset({"52", "1000", "506"}), 3, 2.0
 
 V5 = "https://api.direct.yandex.com/json/v5/"
-V5_SANDBOX = "https://api-sandbox.direct.yandex.com/json/v5/"
 LIVE4 = "https://api.direct.yandex.ru/live/v4/json/"
-LIVE4_SANDBOX = "https://api-sandbox.direct.yandex.ru/live/v4/json/"
 
 # Наибольшая страница get в API v5.
 PAGE_LIMIT = 10000
-
-SANDBOX_CLOSED = "Песочница API Директа отключена Яндексом 15.07.2026 — подключите боевой кабинет"
 
 # Баллы из заголовка Units последнего ответа по логину клиента: (потрачено, остаток, лимит).
 _units: dict[str, tuple[int, int, int]] = {}
 
 
-class AccessToken(str):
-    """OAuth-токен подключения; sandbox=True — запросы Директа идут в песочницу."""
-
-    sandbox: bool = False
-
-    def __new__(cls, value: str, sandbox: bool = False) -> "AccessToken":
-        obj = super().__new__(cls, value)
-        obj.sandbox = bool(sandbox)
-        return obj
-
-
-def is_sandbox(token) -> bool:
-    return bool(getattr(token, "sandbox", False))
-
-
 def v5_url(token, service: str, version: str = "v5") -> str:
     """Адрес сервиса. Товарные объявления живут на v501, остальное — на v5."""
-    base = V5_SANDBOX if is_sandbox(token) else V5
+    base = V5
     if version != "v5":
         base = base.replace("/json/v5/", f"/json/{version}/")
     return base + service
 
 
 def live4_url(token) -> str:
-    return LIVE4_SANDBOX if is_sandbox(token) else LIVE4
+    return LIVE4
 
 
 def headers(token, client_login: str | None = None) -> dict:
@@ -152,8 +129,6 @@ def call(
     """POST в сервис API v5; ошибка запроса целиком — YandexError, результат — payload["result"]."""
     from app.yandex import YandexError, direct_api_error
 
-    if is_sandbox(token):
-        raise YandexError("sandbox", SANDBOX_CLOSED)
     for attempt in range(BUSY_ATTEMPTS):
         # get идемпотентен. add/update при 504 могли уже пройти на стороне Директа — не повторяем.
         try:
