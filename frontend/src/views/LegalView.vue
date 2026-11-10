@@ -6,7 +6,10 @@
         <article v-if="doc">
           <h1>{{ doc.heading }}</h1>
           <p class="meta">{{ doc.meta }}</p>
-          <p v-for="(paragraph, index) in doc.paragraphs" :key="index">{{ paragraph }}</p>
+          <template v-for="(paragraph, index) in doc.paragraphs" :key="index">
+            <h2 v-if="isHeading(paragraph)">{{ paragraph }}</h2>
+            <p v-else>{{ paragraph }}</p>
+          </template>
         </article>
         <p v-else class="empty">Загружаем документ…</p>
       </div>
@@ -27,6 +30,11 @@ const props = defineProps({
 })
 
 const doc = ref(null)
+
+// «3. Тарифы» — заголовок раздела; «3.1. …» и обычные абзацы — текст.
+function isHeading(text) {
+  return /^\d+\. [^\n]{2,80}$/.test(text) && !/[.:;]$/.test(text)
+}
 
 async function load() {
   doc.value = null

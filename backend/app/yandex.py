@@ -8,6 +8,7 @@ from datetime import datetime, timedelta, timezone
 from urllib.parse import urlencode
 
 import httpx
+from psycopg.types.json import Jsonb
 
 from app import direct_api
 from app.config import settings
@@ -139,9 +140,16 @@ def _purge_expired_states() -> None:
 
 
 def create_oauth_state(
-    *, purpose: str, user_id: int | None = None, mode: str = "", connection_id: int | None = None
+    *,
+    purpose: str,
+    user_id: int | None = None,
+    mode: str = "",
+    connection_id: int | None = None,
+    signup: dict | None = None,
 ) -> str:
-    """purpose: login / connect — основное приложение; audience — Аудитории логина connection_id."""
+    """purpose: login / connect — основное приложение; audience — Аудитории логина connection_id.
+
+    signup — что запомнить на случай, если вход создаст нового пользователя (реф-код)."""
     if purpose not in OAUTH_PURPOSES:
         raise YandexError("purpose")
     if mode not in OAUTH_MODES or (mode and purpose == "audience"):
@@ -155,8 +163,8 @@ def create_oauth_state(
     with pool.connection() as conn:
         conn.execute(
             """
-            INSERT INTO oauth_states (state, user_id, purpose, mode, connection_id, expires_at)
-            VALUES (%s, %s, %s, %s, %s, %s)
+            INSERT INTO oauth_states (state, user_id, purpose, mode, connection_id, signup, expires_at)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
             """,
             (
                 state,
@@ -164,6 +172,7 @@ def create_oauth_state(
                 purpose,
                 mode,
                 connection_id if purpose == "audience" else None,
+                Jsonb(signup or {}),
                 datetime.now(timezone.utc) + timedelta(minutes=15),
             ),
         )
@@ -178,7 +187,7 @@ def consume_oauth_state(state: str) -> dict:
             """
             DELETE FROM oauth_states
             WHERE state = %s AND expires_at >= NOW()
-            RETURNING state, user_id, purpose, mode, connection_id
+            RETURNING state, user_id, purpose, mode, connection_id, signup
             """,
             (state,),
         ).fetchone()
@@ -203,7 +212,7 @@ def build_authorize_url(state: str, *, audience: bool = False, login_hint: str =
 
 
 def start_oauth(
-    *, purpose: str, user_id: int | None = None, mode: str = "", connection_id: int | None = None
+    *, purpose: str, user_id: int | None = None, mode: str = "", connection_id: int | None = None, ref: str = ""
 ) -> str:
     if purpose == "audience":
         _client(audience=True)
@@ -212,7 +221,8 @@ def start_oauth(
         row = _audience_connection(user_id, connection_id)
         state = create_oauth_state(purpose=purpose, user_id=user_id, connection_id=row["id"])
         return build_authorize_url(state, audience=True, login_hint=row["yandex_login"] or "")
-    state = create_oauth_state(purpose=purpose, user_id=user_id, mode=mode)
+    signup = {"ref": ref.strip()[:40]} if ref and purpose == "login" else None
+    state = create_oauth_state(purpose=purpose, user_id=user_id, mode=mode, signup=signup)
     return build_authorize_url(state)
 
 
@@ -1066,7 +1076,12 @@ def complete_oauth(*, code: str, state: str) -> tuple[dict, dict | None]:
 
     if user.get("_created"):
         plans.start_trial(user["id"])
-        events.record(user["id"], "register", via="yandex")
+        ref = str((oauth_state.get("signup") or {}).get("ref") or "")
+        if ref:
+            from app import referrals
+
+            referrals.attach(user["id"], ref)
+        events.record(user["id"], "register", via="yandex", **({"ref": ref} if ref else {}))
     events.record(user["id"], "yandex_connected", login=profile.get("login") or "", mode=oauth_state.get("mode") or "")
     return user, job
 

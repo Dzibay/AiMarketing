@@ -1,11 +1,39 @@
-from fastapi import APIRouter, HTTPException
+import logging
+
+from fastapi import APIRouter, Body, HTTPException
+from pydantic import BaseModel
+
+from app import payments, referrals
 
 from app.config import settings
 from app.legal import legal_consent_data, legal_cookies_data, legal_offer_data, legal_privacy_data
 from app.settings_store import consent_url, cookies_url, offer_url, privacy_url
-from app.yandex import yandex_configured
+from app.yandex import YandexError, yandex_configured
 
+log = logging.getLogger(__name__)
 router = APIRouter(tags=["site"])
+
+
+class RefBody(BaseModel):
+    code: str = ""
+
+
+@router.post("/site/ref")
+def site_ref(body: RefBody) -> dict:
+    """Первый заход по ?ref=код: +1 переход. Неизвестный или выключенный код — 404, сайт его забудет."""
+    if not referrals.visit(body.code):
+        raise HTTPException(status_code=404, detail="not-found")
+    return {"ok": True}
+
+
+@router.post("/yookassa/webhook")
+def yookassa_webhook(body: dict = Body(default_factory=dict)) -> dict:
+    """HTTP-уведомления ЮKassa. Платёж перечитываем через API; не смогли — 500, ЮKassa повторит."""
+    try:
+        return {"result": payments.handle_notification(body)}
+    except YandexError as exc:
+        log.warning("Уведомление ЮKassa не обработано: %s", exc.message or exc.code)
+        raise HTTPException(status_code=500, detail="retry") from exc
 
 
 @router.get("/site/config")

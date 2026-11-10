@@ -76,6 +76,22 @@ def _enqueue_rules() -> None:
             submit("run_rules", user_id)
 
 
+def _enqueue_reminders() -> None:
+    from app.reminders import due
+
+    for item in due():
+        submit("plan_reminder", item["user_id"], {"ends_at": item["ends_at"], "days": item["days"]})
+
+
+def _sync_payments() -> None:
+    """Сверка с ЮKassa: на случай, если уведомление не дошло, и чтобы подтянуть возвраты."""
+    from app.payments import sync_open
+
+    result = sync_open()
+    if result["checked"] or result["errors"]:
+        log.info("Сверка платежей: %s", result)
+
+
 def _purge_jobs() -> None:
     n = purge_finished()
     if n:
@@ -94,6 +110,8 @@ SCHEDULES: dict[str, tuple[int, Callable[[], None]]] = {
     "digest": (600, _enqueue_digests),
     "rules": (3600, _enqueue_rules),
     "purge_jobs": (86400, _purge_jobs),
+    "plan_reminders": (3600, _enqueue_reminders),
+    "payments": (600, _sync_payments),
 }
 
 

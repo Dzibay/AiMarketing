@@ -247,7 +247,7 @@ def _days(first: date, stop: date, daily: list[dict], base: float) -> list[dict]
     return out
 
 
-HISTORY_KINDS = ("payment", "plan_changed")
+HISTORY_KINDS = ("payment", "plan_changed", "promo")
 
 
 def plan_history(user_id: int, limit: int = 30) -> list[dict]:
@@ -276,6 +276,8 @@ def plan_history(user_id: int, limit: int = 30) -> list[dict]:
                 "last_day": meta.get("last_day"),
                 "renew": bool(meta.get("renew")),
                 "amount_rub": float(amount) if isinstance(amount, (int, float)) else None,
+                "code": meta.get("code") or "",
+                "test": bool(meta.get("test")),
             }
         )
     return out

@@ -162,6 +162,12 @@ def _apply_negative_list(user_id: int, payload: dict, progress: Progress) -> dic
     return apply_negative_list(user_id, _int(payload, "list_id"), ids, progress)
 
 
+def _plan_reminder(user_id: int, payload: dict, progress: Progress) -> dict:
+    from app.reminders import send
+
+    return send(user_id, str(payload.get("ends_at") or ""), int(payload.get("days") or 3))
+
+
 def _run_rules(user_id: int, payload: dict, progress: Progress) -> dict:
     return {"rules_run": run_enabled_rules_for_user(user_id)}
 
@@ -323,6 +329,7 @@ HANDLERS: dict[str, Handler] = {
     "ads_ai": _ads_ai,
     "ads_ab": _ads_ab,
     "fix_links": _fix_links,
+    "plan_reminder": _plan_reminder,
 }
 
 

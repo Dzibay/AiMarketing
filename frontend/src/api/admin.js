@@ -79,6 +79,38 @@ export const adminApi = {
   /** Одна настоящая картинка — платно для сервиса: { ok, model, image (data URL) }. */
   testImages: () => send('POST', '/images/test'),
 
+  /**
+   * ЮKassa: { configured, enabled, ready, shop_id, has_key, key_hint, test_mode, checked_at, check_error, check_test,
+   * webhook_url, webhook_events }. secret_key: null — оставить, '' — удалить.
+   */
+  paymentsSettings: () => call('/payments/settings'),
+  savePaymentsSettings: (payload) => send('PUT', '/payments/settings', payload),
+  /** GET /me в ЮKassa: { ok, account_id, test, status, warning }. */
+  testPayments: () => send('POST', '/payments/settings/test'),
+  /** { items, summary: { month_count, month_rub, total_count, total_rub, refunded_rub, no_receipt } }. */
+  payments: ({ userId = null, status = '', limit = 300 } = {}) => {
+    const q = new URLSearchParams({ limit: String(limit) })
+    if (userId) q.set('user_id', String(userId))
+    if (status) q.set('status', status)
+    return call(`/payments?${q}`)
+  },
+  /** Перечитать платёж из ЮKassa (статус, возврат). */
+  syncPayment: (id) => send('POST', `/payments/${id}/sync`),
+  /** Отметка «чек самозанятого пробит в „Мой налог“». */
+  setReceipt: (id, done) => send('PUT', `/payments/${id}/receipt`, { done }),
+
+  /** { items: [промокод + uses, plan_name], kinds: { units | days | plan: название } }. */
+  promos: () => call('/promos'),
+  createPromo: (payload) => send('POST', '/promos', payload),
+  updatePromo: (id, payload) => send('PUT', `/promos/${id}`, payload),
+  deletePromo: (id) => send('DELETE', `/promos/${id}`),
+
+  /** { items: [{ id, code, name, active, url, visits, registrations, verified, payers, payments, revenue_rub }] }. */
+  refs: () => call('/refs'),
+  createRef: (payload) => send('POST', '/refs', payload),
+  updateRef: (id, payload) => send('PUT', `/refs/${id}`, payload),
+  deleteRef: (id) => send('DELETE', `/refs/${id}`),
+
   /** Расход сервиса за месяц (ГГГГ-ММ, по умолчанию текущий): по видам и по пользователям. */
   usage: (month = '') => call(`/usage${month ? `?month=${encodeURIComponent(month)}` : ''}`),
 }

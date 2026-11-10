@@ -44,7 +44,7 @@
         <div class="cabinet__head">
           <div>
             <h1>Админка</h1>
-            <p>Пользователи и подписки, тарифы, общие ИИ, Вордстат и картинки, расход сервиса.</p>
+            <p>Пользователи и подписки, тарифы и оплата, промокоды и реф-ссылки, общие ИИ, Вордстат и картинки, расход сервиса.</p>
           </div>
         </div>
 
@@ -66,6 +66,15 @@
                 {{ summary.email_check ? 'включено' : 'выкл.: нет SMTP' }}
               </strong>
             </div>
+            <div class="stat-card" :title="summary.payments?.no_receipt ? `Без чека в «Мой налог»: ${summary.payments.no_receipt}` : ''">
+              <small>Оплаты за месяц</small>
+              <strong>{{ rubles(summary.payments?.month_rub || 0) }}</strong>
+              <span class="cell-note">
+                {{ num(summary.payments?.month_count || 0) }}
+                {{ plural(summary.payments?.month_count || 0, 'оплата', 'оплаты', 'оплат') }}<template
+                  v-if="summary.payments?.no_receipt"> · без чека: {{ num(summary.payments.no_receipt) }}</template>
+              </span>
+            </div>
             <div class="stat-card">
               <small>Пробный тариф</small>
               <strong :class="summary.trial_plan ? 'tone-ok' : 'tone-warn'">{{ summary.trial_plan || 'нет — без ограничений' }}</strong>
@@ -86,6 +95,9 @@
 
           <AdminUsers v-if="tab === 'users'" />
           <AdminPlans v-else-if="tab === 'plans'" @changed="loadSummary" />
+          <AdminPayments v-else-if="tab === 'payments'" @changed="loadSummary" />
+          <AdminPromos v-else-if="tab === 'promos'" />
+          <AdminRefs v-else-if="tab === 'refs'" />
           <template v-else-if="tab === 'services'">
             <AdminServices :bridge="bridge" @changed="loadSummary" />
             <AdminBridge @update="bridge = $event" />
@@ -103,7 +115,10 @@ import { useRoute, useRouter } from 'vue-router'
 import { LogOut, Moon, Sun } from '@lucide/vue'
 import BrandMark from '../components/BrandMark.vue'
 import AdminBridge from './admin/AdminBridge.vue'
+import AdminPayments from './admin/AdminPayments.vue'
 import AdminPlans from './admin/AdminPlans.vue'
+import AdminPromos from './admin/AdminPromos.vue'
+import AdminRefs from './admin/AdminRefs.vue'
 import AdminServices from './admin/AdminServices.vue'
 import AdminUsage from './admin/AdminUsage.vue'
 import AdminUsers from './admin/AdminUsers.vue'
@@ -113,13 +128,16 @@ import { clearAdminSession, setAdminSession, useAdminSession } from '../composab
 import { useTheme } from '../composables/useTheme'
 import { pushToast } from '../composables/useToasts'
 import { useHead } from '../utils/useHead'
-import { num } from '../utils/format'
+import { num, plural, rubles } from '../utils/format'
 
 useHead('Админка — AiMarketing', true)
 
 const TABS = [
   { id: 'users', label: 'Пользователи' },
   { id: 'plans', label: 'Тарифы' },
+  { id: 'payments', label: 'Оплата' },
+  { id: 'promos', label: 'Промокоды' },
+  { id: 'refs', label: 'Реф-ссылки' },
   { id: 'services', label: 'ИИ и сервисы' },
   { id: 'usage', label: 'Расход' },
 ]
@@ -140,6 +158,7 @@ const services = computed(() => [
   { key: 'wordstat', label: 'Вордстат', ok: summary.value?.wordstat_configured },
   { key: 'images', label: 'Картинки', ok: summary.value?.images_configured },
   { key: 'oauth', label: 'Вход через Яндекс', ok: summary.value?.yandex_oauth },
+  { key: 'payments', label: 'ЮKassa', ok: summary.value?.payments_ready },
 ])
 
 function setTab(id) {

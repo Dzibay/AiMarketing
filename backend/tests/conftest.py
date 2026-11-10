@@ -60,6 +60,6 @@ def db(db_pool):
     from tests.dbutil import reset_services
 
     with db_pool.connection() as conn:
-        conn.execute("TRUNCATE users, jobs, job_schedules, plans RESTART IDENTITY CASCADE")
+        conn.execute("TRUNCATE users, jobs, job_schedules, plans, ref_links, promo_codes, payments RESTART IDENTITY CASCADE")
     reset_services(db_pool)
     return db_pool

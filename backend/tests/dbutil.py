@@ -128,7 +128,7 @@ def admin_headers() -> dict:
     return {"Authorization": f"Bearer {make_token()}"}
 
 
-SERVICE_TABLES = ("service_ai", "service_wordstat", "service_images", "service_bridge")
+SERVICE_TABLES = ("service_ai", "service_wordstat", "service_images", "service_bridge", "service_payments")
 
 
 def reset_services(pool) -> None:

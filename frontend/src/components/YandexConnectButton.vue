@@ -13,6 +13,7 @@
 <script setup>
 import { ref } from 'vue'
 import { errorText, webApi } from '../api/web'
+import { currentRef } from '../composables/useReferral'
 import { setOAuthReturn } from '../composables/useSession'
 import { pushToast } from '../composables/useToasts'
 
@@ -34,7 +35,9 @@ const busy = ref(false)
 async function connect() {
   busy.value = true
   try {
-    const data = await webApi.yandexStart(props.purpose, props.mode, props.connectionId)
+    // Вход через Яндекс может оказаться регистрацией — передаём реф-код, сервер привяжет его к новому аккаунту.
+    const refCode = props.purpose === 'login' ? currentRef() : ''
+    const data = await webApi.yandexStart(props.purpose, props.mode, props.connectionId, refCode)
     if (!data?.url) throw new Error('url')
     setOAuthReturn(props.returnTo)
     window.location.href = data.url

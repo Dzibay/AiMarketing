@@ -8,7 +8,7 @@ from pydantic import BaseModel, Field
 
 log = logging.getLogger("app.api.web")
 
-from app import ad_extras, billing, email_verify, events, plans
+from app import ad_extras, billing, email_verify, events, payments, plans, promos, referrals
 from app.actions import (
     _account_creds,
     bulk_campaign_action,
@@ -113,6 +113,17 @@ class RegisterBody(BaseModel):
     email: str = ""
     password: str = ""
     name: str = ""
+    # Промокод и реф-код (?ref= с первого захода на сайт) — необязательно.
+    promo: str = ""
+    ref: str = ""
+
+
+class PayBody(BaseModel):
+    plan_id: int
+
+
+class PromoBody(BaseModel):
+    code: str = ""
 
 
 class ProfileBody(BaseModel):
@@ -400,15 +411,31 @@ def web_config() -> dict:
 
 @router.post("/register")
 def web_register(body: RegisterBody) -> dict:
+    promo_code = promos.normalize(body.promo)
+    if promo_code:
+        # Неверный код — до создания аккаунта, чтобы его можно было исправить в той же форме.
+        try:
+            promos.check(promo_code)
+        except YandexError as exc:
+            raise _http(exc) from exc
     try:
         user = register_user(email=body.email, password=body.password, name=body.name)
     except UsersError as exc:
         raise _http(exc) from exc
     plans.start_trial(user["id"])
-    events.record(user["id"], "register", via="email")
+    ref = referrals.normalize(body.ref)
+    attached = bool(ref) and referrals.attach(user["id"], ref)
+    events.record(user["id"], "register", via="email", **({"ref": ref} if attached else {}))
+    promo = None
+    if promo_code:
+        try:
+            promo = promos.redeem(user["id"], promo_code)
+        except YandexError as exc:
+            # Код успели исчерпать между проверкой и регистрацией — аккаунт уже есть, сообщаем.
+            promo = {"error": exc.message or exc.code}
     if plans.email_check_required():
         email_verify.send(user["id"])
-    return {"token": make_session(user["id"]), "user": public_user(user)}
+    return {"token": make_session(user["id"]), "user": public_user(user), "promo": promo}
 
 
 @router.post("/login")
@@ -527,7 +554,43 @@ def web_plan(user_id: int = Depends(require_web_identity)) -> dict:
         "offers": plans.offers(user_id),
         "features": plans.FEATURES,
         "history": billing.plan_history(user_id),
+        **payments.user_view(user_id),
     }
+
+
+@router.get("/payments/quote")
+def web_payment_quote(plan_id: int, user_id: int = Depends(require_web_identity)) -> dict:
+    """Сколько стоит тариф для пользователя и продлит он подписку или начнётся заново."""
+    try:
+        return payments.quote(user_id, plan_id)
+    except YandexError as exc:
+        raise _http(exc) from exc
+
+
+@router.post("/payments")
+def web_payment_create(body: PayBody, user_id: int = Depends(require_web_identity)) -> dict:
+    """Платёж в ЮKassa → ссылка, куда отправить пользователя оплачивать."""
+    try:
+        return payments.create_payment(user_id, body.plan_id)
+    except YandexError as exc:
+        raise _http(exc) from exc
+
+
+@router.post("/payments/{payment_id}/check")
+def web_payment_check(payment_id: int, user_id: int = Depends(require_web_identity)) -> dict:
+    """Вернулись со страницы ЮKassa: перечитываем платёж, оплачен — подписка уже продлена."""
+    try:
+        return {"payment": payments.check_for_user(user_id, payment_id)}
+    except YandexError as exc:
+        raise _http(exc) from exc
+
+
+@router.post("/promo")
+def web_promo(body: PromoBody, user_id: int = Depends(require_web_identity)) -> dict:
+    try:
+        return promos.redeem(user_id, body.code)
+    except YandexError as exc:
+        raise _http(exc) from exc
 
 
 @router.get("/yandex/start")
@@ -535,9 +598,10 @@ def web_yandex_start(
     purpose: str = "login",
     mode: str = "",
     connection_id: int | None = None,
+    ref: str = "",
     authorization: str = Header(default=""),
 ) -> dict:
-    """mode: "" — Метрика и Директ, "metrika" / "direct" — одна роль.
+    """mode: "" — Метрика и Директ, "metrika" / "direct" — одна роль. ref — реф-код для нового пользователя.
 
     purpose=audience — второе приложение: Яндекс Аудитории логину connection_id."""
     purpose = (purpose or "login").strip().lower()
@@ -553,7 +617,7 @@ def web_yandex_start(
         if user_id is None:
             raise HTTPException(status_code=401, detail="unauthorized")
     try:
-        url = start_oauth(purpose=purpose, user_id=user_id, mode=mode, connection_id=connection_id)
+        url = start_oauth(purpose=purpose, user_id=user_id, mode=mode, connection_id=connection_id, ref=ref)
     except YandexError as exc:
         raise _http(exc) from exc
     return {"url": url}

@@ -7,7 +7,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
-from app import ai, ai_bridge, auth, billing, events, image_gen, mailer, plans, wordstat
+from app import ai, ai_bridge, auth, billing, events, image_gen, mailer, payments, plans, promos, referrals, wordstat
 from app.api.web import _http
 from app.users import UsersError, count_users, list_users, mark_email_verified, set_user_blocked
 from app.yandex import YandexError, yandex_configured
@@ -61,6 +61,8 @@ def admin_me() -> dict:
         "email_check": plans.email_check_required(),
         "smtp_configured": mailer.configured(),
         "trial_plan": next((p["name"] for p in plans.list_plans(for_admin=True) if p["is_trial"] and p["active"]), None),
+        "payments_ready": payments.is_ready(),
+        "payments": payments.month_revenue(),
     }
 
 
@@ -344,3 +346,117 @@ def admin_images_test() -> dict:
 @router.get("/usage")
 def admin_usage(month: str = "") -> dict:
     return _call(billing.service_usage, month or None)
+
+
+# --- Оплата (ЮKassa) -----------------------------------------------------------------------------
+
+
+class PaymentsSettingsBody(BaseModel):
+    shop_id: str = ""
+    # None — оставить сохранённый ключ, "" — удалить.
+    secret_key: str | None = None
+    test_mode: bool = True
+    enabled: bool = False
+
+
+class ReceiptBody(BaseModel):
+    done: bool = True
+
+
+@router.get("/payments/settings")
+def admin_payments_settings() -> dict:
+    return payments.get_settings()
+
+
+@router.put("/payments/settings")
+def admin_payments_settings_put(body: PaymentsSettingsBody) -> dict:
+    return _call(payments.save_settings, **body.model_dump())
+
+
+@router.post("/payments/settings/test")
+def admin_payments_settings_test() -> dict:
+    return _call(payments.check_connection)
+
+
+@router.get("/payments")
+def admin_payments(user_id: int | None = None, status: str = "", limit: int = 300) -> dict:
+    return payments.admin_list(user_id=user_id, status=status, limit=limit)
+
+
+@router.post("/payments/{payment_id}/sync")
+def admin_payment_sync(payment_id: int) -> dict:
+    """Перечитать платёж из ЮKassa: статус и сумму возврата."""
+    return _call(payments.admin_refresh, payment_id)
+
+
+@router.put("/payments/{payment_id}/receipt")
+def admin_payment_receipt(payment_id: int, body: ReceiptBody) -> dict:
+    """Отметка: чек самозанятого пробит в «Мой налог»."""
+    return _call(payments.set_receipt, payment_id, body.done)
+
+
+# --- Промокоды -----------------------------------------------------------------------------------
+
+
+class PromoBody(BaseModel):
+    code: str = ""
+    kind: str = "days"
+    units: float | None = None
+    days: int | None = None
+    plan_id: int | None = None
+    max_uses: int | None = None
+    # Последний день действия «ГГГГ-ММ-ДД»; пусто — бессрочно.
+    valid_until: str | None = None
+    active: bool = True
+    note: str = ""
+
+
+@router.get("/promos")
+def admin_promos() -> dict:
+    return {"items": promos.list_promos(), "kinds": promos.KINDS}
+
+
+@router.post("/promos")
+def admin_promo_create(body: PromoBody) -> dict:
+    return _call(promos.save_promo, None, body.model_dump())
+
+
+@router.put("/promos/{promo_id}")
+def admin_promo_update(promo_id: int, body: PromoBody) -> dict:
+    return _call(promos.save_promo, promo_id, body.model_dump())
+
+
+@router.delete("/promos/{promo_id}")
+def admin_promo_delete(promo_id: int) -> dict:
+    _call(promos.delete_promo, promo_id)
+    return {"ok": True}
+
+
+# --- Реф-ссылки ----------------------------------------------------------------------------------
+
+
+class RefLinkBody(BaseModel):
+    code: str = ""
+    name: str = ""
+    active: bool = True
+
+
+@router.get("/refs")
+def admin_refs() -> dict:
+    return {"items": referrals.list_links()}
+
+
+@router.post("/refs")
+def admin_ref_create(body: RefLinkBody) -> dict:
+    return _call(referrals.save_link, None, body.model_dump())
+
+
+@router.put("/refs/{link_id}")
+def admin_ref_update(link_id: int, body: RefLinkBody) -> dict:
+    return _call(referrals.save_link, link_id, body.model_dump())
+
+
+@router.delete("/refs/{link_id}")
+def admin_ref_delete(link_id: int) -> dict:
+    _call(referrals.delete_link, link_id)
+    return {"ok": True}

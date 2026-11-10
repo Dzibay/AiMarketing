@@ -126,7 +126,7 @@
       <main class="cabinet app__content">
         <div v-if="limitBanner" class="notice limit-banner" :class="limitBanner.cls" role="status">
           <span>{{ limitBanner.text }}</span>
-          <RouterLink class="btn btn--ghost btn--xs" to="/cabinet/plan">{{ limitBanner.action }}</RouterLink>
+          <RouterLink class="btn btn--ghost btn--xs" :to="limitBanner.to || '/cabinet/plan'">{{ limitBanner.action }}</RouterLink>
           <button class="icon-btn" type="button" aria-label="Скрыть" @click="dismissBanner">
             <X aria-hidden="true" />
           </button>
@@ -333,7 +333,7 @@ function logout() {
   router.replace('/login')
 }
 
-// --- Лимит периода: предупреждение на 80% и 100%, окно «Лимит исчерпан» с тарифами выше ---
+// --- Конец тарифа (за 3 дня и в последний день) и лимит периода (80% / 100%), окно «Лимит исчерпан» ---
 
 const BANNER_KEY = 'aimarketing-limit-banner'
 const dismissed = ref(localStorage.getItem(BANNER_KEY) || '')
@@ -345,11 +345,41 @@ const limitLevel = computed(() => {
   return u.used_percent >= 80 ? 'near' : ''
 })
 
+/** Сколько дней до конца подписки с тарифом (последний день — 1), если осталось не больше 3. */
+const endsIn = computed(() => {
+  const sub = subscription.value
+  if (!sub?.plan || !sub.ends_at || sub.state !== 'ok') return 0
+  const left = (new Date(sub.ends_at).getTime() - Date.now()) / 86400000
+  if (left <= 0 || left > 3) return 0
+  return left <= 1 ? 1 : 3
+})
+
+const endBanner = computed(() => {
+  const sub = subscription.value
+  const days = endsIn.value
+  if (!days || dismissed.value === `end:${sub.ends_at}:${days}`) return null
+  const last = formatDay(sub.last_day)
+  const trial = sub.plan.is_trial
+  const what = trial ? 'Пробный период' : `Тариф «${sub.plan.name}»`
+  return {
+    key: `end:${sub.ends_at}:${days}`,
+    cls: 'notice--warn',
+    text:
+      days === 1
+        ? `${what} заканчивается — последний день ${last}. Затем ИИ-помощник и загрузка из Яндекса остановятся, данные сохранятся.`
+        : `${what} действует по ${last}. Продлите заранее, чтобы ИИ-помощник и загрузка из Яндекса не остановились.`,
+    action: trial ? 'Выбрать тариф' : 'Продлить',
+    to: trial ? '/cabinet/plan#offers' : `/cabinet/plan?choose=${sub.plan.id}`,
+  }
+})
+
 const limitBanner = computed(() => {
+  // На странице тарифа срок, шкала и тарифы и так перед глазами.
+  if (route.path === '/cabinet/plan') return null
+  if (endBanner.value) return endBanner.value
   const u = plan.value?.usage
   const level = limitLevel.value
-  // На странице тарифа шкала и так перед глазами.
-  if (!level || route.path === '/cabinet/plan' || dismissed.value === `${u.period_start}:${level}`) return null
+  if (!level || dismissed.value === `${u.period_start}:${level}`) return null
   if (level === 'over') {
     return {
       cls: 'notice--warn',
@@ -365,7 +395,7 @@ const limitBanner = computed(() => {
 })
 
 function dismissBanner() {
-  const value = `${plan.value?.usage?.period_start}:${limitLevel.value}`
+  const value = limitBanner.value?.key || `${plan.value?.usage?.period_start}:${limitLevel.value}`
   dismissed.value = value
   localStorage.setItem(BANNER_KEY, value)
 }
@@ -407,9 +437,9 @@ async function onAccess(event) {
   }
 }
 
-function chooseOffer() {
+function chooseOffer(offer) {
   upgrade.value = null
-  router.push('/cabinet/plan')
+  router.push(offer?.id ? `/cabinet/plan?choose=${offer.id}` : '/cabinet/plan')
 }
 
 // --- Загрузка: профиль, проекты, тариф и «Ждёт решения» (раз в минуту, пока вкладка открыта) ---

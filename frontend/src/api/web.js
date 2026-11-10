@@ -248,17 +248,30 @@ export const webApi = {
   login: (payload) => request('/api/web/login', { method: 'POST', body: JSON.stringify(payload) }),
   me: () => request('/api/web/me'),
   updateProfile: (payload) => request('/api/web/me', { method: 'PATCH', body: JSON.stringify(payload) }),
-  /** Тариф, расход лимита за период и тарифы для перехода (цены со скидкой). */
+  /**
+   * Тариф, расход лимита за период, тарифы для перехода (цены со скидкой), история,
+   * payments_enabled / payments_test и платежи [{ id, plan_name, amount_rub, status, status_label, applied,
+   * last_day, cancel_reason, confirmation_url, refunded_rub, test, created_at }].
+   */
   plan: () => request('/api/web/plan'),
+  /** Сколько заплатить за тариф: { plan_name, days, kind: renew | change, amount_rub, extends }. */
+  paymentQuote: (planId) => request(`/api/web/payments/quote?plan_id=${encodeURIComponent(planId)}`),
+  /** Платёж в ЮKassa: { payment, confirmation_url } — туда уводим пользователя. */
+  createPayment: (planId) => post('/api/web/payments', { plan_id: planId }),
+  /** Перепроверка платежа после возврата с ЮKassa: { payment }. */
+  checkPayment: (id) => post(`/api/web/payments/${id}/check`),
+  /** Промокод в кабинете: { kind, message, last_day }. */
+  redeemPromo: (code) => post('/api/web/promo', { code }),
   /** Ссылка из письма открывается и без входа — сессию не отправляем. */
   verifyEmail: (token) => request('/api/web/verify-email', { method: 'POST', body: JSON.stringify({ token }), token: '' }),
   resendVerify: () => post('/api/web/verify-email/resend'),
   // purpose=audience — второе приложение (Яндекс Аудитории) логину connectionId.
-  yandexStart: (purpose = 'login', mode = '', connectionId = null) =>
+  // ref — реф-код для входа через Яндекс: сохранится, если это регистрация.
+  yandexStart: (purpose = 'login', mode = '', connectionId = null, ref = '') =>
     request(
       `/api/web/yandex/start?purpose=${encodeURIComponent(purpose)}${mode ? `&mode=${encodeURIComponent(mode)}` : ''}${
         connectionId ? `&connection_id=${encodeURIComponent(connectionId)}` : ''
-      }`,
+      }${ref ? `&ref=${encodeURIComponent(ref)}` : ''}`,
     ),
   syncConnection: (id, onProgress) => runJob(`/api/web/connections/${id}/sync`, undefined, onProgress),
   patchConnection: (id, payload) =>
@@ -456,6 +469,13 @@ export const ERRORS = {
   'name-too-long': 'Имя — не длиннее 120 символов.',
   'too-soon': 'Письмо уже отправлено — повторить можно через минуту.',
   'plan-in-use': 'На этом тарифе есть пользователи.',
+  'payments-off': 'Онлайн-оплата пока не подключена — напишите в поддержку, подключим тариф вручную.',
+  'payments-remote': 'ЮKassa не ответила — попробуйте ещё раз через минуту.',
+  'payments-auth': 'ЮKassa отклонила ключ магазина.',
+  'payments-field': 'Проверьте настройки ЮKassa.',
+  promo: 'Промокод не найден.',
+  'promo-field': 'Проверьте поля промокода.',
+  'ref-field': 'Проверьте код ссылки.',
   'not-found': 'Не найдено.',
   purpose: 'Некорректный режим подключения.',
   'token-expired': 'Токен Яндекса истёк. Подключите аккаунт заново.',

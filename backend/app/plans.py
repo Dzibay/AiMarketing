@@ -177,6 +177,9 @@ def delete_plan(plan_id: int) -> None:
         used = conn.execute("SELECT COUNT(*) AS n FROM subscriptions WHERE plan_id = %s", (plan_id,)).fetchone()
         if used and used["n"]:
             raise YandexError("plan-in-use", "На тарифе есть пользователи — выключите тариф вместо удаления")
+        promo = conn.execute("SELECT code FROM promo_codes WHERE plan_id = %s LIMIT 1", (plan_id,)).fetchone()
+        if promo:
+            raise YandexError("plan-in-use", f"Тариф выдаёт промокод {promo['code']} — сначала удалите или измените его")
         row = conn.execute("DELETE FROM plans WHERE id = %s RETURNING id", (plan_id,)).fetchone()
     if row is None:
         raise YandexError("not-found", "Тариф не найден")
@@ -248,7 +251,7 @@ def _row(user_id: int) -> dict | None:
         return conn.execute(
             """
             SELECT u.id AS user_id, u.email_verified_at, u.created_at AS user_created_at,
-                   s.plan_id, s.starts_at, s.ends_at, s.overrides,
+                   s.plan_id, s.starts_at, s.ends_at, s.overrides, s.bonus_units, s.bonus_period_start,
                    p.name AS plan_name, p.price_rub, p.days, p.units_limit, p.projects_limit,
                    p.features, p.is_trial
             FROM users u
@@ -286,6 +289,12 @@ def subscription(user_id: int, *, now: datetime | None = None) -> dict:
         if key in features:
             features[key] = bool(value)
     period_start, period_end = period_of(starts_at, ends_at, int(row["days"]) if has_plan else None, now)
+    # Единицы из промокодов — только в том периоде, где их активировали.
+    bonus = float(row.get("bonus_units") or 0)
+    if not bonus or row.get("bonus_period_start") != period_start:
+        bonus = 0.0
+    if units is not None and bonus:
+        units = float(units) + bonus
     expired = ends_at is not None and now >= ends_at
     verified = row.get("email_verified_at") is not None
     if row and not verified and email_check_required():
@@ -315,6 +324,7 @@ def subscription(user_id: int, *, now: datetime | None = None) -> dict:
         "projects_limit": None if projects is None else int(projects),
         "features": features,
         "overrides": overrides,
+        "bonus_units": bonus,
         "period_start": period_start,
         "period_end": period_end,
     }
@@ -463,6 +473,46 @@ def set_subscription(user_id: int, *, plan_id=_UNSET, until=_UNSET, overrides=_U
     return admin_view(user_id, after)
 
 
+def lock_subscription(conn, user_id: int) -> dict:
+    """Строка подписки под блокировкой (в транзакции conn) вместе с тарифом; нет строки — создаётся без тарифа."""
+    conn.execute("INSERT INTO subscriptions (user_id) VALUES (%s) ON CONFLICT (user_id) DO NOTHING", (user_id,))
+    return conn.execute(
+        """
+        SELECT s.*, p.name AS plan_name, p.is_trial, p.price_rub
+        FROM subscriptions s LEFT JOIN plans p ON p.id = s.plan_id
+        WHERE s.user_id = %s FOR UPDATE OF s
+        """,
+        (user_id,),
+    ).fetchone()
+
+
+def extend_or_switch(conn, user_id: int, plan_id: int, days: int, now: datetime) -> dict:
+    """Оплата или промокод на тариф: тот же действующий тариф — продлеваем с конца срока, иначе тариф
+    начинается сейчас на days дней. При смене правки админа поверх тарифа и бонус единиц сбрасываются.
+
+    Вызывать в транзакции conn. Возвращает {"was_expired", "renewed", "ends_at"}.
+    """
+    sub = lock_subscription(conn, user_id)
+    ends_at = sub["ends_at"]
+    was_expired = ends_at is not None and ends_at <= now
+    if sub["plan_id"] == plan_id and ends_at is not None and ends_at > now:
+        new_end = ends_at + timedelta(days=days)
+        conn.execute(
+            "UPDATE subscriptions SET ends_at = %s, updated_at = NOW() WHERE user_id = %s", (new_end, user_id)
+        )
+        return {"was_expired": False, "renewed": True, "ends_at": new_end}
+    new_end = now + timedelta(days=days)
+    conn.execute(
+        """
+        UPDATE subscriptions SET plan_id = %s, starts_at = %s, ends_at = %s, overrides = '{}',
+               bonus_units = 0, bonus_period_start = NULL, updated_at = NOW()
+        WHERE user_id = %s
+        """,
+        (plan_id, now, new_end, user_id),
+    )
+    return {"was_expired": was_expired, "renewed": False, "ends_at": new_end}
+
+
 def admin_view(user_id: int, sub: dict | None = None) -> dict:
     sub = sub or subscription(user_id)
     return {**public(sub), "units_limit": sub["units_limit"], "overrides": sub["overrides"]}
@@ -509,7 +559,8 @@ def offers(user_id: int) -> list[dict]:
     if current is not None:
         discounts = {u["to_plan_id"]: u["discount_pct"] for u in list_upgrades() if u["from_plan_id"] == current}
     out = []
-    base = sub["units_limit"]
+    # Бонус из промокода — разовый, сравниваем с лимитом самого тарифа.
+    base = sub["units_limit"] - sub["bonus_units"] if sub["units_limit"] is not None else None
     for plan in list_plans():
         pct = discounts.get(plan["id"], 0.0)
         # Единицы пользователю не показываем — только во сколько раз лимит больше текущего.

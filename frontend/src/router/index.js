@@ -8,6 +8,7 @@ import ResetPasswordView from '../views/ResetPasswordView.vue'
 import OAuthDoneView from '../views/OAuthDoneView.vue'
 import { ACCESS_EVENT } from '../api/web'
 import { accessRedirect, loadProfile, useProfile } from '../composables/useProfile'
+import { captureRef } from '../composables/useReferral'
 import { getSession } from '../composables/useSession'
 
 const DOCS_PAGES = new Set(['privacy', 'consent', 'offer', 'cookies'])
@@ -250,6 +251,12 @@ const router = createRouter({
 const GATED = /^\/(cabinet|w)(\/|$)/
 
 router.beforeEach(async (to) => {
+  if (to.query.ref !== undefined) {
+    // Реф-код запоминаем и убираем из адреса — чтобы не попадал в закладки и не пересылался дальше.
+    captureRef(to.query.ref)
+    const { ref: _ref, ...query } = to.query
+    return { path: to.path, query, hash: to.hash, replace: true }
+  }
   if (!GATED.test(to.path) || !getSession()) return true
   try {
     await loadProfile()

@@ -18,6 +18,7 @@ import { computed, onMounted, ref } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
 import SiteHeader from '../components/SiteHeader.vue'
 import { ERRORS, webApi } from '../api/web'
+import { clearRef } from '../composables/useReferral'
 import { setSession, takeOAuthReturn } from '../composables/useSession'
 import { useHead } from '../utils/useHead'
 
@@ -75,6 +76,8 @@ onMounted(async () => {
   try {
     const data = await webApi.oauthExchange(code)
     setSession(data.token)
+    // Вошли — реф-код либо привязан к новому аккаунту, либо уже не нужен.
+    clearRef()
     pending.value = false
     router.replace(takeOAuthReturn())
   } catch (err) {

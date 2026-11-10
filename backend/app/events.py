@@ -22,7 +22,10 @@ KINDS = {
     "action_applied": "Выполнено предложение ИИ",
     "limit_exhausted": "Лимит исчерпан",
     "payment": "Оплата",
+    "refund": "Возврат",
     "plan_changed": "Смена тарифа",
+    "promo": "Промокод",
+    "plan_reminder": "Напоминание о тарифе",
 }
 
 
