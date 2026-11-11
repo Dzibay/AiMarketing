@@ -1,0 +1,112 @@
+---
+// Секция 6: две аудитории. Посадочных /direktologam/ и /biznesu/ пока нет — ведём на регистрацию.
+const cards = [
+  {
+    tag: 'Директологам и фрилансерам',
+    title: 'Все кабинеты клиентов в одном окне',
+    points: [
+      'Свои кабинеты и клиенты агентского аккаунта — в одной сводке',
+      'Минусовка, площадки и кросс-минусовка — пачкой по нескольким кампаниям',
+      'Утром в Telegram: у какого клиента что случилось',
+    ],
+    cta: 'Подключить кабинеты',
+    place: 'audience_freelance',
+  },
+  {
+    tag: 'Владельцам бизнеса',
+    title: 'Реклама в Директе понятным языком',
+    points: [
+      '«Что сделать сегодня» вместо отчёта на 40 колонок',
+      'Видно, за что вы платите и сколько стоит заявка',
+      'Ведёте сами или с подрядчиком — говорите с ним на одном языке',
+    ],
+    cta: 'Разобраться в своей рекламе',
+    place: 'audience_business',
+  },
+]
+---
+
+<section class="section section--tight" id="dlya-kogo" aria-labelledby="aud-h">
+  <div class="wrap">
+    <div class="q-head">
+      <span class="q-ask">Это для меня?</span>
+      <h2 id="aud-h">Если вы платите за Директ — да</h2>
+    </div>
+    <div class="aud">
+      {
+        cards.map((c, i) => (
+          <article class={`aud__card reveal ${i === 1 ? 'aud__card--alt' : ''}`}>
+            <span class="chip">{c.tag}</span>
+            <h3>{c.title}</h3>
+            <ul>
+              {c.points.map((p) => (
+                <li>{p}</li>
+              ))}
+            </ul>
+            <a class={`btn ${i === 1 ? 'btn--lime' : ''}`} href="/register" data-goal="signup_click" data-goal-place={c.place}>
+              {c.cta}
+            </a>
+          </article>
+        ))
+      }
+    </div>
+  </div>
+</section>
+
+<style>
+  .aud {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+  }
+  .aud__card {
+    display: grid;
+    gap: 18px;
+    align-content: start;
+    padding: clamp(24px, 4vw, 40px);
+    border-radius: 28px;
+    background: var(--surface);
+    border: 1px solid var(--line);
+  }
+  .aud__card--alt {
+    background: var(--surface-3);
+    transition-delay: 0.08s;
+  }
+  .aud__card h3 {
+    font-size: clamp(28px, 3vw, 36px);
+  }
+  .aud__card ul {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: grid;
+    gap: 12px;
+  }
+  .aud__card li {
+    display: grid;
+    grid-template-columns: 22px 1fr;
+    gap: 10px;
+    color: var(--ink-2);
+  }
+  .aud__card li::before {
+    content: '✓';
+    display: grid;
+    place-items: center;
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    background: var(--lime);
+    font-size: 12px;
+    font-weight: 800;
+    margin-top: 2px;
+  }
+  .aud__card .btn {
+    width: fit-content;
+    margin-top: 6px;
+  }
+  @media (max-width: 820px) {
+    .aud {
+      grid-template-columns: 1fr;
+    }
+  }
+</style>

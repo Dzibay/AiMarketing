@@ -111,6 +111,43 @@ def term_discount(plan: dict, months: int) -> float:
     return 0.0
 
 
+def public_catalog_from(rows: list[dict]) -> dict:
+    """Тарифы для сайта tolk-ads.ru из строк ``list_plans(for_admin=True)``: только включённые, без служебных полей.
+
+    Единицы, как и в кабинете, не показываем — только во сколько раз лимит больше, чем у младшего платного
+    тарифа (``units_factor``; у младшего — 1, без лимита — ``units_unlimited``).
+    """
+    active = [p for p in rows if p["active"]]
+    paid = [p for p in active if not p["is_trial"]]
+    trial = next((p for p in active if p["is_trial"]), None)
+    base = min((p["units_limit"] for p in paid if p["units_limit"]), default=None)
+    items = []
+    for plan in paid:
+        limit = plan["units_limit"]
+        items.append(
+            {
+                "id": plan["id"],
+                "name": plan["name"],
+                "price_rub": plan["price_rub"],
+                "days": plan["days"],
+                "projects_limit": plan["projects_limit"],
+                "features": plan["features"],
+                "units_unlimited": limit is None,
+                "units_factor": round(limit / base, 1) if base and limit else None,
+                "term_discounts": {str(m): term_discount(plan, m) for m in TERMS},
+            }
+        )
+    return {
+        "items": items,
+        "features": FEATURES,
+        "trial": {"days": trial["days"], "projects_limit": trial["projects_limit"]} if trial else None,
+    }
+
+
+def public_catalog() -> dict:
+    return public_catalog_from(list_plans(for_admin=True))
+
+
 def get_plan(plan_id: int) -> dict | None:
     with pool.connection() as conn:
         row = conn.execute("SELECT * FROM plans WHERE id = %s", (plan_id,)).fetchone()

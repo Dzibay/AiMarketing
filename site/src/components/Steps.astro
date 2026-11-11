@@ -1,0 +1,247 @@
+---
+// Секция 3: три шага слева, окно-«терминал» справа печатает, что происходит при подключении.
+const steps = [
+  { title: 'Войдите через Яндекс', text: 'Тот же вход, что в Директе. Пароли и платёжные данные Толку не нужны.' },
+  { title: 'Выберите кабинеты и цели', text: 'Свои кабинеты или клиентов из агентского аккаунта и цели Метрики, по которым считать заявки.' },
+  { title: 'Спросите — или дождитесь сводки', text: 'Задайте вопрос в чате или получите утреннюю сводку в Telegram: что случилось и что сделать.' },
+]
+const lines = [
+  { step: 0, text: 'Вход через Яндекс ID', ok: 'готово' },
+  { step: 1, text: 'Подключаю Директ', ok: '12 кампаний' },
+  { step: 1, text: 'Читаю Метрику', ok: '4 цели' },
+  { step: 2, text: 'Ищу утечки бюджета', ok: '3 находки' },
+  { step: 2, text: 'Сводка — в чате и в Telegram', ok: 'отправлено' },
+]
+---
+
+<section class="section steps" id="kak-nachat" data-steps aria-labelledby="steps-h">
+  <div class="wrap">
+    <div class="q-head">
+      <span class="q-ask">Как начать?</span>
+      <h2 id="steps-h">Пара минут — и&nbsp;первая сводка</h2>
+    </div>
+    <div class="steps__grid">
+      <ol class="steps__list">
+        {
+          steps.map((s, i) => (
+            <li class="steps__item" data-step={i}>
+              <span class="steps__num">{i + 1}</span>
+              <div>
+                <h3>{s.title}</h3>
+                <p>{s.text}</p>
+              </div>
+            </li>
+          ))
+        }
+        <li class="steps__go">
+          <a class="btn btn--lg" href="/register" data-goal="signup_click" data-goal-place="steps">Подключить Директ</a>
+        </li>
+      </ol>
+
+      <div class="term dark" aria-hidden="true">
+        <div class="term__bar">
+          <span class="term__dots"><i></i><i></i><i></i></span>
+          <span>толк · подключение</span>
+        </div>
+        <div class="term__body">
+          {
+            lines.map((l) => (
+              <p class="term__line" data-line data-step={l.step}>
+                <span class="term__prompt">›</span>
+                <span>{l.text}…</span>
+                <span class="term__ok">✓ {l.ok}</span>
+              </p>
+            ))
+          }
+          <p class="term__line term__line--final" data-line data-step="2">
+            <span class="term__prompt">›</span>
+            <span>Готово. Что посмотреть первым?</span>
+            <span class="term__cursor"></span>
+          </p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<script>
+  const root = document.querySelector<HTMLElement>('[data-steps]')
+  if (root) {
+    const lines = [...root.querySelectorAll<HTMLElement>('[data-line]')]
+    const items = [...root.querySelectorAll<HTMLElement>('.steps__item')]
+    const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches
+    const show = (i: number) => {
+      lines[i].classList.add('is-on')
+      const step = Number(lines[i].dataset.step)
+      items.forEach((el, k) => {
+        el.classList.toggle('is-active', k === step)
+        el.classList.toggle('is-done', k < step)
+      })
+    }
+    const run = () => {
+      if (reduced) return lines.forEach((_, i) => show(i))
+      lines.forEach((_, i) => setTimeout(() => show(i), 350 + i * 750))
+    }
+    const io = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((e) => e.isIntersecting)) {
+          io.disconnect()
+          run()
+        }
+      },
+      { threshold: 0.35 },
+    )
+    io.observe(root)
+  }
+</script>
+
+<style>
+  .steps__grid {
+    display: grid;
+    grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
+    gap: clamp(28px, 5vw, 64px);
+    align-items: center;
+  }
+  .steps__list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: grid;
+    gap: 10px;
+  }
+  .steps__item {
+    display: grid;
+    grid-template-columns: 44px 1fr;
+    gap: 16px;
+    padding: 18px;
+    border-radius: 20px;
+    border: 1px solid transparent;
+    transition:
+      background 0.3s ease,
+      border-color 0.3s ease;
+  }
+  .steps__item.is-active {
+    background: var(--surface);
+    border-color: var(--line);
+    box-shadow: var(--shadow);
+  }
+  .steps__num {
+    display: grid;
+    place-items: center;
+    width: 44px;
+    height: 44px;
+    border-radius: 14px;
+    background: var(--surface-3);
+    font-weight: 800;
+    font-size: 18px;
+    transition: background 0.3s ease;
+  }
+  .is-active .steps__num,
+  .is-done .steps__num {
+    background: var(--lime);
+  }
+  .steps__item h3 {
+    font-size: 21px;
+    letter-spacing: -0.02em;
+    margin-bottom: 4px;
+  }
+  .steps__item p {
+    color: var(--muted);
+    font-size: 16px;
+  }
+  .steps__go {
+    padding: 12px 18px 0;
+  }
+
+  .term {
+    border-radius: 24px;
+    overflow: hidden;
+    box-shadow: var(--shadow-pop);
+    background: #141413;
+  }
+  .term__bar {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 14px 18px;
+    border-bottom: 1px solid var(--line);
+    font-size: 13px;
+    color: var(--faint);
+    font-weight: 600;
+  }
+  .term__dots {
+    display: flex;
+    gap: 6px;
+  }
+  .term__dots i {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: #2a2b29;
+  }
+  .term__body {
+    display: grid;
+    gap: 6px;
+    min-height: 300px;
+    padding: 22px;
+    font-family: ui-monospace, 'SFMono-Regular', Consolas, monospace;
+    font-size: 15px;
+  }
+  .term__line {
+    display: flex;
+    gap: 10px;
+    align-items: baseline;
+    padding: 6px 0;
+    opacity: 0;
+    transform: translateX(-8px);
+    transition:
+      opacity 0.35s ease,
+      transform 0.35s ease;
+  }
+  .term__line.is-on {
+    opacity: 1;
+    transform: none;
+  }
+  .term__prompt {
+    color: var(--lime);
+    font-weight: 700;
+  }
+  .term__ok {
+    margin-left: auto;
+    color: var(--lime);
+    white-space: nowrap;
+  }
+  .term__line--final {
+    margin-top: 10px;
+    padding: 12px 14px;
+    border-radius: 12px;
+    background: var(--surface-2);
+    font-family: var(--font);
+    font-weight: 700;
+  }
+  .term__cursor {
+    width: 2px;
+    height: 1.1em;
+    background: var(--lime);
+    animation: tblink 0.9s steps(1) infinite;
+    align-self: center;
+  }
+  @keyframes tblink {
+    50% {
+      opacity: 0;
+    }
+  }
+  .no-js .term__line {
+    opacity: 1;
+    transform: none;
+  }
+  @media (max-width: 860px) {
+    .steps__grid {
+      grid-template-columns: 1fr;
+    }
+    .term__body {
+      font-size: 13px;
+      min-height: 0;
+    }
+  }
+</style>

@@ -1,0 +1,81 @@
+---
+// Секция 8: только проверенные по коду факты (docs/landing-plan.md, раздел 3, секция 8).
+const facts = [
+  { title: 'Официальный вход Яндекса', text: 'Подключение через OAuth Яндекса — пароль от Директа Толк не видит.' },
+  { title: 'Токены зашифрованы', text: 'Ключи доступа к Директу хранятся в зашифрованном виде.' },
+  { title: 'Без доступа к деньгам', text: 'Толк не пополняет баланс и не видит платёжные данные.' },
+  { title: 'Отзыв в один клик', text: 'Доступ можно отозвать в Яндекс ID в любой момент.' },
+]
+---
+
+<section class="section section--tight" id="bezopasnost" aria-labelledby="sec-h">
+  <div class="wrap sec">
+    <div class="q-head sec__head">
+      <span class="q-ask">А доступы и данные?</span>
+      <h2 id="sec-h">Ваш кабинет остаётся вашим</h2>
+      <p class="q-lead">Без вашего одобрения ничего не меняется, а каждое действие видно в журнале.</p>
+    </div>
+    <div class="sec__grid">
+      {
+        facts.map((f) => (
+          <div class="sec__item reveal">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M12 3 5 6v5c0 4.5 3 8.3 7 10 4-1.7 7-5.5 7-10V6z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" />
+              <path d="m9 12 2 2 4-4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+            </svg>
+            <h3>{f.title}</h3>
+            <p>{f.text}</p>
+          </div>
+        ))
+      }
+    </div>
+  </div>
+</section>
+
+<style>
+  .sec {
+    display: grid;
+    grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.2fr);
+    gap: clamp(28px, 5vw, 64px);
+    align-items: start;
+  }
+  .sec__head {
+    margin-bottom: 0;
+  }
+  .sec__grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 14px;
+  }
+  .sec__item {
+    display: grid;
+    gap: 6px;
+    padding: 22px;
+    border-radius: 20px;
+    background: var(--surface);
+    border: 1px solid var(--line);
+  }
+  .sec__item svg {
+    width: 28px;
+    height: 28px;
+    margin-bottom: 6px;
+  }
+  .sec__item h3 {
+    font-size: 18px;
+    letter-spacing: -0.02em;
+  }
+  .sec__item p {
+    color: var(--muted);
+    font-size: 15px;
+  }
+  @media (max-width: 860px) {
+    .sec {
+      grid-template-columns: 1fr;
+    }
+  }
+  @media (max-width: 520px) {
+    .sec__grid {
+      grid-template-columns: 1fr;
+    }
+  }
+</style>

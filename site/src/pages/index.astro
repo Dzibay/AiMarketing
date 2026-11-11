@@ -1,0 +1,200 @@
+---
+import Base from '../layouts/Base.astro'
+import HeroComposer from '../islands/HeroComposer.vue'
+import Calculator from '../islands/Calculator.vue'
+import Pricing from '../islands/Pricing.vue'
+import Scanner from '../components/Scanner.astro'
+import Steps from '../components/Steps.astro'
+import Approval from '../components/Approval.astro'
+import Bento from '../components/Bento.astro'
+import Audience from '../components/Audience.astro'
+import Security from '../components/Security.astro'
+import Faq from '../components/Faq.astro'
+import { BRAND, SLOGAN, SITE_URL } from '../lib/site.js'
+import { FAQ_ITEMS } from '../lib/faq.js'
+
+// Тарифы берём из API при сборке; если API недоступно — пустой каталог, остров обновит его в браузере.
+const empty = { items: [], features: {}, trial: null }
+async function loadPlans() {
+  const base = import.meta.env.SITE_API_URL || process.env.SITE_API_URL
+  if (!base) return empty
+  try {
+    const r = await fetch(`${base.replace(/\/$/, '')}/api/site/plans`, { signal: AbortSignal.timeout(5000) })
+    return r.ok ? await r.json() : empty
+  } catch {
+    return empty
+  }
+}
+const plans = await loadPlans()
+const trialDays = plans.trial?.days
+const daysWord = (n: number) =>
+  n % 10 === 1 && n % 100 !== 11 ? 'день' : [2, 3, 4].includes(n % 10) && ![12, 13, 14].includes(n % 100) ? 'дня' : 'дней'
+
+const jsonLd = [
+  {
+    '@context': 'https://schema.org',
+    '@type': 'Organization',
+    name: BRAND,
+    url: SITE_URL,
+    logo: `${SITE_URL}/favicon.svg`,
+    slogan: SLOGAN,
+  },
+  { '@context': 'https://schema.org', '@type': 'WebSite', name: BRAND, url: SITE_URL, inLanguage: 'ru' },
+  {
+    '@context': 'https://schema.org',
+    '@type': 'FAQPage',
+    mainEntity: FAQ_ITEMS.map((f) => ({
+      '@type': 'Question',
+      name: f.q,
+      acceptedAnswer: { '@type': 'Answer', text: f.a },
+    })),
+  },
+]
+---
+
+<Base
+  title="ИИ-помощник для Яндекс Директа: найдёт, где утекает бюджет — Толк"
+  description="Толк читает ваш Директ и Метрику, находит мусорные запросы, площадки без заявок и просадки — и предлагает правки. Ничего не меняет без вашего одобрения. Попробуйте бесплатно."
+  jsonLd={jsonLd}
+>
+  <section class="hero">
+    <div class="wrap hero__wrap">
+      <span class="chip hero__badge"><i></i>ИИ-помощник для Яндекс Директа</span>
+      <h1>Спросите, что не так с&nbsp;вашей рекламой</h1>
+      <p class="hero__sub">
+        Толк читает ваш Директ и Метрику, находит, где утекают деньги, и предлагает правки. Ничего не меняет без вашего
+        «Одобрить».
+      </p>
+      <div class="hero__composer">
+        <HeroComposer client:load />
+      </div>
+      <ul class="hero__trust">
+        <li>Официальный API Яндекс Директа</li>
+        <li>Не видим платёжные данные</li>
+        <li>Любую правку можно откатить</li>
+        {trialDays ? <li>{trialDays} {daysWord(trialDays)} бесплатно</li> : <li>Бесплатный пробный период</li>}
+      </ul>
+    </div>
+  </section>
+
+  <Scanner />
+  <Steps />
+  <Approval />
+  <Bento />
+  <Audience />
+
+  <section class="section" id="kalkulyator" aria-labelledby="calc-h">
+    <div class="wrap">
+      <div class="q-head">
+        <span class="q-ask">Сколько я теряю?</span>
+        <h2 id="calc-h">Посчитайте, сколько можно вернуть</h2>
+        <p class="q-lead">Подвигайте ползунки под свой кабинет — результат пересчитается сразу.</p>
+      </div>
+      <Calculator client:visible={{ rootMargin: '400px' }} />
+    </div>
+  </section>
+
+  <Security />
+
+  <section class="section" id="tarify" aria-labelledby="price-h">
+    <div class="wrap">
+      <div class="q-head q-head--center">
+        <span class="q-ask">Сколько стоит?</span>
+        <h2 id="price-h">Начните бесплатно, платите, когда понравится</h2>
+      </div>
+      <Pricing client:visible={{ rootMargin: '400px' }} initial={plans} />
+    </div>
+  </section>
+
+  <Faq />
+
+  <section class="section final dark" aria-labelledby="final-h">
+    <div class="wrap final__wrap">
+      <h2 id="final-h">Спросите Толк о своей рекламе</h2>
+      <p class="q-lead">Демо работает прямо здесь. На своих данных — после подключения Директа, это пара минут.</p>
+      <HeroComposer client:visible compact />
+    </div>
+  </section>
+</Base>
+
+<style>
+  .hero {
+    padding: clamp(48px, 9vw, 112px) 0 clamp(40px, 6vw, 72px);
+    background:
+      radial-gradient(60% 50% at 50% 0%, var(--lime-soft), transparent 70%),
+      var(--bg);
+  }
+  .hero__wrap {
+    display: grid;
+    justify-items: center;
+    text-align: center;
+    gap: 22px;
+  }
+  .hero__badge {
+    gap: 8px;
+  }
+  .hero__badge i {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--ok);
+  }
+  .hero h1 {
+    max-width: 14ch;
+    font-size: clamp(42px, 7.4vw, 92px);
+    line-height: 0.98;
+    letter-spacing: -0.05em;
+  }
+  .hero__sub {
+    max-width: 640px;
+    font-size: clamp(17px, 2vw, 21px);
+    color: var(--ink-2);
+  }
+  .hero__composer {
+    width: 100%;
+    max-width: 760px;
+    margin-top: 8px;
+    text-align: left;
+  }
+  .hero__trust {
+    list-style: none;
+    margin: 6px 0 0;
+    padding: 0;
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 8px 22px;
+    color: var(--muted);
+    font-size: 14px;
+    font-weight: 600;
+  }
+  .hero__trust li {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+  }
+  .hero__trust li::before {
+    content: '✓';
+    color: var(--ok);
+    font-weight: 800;
+  }
+
+  .final {
+    background: #141413;
+    color: var(--ink);
+  }
+  .final__wrap {
+    display: grid;
+    justify-items: center;
+    text-align: center;
+    gap: 18px;
+    max-width: 820px;
+  }
+  .final h2 {
+    font-size: clamp(34px, 5vw, 60px);
+  }
+  .final__wrap :global(.hc) {
+    width: 100%;
+    text-align: left;
+  }
+</style>

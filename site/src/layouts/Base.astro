@@ -1,0 +1,129 @@
+---
+import '@fontsource-variable/manrope'
+import '../styles/global.css'
+import Header from '../components/Header.astro'
+import Footer from '../components/Footer.astro'
+import { BRAND, SITE_URL } from '../lib/site.js'
+
+interface Props {
+  title: string
+  description: string
+  jsonLd?: object[]
+  noindex?: boolean
+}
+
+const { title, description, jsonLd = [], noindex = false } = Astro.props
+const canonical = new URL(Astro.url.pathname, SITE_URL).href
+const fullTitle = title.includes(BRAND) ? title : `${title} — ${BRAND}`
+const metrikaId = import.meta.env.PUBLIC_METRIKA_ID || ''
+---
+
+<!doctype html>
+<html lang="ru" class="no-js">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#f4f4f1" />
+    <title>{fullTitle}</title>
+    <meta name="description" content={description} />
+    <link rel="canonical" href={canonical} />
+    {noindex && <meta name="robots" content="noindex" />}
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content={BRAND} />
+    <meta property="og:locale" content="ru_RU" />
+    <meta property="og:title" content={fullTitle} />
+    <meta property="og:description" content={description} />
+    <meta property="og:url" content={canonical} />
+
+    {jsonLd.map((data) => <script type="application/ld+json" set:html={JSON.stringify(data)} />)}
+
+    <script is:inline>
+      // До первой отрисовки: JS есть; вошёл ли человек в кабинет (та же сессия, что у SPA) — меняем кнопки шапки.
+      ;(function () {
+        var root = document.documentElement
+        root.classList.remove('no-js')
+        try {
+          if (localStorage.getItem('aimarketing-session')) root.classList.add('has-session')
+        } catch (e) {}
+      })()
+    </script>
+    <script is:inline>
+      // Реф-ссылка ?ref=код — как useReferral.js кабинета: тот же ключ, 90 дней, первая ссылка не перебивается.
+      ;(function () {
+        var params = new URLSearchParams(location.search)
+        if (!params.has('ref')) return
+        var code = String(params.get('ref') || '').trim().toLowerCase()
+        params.delete('ref')
+        var query = params.toString()
+        history.replaceState(null, '', location.pathname + (query ? '?' + query : '') + location.hash)
+        if (!/^[a-z0-9_-]{2,40}$/.test(code)) return
+        try {
+          var KEY = 'aimarketing-ref'
+          var saved = JSON.parse(localStorage.getItem(KEY) || 'null')
+          if (saved && /^[a-z0-9_-]{2,40}$/.test(saved.code) && Date.now() - saved.at < 90 * 864e5) return
+          localStorage.setItem(KEY, JSON.stringify({ code: code, at: Date.now() }))
+          fetch('/api/site/ref', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ code: code }),
+          })
+            .then(function (r) {
+              if (r.status === 404) localStorage.removeItem(KEY)
+            })
+            .catch(function () {})
+        } catch (e) {}
+      })()
+    </script>
+    {
+      metrikaId && (
+        <script is:inline define:vars={{ metrikaId }}>
+          window.__metrika = Number(metrikaId)
+          ;(function (m, e, t, r, i, k, a) {
+            m[i] = m[i] || function () { (m[i].a = m[i].a || []).push(arguments) }
+            m[i].l = 1 * new Date()
+            k = e.createElement(t); a = e.getElementsByTagName(t)[0]
+            k.async = 1; k.src = r; a.parentNode.insertBefore(k, a)
+          })(window, document, 'script', 'https://mc.yandex.ru/metrika/tag.js', 'ym')
+          ym(window.__metrika, 'init', { clickmap: true, trackLinks: true, accurateTrackBounce: true, webvisor: true })
+        </script>
+      )
+    }
+  </head>
+  <body>
+    <a class="sr-only" href="#main">К содержимому</a>
+    <Header />
+    <main id="main">
+      <slot />
+    </main>
+    <Footer />
+
+    <script>
+      // Появление блоков при прокрутке + цели Метрики по data-goal на ссылках и кнопках.
+      import { goal } from '../lib/goal.js'
+
+      const items = document.querySelectorAll('.reveal')
+      if ('IntersectionObserver' in window) {
+        const io = new IntersectionObserver(
+          (entries) => {
+            for (const entry of entries) {
+              if (!entry.isIntersecting) continue
+              entry.target.classList.add('is-in')
+              io.unobserve(entry.target)
+            }
+          },
+          { rootMargin: '0px 0px -8% 0px' },
+        )
+        items.forEach((el) => io.observe(el))
+      } else {
+        items.forEach((el) => el.classList.add('is-in'))
+      }
+
+      document.addEventListener('click', (event) => {
+        const el = (event.target as HTMLElement).closest<HTMLElement>('[data-goal]')
+        if (el) goal(el.dataset.goal!, el.dataset.goalPlace ? { place: el.dataset.goalPlace } : undefined)
+      })
+    </script>
+  </body>
+</html>

@@ -1,9 +1,10 @@
 import logging
+import time
 
 from fastapi import APIRouter, Body, HTTPException
 from pydantic import BaseModel
 
-from app import payments, referrals
+from app import payments, plans, referrals
 
 from app.config import settings
 from app.legal import legal_consent_data, legal_cookies_data, legal_offer_data, legal_privacy_data
@@ -46,6 +47,20 @@ def site_config() -> dict:
         "offer_url": offer_url() or "/offer",
         "cookies_url": cookies_url() or "/cookies",
     }
+
+
+_PLANS_TTL = 300
+_plans_cache: dict = {"at": 0.0, "data": None}
+
+
+@router.get("/site/plans")
+def site_plans() -> dict:
+    """Тарифы для сайта tolk-ads.ru: при сборке страниц и в браузере. Кэш на 5 минут — сайт дёргает часто."""
+    now = time.monotonic()
+    if _plans_cache["data"] is None or now - _plans_cache["at"] > _PLANS_TTL:
+        _plans_cache["data"] = plans.public_catalog()
+        _plans_cache["at"] = now
+    return _plans_cache["data"]
 
 
 @router.get("/site/legal/{page}")

@@ -1,0 +1,8 @@
+# Локальные зависимости и сборки: в образе ставятся и собираются заново под Linux.
+**/node_modules
+**/dist
+site/.astro
+backend/.venv
+**/__pycache__
+.git
+.env

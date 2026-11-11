@@ -1,0 +1,354 @@
+---
+// Секция 2: «грязный» кабинет, по которому при прокрутке проходит лаймовая линия сканера.
+const rows = [
+  { name: 'Поиск — ремонт квартир', spend: '46 200 ₽', leads: '38', bad: '63 мусорных запроса', fix: 'Добавить 63 минус-фразы' },
+  { name: 'РСЯ — ремонт квартир', spend: '31 800 ₽', leads: '12', bad: '27 площадок без заявок', fix: 'Отключить площадки · −18 400 ₽' },
+  { name: 'Поиск — Москва', spend: '52 100 ₽', leads: '31', bad: 'Заявка дорожает 3 недели', fix: 'Перезапустить копией' },
+  { name: 'Ретаргетинг', spend: '9 400 ₽', leads: '14', bad: '', fix: '' },
+  { name: 'Мастер кампаний — дизайн', spend: '12 300 ₽', leads: '2', bad: 'Объявление отклонено', fix: 'Поправить текст и отправить' },
+  { name: 'Поиск — бренд', spend: '4 100 ₽', leads: '22', bad: '', fix: '' },
+]
+---
+
+<section class="scan" id="skaner" data-scan aria-labelledby="scan-h">
+  <div class="scan__sticky">
+    <div class="wrap scan__grid">
+      <div class="q-head scan__head">
+        <span class="q-ask">А что он найдёт у меня?</span>
+        <h2 id="scan-h">Утечки, которых не видно в&nbsp;отчётах</h2>
+        <p class="q-lead">
+          Толк каждый день проходит по кампаниям, запросам и площадкам и сверяет расход с целями Метрики. Всё, что
+          тратит деньги без заявок, — в одном списке, с готовой правкой.
+        </p>
+        <div class="scan__sum" data-scan-sum>
+          <strong>4 проблемы</strong>
+          <span>~23 600 ₽ в месяц можно вернуть</span>
+          <span class="demo-note">Демо-сценарий: цифры для примера</span>
+        </div>
+      </div>
+
+      <div class="scan__board card" role="img" aria-label="Кабинет Директа до и после проверки Толком: четыре кампании с проблемами получают готовые правки">
+        <div class="scan__bar">
+          <span class="scan__dots"><i></i><i></i><i></i></span>
+          <span>Кампании · 30 дней</span>
+          <span class="scan__status" data-scan-status>Проверяю…</span>
+        </div>
+        <div class="scan__table">
+          <div class="scan__row scan__row--head">
+            <span>Кампания</span><span>Расход</span><span>Заявки</span><span>Состояние</span>
+          </div>
+          {
+            rows.map((r) => (
+              <div class={`scan__row ${r.bad ? 'has-issue' : ''}`} data-scan-row>
+                <span class="scan__name">{r.name}</span>
+                <span class="scan__num">{r.spend}</span>
+                <span class="scan__num">{r.leads}</span>
+                <span class="scan__state">
+                  {r.bad ? (
+                    <>
+                      <em class="scan__bad">{r.bad}</em>
+                      <em class="scan__fix">{r.fix}</em>
+                    </>
+                  ) : (
+                    <em class="scan__ok">В порядке</em>
+                  )}
+                </span>
+              </div>
+            ))
+          }
+          <div class="scan__line" aria-hidden="true"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<script>
+  const section = document.querySelector<HTMLElement>('[data-scan]')
+  if (section) {
+    const rows = [...section.querySelectorAll<HTMLElement>('[data-scan-row]')]
+    const status = section.querySelector<HTMLElement>('[data-scan-status]')!
+    const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches
+    let last = -1
+
+    const apply = (p: number) => {
+      section.style.setProperty('--p', String(p))
+      const done = rows.filter((_, i) => p > (i + 0.6) / (rows.length + 1)).length
+      if (done === last) return
+      last = done
+      rows.forEach((row, i) => row.classList.toggle('is-done', i < done))
+      const finished = done === rows.length
+      section.classList.toggle('is-finished', finished)
+      status.textContent = finished ? 'Готово · 4 правки' : done ? `Проверено ${done} из ${rows.length}` : 'Проверяю…'
+    }
+
+    if (reduced) {
+      section.classList.add('is-static')
+      apply(1)
+    } else {
+      let ticking = false
+      const update = () => {
+        ticking = false
+        const rect = section.getBoundingClientRect()
+        const total = section.offsetHeight - window.innerHeight
+        const p = total > 0 ? Math.min(1, Math.max(0, -rect.top / total)) : 1
+        apply(p)
+      }
+      window.addEventListener(
+        'scroll',
+        () => {
+          if (!ticking) {
+            ticking = true
+            requestAnimationFrame(update)
+          }
+        },
+        { passive: true },
+      )
+      window.addEventListener('resize', update)
+      update()
+    }
+  }
+</script>
+
+<style>
+  .scan {
+    --p: 0;
+    position: relative;
+    height: 240vh;
+  }
+  .scan.is-static {
+    height: auto;
+  }
+  .scan__sticky {
+    position: sticky;
+    top: 0;
+    min-height: 100vh;
+    display: grid;
+    align-items: center;
+    padding-block: 96px 48px;
+  }
+  .is-static .scan__sticky {
+    position: static;
+    min-height: 0;
+  }
+  .scan__grid {
+    display: grid;
+    grid-template-columns: minmax(0, 0.85fr) minmax(0, 1.15fr);
+    gap: clamp(32px, 5vw, 72px);
+    align-items: center;
+  }
+  .scan__head {
+    margin-bottom: 0;
+  }
+  .scan__sum {
+    display: grid;
+    gap: 2px;
+    width: fit-content;
+    padding: 16px 20px;
+    border-radius: 18px;
+    background: var(--solid);
+    color: var(--on-solid);
+    opacity: 0;
+    transform: translateY(10px);
+    transition:
+      opacity 0.4s ease,
+      transform 0.4s ease;
+  }
+  .scan__sum strong {
+    font-size: 28px;
+    letter-spacing: -0.03em;
+    line-height: 1.1;
+  }
+  .scan__sum strong::before {
+    content: '';
+    display: inline-block;
+    width: 12px;
+    height: 12px;
+    margin-right: 10px;
+    border-radius: 50%;
+    background: var(--lime);
+    vertical-align: 4px;
+  }
+  .scan__sum .demo-note {
+    color: #8c8c85;
+  }
+  .is-finished .scan__sum {
+    opacity: 1;
+    transform: none;
+  }
+
+  .scan__board {
+    overflow: hidden;
+    border-radius: 22px;
+  }
+  .scan__bar {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 14px 18px;
+    border-bottom: 1px solid var(--line);
+    font-size: 14px;
+    font-weight: 700;
+  }
+  .scan__dots {
+    display: flex;
+    gap: 6px;
+  }
+  .scan__dots i {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: var(--surface-3);
+  }
+  .scan__status {
+    margin-left: auto;
+    padding: 4px 10px;
+    border-radius: var(--pill);
+    background: var(--surface-2);
+    font-size: 13px;
+    color: var(--muted);
+  }
+  .is-finished .scan__status {
+    background: var(--lime);
+    color: var(--on-lime);
+  }
+  .scan__table {
+    position: relative;
+    padding: 6px 0;
+  }
+  .scan__row {
+    display: grid;
+    grid-template-columns: minmax(0, 1.5fr) 0.8fr 0.5fr minmax(0, 1.6fr);
+    gap: 12px;
+    align-items: center;
+    padding: 13px 18px;
+    font-size: 14px;
+    border-bottom: 1px solid var(--line);
+    transition: background 0.35s ease;
+  }
+  .scan__row:last-of-type {
+    border-bottom: 0;
+  }
+  .scan__row--head {
+    padding-block: 8px;
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--faint);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  .scan__name {
+    font-weight: 700;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .scan__num {
+    font-variant-numeric: tabular-nums;
+    color: var(--ink-2);
+  }
+  .scan__state {
+    position: relative;
+    display: grid;
+  }
+  .scan__state em {
+    grid-area: 1 / 1;
+    width: fit-content;
+    padding: 4px 10px;
+    border-radius: 8px;
+    font-style: normal;
+    font-weight: 700;
+    font-size: 13px;
+    transition:
+      opacity 0.35s ease,
+      transform 0.35s ease;
+  }
+  .scan__bad {
+    background: var(--danger-soft);
+    color: var(--danger);
+    transform: rotate(-1.2deg);
+  }
+  .scan__fix {
+    background: var(--lime);
+    color: var(--on-lime);
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  .scan__ok {
+    color: var(--ok);
+    background: var(--ok-soft);
+  }
+  .has-issue:not(.is-done) {
+    background: repeating-linear-gradient(-45deg, transparent 0 10px, rgba(192, 57, 43, 0.035) 10px 20px);
+  }
+  .is-done .scan__bad {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+  .is-done .scan__fix {
+    opacity: 1;
+    transform: none;
+  }
+  .scan__line {
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: calc(var(--p) * 100%);
+    height: 2px;
+    background: var(--lime);
+    box-shadow:
+      0 0 0 1px rgba(198, 240, 74, 0.35),
+      0 0 28px 8px rgba(198, 240, 74, 0.45);
+    pointer-events: none;
+    transition: opacity 0.3s ease;
+  }
+  .is-finished .scan__line,
+  .is-static .scan__line {
+    opacity: 0;
+  }
+
+  @media (max-width: 900px) {
+    .scan {
+      height: 260vh;
+    }
+    .scan__sticky {
+      padding-block: 80px 24px;
+      align-items: start;
+    }
+    .scan__grid {
+      grid-template-columns: 1fr;
+      gap: 20px;
+    }
+    .scan__head .q-lead {
+      display: none;
+    }
+    .scan__head h2 {
+      font-size: 32px;
+    }
+    .scan__sum {
+      position: absolute;
+      bottom: 24px;
+      left: 20px;
+      right: 20px;
+      width: auto;
+      z-index: 2;
+    }
+    .is-static .scan__sum {
+      position: static;
+    }
+    .scan__row {
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 6px 12px;
+      padding: 10px 14px;
+    }
+    .scan__row--head {
+      display: none;
+    }
+    .scan__row .scan__num:nth-child(3) {
+      display: none;
+    }
+    .scan__state {
+      grid-column: 1 / -1;
+    }
+  }
+</style>

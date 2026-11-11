@@ -1,5 +1,4 @@
 import { createRouter, createWebHistory } from 'vue-router'
-import HomeView from '../views/HomeView.vue'
 import LegalView from '../views/LegalView.vue'
 import LoginView from '../views/LoginView.vue'
 import RegisterView from '../views/RegisterView.vue'
@@ -25,7 +24,8 @@ const expert = (meta) => ({ ...meta, expert: true })
 const router = createRouter({
   history: createWebHistory(),
   routes: [
-    { path: '/', name: 'home', component: HomeView },
+    // Главная — статический сайт site/ (nginx отдаёт его сам). Сюда SPA попадает только в dev или по ссылке изнутри.
+    { path: '/', name: 'home', redirect: () => (getSession() ? '/cabinet' : '/login') },
     { path: '/login', name: 'login', component: LoginView },
     { path: '/register', name: 'register', component: RegisterView },
     { path: '/forgot-password', name: 'forgot-password', component: ForgotPasswordView },
@@ -227,7 +227,7 @@ const router = createRouter({
     { path: '/cookies', name: 'cookies', component: LegalView, props: { page: 'cookies' } },
     { path: '/admin', redirect: '/admin-panel' },
     { path: '/admin-panel', name: 'admin', component: () => import('../views/AdminView.vue') },
-    { path: '/:pathMatch(.*)*', redirect: '/' },
+    { path: '/:pathMatch(.*)*', redirect: '/cabinet' },
   ],
   scrollBehavior(to, from, savedPosition) {
     if (DOCS_PAGES.has(to.name)) {

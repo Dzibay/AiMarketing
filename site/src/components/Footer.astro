@@ -1,0 +1,103 @@
+---
+import Logo from './Logo.astro'
+import { FOOTER, SLOGAN } from '../lib/site.js'
+
+// Реквизиты и почта нужны для проверки сайта ЮKassa — задаются при сборке (site/.env), без них строки не выводятся.
+const legal = import.meta.env.PUBLIC_LEGAL_LINE || ''
+const email = import.meta.env.PUBLIC_SUPPORT_EMAIL || ''
+const year = new Date().getFullYear()
+---
+
+<footer class="ftr dark">
+  <div class="wrap ftr__in">
+    <div class="ftr__brand">
+      <Logo size={36} />
+      <p>{SLOGAN}. ИИ-помощник для Яндекс Директа и Метрики, который предлагает — а решаете вы.</p>
+      {email && <a class="ftr__mail" href={`mailto:${email}`}>{email}</a>}
+    </div>
+    {
+      FOOTER.map((col) => (
+        <div class="ftr__col">
+          <h3>{col.title}</h3>
+          <ul>
+            {col.links.map((link) => (
+              <li>
+                <a href={link.href}>{link.label}</a>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ))
+    }
+  </div>
+  <div class="wrap ftr__base">
+    <span>© {year} Толк</span>
+    {legal && <span>{legal}</span>}
+    <span>Яндекс Директ, Метрика и Вордстат — сервисы ООО «Яндекс». Толк работает через их официальные API.</span>
+  </div>
+</footer>
+
+<style>
+  .ftr {
+    padding-block: 72px 32px;
+  }
+  .ftr__in {
+    display: grid;
+    grid-template-columns: 1.6fr repeat(3, 1fr);
+    gap: 40px;
+  }
+  .ftr__brand {
+    display: grid;
+    gap: 16px;
+    align-content: start;
+    max-width: 340px;
+  }
+  .ftr__brand p {
+    color: var(--muted);
+    font-size: 15px;
+  }
+  .ftr__mail {
+    font-weight: 700;
+    text-decoration: none;
+  }
+  .ftr__col h3 {
+    font-size: 14px;
+    letter-spacing: 0;
+    color: var(--faint);
+    font-weight: 700;
+    margin-bottom: 14px;
+  }
+  .ftr__col ul {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: grid;
+    gap: 10px;
+  }
+  .ftr__col a {
+    color: var(--ink-2);
+    text-decoration: none;
+    font-size: 15px;
+  }
+  .ftr__col a:hover {
+    color: var(--lime);
+  }
+  .ftr__base {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px 24px;
+    margin-top: 56px;
+    padding-top: 24px;
+    border-top: 1px solid var(--line);
+    font-size: 13px;
+    color: var(--faint);
+  }
+  @media (max-width: 860px) {
+    .ftr__in {
+      grid-template-columns: 1fr 1fr;
+    }
+    .ftr__brand {
+      grid-column: 1 / -1;
+    }
+  }
+</style>

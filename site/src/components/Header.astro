@@ -1,0 +1,166 @@
+---
+import Logo from './Logo.astro'
+import { APP, NAV } from '../lib/site.js'
+---
+
+<header class="hdr" data-hdr>
+  <div class="wrap hdr__in">
+    <a class="hdr__brand" href="/" aria-label="Толк — на главную"><Logo /></a>
+    <nav class="hdr__nav" aria-label="Разделы">
+      {NAV.map((item) => <a href={item.href}>{item.label}</a>)}
+    </nav>
+    <div class="hdr__act">
+      <a class="hdr__login when-guest" href={APP.login}>Войти</a>
+      <a class="btn btn--sm when-guest" href={APP.register} data-goal="signup_click" data-goal-place="header">
+        Попробовать<span class="hdr__long">&nbsp;бесплатно</span>
+      </a>
+      <a class="btn btn--sm when-session" href={APP.cabinet}>В кабинет</a>
+      <button class="hdr__burger" type="button" aria-label="Меню" aria-expanded="false" data-burger>
+        <span></span><span></span>
+      </button>
+    </div>
+  </div>
+  <nav class="hdr__mobile" aria-label="Разделы" data-mobile hidden>
+    {NAV.map((item) => <a href={item.href}>{item.label}</a>)}
+    <a class="when-guest" href={APP.login}>Войти</a>
+  </nav>
+</header>
+
+<script>
+  const hdr = document.querySelector<HTMLElement>('[data-hdr]')!
+  const burger = hdr.querySelector<HTMLButtonElement>('[data-burger]')!
+  const mobile = hdr.querySelector<HTMLElement>('[data-mobile]')!
+  const onScroll = () => hdr.classList.toggle('is-scrolled', window.scrollY > 8)
+  onScroll()
+  window.addEventListener('scroll', onScroll, { passive: true })
+  const setOpen = (open: boolean) => {
+    mobile.hidden = !open
+    burger.setAttribute('aria-expanded', String(open))
+    hdr.classList.toggle('is-open', open)
+  }
+  burger.addEventListener('click', () => setOpen(mobile.hidden))
+  mobile.addEventListener('click', (e) => {
+    if ((e.target as HTMLElement).closest('a')) setOpen(false)
+  })
+</script>
+
+<style>
+  .hdr {
+    position: sticky;
+    top: 0;
+    z-index: 50;
+    transition:
+      background 0.2s ease,
+      box-shadow 0.2s ease;
+  }
+  .hdr.is-scrolled,
+  .hdr.is-open {
+    background: var(--glass);
+    backdrop-filter: saturate(1.4) blur(14px);
+    box-shadow: 0 1px 0 var(--line);
+  }
+  .hdr__in {
+    display: flex;
+    align-items: center;
+    gap: 28px;
+    height: 72px;
+  }
+  .hdr__brand {
+    text-decoration: none;
+    flex: none;
+  }
+  .hdr__nav {
+    display: flex;
+    gap: 4px;
+    margin-inline: auto;
+  }
+  .hdr__nav a,
+  .hdr__login {
+    padding: 8px 12px;
+    border-radius: var(--pill);
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--ink-2);
+    text-decoration: none;
+  }
+  .hdr__nav a:hover,
+  .hdr__login:hover {
+    background: var(--surface);
+    color: var(--ink);
+  }
+  .hdr__act {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  :global(.has-session) .when-guest,
+  .when-session {
+    display: none;
+  }
+  :global(.has-session) .when-session {
+    display: inline-flex;
+  }
+  .hdr__burger {
+    display: none;
+    width: 44px;
+    height: 44px;
+    border: 0;
+    border-radius: 50%;
+    background: transparent;
+    cursor: pointer;
+    place-content: center;
+    gap: 6px;
+  }
+  .hdr__burger span {
+    display: block;
+    width: 20px;
+    height: 2px;
+    border-radius: 2px;
+    background: var(--ink);
+    transition: transform 0.2s ease;
+  }
+  .is-open .hdr__burger span:first-child {
+    transform: translateY(4px) rotate(45deg);
+  }
+  .is-open .hdr__burger span:last-child {
+    transform: translateY(-4px) rotate(-45deg);
+  }
+  .hdr__mobile {
+    display: grid;
+    padding: 4px 20px 20px;
+  }
+  .hdr__mobile[hidden] {
+    display: none;
+  }
+  .hdr__mobile a {
+    padding: 14px 4px;
+    border-bottom: 1px solid var(--line);
+    font-weight: 700;
+    font-size: 18px;
+    text-decoration: none;
+  }
+  @media (max-width: 960px) {
+    .hdr__nav,
+    .hdr__login {
+      display: none;
+    }
+    .hdr__act {
+      margin-left: auto;
+    }
+    .hdr__burger {
+      display: grid;
+    }
+  }
+  @media (max-width: 420px) {
+    .hdr__act .btn {
+      padding: 0 14px;
+      font-size: 14px;
+    }
+    .hdr__long {
+      display: none;
+    }
+    .hdr__burger {
+      width: 40px;
+    }
+  }
+</style>

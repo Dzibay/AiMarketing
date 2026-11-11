@@ -1,0 +1,18 @@
+User-agent: *
+Disallow: /cabinet
+Disallow: /w/
+Disallow: /admin
+Disallow: /admin-panel
+Disallow: /api/
+Disallow: /oauth/
+
+User-agent: Yandex
+Disallow: /cabinet
+Disallow: /w/
+Disallow: /admin
+Disallow: /admin-panel
+Disallow: /api/
+Disallow: /oauth/
+Clean-param: ref&utm_source&utm_medium&utm_campaign&utm_content&utm_term&yclid
+
+Sitemap: https://tolk-ads.ru/sitemap-index.xml

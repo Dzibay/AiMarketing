@@ -1,10 +1,11 @@
 <template>
   <header class="site-header" :class="{ 'is-solid': solid }">
     <div class="wrap site-header__inner">
-      <RouterLink class="brand" to="/" aria-label="AiMarketing">
+      <!-- Главная — статический сайт (site/), а не маршрут SPA: обычная ссылка с перезагрузкой. -->
+      <a class="brand" href="/" aria-label="AiMarketing">
         <i class="brand__dot" aria-hidden="true"><Sparkles /></i>
         <span class="brand__name">AiMarketing</span>
-      </RouterLink>
+      </a>
       <nav class="nav">
         <button class="icon-btn" type="button" :aria-label="isDark ? 'Светлая тема' : 'Тёмная тема'" @click="toggleTheme">
           <Sun v-if="isDark" aria-hidden="true" />

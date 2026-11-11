@@ -1,0 +1,35 @@
+---
+import Base from '../layouts/Base.astro'
+---
+
+<Base title="Страница не найдена" description="Такой страницы на сайте Толка нет." noindex>
+  <section class="section nf">
+    <div class="wrap nf__in">
+      <span class="q-ask">Где эта страница?</span>
+      <h1>Такой страницы нет</h1>
+      <p class="q-lead">Возможно, адрес изменился. Начните с главной — или сразу спросите Толк о своей рекламе.</p>
+      <div class="nf__act">
+        <a class="btn btn--lg" href="/">На главную</a>
+        <a class="btn btn--lg btn--ghost" href="/register">Попробовать бесплатно</a>
+      </div>
+    </div>
+  </section>
+</Base>
+
+<style>
+  .nf__in {
+    display: grid;
+    gap: 22px;
+    justify-items: start;
+    min-height: 52vh;
+    align-content: center;
+  }
+  h1 {
+    font-size: clamp(40px, 7vw, 76px);
+  }
+  .nf__act {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+</style>
