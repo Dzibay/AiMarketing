@@ -1,4 +1,160 @@
 <template>
+  <template v-if="!expert">
+    <p v-if="!briefFilled" class="notice notice--warn">
+      Бриф клиента не заполнен — ИИ хуже понимает, что вы продаёте, и чаще ошибается.
+      <RouterLink :to="`/w/${ws.id}/settings#brief`">Заполнить бриф</RouterLink>
+    </p>
+
+    <p v-if="loading && !data" class="ccard ccard--note">Загружаем запросы…</p>
+    <div v-else-if="!data" class="ccard ccard--note">
+      {{ loadError || 'Не удалось загрузить запросы.' }}
+      <button class="btn btn--ghost" type="button" @click="load()">Повторить</button>
+    </div>
+    <div v-else-if="!campaigns.length" class="ccard ccard--note">
+      В проекте нет поисковых кампаний — чистить нечего. Добавьте кампании в
+      <RouterLink :to="`/w/${ws.id}/settings`">настройках</RouterLink>.
+    </div>
+    <template v-else>
+      <div v-if="result" class="ccard tri-done">
+        <div class="prow">
+          <div class="prow__main">
+            <strong>{{ resultTitle }}</strong>
+            <span class="meta-note">
+              Решения запомнили — эти запросы больше не попадут в разбор.
+              <template v-if="result.problems.length">
+                Не получилось с {{ result.problems.length }} — подробности в экспертном режиме.
+              </template>
+            </span>
+          </div>
+          <div class="prow__acts">
+            <button v-if="forceable.length" class="btn btn--ghost" type="button" :disabled="!!busy" @click="applyForce">
+              Всё равно добавить {{ forceable.length }}
+            </button>
+            <button v-if="result.log_id" class="btn btn--ghost" type="button" @click="undoId = result.log_id">
+              Вернуть
+            </button>
+            <button class="btn btn--ghost" type="button" @click="result = null">Скрыть</button>
+          </div>
+        </div>
+      </div>
+
+      <section class="ccard tri-sum">
+        <div class="tri-sum__text">
+          <h2>{{ summary.title }}</h2>
+          <p class="meta-note">{{ summary.note }}</p>
+          <p v-if="busyText" class="sync-status">{{ busyText }}</p>
+        </div>
+        <div class="tri-sum__acts">
+          <button
+            v-if="summary.state === 'junk'"
+            class="btn btn--accent"
+            type="button"
+            :disabled="!!busy"
+            @click="minusAll"
+          >
+            {{ busy === 'apply' ? 'Применяем…' : summary.allLabel }}
+          </button>
+          <button
+            v-if="summary.state === 'new' || (summary.state === 'junk' && counts.new)"
+            class="btn"
+            :class="summary.state === 'new' ? 'btn--accent' : 'btn--ghost'"
+            type="button"
+            :disabled="!!busy"
+            @click="classify"
+          >
+            {{ busy === 'classify' ? 'Размечаем…' : summary.state === 'new' ? 'Разметить с ИИ' : 'Разметить новые' }}
+          </button>
+          <button
+            class="btn"
+            :class="summary.state === 'empty' ? 'btn--accent' : 'btn--ghost'"
+            type="button"
+            :disabled="!!busy"
+            @click="sync"
+          >
+            {{ busy === 'sync' ? 'Загружаем…' : summary.state === 'empty' ? 'Загрузить из Директа' : 'Обновить из Директа' }}
+          </button>
+        </div>
+      </section>
+
+      <template v-if="junkGroups.length">
+        <h2 class="section-h">
+          Мусор по минус-фразам <span class="cgroup__n">{{ junkGroups.length }}</span>
+          <small class="tri-note">одна минус-фраза отсекает всю группу</small>
+        </h2>
+        <div class="rgrid">
+          <article v-for="g in junkGroups" :key="g.key" class="rcard">
+            <header class="rcard__h">
+              <h3>{{ g.title }}</h3>
+              <span class="meta-note">
+                {{ g.items.length }} {{ plural(g.items.length, 'запрос', 'запроса', 'запросов') }} ·
+                {{ rubles(g.cost) }}
+              </span>
+            </header>
+            <ul class="rcard__list">
+              <li v-for="q in g.items.slice(0, GROUP_SHOWN)" :key="q.query_norm">
+                <span class="rcard__q">
+                  {{ q.query }}
+                  <small v-if="g.misc && phraseOf(q) !== q.query_norm" class="meta-note">минус «{{ phraseOf(q) }}»</small>
+                </span>
+                <span class="rcard__cost">{{ rubles(q.cost_rub) }}</span>
+              </li>
+            </ul>
+            <p v-if="g.items.length > GROUP_SHOWN" class="meta-note">и ещё {{ g.items.length - GROUP_SHOWN }}</p>
+            <ul v-if="openWhy[g.key]" class="rcard__why">
+              <li v-for="r in g.reasons" :key="r">{{ r }}</li>
+              <li v-if="!g.reasons.length">ИИ не оставил пояснения.</li>
+            </ul>
+            <p v-if="g.conflicts" class="rcard__warn">
+              {{ g.conflicts }} {{ plural(g.conflicts, 'запрос заденет', 'запроса заденут', 'запросов заденут') }} ваши
+              ключевые фразы — их пропустим и спросим отдельно.
+            </p>
+            <footer class="rcard__acts">
+              <button class="btn btn--accent" type="button" :disabled="!!busy" @click="minusGroup(g)">
+                Минусовать группу
+              </button>
+              <button class="btn btn--ghost" type="button" @click="openWhy[g.key] = !openWhy[g.key]">
+                {{ openWhy[g.key] ? 'Скрыть причину' : 'Почему это мусор?' }}
+              </button>
+            </footer>
+          </article>
+        </div>
+      </template>
+
+      <div v-if="targets.length" class="ccard tri-ok">
+        <div class="prow">
+          <div class="prow__main">
+            <span class="st st--ok">
+              <CircleCheck :size="15" aria-hidden="true" />
+              {{ num(counts.target) }} {{ plural(counts.target, 'полезный запрос', 'полезных запроса', 'полезных запросов') }}
+            </span>
+            <span class="meta-note">С ними всё в порядке — ИИ считает их целевыми.</span>
+          </div>
+          <div class="prow__acts">
+            <button class="btn btn--ghost" type="button" :disabled="!!busy" @click="keepTargets">Всё верно, запомнить</button>
+            <button class="btn btn--ghost" type="button" @click="showTargets = !showTargets">
+              {{ showTargets ? 'Скрыть' : 'Показать' }}
+            </button>
+          </div>
+        </div>
+        <ul v-if="showTargets" class="rcard__list tri-ok__list">
+          <li v-for="q in targets.slice(0, 50)" :key="q.query_norm">
+            <span class="rcard__q">
+              {{ q.query }}
+              <small v-if="q.label?.reason" class="meta-note">{{ q.label.reason }}</small>
+            </span>
+            <span class="rcard__cost">
+              {{ rubles(q.cost_rub) }}<template v-if="q.conversions"> · {{ num(q.conversions) }} конв.</template>
+            </span>
+          </li>
+        </ul>
+        <p v-if="showTargets && targets.length > 50" class="meta-note">Показаны 50 самых дорогих.</p>
+      </div>
+
+      <ExpertHint>Фильтры, таблица всех запросов, ручная правка минус-фраз и память решений</ExpertHint>
+    </template>
+  </template>
+
+  <template v-else>
   <div class="ws-toolbar">
     <div class="seg" role="group" aria-label="Период загрузки из Директа">
       <button
@@ -390,6 +546,7 @@
       <button class="btn btn--ghost" type="button" :disabled="mem.loading" @click="loadMemory(true)">Показать ещё</button>
     </div>
   </section>
+  </template>
 
   <Modal :open="applyModal.open" title="Применить решения" :locked="busy === 'apply'" @close="applyModal.open = false">
     <ul class="apply-summary">
@@ -496,7 +653,10 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
+import { CircleCheck } from '@lucide/vue'
+import ExpertHint from '../../components/ExpertHint.vue'
 import Modal from '../../components/ui/Modal.vue'
+import { useExpert } from '../../composables/useExpert'
 import TermHint from '../../components/TermHint.vue'
 import UndoDialog from '../../components/UndoDialog.vue'
 import { errorText, jobProgressText, wsApi } from '../../api/web'
@@ -527,6 +687,7 @@ const EMPTY_COUNTS = { new: 0, negative: 0, target: 0, done: 0, all: 0 }
 const route = useRoute()
 const router = useRouter()
 const { ws } = useWs()
+const { expert } = useExpert()
 
 const data = ref(null)
 const items = ref([])
@@ -618,6 +779,160 @@ const resultTitle = computed(() => {
   return parts.length ? `Применено: ${parts.join(', ')}` : 'Ничего не изменилось'
 })
 const forceable = computed(() => (result.value?.problems || []).filter((p) => p.status === 'skipped' && p.conflicts))
+
+// --- Простой режим: мусор группами по минус-фразе, полезные свёрнуты ---
+
+const SIMPLE_LIMIT = 300 // больше сервер за раз не отдаёт
+const GROUP_SHOWN = 5
+const targets = ref([])
+const showTargets = ref(false)
+const openWhy = reactive({})
+
+function phraseOf(q) {
+  return (decisions[q.query_norm]?.negative_phrase || q.query).trim().toLowerCase()
+}
+
+function makeGroup(key, title, list, misc = false) {
+  return {
+    key,
+    title,
+    misc,
+    items: list,
+    cost: list.reduce((s, q) => s + (q.cost_rub || 0), 0),
+    conflicts: list.filter((q) => q.conflicts_total).length,
+    reasons: [...new Set(list.map((q) => q.label?.reason).filter(Boolean))].slice(0, 3),
+  }
+}
+
+// У ИИ нет категорий причин, зато общая минус-фраза — естественная группа: одна фраза отсекает их все.
+const junkGroups = computed(() => {
+  const by = new Map()
+  for (const q of items.value) {
+    const phrase = phraseOf(q)
+    if (!by.has(phrase)) by.set(phrase, [])
+    by.get(phrase).push(q)
+  }
+  const groups = []
+  const rest = []
+  for (const [phrase, list] of by) {
+    if (list.length > 1) groups.push(makeGroup(phrase, `«${phrase}»`, list))
+    else rest.push(list[0])
+  }
+  groups.sort((a, b) => b.cost - a.cost)
+  if (rest.length) groups.push(makeGroup('*', groups.length ? 'Разные запросы' : 'Мусорные запросы', rest, true))
+  return groups
+})
+
+function periodDays() {
+  const d = data.value
+  if (!d?.date_from || !d?.date_to) return 0
+  return Math.round((Date.parse(d.date_to) - Date.parse(d.date_from)) / 86_400_000) + 1
+}
+
+const summary = computed(() => {
+  const c = counts.value
+  const d = data.value || {}
+  if (!c.all)
+    return {
+      state: 'empty',
+      title: 'Запросов пока нет',
+      note: `Загрузим из Директа, по каким запросам показывалась реклама за ${days.value} дней, и ИИ разберёт их.`,
+    }
+  if (c.negative) {
+    const span = periodDays()
+    const weekly = span > 0 ? Math.round(((d.negative_cost_rub || 0) / span) * 7) : 0
+    const n = junkGroups.value.length
+    let note = 'Разложили по минус-фразам — проверьте группы и минусуйте.'
+    if (weekly > 0) note += ` Экономия — около ${rubles(weekly)} в неделю.`
+    if (c.new) note += ` Ещё ${num(c.new)} ${plural(c.new, 'новый запрос', 'новых запроса', 'новых запросов')} без разметки.`
+    return {
+      state: 'junk',
+      title: `ИИ нашёл ${num(c.negative)} ${plural(c.negative, 'мусорный запрос', 'мусорных запроса', 'мусорных запросов')} на ${rubles(d.negative_cost_rub)}`,
+      note,
+      allLabel: n > 1 ? `Минусовать все ${n} ${plural(n, 'группу', 'группы', 'групп')}` : 'Минусовать всё',
+    }
+  }
+  if (c.new)
+    return {
+      state: 'new',
+      title: `${num(c.new)} ${plural(c.new, 'новый запрос', 'новых запроса', 'новых запросов')} на ${rubles(d.new_cost_rub)}`,
+      note: 'ИИ разберёт их и предложит, что отминусовать. Разметка тратит лимит ИИ — перед большой покажем, сколько.',
+    }
+  return {
+    state: 'clean',
+    title: 'Мусора не найдено',
+    note: d.synced_at
+      ? `Все запросы за ${formatDate(d.date_from)} — ${formatDate(d.date_to)} разобраны. Загружены ${formatDateTime(d.synced_at)}.`
+      : 'Все загруженные запросы разобраны.',
+  }
+})
+
+function negativeItem(q) {
+  const d = decisions[q.query_norm]
+  return {
+    query_norm: q.query_norm,
+    verdict: 'negative',
+    negative_phrase: (d?.negative_phrase || q.query).trim(),
+    level: levelFor(q, d?.level || 'campaign'),
+    add_keyword: false,
+    adgroup_row_id: null,
+  }
+}
+
+function minusGroup(g) {
+  return apply(g.items.map(negativeItem))
+}
+
+async function minusAll() {
+  const list = items.value
+  const ok = await askConfirm(
+    `Добавить в минус-фразы ${list.length} ${plural(list.length, 'запрос', 'запроса', 'запросов')}? Запросы, которые заденут ваши ключевые фразы, пропустим. Действие можно откатить.`,
+    { title: 'Минусовать всё', confirmText: 'Минусовать' },
+  )
+  if (ok) await apply(list.map(negativeItem))
+}
+
+async function keepTargets() {
+  const list = targets.value
+  const ok = await askConfirm(
+    `Запомнить ${list.length} ${plural(list.length, 'запрос', 'запроса', 'запросов')} как целевые? ИИ больше не будет их разбирать; в Директе ничего не изменится.`,
+    { title: 'Полезные запросы', confirmText: 'Запомнить' },
+  )
+  if (!ok) return
+  await apply(
+    list.map((q) => ({
+      query_norm: q.query_norm,
+      verdict: 'target',
+      negative_phrase: '',
+      level: decisions[q.query_norm]?.level || 'campaign',
+      add_keyword: false,
+      adgroup_row_id: null,
+    })),
+  )
+}
+
+async function loadSimple() {
+  const seq = ++loadSeq
+  loading.value = true
+  loadError.value = ''
+  try {
+    const params = { tab: 'negative', limit: SIMPLE_LIMIT, offset: 0 }
+    const [neg, tgt] = await Promise.all([
+      wsApi.queries(ws.value.id, params),
+      wsApi.queries(ws.value.id, { ...params, tab: 'target' }),
+    ])
+    if (seq !== loadSeq) return
+    for (const q of [...neg.items, ...tgt.items]) initDecision(q)
+    data.value = neg
+    items.value = neg.items
+    targets.value = tgt.items
+    if (!daysPicked.value) days.value = loadedDays(neg) || days.value
+  } catch (err) {
+    if (seq === loadSeq) loadError.value = errorText(err)
+  } finally {
+    if (seq === loadSeq) loading.value = false
+  }
+}
 
 function placeText(q) {
   const camps = q.campaigns.map((c) => c.name || `кампания ${c.id}`)
@@ -760,6 +1075,7 @@ function queueParams(offset = 0) {
 let loadSeq = 0
 
 async function load({ more = false } = {}) {
+  if (!expert.value) return loadSimple()
   const seq = ++loadSeq
   loading.value = true
   loadError.value = ''
@@ -833,10 +1149,10 @@ async function sync() {
         (errors.length ? `. Не вышло: ${errors.map((e) => e.name).join(', ')}` : ''),
       errors.length ? 'warn' : 'ok',
     )
-    if (tab.value === 'memory') await refreshCounts()
+    if (expert.value && tab.value === 'memory') await refreshCounts()
     else await load()
     // Предложений в минус ещё нет, а новые появились — показываем их, а не пустую вкладку.
-    if (tab.value === 'negative' && !counts.value.negative && counts.value.new) setTab('new')
+    if (expert.value && tab.value === 'negative' && !counts.value.negative && counts.value.new) setTab('new')
   } catch (err) {
     pushToast(errorText(err), 'error')
   } finally {
@@ -898,7 +1214,8 @@ async function runClassify(payload) {
       pushToast(parts.join('; '), 'ok')
       if (res.ai_error) pushToast(`ИИ разобрал не всё: ${res.ai_error}`, 'warn')
     }
-    if (res.negative && tab.value !== 'negative') setTab('negative')
+    if (!expert.value) await load()
+    else if (res.negative && tab.value !== 'negative') setTab('negative')
     else if (tab.value === 'memory') await refreshCounts()
     else await load()
   } catch (err) {
@@ -943,7 +1260,7 @@ async function apply(list, { force = false, bid = null } = {}) {
   busy.value = 'apply'
   busyText.value = 'Применяем решения…'
   // Тексты запросов запоминаем до перезагрузки: применённые уйдут из вкладки.
-  const names = Object.fromEntries(items.value.map((q) => [q.query_norm, q.query]))
+  const names = Object.fromEntries([...items.value, ...targets.value].map((q) => [q.query_norm, q.query]))
   try {
     const res = await wsApi.queriesApply(ws.value.id, { items: list, force, bid_rub: bid }, (job) => {
       busyText.value = `Применяем: ${jobProgressText(job)}`
@@ -989,7 +1306,7 @@ async function applyForce() {
 function onUndone() {
   result.value = null
   for (const key of Object.keys(rowResults)) delete rowResults[key]
-  if (tab.value === 'memory') loadMemory()
+  if (expert.value && tab.value === 'memory') loadMemory()
   else load()
 }
 
@@ -1074,8 +1391,16 @@ watch(
   },
 )
 
+// Смена режима — другой набор данных: простой грузит мусор и полезные целиком, экспертный — вкладку.
+watch(expert, (on) => {
+  if (on && tab.value === 'memory') {
+    loadMemory()
+    refreshCounts()
+  } else load()
+})
+
 onMounted(() => {
-  if (tab.value === 'memory') {
+  if (expert.value && tab.value === 'memory') {
     loadMemory()
     refreshCounts()
   } else {
@@ -1089,3 +1414,133 @@ onBeforeUnmount(() => {
   clearTimeout(checkTimer)
 })
 </script>
+
+<style scoped>
+.tri-sum {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 20px 22px;
+}
+.tri-sum__text {
+  flex: 1 1 320px;
+  min-width: 0;
+}
+.tri-sum h2 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 800;
+  line-height: 1.3;
+}
+.tri-sum .meta-note {
+  display: block;
+  margin: 6px 0 0;
+}
+.tri-sum__acts,
+.rcard__acts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.tri-note {
+  margin-left: 6px;
+  color: var(--faint);
+  font-size: 12px;
+  font-weight: 600;
+}
+.tri-done {
+  border-color: var(--ok);
+}
+.tri-ok .prow__main,
+.tri-done .prow__main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.rgrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 12px;
+}
+.rcard {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 16px 18px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-card);
+  background: var(--surface);
+}
+.rcard__h {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.rcard__h h3 {
+  margin: 0;
+  overflow-wrap: anywhere;
+  font-size: 15px;
+  font-weight: 700;
+}
+.rcard__list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 13px;
+}
+.rcard__list li {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+.rcard__q {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.rcard .meta-note,
+.tri-ok .meta-note {
+  margin: 0;
+}
+.rcard__q small {
+  display: block;
+  margin-top: 1px;
+  font-size: 12px;
+}
+.rcard__cost {
+  flex-shrink: 0;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.rcard__why {
+  margin: 0;
+  padding: 10px 12px 10px 28px;
+  border-radius: 10px;
+  background: var(--line);
+  color: var(--muted);
+  font-size: 13px;
+}
+.rcard__warn {
+  margin: 0;
+  color: var(--warn);
+  font-size: 13px;
+}
+.rcard__acts {
+  margin-top: auto;
+  padding-top: 4px;
+}
+.tri-ok__list {
+  padding: 14px 18px 16px;
+  border-top: 1px solid var(--line);
+}
+.tri-ok > .meta-note {
+  padding: 0 18px 14px;
+}
+</style>

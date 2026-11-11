@@ -23,7 +23,7 @@
         <label>Сайт</label>
         <input v-model.trim="general.site" type="text" maxlength="300" placeholder="example.ru" />
       </div>
-      <div v-field class="field">
+      <div v-if="expert" v-field class="field">
         <label>Папка клиента</label>
         <select v-model="general.client_id">
           <option :value="null">Без клиента</option>
@@ -77,13 +77,13 @@
     </form>
   </section>
 
-  <LinkTemplatePanel />
+  <LinkTemplatePanel v-if="expert" />
 
   <BriefPanel />
 
   <ContextFilesPanel />
 
-  <section class="panel" id="client">
+  <section v-if="expert" class="panel" id="client">
     <div class="panel__head">
       <div>
         <h2>Клиент</h2>
@@ -162,7 +162,7 @@
     </template>
   </section>
 
-  <section class="panel">
+  <section v-if="expert || !ws.campaigns_count" class="panel">
     <div class="panel__head">
       <div>
         <h2>Кабинеты Директа</h2>
@@ -218,7 +218,7 @@
     </div>
   </section>
 
-  <section class="panel">
+  <section v-if="expert || !ws.campaigns_count" class="panel">
     <div class="panel__head">
       <div>
         <h2>Кампании проекта</h2>
@@ -301,7 +301,22 @@
     </div>
   </section>
 
-  <section id="ai" class="panel">
+  <section v-if="!expert" id="ai" class="ccard ai-simple">
+    <div class="prow">
+      <div class="prow__main">
+        <b>{{ aiRights.length ? 'ИИ может менять без согласования' : 'ИИ ничего не меняет сам' }}</b>
+        <span class="meta-note">
+          <template v-if="aiRights.length">{{ aiRights.join(', ') }}. Остальное ждёт вашего «Выполнить».</template>
+          <template v-else>Каждое изменение ждёт вашего «Выполнить». Всё выполненное можно вернуть в «Истории».</template>
+        </span>
+      </div>
+      <div class="prow__acts">
+        <RouterLink class="btn btn--ghost" :to="`/w/${ws.id}/history`">Открыть историю</RouterLink>
+      </div>
+    </div>
+  </section>
+
+  <section v-else id="ai" class="panel">
     <div class="panel__head">
       <div>
         <h2>Доступ ИИ</h2>
@@ -385,7 +400,9 @@
     </div>
   </section>
 
-  <section class="panel">
+  <ExpertHint>Права ИИ, память помощника, кабинеты, шаблон ссылки, папка клиента и архив</ExpertHint>
+
+  <section v-if="expert" class="panel">
     <div class="panel__head">
       <div>
         <h2>{{ ws.archived ? 'Проект в архиве' : 'Архив' }}</h2>
@@ -417,10 +434,13 @@ import ContextFilesPanel from './ContextFilesPanel.vue'
 import LinkTemplatePanel from './LinkTemplatePanel.vue'
 import { useWs } from './context'
 import TermHint from '../../components/TermHint.vue'
+import ExpertHint from '../../components/ExpertHint.vue'
+import { useExpert } from '../../composables/useExpert'
 
 const COUNTER_TONES = { ok: 'tone-ok', unknown: 'tone-warn' }
 
 const { ws, reload, patch } = useWs()
+const { expert } = useExpert()
 const { clients, workspaces } = useWorkspaces()
 
 // --- Основное ---------------------------------------------------------------------------------
@@ -779,6 +799,13 @@ function aiFromWs(w) {
 }
 
 const ai = reactive(aiFromWs(ws.value))
+
+/** Что ИИ разрешено делать самому — по сохранённым настройкам проекта, для простого режима. */
+const aiRights = computed(() => {
+  const access = ws.value.ai_access || {}
+  if (access.full_access) return ['любые действия в проекте, включая удаление']
+  return (ws.value.ai_categories || []).filter((c) => access.categories?.[c.key]).map((c) => c.label.toLowerCase())
+})
 const aiBusy = ref(false)
 const aiError = ref('')
 
@@ -864,3 +891,17 @@ onMounted(() => {
   loadCandidates()
 })
 </script>
+
+<style scoped>
+.ai-simple {
+  margin-top: 16px;
+}
+.ai-simple .prow__main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.ai-simple .meta-note {
+  margin: 0;
+}
+</style>

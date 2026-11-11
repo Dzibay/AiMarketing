@@ -51,9 +51,17 @@
       :rows="simpleRows"
       :kpi-of="(c) => kpiByProject.get(c.project.id)"
       :busy="busy"
+      :selected="selected"
       @toggle="quickToggle"
+      @pick="toggle"
     />
     <ExpertHint v-if="data && simpleRows.length">Фильтры, архив, массовые действия и таблица со всеми цифрами</ExpertHint>
+    <CampaignAsk
+      v-if="data && simpleRows.length"
+      :rows="simpleRows"
+      :selected="selected"
+      @unselect="toggle($event, false)"
+    />
   </template>
 
   <section v-else class="panel">
@@ -219,6 +227,7 @@ import { CAMPAIGN_STATES, CAMPAIGN_STATUSES, CAMPAIGN_TYPES, formatDate, lastDay
 import { useHead } from '../utils/useHead'
 import TermHint from '../components/TermHint.vue'
 import CampaignGroups from '../components/CampaignGroups.vue'
+import CampaignAsk from '../components/CampaignAsk.vue'
 import ExpertHint from '../components/ExpertHint.vue'
 import { useExpert } from '../composables/useExpert'
 

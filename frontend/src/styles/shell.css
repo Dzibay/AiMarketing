@@ -946,6 +946,18 @@
 .crow:first-child {
   border-top: 0;
 }
+.crow--pick {
+  grid-template-columns: 18px minmax(0, 1.3fr) minmax(0, 1fr) 110px auto;
+}
+.crow.is-sel {
+  background: color-mix(in srgb, var(--lime) 12%, transparent);
+}
+.crow__pick {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--ink);
+}
 .crow__name a {
   display: block;
   overflow: hidden;
@@ -1119,6 +1131,51 @@
   font-weight: 800;
 }
 
+/* Главная простого режима */
+.ccard--note {
+  padding: 16px 18px;
+  color: var(--muted);
+}
+.home-link {
+  margin-left: 6px;
+  font-size: 12px;
+  font-weight: 600;
+}
+.home-link a {
+  color: var(--muted);
+}
+.pstrip {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 12px;
+}
+.pcard {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-card);
+  background: var(--surface);
+  color: var(--ink);
+  text-decoration: none;
+  transition: border-color 0.15s;
+}
+.pcard:hover {
+  border-color: var(--ink);
+}
+.pcard b {
+  overflow: hidden;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pcard p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
 @media (max-width: 720px) {
   .prow {
     flex-direction: column;
@@ -1134,6 +1191,12 @@
   .crow {
     grid-template-columns: minmax(0, 1fr) 96px auto;
     row-gap: 4px;
+  }
+  .crow--pick {
+    grid-template-columns: 18px minmax(0, 1fr) 96px auto;
+  }
+  .crow--pick .crow__health {
+    grid-column: 2 / -1;
   }
   .crow__health {
     grid-column: 1 / -1;

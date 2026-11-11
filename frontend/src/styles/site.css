@@ -4649,6 +4649,22 @@ body.has-modal {
   color: var(--muted);
 }
 
+.action-card__note {
+  flex-basis: 100%;
+  margin: 0;
+  font-size: 0.82rem;
+}
+
+/* «Позже»: свёрнутая карточка, на сервере действие ждёт решения */
+.action-card--later {
+  gap: 0.4rem;
+  box-shadow: inset 4px 0 var(--line-2);
+}
+
+.action-card--later .hint {
+  margin: 0;
+}
+
 /* «Было → станет» в карточке действия ИИ */
 .ai-changes {
   width: 100%;

@@ -1,7 +1,7 @@
 <template>
   <HomeAsk />
 
-  <div class="page-actions">
+  <div v-if="expert" class="page-actions">
     <p class="page-lead">Все проекты на одном экране: расход, KPI, бюджет, баланс и что требует внимания.</p>
     <button class="btn btn--accent" type="button" :disabled="refreshing || loading" @click="refresh">
       {{ refreshing ? 'Обновляем…' : 'Обновить расход за сегодня' }}
@@ -11,6 +11,45 @@
   <OnboardingChecklist @advanced="load" />
 
   <div v-if="loading" class="panel"><p class="empty">Собираем обзор…</p></div>
+
+  <!-- Простой режим: решения, сигналы, неделя в трёх цифрах и карточки проектов. -->
+  <template v-else-if="!expert">
+    <section v-if="!rows.length" class="panel">
+      <p class="empty">
+        Здесь появятся ваши сайты: сколько потрачено, сколько заявок и что требует внимания. Начните с подключения
+        Метрики и Директа в <RouterLink to="/cabinet/connections">подключениях</RouterLink>.
+      </p>
+    </section>
+    <template v-else>
+      <PendingDecisions />
+      <SignalCards :problems="data.problems" show-project />
+
+      <h2 class="section-h">
+        За неделю
+        <small class="home-link"><RouterLink to="/cabinet/analytics">Все отчёты</RouterLink></small>
+      </h2>
+      <div class="bigstats">
+        <div v-for="t in weekTiles" :key="t.label" class="bigstat">
+          <span>{{ t.label }}</span>
+          <b>{{ t.value }}</b>
+          <small :class="t.tone">{{ t.note }}</small>
+        </div>
+      </div>
+
+      <h2 class="section-h">Проекты <span class="cgroup__n">{{ projectCards.length }}</span></h2>
+      <div class="pstrip">
+        <RouterLink v-for="w in projectCards" :key="w.id" class="pcard" :to="`/w/${w.id}/summary`">
+          <b>{{ w.name }}</b>
+          <span class="st" :class="`st--${w.status.tone}`">
+            <component :is="w.status.icon" :size="14" aria-hidden="true" />
+            {{ w.status.text }}
+          </span>
+          <p>{{ w.verdict }}</p>
+        </RouterLink>
+      </div>
+      <ExpertHint>Расход за сегодня, темп бюджета, балансы и таблица всех проектов</ExpertHint>
+    </template>
+  </template>
 
   <template v-else>
     <section v-if="!rows.length" class="panel">
@@ -300,11 +339,15 @@
 <script setup>
 import { computed, onMounted, ref, watch } from 'vue'
 import { RouterLink, useRouter } from 'vue-router'
-import { CalendarClock, Coins, Crosshair, Lock, Target, TriangleAlert, Wallet } from '@lucide/vue'
+import { CalendarClock, CircleCheck, Coins, Crosshair, Lock, Target, TriangleAlert, Wallet } from '@lucide/vue'
+import ExpertHint from '../components/ExpertHint.vue'
 import HomeAsk from '../components/HomeAsk.vue'
 import OnboardingChecklist from '../components/OnboardingChecklist.vue'
+import PendingDecisions from '../components/PendingDecisions.vue'
+import SignalCards from '../components/SignalCards.vue'
 import Sparkline from '../components/Sparkline.vue'
 import { errorDetail, errorText, jobProgressText, webApi } from '../api/web'
+import { useExpert } from '../composables/useExpert'
 import { pushToast } from '../composables/useToasts'
 import { useWorkspaces } from '../composables/useWorkspaces'
 import { useHead } from '../utils/useHead'
@@ -321,6 +364,7 @@ import {
   num,
   plural,
   rub,
+  rubles,
   SEVERITY_LABELS,
 } from '../utils/format'
 
@@ -349,6 +393,7 @@ const WEEKDAY_TO_LAST = [
 ]
 
 const router = useRouter()
+const { expert } = useExpert()
 const { loadWorkspaces, workspaces } = useWorkspaces()
 // Проекты сверх лимита тарифа: в обзоре видны, но открываются экраном «на тарифе выше».
 const lockedIds = computed(() => new Set(workspaces.value.filter((w) => w.locked).map((w) => w.id)))
@@ -387,9 +432,63 @@ const weekChange = computed(() => {
   const prevConv = sum(prevWeek.value, 'conversions')
   return {
     cost: change(cost, prevCost),
+    conv: change(conv, prevConv),
     cpa: conv && prevConv ? change(cost / conv, prevCost / prevConv) : null,
   }
 })
+
+/** «на 12% больше, чем неделей раньше»; inverse — рост это плохо (расход, цена). */
+function versus(value, more, less, inverse = false) {
+  if (value == null) return { note: 'неделей раньше не с чем сравнить', tone: '' }
+  const v = Math.round(value)
+  if (!v) return { note: 'как неделей раньше', tone: '' }
+  const bad = inverse ? v > 0 : v < 0
+  return { note: `на ${Math.abs(v)}% ${v > 0 ? more : less}, чем неделей раньше`, tone: Math.abs(v) < 5 ? '' : bad ? 'is-warn' : 'is-ok' }
+}
+
+const weekTiles = computed(() => {
+  const t = totals.value
+  const c = weekChange.value
+  return [
+    { label: 'Потрачено', value: rub(t.spend_7d), ...versus(c.cost, 'больше', 'меньше', true) },
+    { label: 'Конверсии', value: num(t.conversions_7d || 0), ...versus(c.conv, 'больше', 'меньше') },
+    {
+      label: 'Цена конверсии',
+      value: t.conversions_7d ? rub(t.spend_7d / t.conversions_7d) : '—',
+      ...versus(c.cpa, 'дороже', 'дешевле', true),
+    },
+  ]
+})
+
+const STATUS = {
+  bad: { tone: 'bad', icon: TriangleAlert, text: 'Есть проблема' },
+  warn: { tone: 'warn', icon: TriangleAlert, text: 'Стоит посмотреть' },
+  ok: { tone: 'ok', icon: CircleCheck, text: 'Всё в порядке' },
+}
+
+/** Карточка проекта простыми словами: статус по сигналам и KPI, одна строка итога недели. */
+const projectCards = computed(() =>
+  rows.value
+    .filter((w) => w.id != null)
+    .map((w) => {
+      const kpiBad = w.kpi?.type && (w.kpi.status === 'warn' || w.kpi.status === 'bad')
+      const status = w.severity === 'critical' ? STATUS.bad : w.severity === 'warning' || kpiBad ? STATUS.warn : STATUS.ok
+      let verdict
+      if (lockedIds.value.has(w.id)) verdict = 'Доступен на тарифе выше'
+      else if (w.kpi?.type && w.kpi.value != null) {
+        const k = w.kpi
+        const target = k.target == null ? '' : `, цель ${k.type === 'cpa' ? rubles(k.target) : `${k.target}%`}`
+        verdict = `${k.type === 'cpa' ? 'CPA' : 'ДРР'} за неделю ${kpiValue(k)}${target}`
+      }
+      else if (w.spend_7d) verdict = `${rub(w.spend_7d)} за неделю, ${num(w.conversions_7d || 0)} конв.`
+      else verdict = 'За неделю расхода не было'
+      return { ...w, status, verdict }
+    })
+    .sort(
+      (a, b) =>
+        SEVERITY_RANK[a.severity || ''] - SEVERITY_RANK[b.severity || ''] || a.name.localeCompare(b.name, 'ru'),
+    ),
+)
 
 function shiftDay(iso, days) {
   const d = new Date(`${iso}T00:00:00Z`)

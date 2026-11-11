@@ -44,14 +44,18 @@
             {{ reviewing ? 'Запускаем…' : 'Разбор' }}
           </button>
           <label
-            v-if="!general"
+            v-if="!general && expert"
             class="switch"
             :title="access.full_access ? 'Выключить полный доступ' : 'Включить полный доступ'"
           >
             <input type="checkbox" :checked="access.full_access" :disabled="accessBusy" @change="toggleFullAccess($event)" />
             <span>Полный доступ</span>
           </label>
-          <RouterLink v-if="!general" class="btn btn--ghost" :to="{ path: `/w/${ws.id}/settings`, hash: '#ai' }">
+          <RouterLink
+            v-if="!general && expert"
+            class="btn btn--ghost"
+            :to="{ path: `/w/${ws.id}/settings`, hash: '#ai' }"
+          >
             Права ИИ
           </RouterLink>
           <template v-if="chat">
@@ -177,7 +181,7 @@
 
           <div v-else class="msg msg--ai">
             <div v-if="item.content" class="msg__bubble md" v-html="renderMarkdown(item.content)" />
-            <small v-if="item.content && item.model" class="msg__model">{{ item.model }}</small>
+            <small v-if="expert && item.content && item.model" class="msg__model">{{ item.model }}</small>
 
             <div v-if="item.reads.length" class="chat-steps">
               <details v-for="r in item.reads" :key="r.id" class="chat-step">
@@ -226,6 +230,21 @@
                 <span>{{ a.plaque }}</span>
                 <button class="ai-check__link" type="button" @click="toBoard(a.id)">К доске</button>
               </div>
+              <div v-else-if="isLater(a)" class="action-card action-card--later" :data-action="a.id">
+                <div class="action-card__head">
+                  <strong>{{ a.label }}</strong>
+                  <span class="chip">отложено</span>
+                  <span v-if="projectName(a)" class="chip chip--project">{{ projectName(a) }}</span>
+                </div>
+                <p class="action-card__summary">{{ a.summary }}</p>
+                <p class="hint">
+                  Ничего не изменилось. Предложение ждёт на главной в «Ждут вашего решения»; новое сообщение в этом чате
+                  его отклонит.
+                </p>
+                <div class="action-card__buttons">
+                  <button class="btn btn--ghost" type="button" @click="setLater(a, false)">Решить сейчас</button>
+                </div>
+              </div>
               <div v-else class="action-card" :class="`is-${a.status}`" :data-action="a.id">
                 <div class="action-card__head">
                   <strong>{{ a.label }}</strong>
@@ -255,12 +274,12 @@
                 <p v-if="a.categories?.length" class="action-card__cats">
                   <span v-for="c in a.categories" :key="c.id" class="chip">{{ c.label }}</span>
                 </p>
-                <details v-if="hasArgs(a.argsShown)" class="action-card__details">
+                <details v-if="expert && hasArgs(a.argsShown)" class="action-card__details">
                   <summary>Параметры</summary>
                   <pre>{{ pretty(a.argsShown) }}</pre>
                 </details>
                 <p v-if="a.status === 'error' && a.error" class="tone-bad">{{ a.error }}</p>
-                <details v-if="a.status === 'done' && a.result != null" class="action-card__details">
+                <details v-if="expert && a.status === 'done' && a.result != null" class="action-card__details">
                   <summary>Результат</summary>
                   <pre>{{ pretty(a.result) }}</pre>
                 </details>
@@ -270,6 +289,15 @@
                     {{ offCount(a) ? `Выполнить без снятых (${offCount(a)})` : 'Выполнить' }}
                   </button>
                   <button class="btn btn--ghost" type="button" :disabled="deciding" @click="decide(a, false)">Отклонить</button>
+                  <button
+                    class="btn btn--ghost"
+                    type="button"
+                    :disabled="deciding"
+                    title="Свернуть карточку: решить можно позже здесь или на главной"
+                    @click="setLater(a, true)"
+                  >
+                    Позже
+                  </button>
                   <span v-if="allOff(a)" class="hint">Сняты все строки — отклоните действие</span>
                   <label
                     v-if="!general && a.categories?.length && !a.categories.some((c) => c.id === 'destructive')"
@@ -278,6 +306,9 @@
                     <input v-model="remember[a.id]" type="checkbox" />
                     <span>Больше не спрашивать для «{{ a.categories.map((c) => c.label).join('», «') }}»</span>
                   </label>
+                  <p v-if="!expert" class="hint action-card__note">
+                    Ничего не изменится, пока вы не нажмёте «Выполнить». Вернуть как было можно в «Истории».
+                  </p>
                 </div>
               </div>
             </template>
@@ -293,8 +324,10 @@
         </div>
       </div>
 
-      <div v-if="pendingWrites.length > 1" class="chat__pending">
-        <span>Ждут решения: {{ pendingWrites.length }}</span>
+      <div v-if="activeWrites.length > 1" class="chat__pending">
+        <span>
+          Ждут решения: {{ activeWrites.length }}<template v-if="laterCount">, отложено: {{ laterCount }}</template>
+        </span>
         <button class="btn btn--accent" type="button" :disabled="deciding" @click="decideAll(true)">Выполнить все</button>
         <button class="btn btn--ghost" type="button" :disabled="deciding" @click="decideAll(false)">Отклонить все</button>
       </div>
@@ -405,6 +438,7 @@ import AiPlanCard from './AiPlanCard.vue'
 import AiQuestionsCard from './AiQuestionsCard.vue'
 import CampaignBoard from './CampaignBoard.vue'
 import { useWs } from './context'
+import { useExpert } from '../../composables/useExpert'
 
 const POLL_MS = 1500
 const NEW_CAMPAIGN_PROMPT = 'Хочу собрать новую кампанию. Задай вопросы, которых не хватает, и веди меня по этапам'
@@ -504,6 +538,34 @@ const actions = computed(() => (chat.value ? data.value.actions : []))
 const pendingActions = computed(() => actions.value.filter((a) => a.status === 'pending'))
 // Вопросы, план и таблицы закрываются ответом в своей карточке, а не кнопками «Выполнить / Отклонить все».
 const pendingWrites = computed(() => pendingActions.value.filter((a) => a.kind !== 'ask'))
+
+const { expert } = useExpert()
+
+// «Позже»: карточка сворачивается только у вас в браузере, на сервере действие так и ждёт решения.
+const LATER_KEY = 'aimarketing-later'
+const later = ref(new Set(readLater()))
+function readLater() {
+  try {
+    const ids = JSON.parse(localStorage.getItem(LATER_KEY) || '[]')
+    return Array.isArray(ids) ? ids : []
+  } catch {
+    return []
+  }
+}
+const activeWrites = computed(() => pendingWrites.value.filter((a) => !later.value.has(a.id)))
+const laterCount = computed(() => pendingWrites.value.length - activeWrites.value.length)
+const isLater = (a) => a.status === 'pending' && !!a.id && later.value.has(a.id)
+function setLater(a, on) {
+  const next = new Set(later.value)
+  if (on) next.add(a.id)
+  else next.delete(a.id)
+  later.value = next
+  try {
+    localStorage.setItem(LATER_KEY, JSON.stringify([...next].slice(-200)))
+  } catch {
+    // хранилище недоступно — свёрнуто до перезагрузки
+  }
+}
 const pendingAsks = computed(() => pendingActions.value.filter((a) => a.kind === 'ask'))
 const plans = computed(() => actions.value.filter((a) => a.tool === 'propose_plan'))
 // Сборка новой кампании — доской на пол-экрана рядом с чатом; таблицы этапов решаются на ней.
@@ -1097,7 +1159,12 @@ async function decideAll(approve) {
         for (const a of item.writes || []) if (a.status === 'pending' && excludeFor(a).length) exclude[a.id] = excludeFor(a)
       }
     }
-    await aiApi.decideAll(chatId.value, approve, exclude)
+    // Отложенные «Позже» не трогаем: решаем по одному только те, что на виду.
+    if (laterCount.value) {
+      for (const a of activeWrites.value) await aiApi.decide(a.id, approve, false, approve ? exclude[a.id] || [] : [])
+    } else {
+      await aiApi.decideAll(chatId.value, approve, exclude)
+    }
     await loadChat(chatId.value)
   } catch (err) {
     pushToast(errorText(err), 'error')

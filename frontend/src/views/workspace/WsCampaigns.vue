@@ -36,11 +36,20 @@
       :rows="simpleRows"
       :kpi-of="() => data.kpi"
       :busy="busy"
+      :selected="selected"
       @toggle="quickToggle"
+      @pick="toggle"
     />
     <ExpertHint v-if="data && simpleRows.length">
       Фильтры, архив, бюджеты, копии и массовые действия
     </ExpertHint>
+    <CampaignAsk
+      v-if="data && simpleRows.length"
+      :rows="simpleRows"
+      :selected="selected"
+      :ws-id="ws.id"
+      @unselect="toggle($event, false)"
+    />
   </template>
 
   <section v-else class="panel">
@@ -312,6 +321,7 @@ import CampaignWizard from './CampaignWizard.vue'
 import DuplicateDialog from './DuplicateDialog.vue'
 import { useWs } from './context'
 import CampaignGroups from '../../components/CampaignGroups.vue'
+import CampaignAsk from '../../components/CampaignAsk.vue'
 import ExpertHint from '../../components/ExpertHint.vue'
 import { useExpert } from '../../composables/useExpert'
 
