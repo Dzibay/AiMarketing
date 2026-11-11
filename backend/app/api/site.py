@@ -1,10 +1,10 @@
 import logging
 import time
 
-from fastapi import APIRouter, Body, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Body, HTTPException, Request
 from pydantic import BaseModel
 
-from app import payments, plans, referrals
+from app import payments, plans, referrals, site_check
 
 from app.config import settings
 from app.legal import legal_consent_data, legal_cookies_data, legal_offer_data, legal_privacy_data
@@ -75,3 +75,37 @@ def site_legal(page: str) -> dict:
     if render is None:
         raise HTTPException(status_code=404, detail="not-found")
     return render()
+
+
+class SiteCheckBody(BaseModel):
+    url: str = ""
+
+
+def _client_ip(request: Request) -> str:
+    # За Caddy и nginx: первый адрес X-Forwarded-For — клиент.
+    forwarded = request.headers.get("x-forwarded-for", "").split(",")[0].strip()
+    return forwarded or request.headers.get("x-real-ip", "") or (request.client.host if request.client else "")
+
+
+@router.post("/site/check")
+def site_check_start(body: SiteCheckBody, request: Request, background: BackgroundTasks) -> dict:
+    """Проверка сайта с лендинга: создать (или взять из кэша) и запустить в фоне; дальше — GET по id."""
+    from app.api.web import _http
+
+    try:
+        started = site_check.start(body.url, _client_ip(request))
+    except YandexError as exc:
+        raise _http(exc) from exc
+    if not started["cached"]:
+        background.add_task(site_check.run, started["id"])
+    return started
+
+
+@router.get("/site/check/{check_id}")
+def site_check_status(check_id: str) -> dict:
+    from app.api.web import _http
+
+    try:
+        return site_check.public(check_id)
+    except YandexError as exc:
+        raise _http(exc) from exc

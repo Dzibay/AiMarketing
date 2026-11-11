@@ -114,6 +114,8 @@
     </template>
   </section>
 
+  <AdminSiteCheck :key="aiVersion" />
+
   <section class="panel" id="wordstat">
     <div class="panel__head">
       <h2>Вордстат</h2>
@@ -244,6 +246,7 @@
 <script setup>
 import { computed, onMounted, reactive, ref } from 'vue'
 import { adminApi } from '../../api/admin'
+import AdminSiteCheck from './AdminSiteCheck.vue'
 import { errorText } from '../../api/web'
 import { askConfirm } from '../../composables/useConfirm'
 import { pushToast } from '../../composables/useToasts'
@@ -270,6 +273,8 @@ const aiForm = reactive({
 const aiBusy = ref(false)
 const aiTesting = ref(false)
 const aiTest = ref(null)
+// Модель проверки сайта по умолчанию — модель класса: после сохранения ИИ перечитываем её раздел.
+const aiVersion = ref(0)
 
 const wordstat = ref({ configured: false, has_key: false, key_hint: '', price_rub_per_1000: 20, hourly_quota: 100 })
 const wsForm = reactive({ folder_id: '', api_key: '', units_per_request: '', cost_per_request: '' })
@@ -334,6 +339,7 @@ async function saveAi() {
         task_classes: aiForm.task_classes,
       }),
     )
+    aiVersion.value += 1
     emit('changed')
     pushToast(ai.value.configured ? 'Настройки ИИ сохранены' : 'Сохранено — осталось указать ключ и модель')
     if (ai.value.configured && apiKey) await testAi()

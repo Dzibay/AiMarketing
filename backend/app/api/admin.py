@@ -7,7 +7,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
-from app import ai, ai_bridge, auth, billing, events, image_gen, mailer, payments, plans, promos, referrals, wordstat
+from app import ai, ai_bridge, auth, billing, events, image_gen, mailer, payments, plans, promos, referrals, site_check, wordstat
 from app.api.web import _http
 from app.users import UsersError, count_users, list_users, mark_email_verified, set_user_blocked
 from app.yandex import YandexError, yandex_configured
@@ -232,6 +232,34 @@ def admin_ai_put(body: AiServiceBody) -> dict:
 def admin_ai_test() -> dict:
     """Короткий запрос к каждому включённому классу — без списания единиц."""
     return _call(ai.check_connection)
+
+
+# --- Проверка сайта на лендинге ------------------------------------------------------------------
+
+
+class SiteCheckBody(BaseModel):
+    enabled: bool = True
+    # Пусто — модель класса задачи «Проверка сайта на лендинге». Адрес API и ключ — общие (раздел ИИ).
+    model: str = ""
+    ip_daily: int | None = None
+    daily: int | None = None
+    cache_days: int | None = None
+
+
+@router.get("/site-check")
+def admin_site_check_get() -> dict:
+    return site_check.admin_overview()
+
+
+@router.put("/site-check")
+def admin_site_check_put(body: SiteCheckBody) -> dict:
+    return _call(site_check.save_settings, **body.model_dump())
+
+
+@router.post("/site-check/test")
+def admin_site_check_test() -> dict:
+    """Короткий запрос к модели проверки — без списания единиц."""
+    return _call(site_check.test_model)
 
 
 # --- Мост Cloudflare -----------------------------------------------------------------------------

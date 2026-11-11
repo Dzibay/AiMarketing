@@ -62,6 +62,12 @@ export const adminApi = {
   /** Пробный вызов каждого включённого класса — без списания единиц. */
   testAi: () => send('POST', '/ai/test'),
 
+  /** Проверка сайта на лендинге: своя модель (тот же адрес API и ключ), лимиты, кэш, счётчики. */
+  siteCheck: () => call('/site-check'),
+  saveSiteCheck: (payload) => send('PUT', '/site-check', payload),
+  /** Пробный вызов модели проверки — без списания единиц. */
+  testSiteCheck: () => send('POST', '/site-check/test'),
+
   /** Мост Cloudflare: зарубежные модели с сервера в РФ. */
   bridge: () => call('/bridge'),
   saveBridge: (payload) => send('PUT', '/bridge', payload),

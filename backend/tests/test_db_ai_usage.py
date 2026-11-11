@@ -94,7 +94,7 @@ def test_class_per_task_prices_and_keep(db):
     saved = ai.save_service_settings(provider="openai", task_classes={"classify": "standard", "brief": "huge", "x": "fast"})
     assert saved["task_classes"]["classify"] == "standard" and saved["task_classes"]["brief"] == "fast"
     assert ai.load_config(user, "classify")["model"] == "gpt-smart"
-    assert [t["id"] for t in saved["tasks"]] == ["chat", "classify", "brief", "placements", "ads"]
+    assert [t["id"] for t in saved["tasks"]] == ["chat", "classify", "brief", "placements", "ads", "site_check"]
     # Сохранение без классов (как «Удалить ключ») их не трогает.
     kept = ai.save_service_settings(provider="openai", api_key=None)
     assert kept["classes"][0]["units_in"] == 10.0 and "default_units_limit" not in kept and kept["has_key"]

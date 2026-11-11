@@ -58,6 +58,8 @@ TASKS = {
     "brief": {"label": "Черновик брифа проекта", "class": "fast"},
     "placements": {"label": "Разбор площадок РСЯ", "class": "fast"},
     "ads": {"label": "Тексты объявлений", "class": "standard"},
+    # Модель можно задать отдельно (site_check.py); класс даёт цены и запасную модель.
+    "site_check": {"label": "Проверка сайта на лендинге", "class": "fast"},
 }
 # Подписи задач в журнале расхода, включая проверку подключения и картинки.
 TASK_LABELS = {**{k: v["label"] for k, v in TASKS.items()}, "chat": "ИИ-чат", "test": "Проверка подключения", "images": "Картинки"}
@@ -296,12 +298,18 @@ def save_service_settings(
 
 
 def load_config(
-    user_id: int | None, task: str = "chat", workspace_id: int | None = None, *, model_class: str | None = None
+    user_id: int | None,
+    task: str = "chat",
+    workspace_id: int | None = None,
+    *,
+    model_class: str | None = None,
+    model: str | None = None,
 ) -> dict:
     """Готовая конфигурация вызова: адрес, модель класса, заголовки и цены класса.
 
     user_id — с кого списывать единицы (None — проверка в админке, без списания). model_class — выбор
-    пользователя в чате; выключенный или пустой класс заменяется классом задачи.
+    пользователя в чате; выключенный или пустой класс заменяется классом задачи. model — своя модель
+    вместо модели класса (тот же адрес API и ключ, цены — класса).
     """
     row = _service()
     if not _has_key(row):
@@ -315,7 +323,7 @@ def load_config(
     if cls is None:
         raise YandexError("ai-not-configured", NOT_CONFIGURED)
     provider = row["provider"]
-    model = cls["model"]
+    model = (model or "").strip() or cls["model"]
     model_name = model
     headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
     if provider == "yandexgpt":

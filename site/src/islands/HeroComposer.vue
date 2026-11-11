@@ -77,6 +77,32 @@
             <p class="demo-note">Демо-сценарий: цифры для примера</p>
           </article>
 
+          <article v-if="thread.report && showCard" class="prop report">
+            <header class="prop__head">
+              <span class="chip chip--lime">Проверка сайта</span>
+              <span class="prop__where">{{ thread.domain }}</span>
+            </header>
+            <div v-if="thread.report.headlines.length" class="report__part">
+              <h3 class="report__title">Заголовки объявлений</h3>
+              <ol class="report__heads">
+                <li v-for="h in thread.report.headlines" :key="h">{{ h }}</li>
+              </ol>
+            </div>
+            <div v-if="thread.report.minus_words.length" class="report__part">
+              <h3 class="report__title">Минус-слова сразу</h3>
+              <p class="report__words">
+                <span v-for="w in thread.report.minus_words" :key="w" class="report__word">−{{ w }}</span>
+                <span v-if="thread.report.more.minus_words" class="report__word report__word--more">
+                  ещё {{ thread.report.more.minus_words }}
+                </span>
+              </p>
+            </div>
+            <p v-if="thread.report.more.groups || thread.report.more.headlines" class="report__locked">
+              <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><rect x="5" y="11" width="14" height="9" rx="2" fill="none" stroke="currentColor" stroke-width="2" /><path d="M8 11V8a4 4 0 0 1 8 0v3" fill="none" stroke="currentColor" stroke-width="2" /></svg>
+              В кабинете: {{ lockedText(thread.report.more) }}
+            </p>
+          </article>
+
           <div v-if="thread.cta && showCard" class="hc__cta" :class="{ 'is-ok': approved }">
             <p>{{ approved ? 'Так это работает в кабинете. Подключите Директ — это пара минут.' : thread.ctaText }}</p>
             <a class="btn btn--sm" :href="registerHref" data-goal="signup_click" :data-goal-place="place || (compact ? 'final' : 'hero')">
@@ -247,6 +273,7 @@ function play(item) {
 }
 
 function ask(i, how) {
+  checkSeq += 1
   active.value = i
   goal('hero_chip', { chip: SCENARIOS[i].ask, how })
   play({ ...SCENARIOS[i], cta: true, ctaText: 'Это демо. На ваших данных Толк найдёт своё.' })
@@ -260,14 +287,7 @@ function submit() {
   if (URL_RE.test(value)) {
     const domain = value.replace(/^https?:\/\//i, '').split('/')[0].toLowerCase()
     goal('check_start', { domain })
-    // Живая проверка сайта без регистрации — следующий этап (docs/landing-plan.md, раздел 5).
-    play({
-      ask: value,
-      answer: `Посмотрю ${domain}: о чём сайт, какие заголовки подойдут и какие запросы сразу заминусовать. Проверка сайта прямо отсюда откроется совсем скоро — а в кабинете она уже работает и бесплатна в пробный период.`,
-      card: null,
-      cta: true,
-      ctaText: 'Зарегистрируйтесь — и Толк проверит сайт и соберёт черновик кампании.',
-    })
+    checkSite(value, domain)
     return
   }
   const lower = value.toLowerCase()
@@ -288,6 +308,81 @@ function submit() {
   })
 }
 
+// Живая проверка сайта без регистрации (docs/landing-plan.md, раздел 5): POST создаёт проверку, дальше опрос.
+const CHECK_FAILED = 'Не получилось проверить сайт — попробуйте ещё раз чуть позже. В кабинете проверка работает и бесплатна в пробный период.'
+const CHECK_TIMEOUT = 150_000
+let checkSeq = 0
+const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+
+async function api(url, init) {
+  const res = await fetch(url, { ...init, headers: { Accept: 'application/json', 'Content-Type': 'application/json' } })
+  const data = await res.json().catch(() => ({}))
+  if (!res.ok) throw new Error(data?.detail?.message || CHECK_FAILED)
+  return data
+}
+
+function plural(n, one, few, many) {
+  const m10 = n % 10
+  const m100 = n % 100
+  if (m10 === 1 && m100 !== 11) return one
+  if (m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14)) return few
+  return many
+}
+
+function lockedText(more) {
+  const parts = []
+  if (more.groups) parts.push(`${more.groups} ${plural(more.groups, 'группа', 'группы', 'групп')} объявлений с ключевыми фразами`)
+  if (more.headlines) parts.push(`ещё ${more.headlines} ${plural(more.headlines, 'заголовок', 'заголовка', 'заголовков')}`)
+  return parts.join(', ') + ' — и черновик кампании из них'
+}
+
+async function checkSite(value, domain) {
+  clearTimers()
+  const seq = ++checkSeq
+  approved.value = false
+  showCard.value = false
+  busy.value = true
+  thread.value = { ask: value, domain, card: null }
+  typing.value = true
+  typed.value = `Открываю ${domain} и читаю главную страницу…`
+  try {
+    const started = await api('/api/site/check', { method: 'POST', body: JSON.stringify({ url: value }) })
+    const since = Date.now()
+    let check = { status: 'running' }
+    while (check.status === 'running') {
+      if (Date.now() - since > CHECK_TIMEOUT) throw new Error(CHECK_FAILED)
+      if (!started.cached) await pause(2000)
+      if (seq !== checkSeq) return
+      check = await api(`/api/site/check/${encodeURIComponent(started.id)}`)
+      if (seq !== checkSeq) return
+      if (Date.now() - since > 6000) typed.value = 'Понял, о чём сайт. Подбираю заголовки и минус-слова…'
+    }
+    if (check.status === 'error') throw new Error(check.error || CHECK_FAILED)
+    const r = check.result
+    goal('check_done', { domain })
+    const about = [r.niche && `${r.niche[0].toUpperCase()}${r.niche.slice(1)}.`, r.offer].filter(Boolean).join(' ')
+    play({
+      ask: value,
+      domain,
+      answer: about ? `Вот что понял про ${domain}: ${about}` : `Посмотрел ${domain} — вот с чего начать рекламу.`,
+      card: null,
+      report: r,
+      cta: true,
+      ctaText: 'Зарегистрируйтесь — Толк соберёт из этого черновик кампании. Пробный период бесплатный.',
+    })
+  } catch (err) {
+    if (seq !== checkSeq) return
+    goal('check_error', { domain })
+    play({
+      ask: value,
+      answer: err?.message && err.message !== 'Failed to fetch' ? err.message : CHECK_FAILED,
+      card: null,
+      cta: true,
+      ctaText: 'В кабинете Толк проверит сайт и соберёт черновик кампании.',
+    })
+  }
+}
+
 function approve() {
   approved.value = true
   goal('demo_approve', { card: thread.value?.card?.title })
@@ -295,6 +390,7 @@ function approve() {
 
 function reset() {
   clearTimers()
+  checkSeq += 1
   thread.value = null
   active.value = -1
   busy.value = false
@@ -565,6 +661,58 @@ onBeforeUnmount(() => {
   color: var(--on-lime);
   font-weight: 800;
   animation: pop 0.4s cubic-bezier(0.3, 1.6, 0.5, 1) both;
+}
+
+.report__part {
+  display: grid;
+  gap: 8px;
+}
+
+.report__title {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--faint);
+  letter-spacing: 0;
+}
+
+.report__heads {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding-left: 1.3em;
+  font-weight: 600;
+}
+
+.report__words {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.report__word {
+  padding: 3px 10px;
+  border-radius: var(--pill);
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  font-size: 14px;
+}
+
+.report__word--more {
+  border-style: dashed;
+  color: var(--faint);
+}
+
+.report__locked {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--ink-2);
+}
+
+.report__locked svg {
+  flex: none;
 }
 
 .hc__cta {
