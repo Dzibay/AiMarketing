@@ -725,6 +725,16 @@ onMounted(async () => {
 .neg-preview {
   margin-top: 12px;
 }
+.neg-preview td {
+  vertical-align: top;
+}
+.neg-preview .num {
+  text-align: right;
+  white-space: nowrap;
+}
+.neg-preview tr.is-off {
+  opacity: 0.55;
+}
 .neg-result {
   margin-top: 16px;
   padding: 16px 18px;

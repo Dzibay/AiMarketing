@@ -412,6 +412,14 @@ onMounted(load)
 </script>
 
 <style scoped>
+/* Кнопка стоит у правого края — меню раскрываем влево, иначе появляется горизонтальная прокрутка. */
+.ws-toolbar > .row-actions {
+  margin-left: auto;
+}
+.row-actions .bulk-more__menu {
+  left: auto;
+  right: 0;
+}
 .menu-note {
   margin: 0;
   padding: 0.4rem 0.7rem;
