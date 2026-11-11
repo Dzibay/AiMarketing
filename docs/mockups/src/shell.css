@@ -1,0 +1,24 @@
+/* Каркас макета: полоса с вкладками вариантов и общие сбросы. Стили вариантов лежат в vN.css и действуют только внутри .vN. */
+*, *::before, *::after { box-sizing: border-box; }
+html, body { height: 100%; }
+body { margin: 0; display: flex; flex-direction: column; overflow: hidden; background: #17181a; font: 13px/1.4 'Inter', system-ui, 'Segoe UI', sans-serif; }
+#bar { flex: none; display: flex; align-items: center; gap: 14px; height: 40px; padding: 0 14px; background: #17181a; color: #8d9096; white-space: nowrap; overflow: hidden; }
+#bar strong { color: #fff; font-weight: 600; }
+#bar nav { display: flex; gap: 2px; }
+#bar button { height: 28px; padding: 0 12px; border: 0; border-radius: 7px; background: none; color: #c9ccd1; font: inherit; font-weight: 500; cursor: pointer; }
+#bar button:hover { background: #2a2c30; color: #fff; }
+#bar button.active { background: #fff; color: #17181a; }
+#bar span { margin-left: auto; overflow: hidden; text-overflow: ellipsis; }
+#app { flex: 1; min-height: 0; }
+.v { height: 100%; overflow: auto; container-type: inline-size; }
+.v button { cursor: pointer; border: 0; background: none; padding: 0; font: inherit; color: inherit; }
+.v input, .v textarea { font: inherit; color: inherit; }
+.v h1, .v h2, .v h3, .v h4, .v p, .v figure { margin: 0; }
+.v .ic { flex: none; }
+.v .num { font-variant-numeric: tabular-nums; }
+.v .spark, .v .bars { display: block; }
+.v .chart { display: block; width: 100%; height: auto; }
+.v .dots { display: inline-flex; gap: 2px; }
+.v .dots i { width: 6px; height: 6px; border-radius: 50%; border: 1.5px solid currentColor; opacity: .5; }
+.v .dots i.on { background: currentColor; opacity: 1; }
+.v .st { display: inline-flex; align-items: center; gap: 4px; font-weight: 600; white-space: nowrap; }

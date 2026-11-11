@@ -1,0 +1,64 @@
+/* Страница сравнения. Все классы с приставкой g-: внутри лежат миниатюры вариантов, их стили трогать нельзя. */
+& {
+  --g-bg: #f6f6f4; --g-card: #fff; --g-soft: #ebebe7; --g-line: #e2e2dc;
+  --g-ink: #17181a; --g-ink2: #55585e; --g-ink3: #63666d; --g-ok: #1a7f4e;
+  background: var(--g-bg); color: var(--g-ink);
+  font: 15px/1.55 'Inter', system-ui, 'Segoe UI', sans-serif;
+}
+&[data-theme='dark'] {
+  --g-bg: #111213; --g-card: #1a1b1d; --g-soft: #242528; --g-line: #2d2e31;
+  --g-ink: #f0f0ee; --g-ink2: #b3b5ba; --g-ink3: #8b8e94; --g-ok: #5fd08f;
+  color-scheme: dark;
+}
+
+.g-page { display: grid; grid-template-columns: minmax(0, 1fr); gap: 20px; max-width: 1440px; margin: 0 auto; padding: 40px 32px 80px; }
+.g-head { display: grid; gap: 10px; }
+.g-eyebrow { color: var(--g-ink3); font-size: 13px; font-weight: 500; }
+.g-h1 { font-size: 36px; font-weight: 700; line-height: 1.15; letter-spacing: -.02em; }
+.g-lead { max-width: 780px; color: var(--g-ink2); font-size: 17px; }
+.g-h2 { font-size: 22px; font-weight: 700; line-height: 1.25; letter-spacing: -.01em; }
+
+.g-controls { position: sticky; top: 0; z-index: 3; display: flex; flex-wrap: wrap; align-items: center; gap: 10px 28px; padding: 12px 0; background: var(--g-bg); }
+.g-ctl { display: flex; align-items: center; gap: 10px; color: var(--g-ink2); font-size: 13.5px; }
+.g-seg { display: flex; padding: 3px; border-radius: 10px; background: var(--g-soft); }
+.g-seg button { height: 30px; padding: 0 12px; border-radius: 7px; color: var(--g-ink2); font-size: 13.5px; font-weight: 500; white-space: nowrap; }
+.g-seg button:hover { color: var(--g-ink); }
+.g-seg button.on { background: var(--g-card); color: var(--g-ink); font-weight: 600; box-shadow: 0 1px 2px rgba(0, 0, 0, .12); }
+
+.g-card { display: grid; grid-template-columns: minmax(0, 1.9fr) minmax(0, 1fr); align-items: start; gap: 28px; padding: 20px; border: 1px solid var(--g-line); border-radius: 18px; background: var(--g-card); }
+.g-thumb { position: relative; aspect-ratio: 1360 / 850; overflow: hidden; border: 1px solid var(--g-line); border-radius: 10px; cursor: pointer; transition: box-shadow .15s; }
+.g-thumb:hover { box-shadow: 0 0 0 3px var(--g-soft), 0 10px 30px rgba(0, 0, 0, .12); }
+.g-thumb__in { position: absolute; top: 0; left: 0; width: 1360px; height: 850px; transform-origin: 0 0; pointer-events: none; }
+.g-thumb__in .v { overflow: hidden; }
+.g-thumb__in * { scrollbar-width: none; }
+.g-card__text { display: grid; gap: 12px; padding: 4px 4px 4px 0; }
+.g-who { color: var(--g-ink3); font-size: 13px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; }
+.g-name { font-size: 30px; font-weight: 700; line-height: 1.1; letter-spacing: -.02em; }
+.g-idea { color: var(--g-ink2); }
+.g-pros, .g-common { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.g-pros li, .g-common li { display: flex; align-items: flex-start; gap: 9px; }
+.g-pros .ic, .g-common .ic { margin-top: 4px; color: var(--g-ok); }
+.g-risk { padding: 10px 12px; border-radius: 10px; background: var(--g-soft); color: var(--g-ink2); font-size: 14px; }
+.g-risk b { color: var(--g-ink); }
+.g-btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; justify-self: start; height: 40px; padding: 0 16px; border-radius: 10px; background: var(--g-ink); color: var(--g-bg); font-weight: 600; }
+.g-btn:hover { opacity: .88; }
+
+.g-sec { display: grid; grid-template-columns: minmax(0, 1fr); gap: 14px; margin-top: 20px; }
+.g-scroll { overflow-x: auto; border: 1px solid var(--g-line); border-radius: 14px; background: var(--g-card); }
+.g-table { width: 100%; min-width: 760px; border-collapse: collapse; font-size: 14px; }
+.g-table th, .g-table td { padding: 12px 16px; border-top: 1px solid var(--g-line); text-align: left; vertical-align: top; }
+.g-table thead th { border-top: 0; font-size: 15px; font-weight: 700; }
+.g-table tbody th { width: 17%; color: var(--g-ink2); font-weight: 500; }
+.g-table td { width: 27.6%; }
+.g-common { max-width: 860px; }
+.g-rec { gap: 10px; padding: 22px 24px; border: 1px solid var(--g-line); border-radius: 18px; background: var(--g-card); }
+.g-rec p { max-width: 860px; color: var(--g-ink2); }
+.g-rec p b { color: var(--g-ink); }
+
+@container (max-width: 1000px) {
+  .g-page { padding: 28px 18px 60px; }
+  .g-h1 { font-size: 28px; }
+  .g-card { grid-template-columns: minmax(0, 1fr); gap: 16px; padding: 14px; }
+  .g-card__text { padding: 0 4px 6px; }
+  .g-name { font-size: 26px; }
+}
