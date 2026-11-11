@@ -135,7 +135,7 @@
             ваши сайты, а правки в Директе вносит только после вашего «Выполнить».
           </p>
           <p v-if="!overview" class="empty">Собираем сигналы…</p>
-          <SignalCards v-else :problems="overview.problems || []" show-project :limit="3" />
+          <SignalCards v-else :problems="overview.problems || []" show-project bare :limit="3" />
         </template>
 
         <p v-if="!step.done && step.detail" class="start__detail" :class="DETAIL_TONES[step.status]">

@@ -1,5 +1,5 @@
 <template>
-  <h2 class="section-h">
+  <h2 v-if="!bare" class="section-h">
     Сервис заметил <span class="cgroup__n">{{ visible.length }}</span>
     <small class="section-h__note">по цифрам, без ИИ — лимит не тратится</small>
   </h2>
@@ -54,6 +54,8 @@ const props = defineProps({
   /** Проект страницы: «Спросить» уходит в его чат, без него — в общий. */
   wsId: { type: Number, default: null },
   limit: { type: Number, default: 8 },
+  /** Без своей шапки «Сервис заметил» — когда заголовок уже есть на странице (мастер первого входа). */
+  bare: Boolean,
 })
 
 const STORE = 'aimarketing-hidden-signals'

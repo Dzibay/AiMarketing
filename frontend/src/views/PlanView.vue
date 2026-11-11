@@ -621,6 +621,13 @@ onBeforeUnmount(() => clearTimeout(pollTimer))
   gap: 14px;
   margin-bottom: 18px;
 }
+/* Оплата — белая карточка «Диалога» с чернильной рамкой: это активный шаг, а не подсказка. */
+.pay-box {
+  padding: 18px 20px;
+  border: 1.5px solid var(--ink);
+  border-radius: var(--r-card);
+  background: var(--surface);
+}
 .plan-card {
   display: flex;
   flex-direction: column;
@@ -729,12 +736,18 @@ onBeforeUnmount(() => clearTimeout(pollTimer))
 }
 .plan-irow {
   display: flex;
+  flex-wrap: wrap;
   align-items: flex-end;
   gap: 10px;
 }
+/* Узкая карточка (телефон): кнопка уходит под поле, а не за край. */
 .plan-irow .field {
-  flex: 1;
+  flex: 1 1 180px;
+  min-width: 0;
   margin: 0;
+}
+.plan-irow .field input {
+  width: 100%;
 }
 .plan-note {
   margin-top: 8px;
