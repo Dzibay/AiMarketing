@@ -1,0 +1,49 @@
+---
+// Хаб интеграций: работающие сейчас и «скоро».
+import Base from '../../layouts/Base.astro'
+import PageHero from '../../components/page/PageHero.astro'
+import CtaBand from '../../components/page/CtaBand.astro'
+import { INTEGRATIONS } from '../../lib/tools.js'
+
+const crumbs = [{ href: '/integracii/', label: 'Интеграции' }]
+const live = INTEGRATIONS.filter((i) => !i.soon)
+const soon = INTEGRATIONS.filter((i) => i.soon)
+---
+
+<Base
+  title="Интеграции Толка: Яндекс Директ, Метрика, Вордстат, Telegram"
+  description="С чем работает Толк: Яндекс Директ, Яндекс Метрика, Вордстат и Telegram. В планах — VK Реклама, Ozon и Wildberries."
+  crumbs={crumbs}
+>
+  <PageHero crumbs={crumbs} ask="С чем он работает?" title="Интеграции" lead="Толк подключается к сервисам Яндекса через официальный вход и API — без паролей." />
+
+  <section class="section section--tight" style="padding-top:0">
+    <div class="wrap">
+      <div class="hub">
+        {
+          live.map((i) => (
+            <a class="hub__card reveal" href={`/integracii/${i.slug}/`}>
+              <h2>{i.title}</h2>
+              <p>{i.text}</p>
+              <span class="hub__more">Подробнее →</span>
+            </a>
+          ))
+        }
+      </div>
+      <h2 class="hub__group">Скоро</h2>
+      <div class="hub">
+        {
+          soon.map((i) => (
+            <a class="hub__card reveal" href={`/integracii/${i.slug}/`}>
+              <h3>{i.title}</h3>
+              <p>{i.text}</p>
+              <span class="hub__more">Что планируем →</span>
+            </a>
+          ))
+        }
+      </div>
+    </div>
+  </section>
+
+  <CtaBand title="Подключите Директ за пару минут" place="integracii_final" />
+</Base>

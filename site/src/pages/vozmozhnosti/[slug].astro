@@ -1,0 +1,89 @@
+---
+// Страница возможности по шаблону 7.3: H1, обещание, строка вопроса с демо «было → станет», как работает,
+// «вручную vs Толк», связанные инструменты/справка/словарь, FAQ, призыв.
+import Base from '../../layouts/Base.astro'
+import PageHero from '../../components/page/PageHero.astro'
+import CtaBand from '../../components/page/CtaBand.astro'
+import Related from '../../components/page/Related.astro'
+import Faq from '../../components/Faq.astro'
+import HeroComposer from '../../islands/HeroComposer.vue'
+import { FEATURE_PAGES } from '../../lib/features.js'
+import { faqLd } from '../../lib/faq.js'
+
+export function getStaticPaths() {
+  return FEATURE_PAGES.map((f) => ({ params: { slug: f.slug }, props: { f } }))
+}
+
+const { f } = Astro.props
+const crumbs = [
+  { href: '/vozmozhnosti/', label: 'Возможности' },
+  { href: `/vozmozhnosti/${f.slug}/`, label: f.h1 },
+]
+---
+
+<Base title={`${f.title} — Толк`} description={f.description} jsonLd={[faqLd(f.faq)]} crumbs={crumbs}>
+  <PageHero crumbs={crumbs} ask={f.demo.ask} title={f.h1} lead={f.lead}>
+    <div class="ft-composer">
+      <HeroComposer client:visible compact scenarios={[f.demo]} hints={[f.demo.ask]} place={`feature_${f.slug}`} />
+    </div>
+  </PageHero>
+
+  <section class="section section--tight" aria-labelledby="how-h">
+    <div class="wrap">
+      <div class="q-head">
+        <span class="q-ask">Как это работает?</span>
+        <h2 id="how-h">Как это работает</h2>
+      </div>
+      <div class={`tiles ${f.how.length === 4 ? 'tiles--2' : ''}`}>
+        {
+          f.how.map((h, i) => (
+            <div class="tile reveal">
+              <span class="tile__num">{String(i + 1).padStart(2, '0')}</span>
+              <h3>{h.title}</h3>
+              <p>{h.text}</p>
+            </div>
+          ))
+        }
+      </div>
+    </div>
+  </section>
+
+  <section class="section section--tight dark" aria-labelledby="vs-h">
+    <div class="wrap">
+      <div class="q-head">
+        <span class="q-ask">А вручную?</span>
+        <h2 id="vs-h">Вручную и с Толком</h2>
+      </div>
+      <div class="vs-table" role="table">
+        <div class="vs-table__row vs-table__head" role="row">
+          <span role="columnheader">Задача</span>
+          <span role="columnheader">Вручную</span>
+          <span role="columnheader">С Толком</span>
+        </div>
+        {
+          f.vs.map((r) => (
+            <div class="vs-table__row" role="row">
+              <span role="cell">{r[0]}</span>
+              <span role="cell" class="vs-table__old" data-label="Вручную">{r[1]}</span>
+              <span role="cell" class="vs-table__new" data-label="С Толком">{r[2]}</span>
+            </div>
+          ))
+        }
+      </div>
+    </div>
+  </section>
+
+  <Related tools={f.tools} help={f.help} terms={f.terms} />
+
+  <Faq items={f.faq} ask="А если…?" title="Вопросы" lead="" />
+
+  <CtaBand title="Попробуйте на своём кабинете" lead="Подключение через вход Яндекса. Ничего не меняется без вашего «Одобрить»." place={`feature_${f.slug}_final`} />
+</Base>
+
+<style>
+  .ft-composer {
+    width: 100%;
+    max-width: 680px;
+    margin-top: 10px;
+  }
+</style>

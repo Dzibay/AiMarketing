@@ -1,0 +1,53 @@
+---
+// Словарь: термины Директа по алфавиту, сгруппированы по первой букве.
+import Base from '../../layouts/Base.astro'
+import PageHero from '../../components/page/PageHero.astro'
+import CtaBand from '../../components/page/CtaBand.astro'
+import { terms } from '../../lib/content.js'
+
+const all = await terms()
+const groups = new Map<string, typeof all>()
+for (const t of all) {
+  const k = t.data.term[0].toUpperCase()
+  if (!groups.has(k)) groups.set(k, [])
+  groups.get(k)!.push(t)
+}
+const crumbs = [{ href: '/slovar/', label: 'Словарь' }]
+---
+
+<Base
+  title="Словарь Яндекс Директа простыми словами"
+  description="CPA, ДРР, минус-слова, кросс-минусовка, площадки РСЯ и другие термины контекстной рекламы — коротко, с примерами."
+  crumbs={crumbs}
+>
+  <PageHero crumbs={crumbs} ask="Что это значит?" title="Словарь" lead="Термины Директа и Метрики простыми словами — коротко и с примерами." />
+
+  <section class="section section--tight" style="padding-top:0">
+    <div class="wrap">
+      {
+        [...groups].map(([letter, list]) => (
+          <div class="hub__group">
+            <h2 class="dict__letter">{letter}</h2>
+            <div class="hub">
+              {list.map((t) => (
+                <a class="hub__card" href={`/slovar/${t.id}/`}>
+                  <h3>{t.data.title}</h3>
+                  <p>{t.data.short}</p>
+                </a>
+              ))}
+            </div>
+          </div>
+        ))
+      }
+    </div>
+  </section>
+
+  <CtaBand title="Толк считает это сам" lead="Цена заявки, ДРР и утечки — по вашему кабинету, без таблиц." place="slovar_index" />
+</Base>
+
+<style>
+  .dict__letter {
+    font-size: 28px;
+    margin: 0 0 12px;
+  }
+</style>

@@ -1,0 +1,34 @@
+---
+// Справка: короткие статьи о работе с кабинетом Толка в порядке первых шагов.
+import Base from '../../layouts/Base.astro'
+import PageHero from '../../components/page/PageHero.astro'
+import CtaBand from '../../components/page/CtaBand.astro'
+import { helpPages } from '../../lib/content.js'
+
+const pages = await helpPages()
+const crumbs = [{ href: '/spravka/', label: 'Справка' }]
+---
+
+<Base
+  title="Справка Толка: подключение и работа"
+  description="Как подключить Яндекс Директ и Метрику, Telegram, работать с предложениями ИИ, откатом и автопилотом."
+  crumbs={crumbs}
+>
+  <PageHero crumbs={crumbs} ask="Как это работает?" title="Справка" lead="От подключения Директа до автоправил — по шагам." />
+
+  <section class="section section--tight" style="padding-top:0">
+    <div class="wrap hub">
+      {
+        pages.map((p) => (
+          <a class="hub__card" href={`/spravka/${p.id}/`}>
+            <h2>{p.data.title}</h2>
+            <p>{p.data.description}</p>
+            <span class="hub__more">Читать →</span>
+          </a>
+        ))
+      }
+    </div>
+  </section>
+
+  <CtaBand title="Не нашли ответ?" lead="Напишите нам — ответим и дополним справку." cta="Связаться" href="/kontakty/" place="spravka_index" />
+</Base>

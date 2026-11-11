@@ -1,0 +1,39 @@
+---
+// Статья справки: текст, дата обновления, соседние статьи.
+import { render } from 'astro:content'
+import Base from '../../layouts/Base.astro'
+import PageHero from '../../components/page/PageHero.astro'
+import CtaBand from '../../components/page/CtaBand.astro'
+import Related from '../../components/page/Related.astro'
+import { helpPages, fmtDate } from '../../lib/content.js'
+
+export async function getStaticPaths() {
+  const all = await helpPages()
+  return all.map((p, i) => ({
+    params: { slug: p.id },
+    props: { p, others: all.filter((_, j) => j !== i && Math.abs(j - i) <= 2).map((x) => x.id) },
+  }))
+}
+
+const { p, others } = Astro.props
+const { Content } = await render(p)
+const crumbs = [
+  { href: '/spravka/', label: 'Справка' },
+  { href: `/spravka/${p.id}/`, label: p.data.title },
+]
+---
+
+<Base title={`${p.data.title} — справка Толка`} description={p.data.description} crumbs={crumbs}>
+  <PageHero crumbs={crumbs} ask="Как это сделать?" title={p.data.title} lead={p.data.description} />
+
+  <section class="section section--tight" style="padding-top:0">
+    <div class="wrap">
+      <article class="prose"><Content /></article>
+      <p class="page-meta">Обновлено {fmtDate(p.data.updated)}</p>
+    </div>
+  </section>
+
+  <Related help={others} title="Ещё в справке" />
+
+  <CtaBand title="Не нашли ответ?" lead="Напишите нам — ответим и дополним справку." cta="Связаться" href="/kontakty/" place={`help_${p.id}`} />
+</Base>

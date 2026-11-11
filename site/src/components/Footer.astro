@@ -44,8 +44,8 @@ const year = new Date().getFullYear()
   }
   .ftr__in {
     display: grid;
-    grid-template-columns: 1.6fr repeat(4, 1fr);
-    gap: 40px;
+    grid-template-columns: 1.4fr repeat(5, 1fr);
+    gap: 32px;
   }
   .ftr__brand {
     display: grid;
@@ -92,6 +92,14 @@ const year = new Date().getFullYear()
     border-top: 1px solid var(--line);
     font-size: 13px;
     color: var(--faint);
+  }
+  @media (max-width: 1080px) {
+    .ftr__in {
+      grid-template-columns: repeat(3, 1fr);
+    }
+    .ftr__brand {
+      grid-column: 1 / -1;
+    }
   }
   @media (max-width: 860px) {
     .ftr__in {

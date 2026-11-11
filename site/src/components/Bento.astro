@@ -1,5 +1,5 @@
 ---
-// Секция 5: бенто-сетка возможностей + плитка «Вручную vs Толк». Страниц /vozmozhnosti/ пока нет — плитки без ссылок.
+// Секция 5: бенто-сетка возможностей + плитка «Вручную vs Толк». Заголовки плиток ведут на /vozmozhnosti/{slug}/ (ссылка растянута на всю плитку).
 import { FEATURES } from '../lib/site.js'
 
 const small = FEATURES.filter((f) =>
@@ -25,7 +25,7 @@ const icons: Record<string, string> = {
 
     <div class="bento">
       <article class="tile tile--chat reveal">
-        <h3>ИИ-помощник</h3>
+        <h3><a class="tile__link" href="/vozmozhnosti/ii-pomoshchnik/">ИИ-помощник</a></h3>
         <p>Спросите о кампаниях своими словами — ответ на данных Директа и Метрики, без жаргона.</p>
         <div class="mini-chat" aria-hidden="true">
           <span class="mini-chat__u">Что с заявками на этой неделе?</span>
@@ -37,8 +37,8 @@ const icons: Record<string, string> = {
       </article>
 
       <article class="tile tile--queries reveal">
-        <h3>Чистка поисковых запросов</h3>
-        <p>Мусорные запросы — в минус-фразы пачкой, с кросс-минусовкой.</p>
+        <h3><a class="tile__link" href="/vozmozhnosti/chistka-poiskovyh-zaprosov/">Чистка поисковых запросов</a></h3>
+        <p>Мусорные запросы — в минус-фразы пачкой, с объяснением по каждому.</p>
         <ul class="mini-q" aria-hidden="true">
           <li><s>ремонт квартир своими руками</s><b>минус</b></li>
           <li><s>ремонт квартир вакансии</s><b>минус</b></li>
@@ -48,7 +48,7 @@ const icons: Record<string, string> = {
       </article>
 
       <article class="tile tile--summary reveal">
-        <h3>Сводка по всем кабинетам</h3>
+        <h3><a class="tile__link" href="/vozmozhnosti/svodka-kabinetov/">Сводка по всем кабинетам</a></h3>
         <p>Свои кабинеты и клиенты агентского аккаунта — проблемы на одном экране.</p>
         <ul class="mini-s" aria-hidden="true">
           <li><i class="d d--bad"></i>Стоматология «Улыбка»<span>3 правки</span></li>
@@ -81,7 +81,7 @@ const icons: Record<string, string> = {
             <svg class="tile__ico" viewBox="0 0 24 24" aria-hidden="true">
               <path d={icons[f.icon]} fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
             </svg>
-            <h3>{f.title}</h3>
+            <h3><a class="tile__link" href={`/vozmozhnosti/${f.slug}/`}>{f.title}</a></h3>
             <p>{f.text}</p>
           </article>
         ))
@@ -91,6 +91,31 @@ const icons: Record<string, string> = {
 </section>
 
 <style>
+  .tile:has(.tile__link) {
+    position: relative;
+  }
+  .tile__link {
+    color: inherit;
+    text-decoration: none;
+  }
+  .tile__link::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+  }
+  .tile__link:hover {
+    text-decoration: underline;
+    text-decoration-thickness: 2px;
+    text-underline-offset: 4px;
+  }
+  .tile__link:focus-visible {
+    outline: none;
+  }
+  .tile:has(.tile__link:focus-visible) {
+    outline: 2px solid var(--ink);
+    outline-offset: 2px;
+  }
   .bento {
     display: grid;
     grid-template-columns: repeat(4, 1fr);

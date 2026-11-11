@@ -1,0 +1,90 @@
+---
+// Сравнение: вердикт, таблица по задачам, когда что лучше, FAQ.
+import Base from '../../layouts/Base.astro'
+import PageHero from '../../components/page/PageHero.astro'
+import CtaBand from '../../components/page/CtaBand.astro'
+import Related from '../../components/page/Related.astro'
+import Faq from '../../components/Faq.astro'
+import { COMPARISONS } from '../../lib/compare.js'
+import { faqLd } from '../../lib/faq.js'
+
+export function getStaticPaths() {
+  return COMPARISONS.map((c) => ({ params: { slug: c.slug }, props: { c } }))
+}
+
+const { c } = Astro.props
+const crumbs = [
+  { href: '/sravnenie/', label: 'Сравнения' },
+  { href: `/sravnenie/${c.slug}/`, label: c.h1 },
+]
+---
+
+<Base title={c.title} description={c.description} jsonLd={[faqLd(c.faq)]} crumbs={crumbs}>
+  <PageHero crumbs={crumbs} ask="Что выбрать?" title={c.h1} lead={c.lead} />
+
+  <section class="section section--tight" style="padding-top:0">
+    <div class="wrap">
+      <blockquote class="verdict">{c.verdict}</blockquote>
+    </div>
+  </section>
+
+  <section class="section section--tight dark" aria-labelledby="cmp-h">
+    <div class="wrap">
+      <div class="q-head">
+        <span class="q-ask">А по задачам?</span>
+        <h2 id="cmp-h">Сравнение по задачам</h2>
+      </div>
+      <div class="vs-table" role="table">
+        <div class="vs-table__row vs-table__head" role="row">
+          <span role="columnheader">Задача</span>
+          <span role="columnheader">{c.other}</span>
+          <span role="columnheader">Толк</span>
+        </div>
+        {
+          c.rows.map((r) => (
+            <div class="vs-table__row" role="row">
+              <span role="cell">{r[0]}</span>
+              <span role="cell" class="vs-table__old" data-label={c.other}>{r[1]}</span>
+              <span role="cell" class="vs-table__new" data-label="Толк">{r[2]}</span>
+            </div>
+          ))
+        }
+      </div>
+    </div>
+  </section>
+
+  <section class="section section--tight" aria-label="Когда что подходит">
+    <div class="wrap tiles tiles--2">
+      <div class="tile">
+        <h2 class="when__h">{c.other} — когда</h2>
+        <ul class="ticks">{c.whenOther.map((w) => <li>{w}</li>)}</ul>
+      </div>
+      <div class="tile">
+        <h2 class="when__h">Толк — когда</h2>
+        <ul class="ticks">{c.whenTolk.map((w) => <li>{w}</li>)}</ul>
+      </div>
+    </div>
+  </section>
+
+  <Related features={c.features} title="Что делает Толк" />
+
+  <Faq items={c.faq} ask="А если…?" title="Вопросы" lead="" />
+
+  <CtaBand title="Посмотрите на своём кабинете" lead="Вход через Яндекс. Ничего не меняется без вашего «Одобрить»." place={`compare_${c.slug}`} />
+</Base>
+
+<style>
+  .verdict {
+    margin: 0;
+    max-width: 820px;
+    padding: clamp(20px, 3vw, 30px);
+    border-radius: 22px;
+    background: var(--lime-soft);
+    font-size: clamp(18px, 1.8vw, 21px);
+    line-height: 1.55;
+  }
+  .when__h {
+    font-size: 22px;
+    letter-spacing: -0.025em;
+  }
+</style>

@@ -1,0 +1,38 @@
+---
+// Блог: статьи по датам. Черновики (draft: true) видны только в dev и в сборку не попадают.
+import Base from '../../layouts/Base.astro'
+import PageHero from '../../components/page/PageHero.astro'
+import CtaBand from '../../components/page/CtaBand.astro'
+import { blogPosts, BLOG_TEMY, fmtDate } from '../../lib/content.js'
+
+const posts = await blogPosts()
+const crumbs = [{ href: '/blog/', label: 'Блог' }]
+---
+
+<Base
+  title="Блог Толка о Яндекс Директе"
+  description="Как найти, куда утекает бюджет в Директе, собрать минус-слова, разобраться с ценой заявки и площадками РСЯ."
+  crumbs={crumbs}
+>
+  <PageHero crumbs={crumbs} ask="Что почитать?" title="Блог" lead="Практика Яндекс Директа: бюджет, запросы, аналитика и ИИ." />
+
+  <section class="section section--tight" style="padding-top:0">
+    <div class="wrap hub">
+      {posts.length === 0 && <p class="page-meta">Первые статьи скоро появятся.</p>}
+      {
+        posts.map((p) => (
+          <a class="hub__card" href={`/blog/${p.id}/`}>
+            <span class="tile__num">
+              {BLOG_TEMY[p.data.tema] ?? p.data.tema} · {fmtDate(p.data.published)}
+              {p.data.draft && ' · черновик'}
+            </span>
+            <h2>{p.data.title}</h2>
+            <p>{p.data.description}</p>
+          </a>
+        ))
+      }
+    </div>
+  </section>
+
+  <CtaBand title="Проверьте свой кабинет" place="blog_index" />
+</Base>

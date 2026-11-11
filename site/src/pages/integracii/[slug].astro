@@ -1,0 +1,108 @@
+---
+// Интеграция: что Толк берёт из сервиса и что с этим делает. «Скоро» — честный план без сроков и без формы
+// (лист ожидания появится вместе с бэкендом заявок).
+import Base from '../../layouts/Base.astro'
+import PageHero from '../../components/page/PageHero.astro'
+import CtaBand from '../../components/page/CtaBand.astro'
+import Related from '../../components/page/Related.astro'
+import { INTEGRATIONS } from '../../lib/tools.js'
+import { CONTACTS } from '../../lib/contacts.js'
+
+export function getStaticPaths() {
+  return INTEGRATIONS.map((i) => ({ params: { slug: i.slug }, props: { i } }))
+}
+
+const { i } = Astro.props
+const crumbs = [
+  { href: '/integracii/', label: 'Интеграции' },
+  { href: `/integracii/${i.slug}/`, label: i.title },
+]
+const title = i.soon ? `${i.title} в Толке — скоро` : `${i.h1}: как работает интеграция`
+const description = i.soon ? `${i.text} ${i.plan.split('.')[0]}.` : `${i.text} ${i.points[0]}.`
+const mailto = CONTACTS.email
+  ? `mailto:${CONTACTS.email}?subject=${encodeURIComponent(`Хочу ${i.title} в Толке`)}`
+  : ''
+---
+
+<Base title={title} description={description} crumbs={crumbs}>
+  <PageHero crumbs={crumbs} ask={i.soon ? 'А это будет?' : 'Как это связано?'} title={i.h1} lead={i.text}>
+    {i.soon && <span class="note-soon">В разработке — сроков пока не называем</span>}
+  </PageHero>
+
+  {
+    i.soon ? (
+      <section class="section section--tight" style="padding-top:0">
+        <div class="wrap soon">
+          <div class="tile">
+            <h2>Что планируем</h2>
+            <p>{i.plan}</p>
+          </div>
+          <div class="tile">
+            <h2>Хотите узнать первыми?</h2>
+            <p>
+              {mailto ? (
+                <>
+                  Напишите нам на <a href={mailto}>{CONTACTS.email}</a> — расскажите, сколько у вас кабинетов и что больше
+                  всего отнимает время. Это прямо влияет на то, что мы сделаем первым.
+                </>
+              ) : (
+                <>
+                  Напишите нам — контакты на странице <a href="/kontakty/">«Контакты»</a>. Расскажите, что больше всего
+                  отнимает время: это прямо влияет на то, что мы сделаем первым.
+                </>
+              )}
+            </p>
+            <p>А пока Толк уже работает с Яндекс Директом.</p>
+          </div>
+        </div>
+      </section>
+    ) : (
+      <section class="section section--tight" style="padding-top:0">
+        <div class="wrap">
+          <ul class="ticks">
+            {i.points.map((p) => (
+              <li>{p}</li>
+            ))}
+          </ul>
+        </div>
+      </section>
+    )
+  }
+
+  {
+    i.soon ? (
+      <Related features={['ii-pomoshchnik', 'svodka-kabinetov', 'chistka-poiskovyh-zaprosov']} title="Что Толк умеет уже сейчас" />
+    ) : (
+      <Related features={i.features} help={i.help} />
+    )
+  }
+
+  <CtaBand
+    title={i.soon ? 'Начните с Директа' : 'Подключите за пару минут'}
+    lead="Вход через Яндекс. Ничего не меняется без вашего «Одобрить»."
+    place={`integration_${i.slug}`}
+  />
+</Base>
+
+<style>
+  .soon {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 14px;
+  }
+  .soon h2 {
+    font-size: 22px;
+    letter-spacing: -0.025em;
+  }
+  .soon p {
+    color: var(--muted);
+  }
+  .soon a {
+    color: var(--ink);
+  }
+  @media (max-width: 760px) {
+    .soon {
+      grid-template-columns: 1fr;
+    }
+  }
+</style>

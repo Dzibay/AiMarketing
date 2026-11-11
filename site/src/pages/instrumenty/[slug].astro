@@ -1,0 +1,114 @@
+---
+// Бесплатный инструмент: H1, сам инструмент (остров), как пользоваться, FAQ, ссылка на возможность Толка.
+import Base from '../../layouts/Base.astro'
+import PageHero from '../../components/page/PageHero.astro'
+import CtaBand from '../../components/page/CtaBand.astro'
+import Related from '../../components/page/Related.astro'
+import Faq from '../../components/Faq.astro'
+import MinusGenerator from '../../islands/tools/MinusGenerator.vue'
+import AdGenerator from '../../islands/tools/AdGenerator.vue'
+import CrossMinus from '../../islands/tools/CrossMinus.vue'
+import CharCounter from '../../islands/tools/CharCounter.vue'
+import UtmBuilder from '../../islands/tools/UtmBuilder.vue'
+import KpiCalculator from '../../islands/tools/KpiCalculator.vue'
+import { TOOLS } from '../../lib/tools.js'
+import { TOOL_COPY } from '../../lib/tool-pages.js'
+import { featureBySlug } from '../../lib/features.js'
+import { faqLd } from '../../lib/faq.js'
+import { SITE_URL } from '../../lib/site.js'
+
+export function getStaticPaths() {
+  return TOOLS.map((t) => ({ params: { slug: t.slug }, props: { t, c: TOOL_COPY[t.slug] } }))
+}
+
+const { t, c } = Astro.props
+const feature = featureBySlug(t.feature)
+const crumbs = [
+  { href: '/instrumenty/', label: 'Инструменты' },
+  { href: `/instrumenty/${t.slug}/`, label: t.title },
+]
+const appLd = {
+  '@context': 'https://schema.org',
+  '@type': 'WebApplication',
+  name: c.h1,
+  url: new URL(`/instrumenty/${t.slug}/`, SITE_URL).href,
+  applicationCategory: 'BusinessApplication',
+  operatingSystem: 'Any',
+  inLanguage: 'ru',
+  offers: { '@type': 'Offer', price: 0, priceCurrency: 'RUB' },
+}
+---
+
+<Base title={c.title} description={c.description} jsonLd={[appLd, faqLd(c.faq)]} crumbs={crumbs}>
+  <PageHero crumbs={crumbs} ask="Бесплатно и без регистрации" title={c.h1} lead={c.lead} />
+
+  <section class="section section--tight" style="padding-top:0" aria-label="Инструмент">
+    <div class="wrap">
+      {t.slug === 'generator-minus-slov' && <MinusGenerator client:load />}
+      {t.slug === 'generator-obyavlenij' && <AdGenerator client:load />}
+      {t.slug === 'kross-minusovka' && <CrossMinus client:load />}
+      {t.slug === 'schetchik-simvolov' && <CharCounter client:load />}
+      {t.slug === 'utm-generator' && <UtmBuilder client:load />}
+      {t.slug === 'kalkulyator-cpa-drr' && <KpiCalculator client:load />}
+      <p class="tool-privacy">Всё считается в вашем браузере — введённые данные никуда не отправляются.</p>
+    </div>
+  </section>
+
+  <section class="section section--tight" aria-labelledby="howto-h" style="padding-top:0">
+    <div class="wrap">
+      <div class="q-head">
+        <span class="q-ask">Как пользоваться?</span>
+        <h2 id="howto-h">Как пользоваться</h2>
+      </div>
+      <div class="tiles">
+        {
+          c.how.map((h, i) => (
+            <div class="tile reveal">
+              <span class="tile__num">{String(i + 1).padStart(2, '0')}</span>
+              <h3>{h.title}</h3>
+              <p>{h.text}</p>
+            </div>
+          ))
+        }
+      </div>
+    </div>
+  </section>
+
+  {
+    feature && (
+      <section class="section section--tight dark" aria-labelledby="feat-h">
+        <div class="wrap tool-feat">
+          <span class="q-ask">А без ручной работы?</span>
+          <h2 id="feat-h">{feature.h1} — в Толке</h2>
+          <p class="q-lead">{feature.lead}</p>
+          <a class="btn btn--lime" href={`/vozmozhnosti/${feature.slug}/`}>
+            Как это работает
+          </a>
+        </div>
+      </section>
+    )
+  }
+
+  <Faq items={c.faq} ask="А если…?" title="Вопросы" lead="" />
+
+  <Related tools={TOOLS.filter((x) => x.slug !== t.slug).map((x) => x.slug).slice(0, 3)} terms={c.terms} />
+
+  <CtaBand title="Толк делает это на данных вашего кабинета" lead="Подключение через вход Яндекса. Ничего не меняется без вашего «Одобрить»." place={`tool_${t.slug}`} />
+</Base>
+
+<style>
+  .tool-privacy {
+    margin-top: 14px;
+    font-size: 14px;
+    color: var(--faint);
+  }
+  .tool-feat {
+    display: grid;
+    gap: 18px;
+    justify-items: start;
+    max-width: 760px;
+  }
+  .tool-feat h2 {
+    font-size: clamp(30px, 4vw, 44px);
+  }
+</style>

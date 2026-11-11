@@ -1,0 +1,38 @@
+---
+// Хаб бесплатных инструментов.
+import Base from '../../layouts/Base.astro'
+import PageHero from '../../components/page/PageHero.astro'
+import CtaBand from '../../components/page/CtaBand.astro'
+import { TOOLS } from '../../lib/tools.js'
+
+const crumbs = [{ href: '/instrumenty/', label: 'Инструменты' }]
+---
+
+<Base
+  title="Бесплатные инструменты для Яндекс Директа"
+  description="Генератор минус-слов и объявлений, кросс-минусовка, счётчик символов, UTM-метки и калькулятор CPA, ДРР и ROMI. Бесплатно, без регистрации."
+  crumbs={crumbs}
+>
+  <PageHero
+    crumbs={crumbs}
+    ask="Можно без регистрации?"
+    title="Бесплатные инструменты для Директа"
+    lead="Работают прямо в браузере: ничего не нужно подключать, данные никуда не отправляются."
+  />
+
+  <section class="section section--tight" style="padding-top:0">
+    <div class="wrap hub">
+      {
+        TOOLS.map((t) => (
+          <a class="hub__card reveal" href={`/instrumenty/${t.slug}/`}>
+            <h2>{t.title}</h2>
+            <p>{t.text}</p>
+            <span class="hub__more">Открыть →</span>
+          </a>
+        ))
+      }
+    </div>
+  </section>
+
+  <CtaBand title="А в Толке это делает ИИ — на данных вашего кабинета" place="instrumenty_final" />
+</Base>

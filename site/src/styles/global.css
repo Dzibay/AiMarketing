@@ -517,3 +517,377 @@ input {
     grid-template-columns: 1fr;
   }
 }
+
+/* --- Хабы разделов (возможности, инструменты, интеграции, сравнения, справка, словарь, блог) --- */
+.hub {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 320px), 1fr));
+  gap: 14px;
+}
+
+.hub__card {
+  display: grid;
+  gap: 10px;
+  align-content: start;
+  padding: clamp(20px, 2.6vw, 28px);
+  border-radius: 22px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  color: var(--ink);
+  text-decoration: none;
+  transition: border-color 0.2s, transform 0.2s;
+}
+
+.hub__card:hover {
+  border-color: var(--ink);
+}
+
+.hub__card h2,
+.hub__card h3 {
+  font-size: 22px;
+  letter-spacing: -0.025em;
+}
+
+.hub__card p {
+  color: var(--muted);
+  font-size: 15px;
+}
+
+.hub__more {
+  margin-top: auto;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.hub__group {
+  margin: 40px 0 16px;
+  font-size: clamp(22px, 2.4vw, 28px);
+}
+
+/* --- Таблица «вручную / с Толком» и сравнения --- */
+.vs-table {
+  display: grid;
+  border-radius: 22px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  background: var(--surface);
+}
+
+.vs-table__row {
+  display: grid;
+  grid-template-columns: 1.2fr 1fr 1fr;
+  gap: 16px;
+  padding: 16px 22px;
+  border-top: 1px solid var(--line);
+}
+
+.vs-table__head {
+  border-top: 0;
+  font-size: 13px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+}
+
+.vs-table__old {
+  color: var(--muted);
+}
+
+.vs-table__new {
+  font-weight: 700;
+}
+
+.dark .vs-table__new {
+  color: var(--lime);
+}
+
+@media (max-width: 700px) {
+  .vs-table__row {
+    grid-template-columns: 1fr;
+    gap: 4px;
+  }
+  .vs-table__head {
+    display: none;
+  }
+  .vs-table__row > :first-child {
+    font-weight: 700;
+  }
+  .vs-table__old::before {
+    content: attr(data-label) ': ';
+    font-weight: 600;
+  }
+  .vs-table__new::before {
+    content: attr(data-label) ': ';
+    font-weight: 600;
+    color: var(--muted);
+  }
+}
+
+/* --- Текст из Markdown: справка, словарь, блог --- */
+.prose {
+  max-width: 720px;
+  font-size: 18px;
+  line-height: 1.65;
+}
+
+.prose > * + * {
+  margin-top: 1em;
+}
+
+.prose h2 {
+  margin-top: 1.8em;
+  font-size: clamp(24px, 2.6vw, 30px);
+}
+
+.prose h3 {
+  margin-top: 1.4em;
+  font-size: 21px;
+}
+
+.prose ul,
+.prose ol {
+  padding-left: 1.3em;
+}
+
+.prose li + li {
+  margin-top: 0.4em;
+}
+
+.prose a {
+  text-decoration-color: var(--lime);
+  text-decoration-thickness: 2px;
+  text-underline-offset: 3px;
+}
+
+.prose code {
+  padding: 2px 6px;
+  border-radius: 6px;
+  background: var(--surface-2);
+  font-size: 0.9em;
+}
+
+.prose pre {
+  padding: 16px 18px;
+  border-radius: 14px;
+  background: var(--surface-2);
+  overflow-x: auto;
+  font-size: 15px;
+}
+
+.prose pre code {
+  padding: 0;
+  background: none;
+}
+
+.prose blockquote {
+  margin-inline: 0;
+  padding: 14px 18px;
+  border-left: 3px solid var(--lime);
+  background: var(--surface);
+  border-radius: 0 14px 14px 0;
+}
+
+.prose table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 16px;
+  display: block;
+  overflow-x: auto;
+}
+
+.prose th,
+.prose td {
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+}
+
+.page-meta {
+  font-size: 14px;
+  color: var(--faint);
+}
+
+/* --- Бесплатные инструменты (острова в src/islands/tools) --- */
+.tool {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+
+.tool--stack {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.tool__panel {
+  display: grid;
+  gap: 18px;
+  align-content: start;
+  padding: clamp(20px, 3vw, 30px);
+  border-radius: 26px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+}
+
+.tool__panel--out {
+  /* вместе с классом .dark: тёмные значения токенов */
+  background: #141413;
+  border-color: #141413;
+}
+
+.tool__cap {
+  font-size: 13px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+}
+
+.tool__field {
+  display: grid;
+  gap: 8px;
+}
+
+.tool__label {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-weight: 600;
+  font-size: 15px;
+}
+
+.tool__hint {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.tool input[type='text'],
+.tool input[type='number'],
+.tool input[type='url'],
+.tool select,
+.tool textarea {
+  width: 100%;
+  padding: 11px 14px;
+  border-radius: 14px;
+  border: 1px solid var(--line-2);
+  background: var(--bg);
+  color: var(--ink);
+  font: inherit;
+  font-size: 16px;
+}
+
+.tool textarea {
+  min-height: 150px;
+  resize: vertical;
+  line-height: 1.5;
+}
+
+.tool__panel--out textarea {
+  background: var(--surface-2);
+  border-color: var(--line);
+}
+
+.tool input:focus-visible,
+.tool select:focus-visible,
+.tool textarea:focus-visible {
+  outline: 2px solid var(--lime);
+  outline-offset: 1px;
+}
+
+.tool__checks {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 200px), 1fr));
+  gap: 8px;
+}
+
+.tool__check {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  padding: 10px 12px;
+  border-radius: 14px;
+  border: 1px solid var(--line);
+  background: var(--bg);
+  font-size: 15px;
+  cursor: pointer;
+}
+
+.tool__check input {
+  margin-top: 4px;
+  accent-color: #141413;
+}
+
+.tool__check small {
+  display: block;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.tool__row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+}
+
+.tool__count {
+  font-size: 13px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.tool__count--over {
+  color: var(--danger);
+}
+
+.tool__list {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.tool__list li {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 14px;
+  border-radius: 12px;
+  background: var(--surface-2);
+  overflow-wrap: anywhere;
+}
+
+.tool__stat {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--line);
+}
+
+.tool__stat b {
+  font-size: clamp(24px, 3vw, 32px);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em;
+}
+
+.tool__stat span {
+  color: var(--muted);
+  font-size: 15px;
+}
+
+.tool__note {
+  color: var(--muted);
+  font-size: 14px;
+}
+
+@media (max-width: 860px) {
+  .tool {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

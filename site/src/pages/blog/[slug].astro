@@ -1,0 +1,53 @@
+---
+// Статья блога (Article). Пути строятся из blogPosts(), поэтому черновики в продакшен не попадают.
+import { render } from 'astro:content'
+import Base from '../../layouts/Base.astro'
+import PageHero from '../../components/page/PageHero.astro'
+import CtaBand from '../../components/page/CtaBand.astro'
+import Related from '../../components/page/Related.astro'
+import { blogPosts, BLOG_TEMY, fmtDate } from '../../lib/content.js'
+import { SITE_URL } from '../../lib/site.js'
+
+export async function getStaticPaths() {
+  return (await blogPosts()).map((p) => ({ params: { slug: p.id }, props: { p } }))
+}
+
+const { p } = Astro.props
+const { Content } = await render(p)
+const crumbs = [
+  { href: '/blog/', label: 'Блог' },
+  { href: `/blog/${p.id}/`, label: p.data.title },
+]
+const org = { '@type': 'Organization', name: 'Толк', url: `${SITE_URL}/` }
+const ld = {
+  '@context': 'https://schema.org',
+  '@type': 'Article',
+  headline: p.data.title,
+  description: p.data.description,
+  datePublished: p.data.published.toISOString().slice(0, 10),
+  dateModified: (p.data.updated ?? p.data.published).toISOString().slice(0, 10),
+  author: org,
+  publisher: org,
+  mainEntityOfPage: `${SITE_URL}/blog/${p.id}/`,
+  inLanguage: 'ru',
+}
+---
+
+<Base title={p.data.title} description={p.data.description} jsonLd={[ld]} crumbs={crumbs}>
+  <PageHero crumbs={crumbs} ask={BLOG_TEMY[p.data.tema] ?? 'Статья'} title={p.data.title} lead={p.data.description} />
+
+  <section class="section section--tight" style="padding-top:0">
+    <div class="wrap">
+      <p class="page-meta">
+        Команда Толка · {fmtDate(p.data.published)}
+        {p.data.updated && ` · обновлено ${fmtDate(p.data.updated)}`}
+        {p.data.draft && ' · черновик'}
+      </p>
+      <article class="prose"><Content /></article>
+    </div>
+  </section>
+
+  <Related features={p.data.features} title="Как это делает Толк" />
+
+  <CtaBand title="Проверьте свой кабинет" lead="Вход через Яндекс. Ничего не меняется без вашего решения." place={`blog_${p.id}`} />
+</Base>

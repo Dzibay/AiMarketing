@@ -1,0 +1,43 @@
+---
+// Термин словаря: определение (DefinedTerm), текст, связанные термины и возможность Толка.
+import { render } from 'astro:content'
+import Base from '../../layouts/Base.astro'
+import PageHero from '../../components/page/PageHero.astro'
+import CtaBand from '../../components/page/CtaBand.astro'
+import Related from '../../components/page/Related.astro'
+import { terms } from '../../lib/content.js'
+import { SITE_URL } from '../../lib/site.js'
+
+export async function getStaticPaths() {
+  return (await terms()).map((t) => ({ params: { slug: t.id }, props: { t } }))
+}
+
+const { t } = Astro.props
+const { Content } = await render(t)
+const crumbs = [
+  { href: '/slovar/', label: 'Словарь' },
+  { href: `/slovar/${t.id}/`, label: t.data.term },
+]
+const ld = {
+  '@context': 'https://schema.org',
+  '@type': 'DefinedTerm',
+  name: t.data.term,
+  description: t.data.short,
+  url: `${SITE_URL}/slovar/${t.id}/`,
+  inDefinedTermSet: { '@type': 'DefinedTermSet', name: 'Словарь Толка', url: `${SITE_URL}/slovar/` },
+}
+---
+
+<Base title={`${t.data.title} — словарь Директа`} description={t.data.description} jsonLd={[ld]} crumbs={crumbs}>
+  <PageHero crumbs={crumbs} ask="Что это?" title={t.data.title} lead={t.data.short} />
+
+  <section class="section section--tight" style="padding-top:0">
+    <div class="wrap">
+      <article class="prose"><Content /></article>
+    </div>
+  </section>
+
+  <Related features={t.data.feature ? [t.data.feature] : []} terms={t.data.related} title="Рядом в словаре" />
+
+  <CtaBand title="Посмотрите на своём кабинете" place={`term_${t.id}`} />
+</Base>

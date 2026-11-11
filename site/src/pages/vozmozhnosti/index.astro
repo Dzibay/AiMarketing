@@ -1,0 +1,38 @@
+---
+// Хаб возможностей: карточки всех страниц /vozmozhnosti/{slug}/.
+import Base from '../../layouts/Base.astro'
+import PageHero from '../../components/page/PageHero.astro'
+import CtaBand from '../../components/page/CtaBand.astro'
+import { FEATURE_PAGES } from '../../lib/features.js'
+
+const crumbs = [{ href: '/vozmozhnosti/', label: 'Возможности' }]
+---
+
+<Base
+  title="Возможности Толка для Яндекс Директа"
+  description="Что умеет Толк: ИИ-помощник, чистка поисковых запросов, сводка по кабинетам, автоправила, перезапуск и эксперименты, аналитика, аудит, создание кампаний, Telegram и картинки."
+  crumbs={crumbs}
+>
+  <PageHero
+    crumbs={crumbs}
+    ask="Что он умеет?"
+    title="Возможности"
+    lead="Всё, что Толк делает с вашим Директом. Предлагает он сам, а меняет — только после вашего «Одобрить»."
+  />
+
+  <section class="section section--tight" style="padding-top:0">
+    <div class="wrap hub">
+      {
+        FEATURE_PAGES.map((f) => (
+          <a class="hub__card reveal" href={`/vozmozhnosti/${f.slug}/`}>
+            <h2>{f.h1}</h2>
+            <p>{f.lead}</p>
+            <span class="hub__more">Подробнее →</span>
+          </a>
+        ))
+      }
+    </div>
+  </section>
+
+  <CtaBand title="Посмотрите на своём кабинете" place="vozmozhnosti_final" />
+</Base>

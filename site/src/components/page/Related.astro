@@ -1,0 +1,95 @@
+---
+// «Что ещё посмотреть»: возможности, инструменты, справка, словарь и статьи блога (перелинковка, раздел 7.6).
+// Несуществующие слаги и черновики в проде молча пропускаются.
+import { getEntry } from 'astro:content'
+import { toolBySlug } from '../../lib/tools.js'
+import { featureBySlug } from '../../lib/features.js'
+import { blogPosts } from '../../lib/content.js'
+
+interface Props {
+  features?: string[]
+  tools?: string[]
+  help?: string[]
+  terms?: string[]
+  posts?: string[]
+  title?: string
+}
+const { features = [], tools = [], help = [], terms = [], posts = [], title = 'Что ещё посмотреть' } = Astro.props
+
+const items: { href: string; kind: string; title: string; text?: string }[] = []
+for (const s of features) {
+  const f = featureBySlug(s)
+  if (f) items.push({ href: `/vozmozhnosti/${s}/`, kind: 'Возможность', title: f.h1 })
+}
+for (const s of tools) {
+  const t = toolBySlug(s)
+  if (t) items.push({ href: `/instrumenty/${s}/`, kind: 'Бесплатный инструмент', title: t.title, text: t.text })
+}
+for (const s of help) {
+  const h = await getEntry('spravka', s)
+  if (h) items.push({ href: `/spravka/${s}/`, kind: 'Справка', title: h.data.title })
+}
+const published = await blogPosts()
+for (const s of posts) {
+  const p = published.find((x) => x.id === s)
+  if (p) items.push({ href: `/blog/${s}/`, kind: 'Статья', title: p.data.title })
+}
+for (const s of terms) {
+  const t = await getEntry('slovar', s)
+  if (t) items.push({ href: `/slovar/${s}/`, kind: 'Словарь', title: t.data.title, text: t.data.short })
+}
+---
+
+{
+  items.length > 0 && (
+    <section class="section section--tight" aria-labelledby="rel-h">
+      <div class="wrap">
+        <h2 id="rel-h" class="rel__h">{title}</h2>
+        <div class="rel">
+          {items.map((i) => (
+            <a class="rel__card" href={i.href}>
+              <span class="tile__num">{i.kind}</span>
+              <b>{i.title}</b>
+              {i.text && <span class="rel__text">{i.text}</span>}
+            </a>
+          ))}
+        </div>
+      </div>
+    </section>
+  )
+}
+
+<style>
+  .rel__h {
+    font-size: clamp(26px, 3vw, 34px);
+    margin-bottom: 18px;
+  }
+  .rel {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+    gap: 12px;
+  }
+  .rel__card {
+    display: grid;
+    gap: 6px;
+    align-content: start;
+    padding: 18px 20px;
+    border-radius: 20px;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    color: var(--ink);
+    text-decoration: none;
+    transition: border-color 0.2s;
+  }
+  .rel__card:hover {
+    border-color: var(--ink);
+  }
+  .rel__card b {
+    font-size: 17px;
+    letter-spacing: -0.01em;
+  }
+  .rel__text {
+    color: var(--muted);
+    font-size: 14px;
+  }
+</style>

@@ -29,7 +29,7 @@ export const FEATURES = [
 ]
 
 export const NAV = [
-  { href: '/#vozmozhnosti', label: 'Возможности' },
+  { href: '/vozmozhnosti/', label: 'Возможности' },
   { href: '/direktologam/', label: 'Директологам' },
   { href: '/biznesu/', label: 'Бизнесу' },
   { href: '/tarify/', label: 'Тарифы' },
@@ -40,10 +40,12 @@ export const FOOTER = [
   {
     title: 'Продукт',
     links: [
-      { href: '/#vozmozhnosti', label: 'Возможности' },
+      { href: '/vozmozhnosti/', label: 'Возможности' },
       { href: '/tarify/', label: 'Тарифы' },
       { href: '/bezopasnost/', label: 'Безопасность' },
       { href: '/primery/', label: 'Примеры' },
+      { href: '/integracii/', label: 'Интеграции' },
+      { href: '/sravnenie/', label: 'Сравнения' },
     ],
   },
   {
@@ -51,6 +53,15 @@ export const FOOTER = [
     links: [
       { href: '/direktologam/', label: 'Директологам' },
       { href: '/biznesu/', label: 'Владельцам бизнеса' },
+    ],
+  },
+  {
+    title: 'Ресурсы',
+    links: [
+      { href: '/instrumenty/', label: 'Бесплатные инструменты' },
+      { href: '/spravka/', label: 'Справка' },
+      { href: '/slovar/', label: 'Словарь' },
+      { href: '/blog/', label: 'Блог' },
     ],
   },
   {

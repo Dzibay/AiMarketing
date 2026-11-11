@@ -1,0 +1,33 @@
+---
+// Хаб сравнений.
+import Base from '../../layouts/Base.astro'
+import PageHero from '../../components/page/PageHero.astro'
+import CtaBand from '../../components/page/CtaBand.astro'
+import { COMPARISONS } from '../../lib/compare.js'
+
+const crumbs = [{ href: '/sravnenie/', label: 'Сравнения' }]
+---
+
+<Base
+  title="Толк и другие способы вести Яндекс Директ"
+  description="Толк рядом с директологом, агентством, ручной работой и автостратегиями Директа: что берёт на себя и что остаётся за вами."
+  crumbs={crumbs}
+>
+  <PageHero crumbs={crumbs} ask="Чем это отличается?" title="Сравнения" lead="Честно: где Толк помогает, а где лучше справится человек или сам Директ." />
+
+  <section class="section section--tight" style="padding-top:0">
+    <div class="wrap hub">
+      {
+        COMPARISONS.map((c) => (
+          <a class="hub__card reveal" href={`/sravnenie/${c.slug}/`}>
+            <h2>{c.h1}</h2>
+            <p>{c.lead}</p>
+            <span class="hub__more">Сравнить →</span>
+          </a>
+        ))
+      }
+    </div>
+  </section>
+
+  <CtaBand title="Посмотрите на своём кабинете" place="sravnenie_final" />
+</Base>
