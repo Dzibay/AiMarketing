@@ -1,7 +1,9 @@
 <script setup>
 // Генератор объявлений по шаблонам: товар + где + преимущества → заголовки и тексты в лимитах Директа.
-// Без ИИ: только перестановки ваших слов. ИИ-версия на данных кабинета — в самом Толке.
+// Шаблоны — перестановки ваших слов в браузере; «Подобрать с ИИ» — варианты от модели (useAi, лимиты в админке).
+// ИИ-версия на данных кабинета — в самом Толке.
 import { computed, ref } from 'vue'
+import { useAi } from './useAi.js'
 import { useCopy } from './useCopy.js'
 
 const TITLE = 56
@@ -14,6 +16,8 @@ const advs = ref('Смета за 1 день\nГарантия 3 года\nФи�
 const cta = ref('Вызовите замерщика')
 const out = ref(null)
 const { copied, copy } = useCopy()
+const ai = useAi('ads')
+const mode = ref('tpl')
 
 const cap = (s) => (s ? s[0].toUpperCase() + s.slice(1) : s)
 const low = (s) => (s ? s[0].toLowerCase() + s.slice(1) : s)
@@ -63,18 +67,30 @@ const texts = computed(() => {
   ).slice(0, 6)
 })
 
+// Что показываем справа: шаблоны или последний ответ ИИ.
+const shown = computed(() =>
+  mode.value === 'ai' && ai.result.value
+    ? ai.result.value
+    : { titles: titles.value, titles2: titles2.value, texts: texts.value },
+)
+
 const asText = computed(() =>
   [
     'Заголовки:',
-    ...titles.value,
+    ...shown.value.titles,
     '',
     'Дополнительные заголовки:',
-    ...titles2.value,
+    ...shown.value.titles2,
     '',
     'Тексты:',
-    ...texts.value,
+    ...shown.value.texts,
   ].join('\n'),
 )
+
+async function runAi() {
+  const data = await ai.run({ product: product.value, where: where.value, pros: list.value.join('; '), cta: cta.value })
+  if (data) mode.value = 'ai'
+}
 </script>
 
 <template>
@@ -97,25 +113,36 @@ const asText = computed(() =>
         <label class="tool__label" for="ag-c">Призыв</label>
         <input id="ag-c" v-model="cta" type="text" placeholder="Вызовите замерщика" />
       </div>
+      <div v-if="ai.available.value" class="tool__row">
+        <button type="button" class="btn btn--ghost" :disabled="ai.busy.value || !clean(product)" @click="runAi">
+          {{ ai.busy.value ? 'Подбираем…' : 'Подобрать с ИИ' }}
+        </button>
+        <span class="tool__note">Перепишет ваши слова по-своему — только по фактам из полей.</span>
+      </div>
+      <p v-if="ai.error.value" class="tool__note" role="alert">{{ ai.error.value }}</p>
     </div>
 
     <div class="tool__panel tool__panel--out dark" aria-live="polite">
+      <div v-if="ai.result.value" class="tool__row" role="radiogroup" aria-label="Варианты">
+        <label class="tool__check"><input v-model="mode" type="radio" value="tpl" /> Шаблоны</label>
+        <label class="tool__check"><input v-model="mode" type="radio" value="ai" /> От ИИ</label>
+      </div>
       <span class="tool__cap">Заголовки · до {{ TITLE }} символов</span>
       <ul class="tool__list">
-        <li v-for="t in titles" :key="t"><span>{{ t }}</span><span class="tool__count">{{ t.length }}</span></li>
-        <li v-if="!titles.length"><span class="tool__note">Впишите товар или услугу</span></li>
+        <li v-for="t in shown.titles" :key="t"><span>{{ t }}</span><span class="tool__count">{{ t.length }}</span></li>
+        <li v-if="!shown.titles.length"><span class="tool__note">Впишите товар или услугу</span></li>
       </ul>
       <span class="tool__cap">Дополнительный заголовок · до {{ TITLE2 }}</span>
       <ul class="tool__list">
-        <li v-for="t in titles2" :key="t"><span>{{ t }}</span><span class="tool__count">{{ t.length }}</span></li>
+        <li v-for="t in shown.titles2" :key="t"><span>{{ t }}</span><span class="tool__count">{{ t.length }}</span></li>
       </ul>
       <span class="tool__cap">Тексты · до {{ TEXT }}</span>
       <ul class="tool__list">
-        <li v-for="t in texts" :key="t"><span>{{ t }}</span><span class="tool__count">{{ t.length }}</span></li>
+        <li v-for="t in shown.texts" :key="t"><span>{{ t }}</span><span class="tool__count">{{ t.length }}</span></li>
       </ul>
       <textarea ref="out" :value="asText" readonly class="sr-only" tabindex="-1" aria-hidden="true" />
       <div class="tool__row">
-        <button type="button" class="btn btn--lime" :disabled="!titles.length" @click="copy(asText, out)">
+        <button type="button" class="btn btn--lime" :disabled="!shown.titles.length" @click="copy(asText, out)">
           {{ copied ? 'Скопировано' : 'Скопировать всё' }}
         </button>
         <span class="tool__note">Варианты длиннее лимита не показываются.</span>

@@ -7,7 +7,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
-from app import ai, ai_bridge, auth, billing, events, image_gen, mailer, payments, plans, promos, referrals, site_check, wordstat
+from app import ai, ai_bridge, auth, billing, events, image_gen, mailer, payments, plans, promos, referrals, site_check, site_extras, wordstat
 from app.api.web import _http
 from app.users import UsersError, count_users, list_users, mark_email_verified, set_user_blocked
 from app.yandex import YandexError, yandex_configured
@@ -260,6 +260,52 @@ def admin_site_check_put(body: SiteCheckBody) -> dict:
 def admin_site_check_test() -> dict:
     """Короткий запрос к модели проверки — без списания единиц."""
     return _call(site_check.test_model)
+
+
+# --- Сайт: контакты, капча, лист ожидания, ИИ-генераторы ----------------------------------------
+
+
+class SiteSettingsBody(BaseModel):
+    email: str = ""
+    legal: str = ""
+    telegram: str = ""
+    captcha_client_key: str = ""
+    # None — серверный ключ не трогаем (в форму он не возвращается), "" — стереть.
+    captcha_server_key: str | None = None
+    tools_enabled: bool = True
+    tools_ip_daily: int = site_extras.TOOLS_DEFAULTS["ip_daily"]
+    tools_daily: int = site_extras.TOOLS_DEFAULTS["daily"]
+
+
+def _site_settings() -> dict:
+    return {
+        "contacts": site_extras.contacts(),
+        "captcha": site_extras.captcha_settings(),
+        "tools": site_extras.tools_settings(),
+    }
+
+
+@router.get("/site")
+def admin_site_get() -> dict:
+    return _site_settings()
+
+
+@router.put("/site")
+def admin_site_put(body: SiteSettingsBody) -> dict:
+    _call(site_extras.save_contacts, email=body.email, legal=body.legal, telegram=body.telegram)
+    _call(site_extras.save_tools, enabled=body.tools_enabled, ip_daily=body.tools_ip_daily, daily=body.tools_daily)
+    site_extras.save_captcha(client_key=body.captcha_client_key, server_key=body.captcha_server_key)
+    return _site_settings()
+
+
+@router.get("/site/waitlist")
+def admin_site_waitlist() -> dict:
+    return site_extras.waitlist_overview()
+
+
+@router.delete("/site/waitlist/{item_id}")
+def admin_site_waitlist_delete(item_id: int) -> dict:
+    return site_extras.waitlist_delete(item_id)
 
 
 # --- Мост Cloudflare -----------------------------------------------------------------------------

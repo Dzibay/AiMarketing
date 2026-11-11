@@ -1,10 +1,11 @@
 ---
 import Logo from './Logo.astro'
 import { FOOTER, SLOGAN } from '../lib/site.js'
-import { CONTACTS, phoneHref } from '../lib/contacts.js'
+import { loadPublic } from '../lib/contacts.js'
 
-// Реквизиты, почта и телефон нужны для проверки сайта ЮKassa — задаются при сборке, без них строки не выводятся.
-const { legal, email, phone } = CONTACTS
+// Реквизиты и почта нужны для проверки сайта ЮKassa — задаются в админке (вкладка «Сайт»), пустые не выводятся.
+// data-contact — Base.astro обновляет значения в браузере без пересборки.
+const { legal, email } = await loadPublic()
 const year = new Date().getFullYear()
 ---
 
@@ -13,8 +14,7 @@ const year = new Date().getFullYear()
     <div class="ftr__brand">
       <Logo size={36} />
       <p>{SLOGAN}. ИИ-помощник для Яндекс Директа и Метрики, который предлагает — а решаете вы.</p>
-      {email && <a class="ftr__mail" href={`mailto:${email}`}>{email}</a>}
-      {phone && <a class="ftr__mail" href={phoneHref(phone)}>{phone}</a>}
+      <a class="ftr__mail" href={email ? `mailto:${email}` : undefined} data-contact="email" hidden={!email}>{email}</a>
     </div>
     {
       FOOTER.map((col) => (
@@ -33,7 +33,7 @@ const year = new Date().getFullYear()
   </div>
   <div class="wrap ftr__base">
     <span>© {year} Толк</span>
-    {legal && <span>{legal}</span>}
+    <span data-contact="legal" hidden={!legal}>{legal}</span>
     <span>Яндекс Директ, Метрика и Вордстат — сервисы ООО «Яндекс». Толк работает через их официальные API.</span>
   </div>
 </footer>

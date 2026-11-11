@@ -23,6 +23,8 @@ export function getStaticPaths() {
 
 const { t, c } = Astro.props
 const feature = featureBySlug(t.feature)
+// У генераторов минус-слов и объявлений есть ИИ-режим (POST /api/site/generate) — меняем строку о приватности.
+const ai = t.slug === 'generator-minus-slov' || t.slug === 'generator-obyavlenij'
 const crumbs = [
   { href: '/instrumenty/', label: 'Инструменты' },
   { href: `/instrumenty/${t.slug}/`, label: t.title },
@@ -43,14 +45,20 @@ const appLd = {
   <PageHero crumbs={crumbs} ask="Бесплатно и без регистрации" title={c.h1} lead={c.lead} />
 
   <section class="section section--tight" style="padding-top:0" aria-label="Инструмент">
-    <div class="wrap">
+    <div class="wrap" data-tool={t.slug}>
       {t.slug === 'generator-minus-slov' && <MinusGenerator client:load />}
       {t.slug === 'generator-obyavlenij' && <AdGenerator client:load />}
       {t.slug === 'kross-minusovka' && <CrossMinus client:load />}
       {t.slug === 'schetchik-simvolov' && <CharCounter client:load />}
       {t.slug === 'utm-generator' && <UtmBuilder client:load />}
       {t.slug === 'kalkulyator-cpa-drr' && <KpiCalculator client:load />}
-      <p class="tool-privacy">Всё считается в вашем браузере — введённые данные никуда не отправляются.</p>
+      <p class="tool-privacy">
+        {
+          ai
+            ? 'Обычный режим считается в вашем браузере. «Подобрать с ИИ» отправляет текст из полей на сервер Толка и в модель ИИ — без регистрации и без данных о вас.'
+            : 'Всё считается в вашем браузере — введённые данные никуда не отправляются.'
+        }
+      </p>
     </div>
   </section>
 
@@ -112,3 +120,21 @@ const appLd = {
     font-size: clamp(30px, 4vw, 44px);
   }
 </style>
+
+<script>
+  // Цель tool_used — один раз на странице, при первом вводе или нажатии в инструменте.
+  import { goal } from '../../lib/goal.js'
+
+  const root = document.querySelector<HTMLElement>('[data-tool]')
+  if (root) {
+    const fire = () => {
+      goal('tool_used', { tool: root.dataset.tool })
+      for (const type of ['input', 'change', 'click']) root.removeEventListener(type, onEvent, true)
+    }
+    const onEvent = (event: Event) => {
+      const el = event.target as HTMLElement
+      if (event.type !== 'click' || el.closest('button')) fire()
+    }
+    for (const type of ['input', 'change', 'click']) root.addEventListener(type, onEvent, true)
+  }
+</script>

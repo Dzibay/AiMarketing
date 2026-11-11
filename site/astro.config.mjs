@@ -1,6 +1,8 @@
 import { defineConfig } from 'astro/config'
 import vue from '@astrojs/vue'
 import sitemap from '@astrojs/sitemap'
+import { writeFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 
 // Сайт tolk-ads.ru: статичный HTML + острова Vue. Кабинет — отдельное SPA (frontend/), nginx делит адреса.
 const apiTarget = process.env.API_PROXY || 'http://127.0.0.1:8000'
@@ -22,11 +24,37 @@ function apiProxyFirst() {
   }
 }
 
+// IndexNow: ключ подтверждается файлом {ключ}.txt в корне сайта; отправка адресов — npm run indexnow.
+const indexNowKey = (process.env.INDEXNOW_KEY || '').trim()
+if (indexNowKey && !/^[A-Za-z0-9-]{8,128}$/.test(indexNowKey)) throw new Error('INDEXNOW_KEY: 8–128 символов, латиница, цифры, дефис')
+
+function indexNowKeyFile() {
+  return {
+    name: 'tolk:indexnow-key',
+    hooks: {
+      'astro:build:done': ({ dir }) => {
+        if (indexNowKey) writeFileSync(fileURLToPath(new URL(`${indexNowKey}.txt`, dir)), indexNowKey)
+      },
+    },
+  }
+}
+
+// Карты сайта: блог и словарь — отдельными файлами (sitemap-blog-0.xml, sitemap-slovar-0.xml), остальное —
+// sitemap-pages-0.xml; общий индекс — sitemap-index.xml (он и в robots.txt).
+const chunk = (prefix) => (item) => (new URL(item.url).pathname.startsWith(prefix) ? item : undefined)
+
 export default defineConfig({
   site: 'https://tolk-ads.ru',
   trailingSlash: 'always',
   build: { format: 'directory' },
-  integrations: [vue(), sitemap({ filter: (page) => !page.includes('/404') })],
+  integrations: [
+    vue(),
+    sitemap({
+      filter: (page) => !page.includes('/404'),
+      chunks: { blog: chunk('/blog/'), slovar: chunk('/slovar/') },
+    }),
+    indexNowKeyFile(),
+  ],
   server: { port: 4321, host: true },
   vite: {
     plugins: [apiProxyFirst()],

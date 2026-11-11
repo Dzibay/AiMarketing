@@ -71,13 +71,12 @@ services:
     build:
       context: .
       dockerfile: frontend/Dockerfile
-      # Сайт «Толк» статичный: счётчик, реквизиты и контакты вшиваются при сборке (значения — из .env).
+      # Сайт «Толк» статичный: счётчик и ключ IndexNow вшиваются при сборке; контакты и реквизиты — в админке
+      # (вкладка «Сайт»), сайт подгружает их без пересборки.
       args:
         PUBLIC_METRIKA_ID: ${PUBLIC_METRIKA_ID:-}
-        PUBLIC_LEGAL_LINE: ${PUBLIC_LEGAL_LINE:-}
-        PUBLIC_SUPPORT_EMAIL: ${PUBLIC_SUPPORT_EMAIL:-}
-        PUBLIC_SUPPORT_PHONE: ${PUBLIC_SUPPORT_PHONE:-}
-        PUBLIC_SUPPORT_TELEGRAM: ${PUBLIC_SUPPORT_TELEGRAM:-}
+        SITE_API_URL: ${SITE_API_URL:-}
+        INDEXNOW_KEY: ${INDEXNOW_KEY:-}
     restart: unless-stopped
     depends_on:
       backend:

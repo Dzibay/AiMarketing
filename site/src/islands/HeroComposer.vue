@@ -123,6 +123,7 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref, useId } from 'vue'
 import { goal } from '../lib/goal.js'
+import { captchaToken } from '../lib/public.js'
 
 const props = defineProps({
   compact: { type: Boolean, default: false },
@@ -367,7 +368,10 @@ async function checkSite(value, domain) {
   typing.value = true
   typed.value = `Открываю ${domain} и читаю главную страницу…`
   try {
-    const started = await api('/api/site/check', { method: 'POST', body: JSON.stringify({ url: value }) })
+    // Невидимая SmartCaptcha (ключ из админки); без ключа токен пустой и сервер его не спрашивает.
+    const captcha = await captchaToken()
+    if (seq !== checkSeq) return
+    const started = await api('/api/site/check', { method: 'POST', body: JSON.stringify({ url: value, captcha }) })
     const since = Date.now()
     let check = { status: 'running' }
     while (check.status === 'running') {

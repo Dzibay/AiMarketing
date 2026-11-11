@@ -1,21 +1,19 @@
 ---
 // Бета-программа: продлённый пробный период в обмен на согласие опубликовать обезличенный кейс.
-// Отдельной формы на бэкенде нет — заявка письмом на почту поддержки; срок продления сообщаем в ответе.
+// Отдельной формы на бэкенде нет — заявка письмом на почту поддержки (из админки); срок продления сообщаем в ответе.
 import Base from '../layouts/Base.astro'
 import PageHero from '../components/page/PageHero.astro'
 import CtaBand from '../components/page/CtaBand.astro'
 import Faq from '../components/Faq.astro'
 import { faqLd } from '../lib/faq.js'
-import { CONTACTS } from '../lib/contacts.js'
+import { loadPublic, mailto } from '../lib/contacts.js'
 import { APP } from '../lib/site.js'
 
 const crumbs = [{ href: '/beta/', label: 'Бета-программа' }]
-const { email } = CONTACTS
-const mailto = email
-  ? `mailto:${email}?subject=${encodeURIComponent('Бета-программа Толка')}&body=${encodeURIComponent(
-      'Почта аккаунта в Толке:\nНиша и регион:\nПримерный бюджет в Директе в месяц:\n',
-    )}`
-  : ''
+const { email } = await loadPublic()
+const subject = 'Бета-программа Толка'
+const body = 'Почта аккаунта в Толке:\nНиша и регион:\nПримерный бюджет в Директе в месяц:\n'
+const href = email ? `${mailto(email, subject)}&body=${encodeURIComponent(body)}` : undefined
 
 const give = [
   { title: 'Дольше бесплатно', text: 'Продлеваем пробный период, чтобы Толк успел набрать статистику и показать результат на ваших данных.' },
@@ -57,7 +55,17 @@ const faq = [
     title="Бета-программа"
     lead="Толк только запускается. Нам нужны настоящие кабинеты и честные отзывы, вам — время, чтобы увидеть результат. Продлим бесплатный период, если вы согласитесь рассказать, что получилось."
   >
-    {mailto ? <a slot="actions" class="btn btn--lime" href={mailto} data-goal="beta_apply" data-goal-place="beta_hero">Подать заявку письмом</a> : null}
+    <a
+      slot="actions"
+      class="btn btn--lime"
+      href={href}
+      hidden={!email}
+      data-contact-href="email"
+      data-subject={subject}
+      data-body={body}
+      data-goal="beta_apply"
+      data-goal-place="beta_hero">Подать заявку письмом</a
+    >
     <a slot="actions" class="btn btn--ghost" href="/primery/">Как выглядит кейс</a>
   </PageHero>
 
@@ -109,7 +117,9 @@ const faq = [
         <li><b>Зарегистрируйтесь</b> и подключите Директ — это бесплатно.</li>
         <li>
           <b>Напишите нам</b>
-          {email ? <>на <a href={mailto}>{email}</a></> : <>в поддержку (<a href="/kontakty/">контакты</a>)</>} с почты аккаунта: ниша, регион и примерный бюджет.
+          <span data-contact-if="email" hidden={!email}>на <a href={href} data-contact="email" data-subject={subject} data-body={body}>{email}</a></span>
+          <span data-contact-unless="email" hidden={!!email}>в поддержку (<a href="/kontakty/">контакты</a>)</span> с почты
+          аккаунта: ниша, регион и примерный бюджет.
         </li>
         <li><b>Получите продление</b> — срок пришлём в ответном письме, он зависит от того, сколько нужно на статистику.</li>
       </ol>

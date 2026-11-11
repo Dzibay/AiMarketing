@@ -1,11 +1,11 @@
 ---
-// Контакты и реквизиты (нужны для проверки сайта ЮKassa). Значения — из переменных сборки, см. lib/contacts.js.
+// Контакты и реквизиты (нужны для проверки сайта ЮKassa). Значения — из админки, см. lib/contacts.js.
 import Base from '../layouts/Base.astro'
 import PageHero from '../components/page/PageHero.astro'
-import { CONTACTS, phoneHref } from '../lib/contacts.js'
+import { loadPublic } from '../lib/contacts.js'
 import { APP, BRAND, SITE_URL } from '../lib/site.js'
 
-const { email, phone, telegram, legal } = CONTACTS
+const { email, telegram, legal } = await loadPublic()
 const crumbs = [{ href: '/kontakty/', label: 'Контакты' }]
 
 const jsonLd = [
@@ -14,14 +14,13 @@ const jsonLd = [
     '@type': 'Organization',
     name: BRAND,
     url: SITE_URL,
-    ...(email || phone
+    ...(email
       ? {
           contactPoint: {
             '@type': 'ContactPoint',
             contactType: 'customer support',
             availableLanguage: 'Russian',
-            ...(email ? { email } : {}),
-            ...(phone ? { telephone: phone } : {}),
+            email,
           },
         }
       : {}),
@@ -31,7 +30,7 @@ const jsonLd = [
 
 <Base
   title="Контакты — Толк"
-  description="Как связаться с командой Толка: почта поддержки, телефон, Telegram и реквизиты. Вопросы об оплате, возврате и данных."
+  description="Как связаться с командой Толка: почта поддержки, Telegram и реквизиты. Вопросы об оплате, возврате и данных."
   jsonLd={jsonLd}
   crumbs={crumbs}
 >
@@ -46,26 +45,17 @@ const jsonLd = [
     <div class="wrap tiles">
       <div class="tile">
         <span class="tile__num">Почта поддержки</span>
-        {email ? <a class="kt__big" href={`mailto:${email}`}>{email}</a> : <p>Скоро появится</p>}
+        <a class="kt__big" href={email ? `mailto:${email}` : undefined} data-contact="email" hidden={!email}>{email}</a>
+        <p data-contact-unless="email" hidden={!!email}>Скоро появится</p>
         <p>Оплата, возврат, удаление данных — пишите с адреса почты аккаунта.</p>
       </div>
-      {
-        phone && (
-          <div class="tile">
-            <span class="tile__num">Телефон</span>
-            <a class="kt__big" href={phoneHref(phone)}>{phone}</a>
-          </div>
-        )
-      }
-      {
-        telegram && (
-          <div class="tile">
-            <span class="tile__num">Telegram</span>
-            <a class="kt__big" href={`https://t.me/${telegram}`} rel="noopener">@{telegram}</a>
-            <p>Короткие вопросы и помощь с подключением.</p>
-          </div>
-        )
-      }
+      <div class="tile" data-contact-if="telegram" hidden={!telegram}>
+        <span class="tile__num">Telegram</span>
+        <a class="kt__big" href={telegram ? `https://t.me/${telegram}` : undefined} rel="noopener" data-contact="telegram">
+          {telegram && `@${telegram}`}
+        </a>
+        <p>Короткие вопросы и помощь с подключением.</p>
+      </div>
       <div class="tile">
         <span class="tile__num">В кабинете</span>
         <a class="kt__big" href={APP.cabinet}>Спросить Толк</a>
@@ -77,7 +67,10 @@ const jsonLd = [
   <section class="section section--tight kt-legal" aria-labelledby="req-h">
     <div class="wrap">
       <h2 id="req-h">Реквизиты и документы</h2>
-      {legal ? <p class="kt__req">{legal}</p> : <p class="kt__req">Реквизиты указываются в чеке и сообщаются по запросу на почту поддержки.</p>}
+      <p class="kt__req" data-contact="legal" hidden={!legal}>{legal}</p>
+      <p class="kt__req" data-contact-unless="legal" hidden={!!legal}>
+        Реквизиты указываются в чеке и сообщаются по запросу на почту поддержки.
+      </p>
       <ul class="kt__docs">
         <li><a href={APP.offer}>Публичная оферта</a></li>
         <li><a href={APP.privacy}>Политика конфиденциальности</a></li>

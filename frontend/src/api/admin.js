@@ -68,6 +68,13 @@ export const adminApi = {
   /** Пробный вызов модели проверки — без списания единиц. */
   testSiteCheck: () => send('POST', '/site-check/test'),
 
+  /** Сайт: контакты, ключи SmartCaptcha (ключ сервера не возвращается), лимиты ИИ-генераторов. */
+  site: () => call('/site'),
+  saveSite: (payload) => send('PUT', '/site', payload),
+  /** Лист ожидания со страниц «скоро»: { channels: [{id,label,count}], items }. */
+  waitlist: () => call('/site/waitlist'),
+  deleteWaitlist: (id) => send('DELETE', `/site/waitlist/${id}`),
+
   /** Мост Cloudflare: зарубежные модели с сервера в РФ. */
   bridge: () => call('/bridge'),
   saveBridge: (payload) => send('PUT', '/bridge', payload),

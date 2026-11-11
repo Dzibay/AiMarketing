@@ -8,6 +8,11 @@
   box-sizing: border-box;
 }
 
+/* hidden сильнее display у классов: контакты и формы прячут пустые строки атрибутом. */
+[hidden] {
+  display: none !important;
+}
+
 html {
   -webkit-text-size-adjust: 100%;
   scroll-behavior: smooth;
@@ -73,10 +78,13 @@ input {
   border-radius: 6px;
 }
 
+/* Размеры с !important: стили полей инструментов (.tool textarea { width: 100% }) не должны растягивать скрытое поле. */
 .sr-only {
   position: absolute;
-  width: 1px;
-  height: 1px;
+  width: 1px !important;
+  height: 1px !important;
+  padding: 0 !important;
+  border: 0 !important;
   overflow: hidden;
   clip: rect(0 0 0 0);
   white-space: nowrap;

@@ -1,6 +1,8 @@
 <script setup>
-// Генератор базовых минус-слов: темы → список без повторов в формате Директа. Всё считается в браузере.
+// Генератор базовых минус-слов: темы → список без повторов в формате Директа. Темы считаются в браузере;
+// «Подобрать с ИИ» добавляет группы под описание бизнеса (useAi, лимиты в админке).
 import { computed, ref } from 'vue'
+import { useAi } from './useAi.js'
 import { useCopy } from './useCopy.js'
 
 const GROUPS = [
@@ -19,19 +21,39 @@ const own = ref('')
 const format = ref('lines')
 const out = ref(null)
 const { copied, copy } = useCopy()
+const ai = useAi('minus')
+const about = ref('')
+const aiGroups = ref([])
+const aiPicked = ref([])
+
+async function runAi() {
+  const data = await ai.run({ about: about.value })
+  if (!data) return
+  aiGroups.value = data.groups.map((g, i) => ({ id: `ai${i}`, title: g.name, words: g.words }))
+  aiPicked.value = aiGroups.value.map((g) => g.id)
+}
 
 const norm = (w) => w.trim().toLowerCase().replace(/ё/g, 'е').replace(/^[-!+]+/, '').replace(/\s+/g, ' ')
 
 const words = computed(() => {
   const all = [
     ...GROUPS.filter((g) => picked.value.includes(g.id)).flatMap((g) => g.words),
+    ...aiGroups.value.filter((g) => aiPicked.value.includes(g.id)).flatMap((g) => g.words),
     ...own.value.split(/[\n,;]+/),
   ]
   return [...new Set(all.map(norm).filter(Boolean))]
 })
 
+// Фразы из нескольких слов к ключевой фразе через минус не дописываются — их оставляем для списка кампании.
+const phrases = computed(() => words.value.filter((w) => w.includes(' ')).length)
+
 const text = computed(() =>
-  format.value === 'lines' ? words.value.join('\n') : words.value.map((w) => (w.includes(' ') ? `-"${w}"` : `-${w}`)).join(' '),
+  format.value === 'lines'
+    ? words.value.join('\n')
+    : words.value
+        .filter((w) => !w.includes(' '))
+        .map((w) => `-${w}`)
+        .join(' '),
 )
 </script>
 
@@ -43,6 +65,23 @@ const text = computed(() =>
         <label v-for="g in GROUPS" :key="g.id" class="tool__check">
           <input v-model="picked" type="checkbox" :value="g.id" />
           <span>{{ g.title }}<small>{{ g.hint }}</small></span>
+        </label>
+      </div>
+      <div v-if="ai.available.value" class="tool__field">
+        <label class="tool__label" for="mg-about">Под ваш бизнес <span class="tool__hint">что продаёте и где</span></label>
+        <input id="mg-about" v-model="about" type="text" maxlength="600" placeholder="Продаём новые кондиционеры с установкой в Казани" />
+        <div class="tool__row">
+          <button type="button" class="btn btn--ghost" :disabled="ai.busy.value || about.trim().length < 3" @click="runAi">
+            {{ ai.busy.value ? 'Подбираем…' : 'Подобрать с ИИ' }}
+          </button>
+          <span class="tool__note">Добавит группы слов, которые не подходят именно вам. Проверьте перед загрузкой.</span>
+        </div>
+        <p v-if="ai.error.value" class="tool__note" role="alert">{{ ai.error.value }}</p>
+      </div>
+      <div v-if="aiGroups.length" class="tool__checks">
+        <label v-for="g in aiGroups" :key="g.id" class="tool__check">
+          <input v-model="aiPicked" type="checkbox" :value="g.id" />
+          <span>ИИ: {{ g.title }}<small>{{ g.words.slice(0, 4).join(', ') }}{{ g.words.length > 4 ? '…' : '' }}</small></span>
         </label>
       </div>
       <div class="tool__field">

@@ -26,20 +26,14 @@ RUN npm install
 COPY frontend/src/styles/tokens.css /app/frontend/src/styles/tokens.css
 COPY site/ ./
 ENV NODE_OPTIONS=--max-old-space-size=1536
-# Счётчик Метрики и строки подвала вшиваются при сборке. Тарифы при сборке не тянем (API ещё не поднят) —
-# остров тарифов подгружает их в браузере из /api/site/plans.
+# Счётчик Метрики и ключ IndexNow вшиваются при сборке. Тарифы и контакты (админка, вкладка «Сайт») берутся
+# из API, если задан SITE_API_URL; без него сайт подгружает их в браузере из /api/site/plans и /api/site/public.
 ARG PUBLIC_METRIKA_ID=""
-ARG PUBLIC_LEGAL_LINE=""
-ARG PUBLIC_SUPPORT_EMAIL=""
-ARG PUBLIC_SUPPORT_PHONE=""
-ARG PUBLIC_SUPPORT_TELEGRAM=""
 ARG SITE_API_URL=""
+ARG INDEXNOW_KEY=""
 ENV PUBLIC_METRIKA_ID=$PUBLIC_METRIKA_ID \
-    PUBLIC_LEGAL_LINE=$PUBLIC_LEGAL_LINE \
-    PUBLIC_SUPPORT_EMAIL=$PUBLIC_SUPPORT_EMAIL \
-    PUBLIC_SUPPORT_PHONE=$PUBLIC_SUPPORT_PHONE \
-    PUBLIC_SUPPORT_TELEGRAM=$PUBLIC_SUPPORT_TELEGRAM \
-    SITE_API_URL=$SITE_API_URL
+    SITE_API_URL=$SITE_API_URL \
+    INDEXNOW_KEY=$INDEXNOW_KEY
 RUN npm run build
 
 

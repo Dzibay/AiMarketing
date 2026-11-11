@@ -4,7 +4,7 @@ import time
 from fastapi import APIRouter, BackgroundTasks, Body, HTTPException, Request
 from pydantic import BaseModel
 
-from app import payments, plans, referrals, site_check
+from app import payments, plans, referrals, site_check, site_extras
 
 from app.config import settings
 from app.legal import legal_consent_data, legal_cookies_data, legal_offer_data, legal_privacy_data
@@ -79,6 +79,7 @@ def site_legal(page: str) -> dict:
 
 class SiteCheckBody(BaseModel):
     url: str = ""
+    captcha: str = ""
 
 
 def _client_ip(request: Request) -> str:
@@ -93,7 +94,9 @@ def site_check_start(body: SiteCheckBody, request: Request, background: Backgrou
     from app.api.web import _http
 
     try:
-        started = site_check.start(body.url, _client_ip(request))
+        ip = _client_ip(request)
+        site_extras.verify_captcha(body.captcha, ip)
+        started = site_check.start(body.url, ip)
     except YandexError as exc:
         raise _http(exc) from exc
     if not started["cached"]:
@@ -107,5 +110,51 @@ def site_check_status(check_id: str) -> dict:
 
     try:
         return site_check.public(check_id)
+    except YandexError as exc:
+        raise _http(exc) from exc
+
+
+@router.get("/site/public")
+def site_public() -> dict:
+    """Контакты из админки, ключ капчи и включён ли ИИ-режим генераторов — сайт берёт при сборке и в браузере."""
+    return site_extras.public()
+
+
+class WaitlistBody(BaseModel):
+    channel: str = ""
+    email: str = ""
+    consent: bool = False
+    captcha: str = ""
+
+
+@router.post("/site/waitlist")
+def site_waitlist(body: WaitlistBody, request: Request) -> dict:
+    from app.api.web import _http
+
+    try:
+        if not body.consent:
+            raise YandexError("consent", "Нужно согласие на обработку персональных данных")
+        ip = _client_ip(request)
+        site_extras.verify_captcha(body.captcha, ip)
+        return site_extras.waitlist_add(body.channel, body.email, ip)
+    except YandexError as exc:
+        raise _http(exc) from exc
+
+
+class GenerateBody(BaseModel):
+    tool: str = ""
+    fields: dict = {}
+    captcha: str = ""
+
+
+@router.post("/site/generate")
+def site_generate(body: GenerateBody, request: Request) -> dict:
+    """ИИ-режим бесплатных генераторов: минус-слова (tool=minus) и объявления (tool=ads)."""
+    from app.api.web import _http
+
+    try:
+        ip = _client_ip(request)
+        site_extras.verify_captcha(body.captcha, ip)
+        return site_extras.generate(body.tool, body.fields, ip)
     except YandexError as exc:
         raise _http(exc) from exc

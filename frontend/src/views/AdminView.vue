@@ -98,6 +98,7 @@
             <AdminServices :bridge="bridge" @changed="loadSummary" />
             <AdminBridge @update="bridge = $event" />
           </template>
+          <AdminSite v-else-if="tab === 'site'" />
           <AdminUsage v-else-if="tab === 'usage'" />
         </template>
       </template>
@@ -116,6 +117,7 @@ import AdminPlans from './admin/AdminPlans.vue'
 import AdminPromos from './admin/AdminPromos.vue'
 import AdminRefs from './admin/AdminRefs.vue'
 import AdminServices from './admin/AdminServices.vue'
+import AdminSite from './admin/AdminSite.vue'
 import AdminUsage from './admin/AdminUsage.vue'
 import AdminUsers from './admin/AdminUsers.vue'
 import { adminApi } from '../api/admin'
@@ -135,6 +137,7 @@ const TABS = [
   { id: 'promos', label: 'Промокоды' },
   { id: 'refs', label: 'Реф-ссылки' },
   { id: 'services', label: 'ИИ и сервисы' },
+  { id: 'site', label: 'Сайт' },
   { id: 'usage', label: 'Расход' },
 ]
 

@@ -117,8 +117,9 @@ const metrikaId = import.meta.env.PUBLIC_METRIKA_ID || ''
     <Footer />
 
     <script>
-      // Появление блоков при прокрутке + цели Метрики по data-goal на ссылках и кнопках.
+      // Появление блоков при прокрутке, контакты из админки, цели Метрики по data-goal на ссылках и кнопках.
       import { goal } from '../lib/goal.js'
+      import { sitePublic } from '../lib/public.js'
 
       const items = document.querySelectorAll('.reveal')
       if ('IntersectionObserver' in window) {
@@ -136,6 +137,32 @@ const metrikaId = import.meta.env.PUBLIC_METRIKA_ID || ''
       } else {
         items.forEach((el) => el.classList.add('is-in'))
       }
+
+      // Контакты из админки: свежие значения без пересборки (lib/contacts.js).
+      // data-contact — подставить значение и ссылку, data-contact-href — только ссылку (текст кнопки свой).
+      const hrefFor = (key: string, value: string, el: HTMLElement) => {
+        if (key === 'telegram') return `https://t.me/${value}`
+        if (key !== 'email') return ''
+        const q = [
+          el.dataset.subject && `subject=${encodeURIComponent(el.dataset.subject)}`,
+          el.dataset.body && `body=${encodeURIComponent(el.dataset.body)}`,
+        ].filter(Boolean)
+        return `mailto:${value}${q.length ? `?${q.join('&')}` : ''}`
+      }
+      sitePublic().then((d) => {
+        const data = d as Record<string, string>
+        document.querySelectorAll<HTMLElement>('[data-contact], [data-contact-href]').forEach((el) => {
+          const key = (el.dataset.contact || el.dataset.contactHref)!
+          const value = data[key] || ''
+          el.hidden = !value
+          if (!value) return
+          if (el.dataset.contact) el.textContent = key === 'telegram' ? `@${value}` : value
+          const href = hrefFor(key, value, el)
+          if (href) el.setAttribute('href', href)
+        })
+        document.querySelectorAll<HTMLElement>('[data-contact-if]').forEach((el) => (el.hidden = !data[el.dataset.contactIf!]))
+        document.querySelectorAll<HTMLElement>('[data-contact-unless]').forEach((el) => (el.hidden = !!data[el.dataset.contactUnless!]))
+      })
 
       document.addEventListener('click', (event) => {
         const el = (event.target as HTMLElement).closest<HTMLElement>('[data-goal]')
