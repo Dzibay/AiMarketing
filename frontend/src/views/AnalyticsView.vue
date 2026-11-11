@@ -1,4 +1,23 @@
 <template>
+  <template v-if="!expert">
+    <p v-if="data && !data.projects.length" class="empty">
+      Проектов пока нет. Подключите Директ и Метрику в
+      <RouterLink to="/cabinet/connections">подключениях</RouterLink> — проекты появятся по счётчикам.
+    </p>
+    <SimpleReport
+      v-else
+      :data="data"
+      :loading="loading"
+      :error="loadError"
+      :period="preset"
+      :campaigns="simpleCampaigns"
+      :chat-link="{ path: '/cabinet/chat', query: { ask: 'analytics' } }"
+      hint="Сравнение с прошлым периодом, все метрики, проекты и кампании таблицами"
+      @period="setPreset"
+    />
+  </template>
+
+  <template v-else>
   <section class="panel">
     <div class="panel__head">
       <div>
@@ -180,6 +199,7 @@
       </div>
     </section>
   </template>
+  </template>
 </template>
 
 <script setup>
@@ -188,6 +208,8 @@ import { RouterLink } from 'vue-router'
 import Sparkline from '../components/Sparkline.vue'
 import TermHint from '../components/TermHint.vue'
 import TrendChart from '../components/TrendChart.vue'
+import SimpleReport from '../components/SimpleReport.vue'
+import { useExpert } from '../composables/useExpert'
 import { errorText, webApi } from '../api/web'
 import {
   CAMPAIGN_STATES,
@@ -198,6 +220,7 @@ import {
   kpiTarget,
   kpiValue,
   lastDays,
+  monthToDate,
   num,
   pct,
   plural,
@@ -215,6 +238,15 @@ const preset = ref(7)
 const range = reactive(lastDays(7))
 const chartKey = ref('cost_kopecks')
 let seq = 0
+
+const { expert } = useExpert()
+const simpleCampaigns = computed(() =>
+  (data.value?.campaigns || []).map((c) => ({
+    ...c,
+    link: `/w/${c.project.id}/campaigns/${c.campaign_row_id}`,
+    where: c.project.name,
+  })),
+)
 
 const topCampaigns = computed(() => (data.value?.campaigns || []).filter((c) => c.cost_kopecks > 0).slice(0, 10))
 
@@ -234,7 +266,7 @@ async function load() {
 
 function setPreset(n) {
   preset.value = n
-  Object.assign(range, lastDays(n))
+  Object.assign(range, n === 'month' ? monthToDate() : lastDays(n))
   load()
 }
 

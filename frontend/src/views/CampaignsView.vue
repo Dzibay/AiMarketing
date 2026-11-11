@@ -32,7 +32,31 @@
     </div>
   </div>
 
-  <section class="panel">
+  <template v-if="!expert">
+    <p v-if="loading && !data" class="empty">Загружаем кампании…</p>
+    <div v-else-if="!data" class="empty">
+      {{ loadError || 'Не удалось загрузить кампании.' }}
+      <button class="btn btn--ghost" type="button" @click="load">Повторить</button>
+    </div>
+    <p v-else-if="!projects.length" class="empty">
+      Проектов пока нет. Подключите Директ и Метрику в
+      <RouterLink to="/cabinet/connections">подключениях</RouterLink> — проекты появятся по счётчикам.
+    </p>
+    <p v-else-if="!simpleRows.length" class="empty">
+      В проектах нет кампаний. Нажмите «Новая кампания» — ИИ поможет собрать первую.
+    </p>
+    <CampaignGroups
+      v-else
+      :class="{ 'is-loading': loading }"
+      :rows="simpleRows"
+      :kpi-of="(c) => kpiByProject.get(c.project.id)"
+      :busy="busy"
+      @toggle="quickToggle"
+    />
+    <ExpertHint v-if="data && simpleRows.length">Фильтры, архив, массовые действия и таблица со всеми цифрами</ExpertHint>
+  </template>
+
+  <section v-else class="panel">
     <div class="filters">
       <div v-field class="field field--wide">
         <label>Поиск</label>
@@ -194,6 +218,11 @@ import { pushToast } from '../composables/useToasts'
 import { CAMPAIGN_STATES, CAMPAIGN_STATUSES, CAMPAIGN_TYPES, formatDate, lastDays, num, pct, rub, rubles } from '../utils/format'
 import { useHead } from '../utils/useHead'
 import TermHint from '../components/TermHint.vue'
+import CampaignGroups from '../components/CampaignGroups.vue'
+import ExpertHint from '../components/ExpertHint.vue'
+import { useExpert } from '../composables/useExpert'
+
+const { expert } = useExpert()
 
 useHead('Кампании — AiMarketing', true)
 
@@ -224,6 +253,18 @@ const newMenu = ref(null)
 let seq = 0
 
 const projects = computed(() => data.value?.projects || [])
+const kpiByProject = computed(() => new Map(projects.value.map((p) => [p.id, p.kpi])))
+
+// Простой режим: фильтры скрыты, поэтому берём всё, кроме архива, без учёта фильтров эксперта.
+const simpleRows = computed(() =>
+  (data.value?.campaigns || [])
+    .filter((c) => c.state !== 'ARCHIVED')
+    .map((c) => ({
+      ...c,
+      link: `/w/${c.project.id}/campaigns/${c.campaign_row_id}`,
+      where: [CAMPAIGN_TYPES[c.type] || c.type, c.project.name].filter(Boolean).join(' · '),
+    })),
+)
 
 const rows = computed(() => {
   const q = filters.search.toLowerCase()

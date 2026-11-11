@@ -124,6 +124,14 @@ export function lastDays(n) {
   return { date_from: isoDay(from), date_to: isoDay(to) }
 }
 
+/** Период «с начала месяца по вчера»; первого числа — весь прошлый месяц. */
+export function monthToDate() {
+  const to = new Date()
+  to.setDate(to.getDate() - 1)
+  const from = new Date(to.getFullYear(), to.getMonth(), 1)
+  return { date_from: isoDay(from), date_to: isoDay(to) }
+}
+
 export const KPI_TONES = { ok: 'tone-ok', warn: 'tone-warn', bad: 'tone-bad', none: '' }
 export const BUDGET_TONES = { ok: 'tone-ok', under: 'tone-warn', over: 'tone-bad', exhausted: 'tone-bad' }
 export const SEVERITY_LABELS = { critical: 'Критично', warning: 'Внимание', info: 'К сведению' }

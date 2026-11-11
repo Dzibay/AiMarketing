@@ -1,4 +1,17 @@
 <template>
+  <SimpleReport
+    v-if="!expert"
+    :data="data"
+    :loading="loading"
+    :error="loadError"
+    :period="preset"
+    :campaigns="simpleCampaigns"
+    :chat-link="{ path: `/w/${ws.id}/chat`, query: { ask: 'analytics', from: range.date_from, to: range.date_to } }"
+    hint="Сравнение с прошлым периодом, все метрики, ключевые фразы, запросы и загрузка статистики"
+    @period="setPreset"
+  />
+
+  <template v-else>
   <section class="panel">
     <div class="panel__head">
       <div>
@@ -219,6 +232,7 @@
       </div>
     </section>
   </template>
+  </template>
 </template>
 
 <script setup>
@@ -226,6 +240,8 @@ import { computed, onMounted, reactive, ref } from 'vue'
 import { RouterLink } from 'vue-router'
 import TrendChart from '../../components/TrendChart.vue'
 import TermHint from '../../components/TermHint.vue'
+import SimpleReport from '../../components/SimpleReport.vue'
+import { useExpert } from '../../composables/useExpert'
 import { errorText, jobProgressText, wsApi } from '../../api/web'
 import { pushToast } from '../../composables/useToasts'
 import {
@@ -238,6 +254,7 @@ import {
   kpiTarget,
   kpiValue,
   lastDays,
+  monthToDate,
   num,
   pct,
   rub,
@@ -290,6 +307,11 @@ const campaigns = computed(() => {
   })
 })
 
+const { expert } = useExpert()
+const simpleCampaigns = computed(() =>
+  (data.value?.by_campaign || []).map((c) => ({ ...c, link: `/w/${ws.value.id}/campaigns/${c.campaign_row_id}` })),
+)
+
 const topRows = computed(() => data.value?.tops?.[topTab.value] || [])
 
 function sortBy(key) {
@@ -319,7 +341,7 @@ async function load() {
 
 function setPreset(n) {
   preset.value = n
-  Object.assign(range, lastDays(n))
+  Object.assign(range, n === 'month' ? monthToDate() : lastDays(n))
   load()
 }
 

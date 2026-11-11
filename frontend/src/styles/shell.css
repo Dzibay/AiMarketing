@@ -884,3 +884,259 @@
   border-color: var(--ink);
   box-shadow: none;
 }
+
+/* ---------- Статусы, группы кампаний и подсказка простого режима ---------- */
+
+/* Статус всегда с иконкой и словом — не только цветом. */
+.st {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  font-weight: 700;
+}
+.st--ok {
+  color: var(--ok);
+}
+.st--warn {
+  color: var(--warn);
+}
+.st--bad {
+  color: var(--danger);
+}
+.st--off,
+.st--idle {
+  color: var(--faint);
+}
+
+.cgroup__h {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 28px 0 10px;
+  font-size: 15px;
+  font-weight: 800;
+}
+.cgroup:first-child .cgroup__h {
+  margin-top: 8px;
+}
+.cgroup__h .st {
+  font-size: 14px;
+}
+.cgroup__n {
+  color: var(--faint);
+  font-weight: 600;
+}
+
+.ccard {
+  border: 1px solid var(--line);
+  border-radius: var(--r-card);
+  background: var(--surface);
+  overflow: hidden;
+}
+
+.crow {
+  display: grid;
+  grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr) 110px auto;
+  align-items: center;
+  gap: 16px;
+  padding: 12px 18px;
+  border-top: 1px solid var(--line);
+}
+.crow:first-child {
+  border-top: 0;
+}
+.crow__name a {
+  display: block;
+  overflow: hidden;
+  color: var(--ink);
+  font-weight: 700;
+  text-decoration: none;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.crow__name a:hover {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.crow small {
+  display: block;
+  color: var(--faint);
+  font-size: 12px;
+}
+.crow__health {
+  color: var(--muted);
+  font-size: 14px;
+}
+.crow__num {
+  text-align: right;
+}
+.crow__num b {
+  display: block;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.xhint {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 24px 0 0;
+  padding: 12px 14px;
+  border: 1px dashed var(--line-2);
+  border-radius: 12px;
+  color: var(--muted);
+  font-size: 13px;
+}
+.xhint svg {
+  flex-shrink: 0;
+  margin-top: 2px;
+  color: var(--faint);
+}
+.xhint a {
+  color: var(--ink);
+  font-weight: 700;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+/* Очередь по сайтам (запросы) */
+.prow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 18px;
+  border-top: 1px solid var(--line);
+}
+.prow:first-child {
+  border-top: 0;
+}
+.prow__main {
+  min-width: 0;
+}
+.prow__main small {
+  display: block;
+  color: var(--faint);
+  font-size: 12px;
+}
+.prow__main b {
+  font-weight: 700;
+}
+.prow__main p {
+  margin: 2px 0 0;
+  color: var(--muted);
+  font-size: 14px;
+}
+.prow__acts {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 14px;
+}
+.meta-note {
+  margin: 12px 2px 0;
+  color: var(--faint);
+  font-size: 13px;
+}
+
+/* Отчёты простого режима */
+.period-seg {
+  margin: 4px 0 16px;
+}
+.bigstats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 12px;
+}
+.bigstat {
+  padding: 18px 20px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-card);
+  background: var(--surface);
+}
+.bigstat span {
+  display: block;
+  color: var(--muted);
+  font-size: 13px;
+}
+.bigstat b {
+  display: block;
+  margin-top: 6px;
+  font-size: 28px;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  white-space: nowrap;
+}
+.bigstat small {
+  display: block;
+  margin-top: 4px;
+  color: var(--faint);
+  font-size: 12px;
+}
+.bigstat small.is-ok {
+  color: var(--ok);
+}
+.bigstat small.is-warn {
+  color: var(--warn);
+}
+.hbars {
+  padding: 6px 18px 14px;
+}
+.hbar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr) 100px;
+  align-items: center;
+  gap: 14px;
+  padding: 9px 0;
+  font-size: 14px;
+}
+.hbar__name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.hbar__track {
+  height: 8px;
+  border-radius: 4px;
+  background: var(--line);
+}
+.hbar__fill {
+  display: block;
+  height: 100%;
+  min-width: 2px;
+  border-radius: 4px;
+  background: var(--ink);
+}
+.hbar__val {
+  text-align: right;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.section-h {
+  margin: 28px 0 10px;
+  font-size: 15px;
+  font-weight: 800;
+}
+
+@media (max-width: 720px) {
+  .prow {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+  .hbar {
+    grid-template-columns: minmax(0, 1fr) 90px;
+  }
+  .hbar__track {
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
+  .crow {
+    grid-template-columns: minmax(0, 1fr) 96px auto;
+    row-gap: 4px;
+  }
+  .crow__health {
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
+}

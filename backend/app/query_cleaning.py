@@ -288,6 +288,7 @@ def portfolio_queue(
         projects.append(
             {
                 **project,
+                "client_name": ws.get("client_name") or "",
                 "counts": q["counts"],
                 "new_cost_rub": q["new_cost_rub"],
                 "negative_cost_rub": q["negative_cost_rub"],

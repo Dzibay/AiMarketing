@@ -1,4 +1,49 @@
 <template>
+  <template v-if="!expert">
+    <p v-if="loading && !data" class="empty">Загружаем запросы…</p>
+    <div v-else-if="!data" class="empty">
+      {{ loadError || 'Не удалось загрузить запросы.' }}
+      <button class="btn btn--ghost" type="button" @click="load">Повторить</button>
+    </div>
+    <p v-else-if="!data.projects.length" class="empty">
+      Проектов пока нет. Подключите Директ и Метрику в
+      <RouterLink to="/cabinet/connections">подключениях</RouterLink>.
+    </p>
+    <template v-else>
+      <p class="page-lead">
+        Где есть что разобрать. ИИ раскладывает новые запросы на «наши» и мусор — вы решаете группами внутри сайта.
+      </p>
+      <div class="ccard">
+        <div v-for="p in queue" :key="p.id" class="prow">
+          <div class="prow__main">
+            <small v-if="p.client_name">{{ p.client_name }}</small>
+            <b>{{ p.name }}</b>
+            <p>{{ p.line.text }}</p>
+          </div>
+          <div class="prow__acts">
+            <span class="st" :class="`st--${p.line.st}`">
+              <component :is="p.line.st === 'ok' ? CircleCheck : TriangleAlert" :size="14" aria-hidden="true" />
+              {{ p.line.st === 'ok' ? 'Разобрано' : 'Есть что разобрать' }}
+            </span>
+            <RouterLink
+              v-if="p.line.btn"
+              class="btn"
+              :class="p.line.st === 'warn' ? 'btn--accent' : 'btn--ghost'"
+              :to="`/w/${p.id}/queries`"
+            >
+              {{ p.line.btn }}
+            </RouterLink>
+          </div>
+        </div>
+      </div>
+      <p class="meta-note">
+        Новые запросы сервис забирает из Директа сам. Размечает их ИИ — только когда вы нажмёте кнопку в проекте.
+      </p>
+      <ExpertHint>Общая таблица запросов по всем сайтам, фильтры и пакетное применение</ExpertHint>
+    </template>
+  </template>
+
+  <template v-else>
   <div v-if="data" class="stats-grid">
     <div class="stat-card">
       <small>Новые запросы</small>
@@ -210,6 +255,7 @@
       <button class="btn btn--ghost" type="button" :disabled="busy" @click="selected = new Set()">Снять выбор</button>
     </div>
   </section>
+  </template>
 </template>
 
 <script setup>
@@ -221,8 +267,41 @@ import { pushToast } from '../composables/useToasts'
 import { formatDateTime, num, plural, rubles } from '../utils/format'
 import { useHead } from '../utils/useHead'
 import TermHint from '../components/TermHint.vue'
+import ExpertHint from '../components/ExpertHint.vue'
+import { CircleCheck, TriangleAlert } from '@lucide/vue'
+import { useExpert } from '../composables/useExpert'
 
 useHead('Чистка запросов — AiMarketing', true)
+
+const { expert } = useExpert()
+const words = (n) => plural(n, 'запрос', 'запроса', 'запросов')
+
+/** Простой режим: строка на сайт — что с запросами и куда нажать. Сначала те, где есть что разбирать. */
+const queue = computed(() =>
+  (data.value?.projects || [])
+    .map((p) => ({ ...p, line: queueLine(p) }))
+    .sort((a, b) => (a.line.st === b.line.st ? 0 : a.line.st === 'warn' ? -1 : 1)),
+)
+
+function queueLine(p) {
+  const c = p.counts
+  if (!p.search_campaigns) return { st: 'ok', text: 'Нет поисковых кампаний — чистить нечего', btn: '' }
+  if (c.negative)
+    return {
+      st: 'warn',
+      text: `ИИ предлагает в минус ${c.negative} ${words(c.negative)}${p.negative_cost_rub ? ` · на них ушло ${rubles(p.negative_cost_rub)}` : ''}`,
+      btn: 'Разобрать',
+    }
+  if (c.new)
+    return {
+      st: 'warn',
+      text: `${c.new} ${plural(c.new, 'новый запрос', 'новых запроса', 'новых запросов')}${p.new_cost_rub ? ` на ${rubles(p.new_cost_rub)}` : ''}, ИИ ещё не размечал`,
+      btn: 'Разметить',
+    }
+  if (c.target) return { st: 'warn', text: `${c.target} ${words(c.target)} ИИ считает целевыми — подтвердите`, btn: 'Открыть' }
+  if (!p.synced_at) return { st: 'warn', text: 'Запросы из Директа ещё не загружали', btn: 'Загрузить' }
+  return { st: 'ok', text: `Новых запросов нет · загружены ${formatDateTime(p.synced_at)}`, btn: 'Посмотреть' }
+}
 
 const TABS = [
   { key: 'new', label: 'Новые' },

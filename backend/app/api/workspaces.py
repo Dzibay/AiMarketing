@@ -388,6 +388,7 @@ def ws_campaigns(
         "date_from": data["date_from"],
         "date_to": data["date_to"],
         "conversions_source": data["conversions_source"],
+        "kpi": data["kpi"],
         "items": data["by_campaign"],
         "accounts": list_workspace_accounts(user_id, workspace_id),
     }

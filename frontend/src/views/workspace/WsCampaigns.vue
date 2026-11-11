@@ -20,7 +20,30 @@
     </div>
   </div>
 
-  <section class="panel">
+  <template v-if="!expert">
+    <p v-if="loading && !data" class="empty">Загружаем кампании…</p>
+    <div v-else-if="!data" class="empty">
+      {{ loadError || 'Не удалось загрузить кампании.' }}
+      <button class="btn btn--ghost" type="button" @click="load">Повторить</button>
+    </div>
+    <div v-else-if="!simpleRows.length" class="empty">
+      В проекте нет кампаний. Нажмите «Новая кампания» или добавьте кабинет в
+      <RouterLink :to="`/w/${ws.id}/settings`">настройках</RouterLink>.
+    </div>
+    <CampaignGroups
+      v-else
+      :class="{ 'is-loading': loading }"
+      :rows="simpleRows"
+      :kpi-of="() => data.kpi"
+      :busy="busy"
+      @toggle="quickToggle"
+    />
+    <ExpertHint v-if="data && simpleRows.length">
+      Фильтры, архив, бюджеты, копии и массовые действия
+    </ExpertHint>
+  </template>
+
+  <section v-else class="panel">
     <div class="filters">
       <div v-field class="field field--wide">
         <label>Поиск</label>
@@ -288,6 +311,11 @@ import {
 import CampaignWizard from './CampaignWizard.vue'
 import DuplicateDialog from './DuplicateDialog.vue'
 import { useWs } from './context'
+import CampaignGroups from '../../components/CampaignGroups.vue'
+import ExpertHint from '../../components/ExpertHint.vue'
+import { useExpert } from '../../composables/useExpert'
+
+const { expert } = useExpert()
 
 const COLUMNS = [
   { key: 'name', label: 'Кампания' },
@@ -344,6 +372,18 @@ const budgetDone = ref([])
 const budgetProgress = ref('')
 
 const accounts = computed(() => data.value?.accounts || [])
+// Простой режим: фильтры скрыты — всё, кроме архива.
+const simpleRows = computed(() =>
+  (data.value?.items || [])
+    .filter((c) => c.state !== 'ARCHIVED')
+    .map((c) => ({
+      ...c,
+      link: `/w/${ws.value.id}/campaigns/${c.campaign_row_id}`,
+      where: [CAMPAIGN_TYPES[c.type] || c.type, accounts.value.length > 1 ? c.account_login : '']
+        .filter(Boolean)
+        .join(' · '),
+    })),
+)
 // Какие действия имеют смысл для выбранных: запустить нечего, если всё уже идёт, и т. п.
 const picked = computed(() => {
   const items = (data.value?.items || []).filter((c) => selected.value.has(c.campaign_row_id))
