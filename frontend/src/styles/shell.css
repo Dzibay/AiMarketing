@@ -318,17 +318,6 @@
   display: none;
 }
 
-/* Логотип на страницах вне кабинета (админка). */
-.side__logo {
-  display: grid;
-  place-items: center;
-  width: 40px;
-  height: 40px;
-  flex-shrink: 0;
-  border-radius: 50%;
-  background: var(--accent-soft);
-}
-
 /* ---- верхняя строка ---- */
 
 .dmain {
@@ -825,6 +814,13 @@
   font-weight: 700;
 }
 
+/* Текстовый статус в плитке («не подключено») — не цифра, набираем мельче. */
+.stat-card strong[class*='tone-'] {
+  font-size: 16px;
+  line-height: 1.3;
+  letter-spacing: -0.01em;
+}
+
 .stat-card__icon {
   border-radius: 9px;
   background: var(--side);
@@ -1202,4 +1198,163 @@
     grid-column: 1 / -1;
     grid-row: 2;
   }
+}
+
+/* ---------- Вход, регистрация и правовые страницы ---------- */
+
+/* Шапка как в кабинете: плоская строка с тем же знаком, без «пилюли» и стекла. */
+.site-header {
+  padding: 0;
+  border-bottom: 1px solid var(--line);
+  background: var(--bg);
+}
+.site-header__inner,
+.site-header.is-solid .site-header__inner {
+  min-height: 60px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  backdrop-filter: none;
+}
+.site-header .brand {
+  gap: 9px;
+  font-size: 16px;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+}
+.brand__dot {
+  display: grid;
+  flex-shrink: 0;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  background: var(--lime);
+  color: var(--on-lime);
+}
+.brand__dot svg {
+  width: 16px;
+  height: 16px;
+}
+.site-header .nav {
+  gap: 8px;
+}
+
+.site-footer {
+  margin-top: 0;
+  padding: 0 0 28px;
+  font-size: 13px;
+}
+.site-footer__inner {
+  padding-top: 18px;
+}
+
+.auth-shell {
+  display: grid;
+  align-content: start;
+  padding: 8vh 0 64px;
+}
+.auth-card {
+  width: min(440px, 100%);
+  padding: 32px 28px 26px;
+  border-radius: var(--r-card);
+  box-shadow: none;
+  animation: none;
+}
+.auth-card h1 {
+  margin: 0 0 6px;
+  font-size: 26px;
+  font-weight: 800;
+  letter-spacing: -0.025em;
+}
+.auth-card .sub {
+  margin-bottom: 22px;
+  font-size: 15px;
+}
+.auth-card form .btn--wide {
+  margin-top: 6px;
+}
+.auth-card .form-error {
+  border-radius: 10px;
+}
+.muted-link {
+  margin-top: 18px;
+  font-size: 14px;
+}
+.muted-link a {
+  color: var(--ink);
+  font-weight: 700;
+  text-decoration: underline;
+  text-decoration-color: var(--line-2);
+  text-underline-offset: 3px;
+}
+.muted-link a:hover {
+  text-decoration-color: currentColor;
+}
+
+@media (max-width: 520px) {
+  .auth-shell {
+    padding-top: 28px;
+  }
+  .auth-card {
+    padding: 24px 18px 20px;
+    border: 0;
+    background: transparent;
+  }
+}
+
+/* Админка: та же плоская шапка и знак, что в кабинете. */
+.admin-top {
+  top: 0;
+  margin: 0 -1.25rem 24px;
+  padding: 10px 1.25rem;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  border-radius: 0;
+  background: var(--bg);
+  box-shadow: none;
+  backdrop-filter: none;
+}
+.admin-shell {
+  padding-top: 0;
+}
+.admin-top__brand {
+  gap: 9px;
+  font-size: 16px;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+}
+.admin-top__brand em {
+  padding: 2px 7px;
+  border-radius: var(--pill);
+  background: var(--ink);
+  color: var(--bg);
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 700;
+  letter-spacing: 0;
+}
+@media (max-width: 480px) {
+  .admin-top__brand {
+    gap: 7px;
+  }
+  .admin-top__out span {
+    display: none;
+  }
+}
+.admin-head {
+  margin-bottom: 20px;
+}
+.admin-head h1 {
+  margin: 0 0 4px;
+  font-size: 26px;
+  font-weight: 800;
+  letter-spacing: -0.025em;
+}
+.admin-head p {
+  max-width: 44rem;
+  margin: 0;
+  color: var(--muted);
 }

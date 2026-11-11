@@ -1,70 +1,70 @@
 <template>
-  <section class="panel">
-    <div class="panel__head">
-      <div>
-        <h2>Ждёт решения</h2>
-        <p class="hint">
-          Предложения ИИ без вашего решения {{ project ? `в проекте «${project.name}»` : 'во всех проектах' }}. В Директе
-          ничего не меняется, пока вы не нажмёте «Выполнить».
-        </p>
-      </div>
-      <button class="btn btn--ghost" type="button" :disabled="loading" @click="load">Обновить</button>
-    </div>
+  <div class="ws-toolbar">
+    <p class="sync-status">
+      Предложения ИИ {{ project ? `по сайту «${project.name}»` : 'по всем сайтам' }}, которые ждут вашего решения. В
+      Директе ничего не меняется, пока вы не нажмёте «Выполнить».
+    </p>
+    <button class="btn btn--ghost" type="button" :disabled="loading" @click="load">
+      <RefreshCw :size="15" aria-hidden="true" />Обновить
+    </button>
+  </div>
 
-    <p v-if="loading && !items.length" class="empty">Загружаем…</p>
-    <p v-else-if="loadError" class="empty">{{ loadError }}</p>
-    <div v-else-if="!items.length" class="pending-empty">
-      <p class="empty">Решений ничего не ждёт. Новые предложения ИИ появятся здесь и в чатах.</p>
-      <RouterLink class="btn btn--accent" :to="chatHome">Открыть ИИ-помощника</RouterLink>
-    </div>
-    <template v-else>
-      <p v-if="total > items.length" class="hint">Показаны первые {{ items.length }} из {{ total }}.</p>
-      <section v-for="g in groups" :key="g.key" class="pending-group">
-        <h3 class="pending-group__title">
-          <RouterLink v-if="g.project" :to="`/w/${g.project.id}/summary`">{{ g.project.name }}</RouterLink>
-          <span v-else>Без проекта</span>
-          <span class="chip">{{ g.items.length }}</span>
-        </h3>
-        <div class="pending-group__list">
-          <article v-for="a in g.items" :key="a.id" class="action-card" :data-action="a.id">
-            <div class="action-card__head">
-              <strong>{{ a.label }}</strong>
-              <span class="hint">{{ formatDateTime(a.created_at) }}</span>
-            </div>
-            <p v-if="a.summary" class="action-card__summary">{{ a.summary }}</p>
-            <p v-else-if="a.kind === 'ask'" class="action-card__summary">{{ ASK_TEXT[a.tool] || ASK_TEXT.ask_questions }}</p>
-            <AiChanges v-if="a.changes?.length" :changes="a.changes" />
-            <p v-if="a.reason" class="hint">Зачем: {{ a.reason }}</p>
-            <p v-if="a.categories?.length" class="action-card__cats">
+  <div v-if="loading && !items.length" class="ccard ccard--note">Загружаем…</div>
+  <div v-else-if="loadError" class="ccard ccard--note tone-bad">{{ loadError }}</div>
+  <div v-else-if="!items.length" class="ccard ccard--note pend-empty">
+    <Check :size="18" aria-hidden="true" />
+    <span>Решений ничего не ждёт. Новые предложения ИИ появятся здесь, на главной и в чатах.</span>
+    <RouterLink class="btn btn--accent" :to="chatHome">Спросить ИИ</RouterLink>
+  </div>
+  <template v-else>
+    <section v-for="g in groups" :key="g.key">
+      <h2 class="section-h pend-h">
+        <RouterLink v-if="g.project" :to="`/w/${g.project.id}/summary`">{{ g.project.name }}</RouterLink>
+        <span v-else>Все сайты</span>
+        <span class="cgroup__n">{{ g.items.length }}</span>
+      </h2>
+      <div class="ccard">
+        <article v-for="a in g.items" :key="a.id" class="prow pend" :data-action="a.id">
+          <div class="prow__main">
+            <small>
+              {{ formatDateTime(a.created_at) }} · {{ a.chat.general ? 'общий чат' : 'чат' }} «{{ a.chat.title }}»
+            </small>
+            <b>{{ a.label }}</b>
+            <p v-if="a.summary">{{ a.summary }}</p>
+            <p v-else-if="a.kind === 'ask'">{{ ASK_TEXT[a.tool] || ASK_TEXT.ask_questions }}</p>
+            <AiChanges v-if="a.changes?.length" class="pend__changes" :changes="a.changes" />
+            <p v-if="a.reason" class="pend__why">Зачем: {{ a.reason }}</p>
+            <p v-if="a.categories?.length" class="pend__cats">
               <span v-for="c in a.categories" :key="c.id" class="chip">{{ c.label }}</span>
             </p>
-            <p v-if="a.kind === 'write' && a.items?.length" class="hint">
-              Строки можно снять только в чате — здесь действие выполнится целиком.
+            <p v-if="a.kind === 'write' && a.items?.length" class="pend__why">
+              Отдельные строки снимаются только в чате — здесь действие выполнится целиком.
             </p>
-            <div class="action-card__buttons">
-              <template v-if="a.kind === 'write'">
-                <button class="btn btn--accent" type="button" :disabled="!!busy[a.id]" @click="decide(a, true)">
-                  Выполнить
-                </button>
-                <button class="btn btn--ghost" type="button" :disabled="!!busy[a.id]" @click="decide(a, false)">
-                  Отклонить
-                </button>
-              </template>
-              <RouterLink class="btn" :class="a.kind === 'ask' ? 'btn--accent' : 'btn--ghost'" :to="chatLink(a)">
-                {{ a.kind === 'ask' ? 'Ответить в чате' : 'Открыть в чате' }}
-              </RouterLink>
-              <span class="hint">{{ a.chat.general ? 'Общий чат' : 'Чат' }} «{{ a.chat.title }}»</span>
-            </div>
-          </article>
-        </div>
-      </section>
-    </template>
-  </section>
+          </div>
+          <div class="prow__acts">
+            <template v-if="a.kind === 'write'">
+              <button class="btn btn--accent" type="button" :disabled="!!busy[a.id]" @click="decide(a, true)">
+                Выполнить
+              </button>
+              <button class="btn btn--ghost" type="button" :disabled="!!busy[a.id]" @click="decide(a, false)">
+                Отклонить
+              </button>
+            </template>
+            <RouterLink class="btn" :class="a.kind === 'ask' ? 'btn--accent' : 'btn--ghost'" :to="chatLink(a)">
+              {{ a.kind === 'ask' ? 'Ответить в чате' : 'Открыть чат' }}
+            </RouterLink>
+          </div>
+        </article>
+      </div>
+    </section>
+    <p v-if="total > items.length" class="meta-note">Показаны первые {{ items.length }} из {{ total }}.</p>
+  </template>
 </template>
 
 <script setup>
 import { computed, reactive, ref, watch } from 'vue'
 import { RouterLink } from 'vue-router'
+import { Check, RefreshCw } from '@lucide/vue'
 import { aiApi, errorText } from '../api/web'
 import { refreshPending } from '../composables/usePending'
 import { useProjectFilter } from '../composables/useProjectFilter'
@@ -149,31 +149,53 @@ watch(projectId, load, { immediate: true })
 </script>
 
 <style scoped>
-.pending-empty {
-  display: grid;
-  justify-items: center;
-  gap: 0.75rem;
-  padding-bottom: 1rem;
+.ws-toolbar .btn {
+  gap: 6px;
 }
-
-.pending-group + .pending-group {
-  margin-top: 1.4rem;
+.pend-empty {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 12px;
 }
-
-.pending-group__title {
+.pend-empty span {
+  flex: 1 1 260px;
+}
+.pend-h {
   display: flex;
   align-items: center;
-  gap: 0.5rem;
-  margin: 0 0 0.6rem;
-  font-size: 1rem;
+  gap: 8px;
 }
-
-.pending-group__title a {
+.pend-h a {
   color: inherit;
+  text-decoration: none;
 }
-
-.pending-group__list {
-  display: grid;
-  gap: 0.75rem;
+.pend-h a:hover {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.pend {
+  align-items: flex-start;
+}
+.pend .prow__main {
+  flex: 1;
+}
+.pend__changes {
+  margin-top: 8px;
+}
+.prow__main .pend__why {
+  font-size: 13px;
+}
+.prow__main .pend__cats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+@media (max-width: 720px) {
+  .pend .prow__acts {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
 }
 </style>

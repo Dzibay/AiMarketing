@@ -2,8 +2,8 @@
   <header class="site-header" :class="{ 'is-solid': solid }">
     <div class="wrap site-header__inner">
       <RouterLink class="brand" to="/" aria-label="AiMarketing">
-        <BrandMark class="brand__mark" :size="36" />
-        <span class="brand__name">Ai<span>Marketing</span></span>
+        <i class="brand__dot" aria-hidden="true"><Sparkles /></i>
+        <span class="brand__name">AiMarketing</span>
       </RouterLink>
       <nav class="nav">
         <button class="icon-btn" type="button" :aria-label="isDark ? 'Светлая тема' : 'Тёмная тема'" @click="toggleTheme">
@@ -20,8 +20,7 @@
 
 <script setup>
 import { RouterLink } from 'vue-router'
-import { Moon, Sun } from '@lucide/vue'
-import BrandMark from './BrandMark.vue'
+import { Moon, Sparkles, Sun } from '@lucide/vue'
 import { useSession } from '../composables/useSession'
 import { useTheme } from '../composables/useTheme'
 

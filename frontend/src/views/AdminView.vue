@@ -2,21 +2,19 @@
   <div class="admin-shell">
     <header class="admin-top">
       <span class="admin-top__brand">
-        <span class="side__logo"><BrandMark :size="34" /></span>
-        <span class="admin-top__name">
-          <strong>Ai<span>Marketing</span></strong>
-          <small>Админка</small>
-        </span>
+        <i class="brand__dot" aria-hidden="true"><Sparkles /></i>
+        <span>AiMarketing</span>
+        <em>админка</em>
       </span>
-      
+
       <div class="admin-top__tools">
         <button class="icon-btn" type="button" :aria-label="isDark ? 'Светлая тема' : 'Тёмная тема'" @click="toggleTheme">
           <Sun v-if="isDark" aria-hidden="true" />
           <Moon v-else aria-hidden="true" />
         </button>
-        <button v-if="isLoggedIn" class="btn btn--ghost" type="button" @click="logout">
+        <button v-if="isLoggedIn" class="btn btn--ghost admin-top__out" type="button" aria-label="Выйти" @click="logout">
           <LogOut aria-hidden="true" />
-          Выйти
+          <span>Выйти</span>
         </button>
       </div>
     </header>
@@ -37,15 +35,13 @@
             autofocus
           />
         </div>
-        <button class="btn btn--wide" type="submit" :disabled="busy">Войти</button>
+        <button class="btn btn--wide btn--accent" type="submit" :disabled="busy">Войти</button>
       </form>
 
       <template v-else>
-        <div class="cabinet__head">
-          <div>
-            <h1>Админка</h1>
-            <p>Пользователи и подписки, тарифы и оплата, промокоды и реф-ссылки, общие ИИ, Вордстат и картинки, расход сервиса.</p>
-          </div>
+        <div class="admin-head">
+          <h1>Админка</h1>
+          <p>Пользователи и подписки, тарифы и оплата, промокоды и реф-ссылки, общие ИИ, Вордстат и картинки, расход сервиса.</p>
         </div>
 
         <div v-if="!summary" class="panel"><p class="empty">Загружаем…</p></div>
@@ -112,8 +108,7 @@
 <script setup>
 import { computed, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { LogOut, Moon, Sun } from '@lucide/vue'
-import BrandMark from '../components/BrandMark.vue'
+import { LogOut, Moon, Sparkles, Sun } from '@lucide/vue'
 import AdminBridge from './admin/AdminBridge.vue'
 import AdminPayments from './admin/AdminPayments.vue'
 import AdminPlans from './admin/AdminPlans.vue'
