@@ -141,7 +141,7 @@
 
 <script setup>
 import { computed, onMounted, ref, watch } from 'vue'
-import { RouterLink } from 'vue-router'
+import { RouterLink, useRoute } from 'vue-router'
 import { History, Sparkles, Undo2, User, Zap } from '@lucide/vue'
 import ExpertHint from './ExpertHint.vue'
 import { useExpert } from '../composables/useExpert'
@@ -171,7 +171,9 @@ const projects = computed(() => workspaces.value.filter((w) => !w.locked))
 const items = ref([])
 const loading = ref(false)
 const loadError = ref('')
-const source = ref('')
+// «Что правила изменили» с Автопилота открывает журнал сразу с фильтром: ?source=rule.
+const route = useRoute()
+const source = ref(expert.value && SOURCES.some((s) => s.id && s.id === route.query.source) ? route.query.source : '')
 const project = ref(0)
 const hasMore = ref(false)
 const undoId = ref(null)

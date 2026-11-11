@@ -6737,89 +6737,11 @@ button.board-chips__text:disabled {
 
 /* --- Эксперименты ИИ --- */
 
-.exp-list {
-  display: grid;
-  gap: 1rem;
-}
-
-.exp-card {
-  display: grid;
-  gap: 0.85rem;
-  padding: 1.15rem 1.25rem;
-  border-radius: var(--r-card);
-  border: 1px solid var(--line);
-  background: var(--surface);
-  box-shadow: var(--shadow-sm);
-}
-
-.exp-card.is-due {
-  box-shadow: inset 4px 0 var(--accent), var(--shadow-sm);
-}
-
-.exp-card__head {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.75rem;
-  justify-content: space-between;
-  align-items: flex-start;
-}
-
-.exp-card__head strong {
-  display: block;
-  font-size: 1.06rem;
-  font-weight: 620;
-  margin-bottom: 0.3rem;
-}
-
-.exp-card__head small {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.4rem;
-  align-items: center;
-  color: var(--muted);
-}
-
-.exp-card .metric-grid {
-  margin-bottom: 0;
-}
-
-.exp-text {
-  margin: 0 0 0.65rem;
-  line-height: 1.5;
-  white-space: pre-wrap;
-}
-
-.exp-card > .exp-text {
-  margin: 0;
-}
-
-.exp-facts {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-  gap: 0.65rem 1rem;
-  margin: 0;
-}
-
-.exp-facts dt,
 .exp-sub {
   margin: 0 0 0.3rem;
   font-size: 0.82rem;
   font-weight: 560;
   color: var(--muted);
-}
-
-.exp-facts dd {
-  margin: 0;
-  line-height: 1.45;
-}
-
-.exp-term {
-  display: grid;
-  gap: 0.4rem;
-}
-
-.exp-term p {
-  margin: 0;
 }
 
 .exp-finish {

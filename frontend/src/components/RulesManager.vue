@@ -4,55 +4,89 @@
       Автопилот не входит в ваш тариф: новые правила не создаются, а действующие не проверяются. Выключить или удалить
       правило можно и сейчас.
     </FeatureLockNotice>
-    <section class="panel">
-      <h2>Новое правило</h2>
-      <p class="hint">
-        Правило проверяется каждый час. В режиме проверки оно только показывает, что бы сделало; в автоматическом —
-        меняет Директ и пишет в журнал действий.
+
+    <div class="ws-toolbar">
+      <p class="sync-status">
+        <template v-if="workspace">Правила этого сайта следят за цифрами сами.</template>
+        <template v-else>Общие правила — для всех сайтов сразу или для выбранного.</template>
+        Сервис проверяет их каждый час, каждое срабатывает не чаще раза в сутки.
       </p>
-      <div class="filters">
+      <button v-if="!adding" class="btn btn--accent" type="button" @click="adding = true">
+        <Plus :size="15" aria-hidden="true" />Новое правило
+      </button>
+    </div>
+
+    <section v-if="adding" class="ccard builder">
+      <h3>Новое правило</h3>
+      <div class="sentence">
+        <span>Если у</span>
+        <select v-model="form.target" aria-label="Что проверять">
+          <option value="campaign">кампании</option>
+          <option value="keyword">фразы</option>
+          <option value="query">запроса</option>
+        </select>
+        <select v-model="form.rule_type" aria-label="Условие">
+          <option value="cpa_above">{{ COND.cpa_above }}</option>
+          <option v-if="form.target !== 'query'" value="cpa_below">{{ COND.cpa_below }}</option>
+          <option value="spend_no_conv">{{ COND.spend_no_conv }}</option>
+          <option value="cpc_above">{{ COND.cpc_above }}</option>
+          <option v-if="form.target === 'campaign'" value="daily_budget_pct">{{ COND.daily_budget_pct }}</option>
+          <option v-if="form.target === 'campaign'" value="weekly_budget_pct">{{ COND.weekly_budget_pct }}</option>
+        </select>
+        <span class="inp">
+          <input v-model.number="form.threshold_value" type="number" min="0" step="1" aria-label="Порог" />
+          <i>{{ unitOf(form.rule_type) }}</i>
+        </span>
+        <template v-if="form.target === 'campaign'">
+          <span>за</span>
+          <span class="inp">
+            <input v-model.number="form.lookback_days" type="number" min="1" max="30" aria-label="За сколько дней" />
+            <i>дн.</i>
+          </span>
+        </template>
+        <span>—</span>
+        <select v-model="form.action" aria-label="Что сделать">
+          <option v-if="form.target !== 'query'" value="pause">{{ DO.pause }}</option>
+          <option v-if="form.target !== 'query'" value="resume">{{ DO.resume }}</option>
+          <option v-if="form.target === 'campaign'" value="set_budget">{{ DO.set_budget }}</option>
+          <option v-if="form.target === 'campaign'" value="set_weekly_budget">{{ DO.set_weekly_budget }}</option>
+          <option v-if="form.target === 'campaign'" value="change_budget_pct">{{ DO.change_budget_pct }}</option>
+          <option v-if="form.target === 'keyword'" value="set_bid">{{ DO.set_bid }}</option>
+          <option v-if="form.target === 'query'" value="negative_adgroup">{{ DO.negative_adgroup }}</option>
+          <option v-if="form.target === 'query'" value="negative_campaign">{{ DO.negative_campaign }}</option>
+          <option value="notify">{{ DO.notify }}</option>
+        </select>
+        <span v-if="['set_budget', 'set_weekly_budget'].includes(form.action)" class="inp">
+          <input v-model.number="form.action_budget_rub" type="number" min="300" step="100" aria-label="Бюджет" />
+          <i>{{ form.action === 'set_weekly_budget' ? '₽/нед.' : '₽' }}</i>
+        </span>
+        <template v-if="form.action === 'change_budget_pct'">
+          <span>на</span>
+          <span class="inp">
+            <input v-model.number="form.action_pct" type="number" min="-90" max="500" step="1" aria-label="Изменить на, %" />
+            <i>%</i>
+          </span>
+        </template>
+        <span v-if="form.action === 'set_bid'" class="inp">
+          <input v-model.number="form.action_bid_rub" type="number" min="0.3" step="0.1" aria-label="Ставка" />
+          <i>₽</i>
+        </span>
+      </div>
+
+      <div class="builder__fields">
         <div v-field class="field">
           <label>Название</label>
-          <input v-model="form.name" type="text" placeholder="CPA высокий" />
-        </div>
-        <div v-field class="field">
-          <label>Объект</label>
-          <select v-model="form.target">
-            <option value="campaign">Кампании</option>
-            <option value="keyword">Ключевые фразы</option>
-            <option value="query">Поисковые запросы</option>
-          </select>
-        </div>
-        <div v-field class="field">
-          <label>Условие</label>
-          <select v-model="form.rule_type">
-            <option value="cpa_above">CPA выше порога, ₽</option>
-            <option v-if="form.target !== 'query'" value="cpa_below">CPA ниже порога, ₽</option>
-            <option value="spend_no_conv">Расход без конверсий, ₽</option>
-            <option value="cpc_above">CPC выше порога, ₽</option>
-            <option v-if="form.target === 'campaign'" value="daily_budget_pct">Израсходовано % дневного бюджета</option>
-            <option v-if="form.target === 'campaign'" value="weekly_budget_pct">
-              Израсходовано % недельного бюджета
-            </option>
-          </select>
-        </div>
-        <div v-field class="field">
-          <label>Порог</label>
-          <input v-model.number="form.threshold_value" type="number" min="0" step="1" />
-        </div>
-        <div v-if="form.target === 'campaign'" v-field class="field">
-          <label>За сколько дней</label>
-          <input v-model.number="form.lookback_days" type="number" min="1" max="30" />
+          <input v-model="form.name" type="text" placeholder="Например: дорогие фразы" />
         </div>
         <div v-if="!workspace" v-field class="field">
-          <label>Проект</label>
+          <label>Где работает</label>
           <select v-model="form.scope_workspace_id">
-            <option value="">Все</option>
+            <option value="">Все сайты</option>
             <option v-for="w in workspaces" :key="w.id" :value="String(w.id)">{{ w.name }}</option>
           </select>
         </div>
         <div v-field class="field">
-          <label>Кабинет</label>
+          <label>Кабинет Директа</label>
           <select v-model="form.scope_account_id">
             <option value="">Все</option>
             <option v-for="a in accounts" :key="a.id" :value="String(a.id)">{{ a.name || a.client_login }}</option>
@@ -76,184 +110,247 @@
             </option>
           </select>
         </div>
-        <div v-field class="field">
-          <label>Действие</label>
-          <select v-model="form.action">
-            <option v-if="form.target !== 'query'" value="pause">Остановить</option>
-            <option v-if="form.target !== 'query'" value="resume">Запустить</option>
-            <option v-if="form.target === 'campaign'" value="set_budget">Установить дневной бюджет</option>
-            <option v-if="form.target === 'campaign'" value="set_weekly_budget">Установить недельный бюджет</option>
-            <option v-if="form.target === 'campaign'" value="change_budget_pct">Изменить бюджет на %</option>
-            <option v-if="form.target === 'keyword'" value="set_bid">Установить ставку</option>
-            <option v-if="form.target === 'query'" value="negative_adgroup">В минус-фразы группы</option>
-            <option v-if="form.target === 'query'" value="negative_campaign">В минус-фразы кампании</option>
-            <option value="notify">Только уведомить</option>
-          </select>
-        </div>
-        <div v-if="form.action === 'set_weekly_budget'" v-field class="field">
-          <label>Недельный бюджет, ₽</label>
-          <input v-model.number="form.action_budget_rub" type="number" min="300" step="100" />
-        </div>
-        <div v-if="form.action === 'change_budget_pct'" v-field class="field">
-          <label>Изменить на, % (минус — уменьшить)</label>
-          <input v-model.number="form.action_pct" type="number" min="-90" max="500" step="1" />
-        </div>
         <div v-if="form.action === 'change_budget_pct'" v-field class="field">
           <label>{{ form.action_pct < 0 ? 'Не ниже' : 'Не выше' }}, ₽/нед. (необязательно)</label>
           <input v-model.number="form.action_cap_rub" type="number" min="300" step="100" />
         </div>
-        <div v-if="form.action === 'set_budget'" v-field class="field">
-          <label>Бюджет, ₽</label>
-          <input v-model.number="form.action_budget_rub" type="number" min="300" step="1" />
-        </div>
-        <div v-if="form.action === 'set_bid'" v-field class="field">
-          <label>Ставка, ₽</label>
-          <input v-model.number="form.action_bid_rub" type="number" min="0.3" step="0.1" />
-        </div>
-        <label class="check-row">
-          <input v-model="form.dry_run" type="checkbox" />
-          Только проверка
-        </label>
-        <button class="btn btn--accent" type="button" :disabled="busy" @click="create">Создать</button>
       </div>
+
+      <label class="builder__dry">
+        <span class="switch"><input v-model="form.dry_run" type="checkbox" /></span>
+        <span>
+          <b>Сначала только проверять</b>
+          <small>Правило пишет, что сделало бы, но рекламу не трогает. Удобно в первую неделю.</small>
+        </span>
+      </label>
       <p v-if="['set_weekly_budget', 'change_budget_pct'].includes(form.action)" class="hint">
         Пример: CPA ниже 800 ₽ за 7 дней → бюджет +20 %, не выше 30 000 ₽/нед. Автостратегии и ручные ставки ЕПК
-        получат недельный бюджет, ручные ставки ТГО — дневной (недельная сумма ÷ 7). Каждый запуск — запись в журнале с откатом.
+        получат недельный бюджет, ручные ставки ТГО — дневной (недельная сумма ÷ 7). Каждый запуск — запись в «Истории»
+        с откатом.
       </p>
       <p v-if="form.target !== 'campaign'" class="hint">
         Для фраз и запросов нужна статистика структуры: кампания → «Обновить структуру и статистику».
         <template v-if="form.target === 'query'">Типичный сценарий: расход без конверсий → минус-фраза.</template>
       </p>
+      <div class="builder__foot">
+        <button class="btn btn--accent" type="button" :disabled="busy" @click="create">Сохранить правило</button>
+        <button class="btn btn--ghost" type="button" @click="adding = false">Отмена</button>
+      </div>
     </section>
 
-    <section class="panel">
-      <h2>Правила</h2>
-      <div v-if="rules.length" class="list">
-        <div v-for="rule in rules" :key="rule.id" class="list-row" :class="{ 'is-off': !rule.enabled }">
-          <div>
-            <strong>
-              {{ rule.name }}
-              <span class="chip" :class="rule.dry_run ? 'chip--info' : 'chip--warning'">
-                {{ rule.dry_run ? 'проверка' : 'автоматически' }}
-              </span>
-            </strong>
-            <small>
-              {{ TARGETS[rule.target] || 'Кампании' }}: {{ lowerFirst(TYPES[rule.rule_type] || rule.rule_type) }}
-              {{ rule.threshold_value }}<template v-if="rule.target === 'campaign'"> за {{ rule.lookback_days }} дн.</template>
-              → {{ lowerFirst(ACTIONS[rule.action] || rule.action) }}
-              <template v-if="rule.action === 'set_budget' && rule.action_budget_rub"> {{ rubles(rule.action_budget_rub) }}</template>
-              <template v-if="rule.action === 'set_weekly_budget' && rule.action_budget_rub">
-                {{ rubles(rule.action_budget_rub) }}/нед.</template
+    <h2 class="section-h rules-h">
+      Правила <span class="rules-h__n">{{ rules.length }}</span>
+      <small>работают без ИИ — лимит не тратится</small>
+    </h2>
+    <div v-if="rules.length" class="ccard rules-list">
+      <div v-for="rule in rules" :key="rule.id" class="prow rule" :class="{ 'is-off': !rule.enabled }">
+        <label class="switch" :title="rule.enabled ? 'Выключить правило' : 'Включить правило'">
+          <input
+            type="checkbox"
+            :checked="rule.enabled"
+            :disabled="busy"
+            :aria-label="`Правило «${rule.name}»`"
+            @change="patch(rule, { enabled: !rule.enabled })"
+          />
+        </label>
+        <div class="prow__main">
+          <b>
+            {{ rule.name }}
+            <span v-if="rule.dry_run" class="chip">Только проверка</span>
+          </b>
+          <p>{{ ruleText(rule) }}</p>
+          <small>{{ ruleMeta(rule) }}</small>
+        </div>
+        <div class="prow__acts">
+          <button
+            class="btn btn--ghost"
+            type="button"
+            :disabled="busy"
+            title="Посчитать по текущей статистике, ничего не меняя"
+            @click="run(rule, true)"
+          >
+            Проверить
+          </button>
+          <details class="bulk-more rule-more">
+            <summary class="btn btn--ghost" aria-label="Действия с правилом"><Ellipsis :size="16" /></summary>
+            <div class="bulk-more__menu" role="menu" @click="closeMenu">
+              <button class="menu-item" type="button" role="menuitem" :disabled="busy" @click="run(rule, false)">
+                <Play aria-hidden="true" />Применить сейчас
+              </button>
+              <button
+                class="menu-item"
+                type="button"
+                role="menuitem"
+                :disabled="busy"
+                @click="patch(rule, { dry_run: !rule.dry_run })"
               >
-              <template v-if="rule.action === 'change_budget_pct' && rule.action_pct != null">
-                {{ rule.action_pct > 0 ? '+' : '' }}{{ rule.action_pct }} %<template v-if="rule.action_budget_rub">,
-                  {{ rule.action_pct < 0 ? 'не ниже' : 'не выше' }} {{ rubles(rule.action_budget_rub) }}/нед.</template
-                ></template
-              >
-              <template v-if="rule.action === 'set_bid' && rule.action_bid_rub"> {{ rubles(rule.action_bid_rub, 2) }}</template>
-              <template v-if="rule.goal_name"> · цель «{{ rule.goal_name }}»</template>
-              <template v-if="!workspace && rule.workspace_name"> · {{ rule.workspace_name }}</template>
-              <template v-if="rule.account_name"> · {{ rule.account_name }}</template>
-              <template v-if="rule.campaign_name"> · кампания «{{ rule.campaign_name }}»</template>
-              <template v-if="!rule.enabled"> · выключено</template>
-            </small>
-          </div>
-          <div class="row-actions">
-            <button class="btn btn--ghost" type="button" :disabled="busy" @click="run(rule, true)">Проверить</button>
-            <button class="btn btn--ghost" type="button" :disabled="busy" @click="run(rule, false)">Применить</button>
-            <button class="btn btn--ghost" type="button" :disabled="busy" @click="patch(rule, { enabled: !rule.enabled })">
-              {{ rule.enabled ? 'Выключить' : 'Включить' }}
-            </button>
-            <button class="btn btn--ghost" type="button" :disabled="busy" @click="patch(rule, { dry_run: !rule.dry_run })">
-              {{ rule.dry_run ? 'Включить авто' : 'Только проверка' }}
-            </button>
-            <button class="btn btn--ghost btn--danger" type="button" :disabled="busy" @click="remove(rule)">Удалить</button>
-          </div>
+                <component :is="rule.dry_run ? Zap : Eye" aria-hidden="true" />
+                {{ rule.dry_run ? 'Разрешить менять рекламу' : 'Перевести в «только проверку»' }}
+              </button>
+              <button class="menu-item is-danger" type="button" role="menuitem" :disabled="busy" @click="remove(rule)">
+                <Trash2 aria-hidden="true" />Удалить правило
+              </button>
+            </div>
+          </details>
         </div>
       </div>
-      <p v-else class="empty">Правил пока нет.</p>
-    </section>
+    </div>
+    <div v-else class="ccard rules-empty">
+      <Zap :size="22" aria-hidden="true" />
+      <p>{{ workspace ? 'Для этого сайта правил пока нет.' : 'Правил пока нет.' }}</p>
+      <button v-if="!adding" class="btn" type="button" @click="adding = true">Создать правило</button>
+    </div>
 
-    <section v-if="lastRun" class="panel">
-      <h2>Результат: {{ lastRun.dry_run ? 'проверка' : 'применение' }}</h2>
-      <p class="hint">
-        Совпало {{ lastRun.matched }}, применено {{ lastRun.applied }} · {{ TARGETS[lastRun.target] || 'Кампании' }} →
-        {{ lowerFirst(ACTIONS[lastRun.action] || lastRun.action || '') }}
-      </p>
+    <section v-if="lastRun" class="ccard run-result">
+      <header>
+        <div>
+          <b>
+            {{ lastRun.dry_run ? 'Проверка' : 'Применение' }}<template v-if="lastRunName"> «{{ lastRunName }}»</template>:
+            {{ runSummary(lastRun) }}
+          </b>
+          <small v-if="lastRun.dry_run">В Директе ничего не изменено.</small>
+        </div>
+        <button class="btn btn--ghost" type="button" @click="lastRun = null">Скрыть</button>
+      </header>
       <p v-if="lastRun.error" class="form-error">Применилось не всё: {{ lastRun.error }}</p>
-      <div v-if="lastRun.items?.length" class="list">
-        <div v-for="item in lastRun.items" :key="`${item.entity}-${item.row_id}`" class="list-row">
-          <div>
-            <strong>{{ item.name }}</strong>
-            <small>
-              {{ item.reason }}
-              <template v-if="item.campaign_name"> · {{ item.campaign_name }}</template>
-              <template v-if="item.adgroup_name"> · {{ item.adgroup_name }}</template>
-            </small>
-          </div>
+      <div v-for="item in lastRun.items || []" :key="`${item.entity}-${item.row_id}`" class="prow">
+        <div class="prow__main">
+          <b>{{ item.name }}</b>
+          <p>
+            {{ item.reason }}
+            <template v-if="item.campaign_name"> · {{ item.campaign_name }}</template>
+            <template v-if="item.adgroup_name"> · {{ item.adgroup_name }}</template>
+          </p>
         </div>
       </div>
-      <p v-else class="empty">Под условие ничего не попало.</p>
     </section>
 
-    <section v-if="runs.length" class="panel">
-      <h2>История прогонов</h2>
-      <div class="list">
-        <div v-for="item in runs.slice(0, 20)" :key="item.id" class="list-row">
-          <div>
-            <strong>{{ ruleName(item.rule_id) }}</strong>
-            <small>
-              совпало {{ item.matched }}, применено {{ item.applied }} · {{ item.dry_run ? 'проверка' : 'авто' }} ·
-              {{ formatDateTime(item.created_at) }}
-            </small>
-            <small v-if="item.error" class="form-error">Применилось не всё: {{ item.error }}</small>
-          </div>
-        </div>
-      </div>
-    </section>
+    <h2 class="section-h rules-h">
+      Последние запуски
+      <small><RouterLink :to="historyTo">Что правила изменили</RouterLink></small>
+    </h2>
+    <div v-if="runs.length" class="ccard table-scroll">
+      <table class="table">
+        <thead>
+          <tr>
+            <th>Когда</th>
+            <th>Правило</th>
+            <th>Что сделало</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr v-for="item in runs.slice(0, 20)" :key="item.id">
+            <td class="rules-when">{{ formatDateTime(item.created_at) }}</td>
+            <td><b>{{ ruleName(item.rule_id) }}</b></td>
+            <td>
+              {{ runSummary(item) }}
+              <small v-if="item.error" class="form-error">Применилось не всё: {{ item.error }}</small>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <p v-else class="ccard ccard--note">Запусков ещё не было.</p>
+    <p class="hint rules-meta">
+      Правило с пометкой «Только проверка» ничего не меняет в Директе — только пишет, что нашло. Всё, что правила
+      изменили, можно вернуть в «Истории».
+    </p>
   </div>
 </template>
 
 <script setup>
 import { askConfirm } from '../composables/useConfirm'
 import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { RouterLink } from 'vue-router'
+import { Ellipsis, Eye, Play, Plus, Trash2, Zap } from '@lucide/vue'
 import FeatureLockNotice from './FeatureLockNotice.vue'
 import { errorText, webApi, wsApi } from '../api/web'
 import { pushToast } from '../composables/useToasts'
 import { useWorkspaces } from '../composables/useWorkspaces'
-import { formatDateTime, rubles } from '../utils/format'
+import { formatDateTime, num, plural, rubles } from '../utils/format'
 import { campaignLabel, repeatedNames } from '../utils/campaignNames'
 
+/**
+ * Правила Автопилота: условие читается как предложение («Если у кампании CPA выше 1 000 ₽ за 7 дней — остановить»),
+ * список с переключателем и меню действий, последние запуски.
+ */
 const props = defineProps({
   // Проект: правила только его кампаний; без него — все правила пользователя.
   workspace: { type: Object, default: null },
 })
 
-// «CPA выше» остаётся с заглавными, «Остановить» → «остановить».
-function lowerFirst(text) {
-  const s = String(text || '')
-  return /^\p{Lu}{2}/u.test(s) ? s : s.charAt(0).toLowerCase() + s.slice(1)
-}
-
-const TARGETS = { campaign: 'Кампании', keyword: 'Ключевые фразы', query: 'Поисковые запросы' }
-const TYPES = {
+// Падежи под «Если у …».
+const WHO = { campaign: 'кампании', keyword: 'фразы', query: 'запроса' }
+const COND = {
   cpa_above: 'CPA выше',
   cpa_below: 'CPA ниже',
-  spend_no_conv: 'Расход без конверсий от',
+  spend_no_conv: 'расход без конверсий больше',
   cpc_above: 'CPC выше',
-  daily_budget_pct: 'Израсходовано % дневного бюджета от',
-  weekly_budget_pct: 'Израсходовано % недельного бюджета от',
+  daily_budget_pct: 'израсходовано дневного бюджета больше',
+  weekly_budget_pct: 'израсходовано недельного бюджета больше',
 }
-const ACTIONS = {
-  pause: 'Остановить',
-  resume: 'Запустить',
-  set_budget: 'Дневной бюджет',
-  set_weekly_budget: 'Недельный бюджет',
-  change_budget_pct: 'Бюджет',
-  set_bid: 'Ставка',
-  negative_adgroup: 'Минус-фраза группы',
-  negative_campaign: 'Минус-фраза кампании',
-  notify: 'Уведомить',
+const DO = {
+  pause: 'остановить',
+  resume: 'запустить',
+  set_budget: 'поставить дневной бюджет',
+  set_weekly_budget: 'поставить недельный бюджет',
+  change_budget_pct: 'изменить бюджет',
+  set_bid: 'поставить ставку',
+  negative_adgroup: 'добавить в минус-фразы группы',
+  negative_campaign: 'добавить в минус-фразы кампании',
+  notify: 'только уведомить',
+}
+
+function unitOf(type) {
+  return String(type).endsWith('_pct') ? '%' : '₽'
+}
+
+function days(n) {
+  return `${n} ${plural(n, 'день', 'дня', 'дней')}`
+}
+
+function ruleText(r) {
+  const th = unitOf(r.rule_type) === '%' ? `${num(r.threshold_value)} %` : rubles(r.threshold_value)
+  let text = `Если у ${WHO[r.target] || WHO.campaign} ${COND[r.rule_type] || r.rule_type} ${th}`
+  if ((r.target || 'campaign') === 'campaign') text += ` за ${days(r.lookback_days)}`
+  text += ` — ${DO[r.action] || r.action}`
+  if (r.action === 'set_budget' && r.action_budget_rub) text += ` ${rubles(r.action_budget_rub)}`
+  if (r.action === 'set_weekly_budget' && r.action_budget_rub) text += ` ${rubles(r.action_budget_rub)} в неделю`
+  if (r.action === 'change_budget_pct' && r.action_pct != null) {
+    text += ` на ${r.action_pct > 0 ? '+' : ''}${num(r.action_pct)} %`
+    if (r.action_budget_rub) {
+      text += `, ${r.action_pct < 0 ? 'не ниже' : 'не выше'} ${rubles(r.action_budget_rub)} в неделю`
+    }
+  }
+  if (r.action === 'set_bid' && r.action_bid_rub) text += ` ${rubles(r.action_bid_rub, 2)}`
+  return text
+}
+
+/** Где работает правило и когда запускалось — строка под условием. */
+function ruleMeta(r) {
+  const parts = []
+  if (!props.workspace) parts.push(r.workspace_name || 'Все сайты')
+  if (r.account_name) parts.push(r.account_name)
+  if (r.campaign_name) parts.push(`кампания «${r.campaign_name}»`)
+  if (r.goal_name) parts.push(`цель «${r.goal_name}»`)
+  if (!r.enabled) parts.push('выключено, ничего не проверяет')
+  else if (r.last_run_at) parts.push(`последний запуск ${formatDateTime(r.last_run_at)}`)
+  else parts.push('первый запуск — в течение часа')
+  return parts.join(' · ')
+}
+
+/** Итог запуска: проверка только считает, применение — меняет Директ. */
+function runSummary(run) {
+  const n = run.matched || 0
+  if (!n) return 'под условие ничего не попало'
+  const found = `нашло ${n}`
+  if (run.dry_run) return `${found}, ничего не меняло`
+  return `${found}, изменено ${run.applied || 0}`
+}
+
+function closeMenu(event) {
+  const menu = event.currentTarget.closest('details')
+  if (menu) menu.open = false
 }
 
 const CAMPAIGN_TYPES = ['daily_budget_pct', 'weekly_budget_pct']
@@ -267,6 +364,8 @@ const allGoals = ref([])
 const allCampaigns = ref([])
 const lastRun = ref(null)
 const busy = ref(false)
+const adding = ref(false)
+const lastRunId = ref(null)
 const form = reactive({
   name: '',
   target: 'campaign',
@@ -329,6 +428,12 @@ watch(
   },
 )
 
+const lastRunName = computed(() => (lastRunId.value ? ruleName(lastRunId.value) : ''))
+const historyTo = computed(() => ({
+  path: props.workspace ? `/w/${props.workspace.id}/history` : '/cabinet/history',
+  query: { source: 'rule' },
+}))
+
 function ruleName(id) {
   return rules.value.find((r) => r.id === id)?.name || `Правило #${id}`
 }
@@ -381,7 +486,8 @@ async function create() {
       action_pct: form.action === 'change_budget_pct' ? Number(form.action_pct) : null,
       action_bid_rub: form.action === 'set_bid' ? Number(form.action_bid_rub) : null,
     })
-    pushToast('Правило создано')
+    pushToast(form.dry_run ? 'Правило сохранено в режиме проверки' : 'Правило сохранено')
+    adding.value = false
     form.name = ''
     form.scope_account_id = ''
     form.scope_campaign_row_id = ''
@@ -402,8 +508,9 @@ async function run(rule, dry) {
   busy.value = true
   try {
     lastRun.value = await webApi.runRule(rule.id, dry)
+    lastRunId.value = rule.id
     pushToast(
-      lastRun.value.error ? `Применилось не всё: ${lastRun.value.error}` : `Совпало: ${lastRun.value.matched}`,
+      lastRun.value.error ? `Применилось не всё: ${lastRun.value.error}` : `Правило ${runSummary(lastRun.value)}`,
       lastRun.value.error ? 'error' : undefined,
     )
     await load()
@@ -441,3 +548,217 @@ async function remove(rule) {
 
 onMounted(load)
 </script>
+
+<style scoped>
+.rules-manager .ws-toolbar .btn {
+  gap: 6px;
+}
+.builder {
+  margin-bottom: 8px;
+  padding: 18px;
+  border-color: var(--faint);
+}
+.builder h3 {
+  margin: 0 0 12px;
+  font-size: 15px;
+}
+.sentence {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 16px;
+  font-size: 15px;
+  font-weight: 600;
+}
+.sentence select {
+  /* По ширине выбранного варианта, а не самого длинного, — так предложение читается слитно. */
+  field-sizing: content;
+  height: 34px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+  font-size: 14px;
+}
+.inp {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 34px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--surface);
+  font-size: 14px;
+}
+.inp:focus-within,
+.sentence select:focus {
+  border-color: var(--ink);
+  outline: 0;
+}
+.inp input {
+  width: 64px;
+  padding: 0;
+  border: 0;
+  outline: 0;
+  background: none;
+  color: var(--ink);
+  font: inherit;
+  text-align: right;
+}
+.inp i {
+  color: var(--faint);
+  font-style: normal;
+  font-size: 13px;
+}
+.builder__fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 12px;
+  margin-bottom: 14px;
+}
+.builder__dry {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  cursor: pointer;
+}
+.builder__dry .switch {
+  margin-top: 2px;
+}
+.builder__dry small {
+  display: block;
+  color: var(--muted);
+  font-size: 13px;
+}
+.builder .hint {
+  margin: 12px 0 0;
+}
+.builder__foot {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.rules-h {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+}
+.rules-h__n {
+  color: var(--faint);
+  font-weight: 600;
+}
+.rules-h small {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 500;
+}
+.rules-h small a {
+  color: var(--muted);
+}
+/* Меню «⋯» у последнего правила не должно обрезаться краем карточки. */
+.rules-list {
+  overflow: visible;
+}
+.rule {
+  align-items: flex-start;
+  justify-content: flex-start;
+}
+.rule > .switch {
+  margin-top: 3px;
+}
+.rule .prow__main {
+  flex: 1;
+}
+.rule .prow__main b {
+  margin-right: 8px;
+}
+.rule .chip {
+  margin-left: 6px;
+  font-size: 12px;
+  vertical-align: 1px;
+}
+.rule.is-off .prow__main b,
+.rule.is-off .prow__main p {
+  color: var(--faint);
+}
+.rule .prow__acts {
+  gap: 6px;
+}
+.rule-more > summary {
+  padding-inline: 10px;
+}
+.rule-more .bulk-more__menu {
+  right: 0;
+  left: auto;
+  min-width: 260px;
+}
+.rules-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 24px 18px;
+  color: var(--muted);
+  text-align: center;
+}
+.rules-empty p {
+  margin: 0;
+}
+.run-result {
+  margin-top: 12px;
+}
+.run-result header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--line);
+}
+.run-result header small {
+  display: block;
+  color: var(--muted);
+  font-size: 13px;
+}
+.run-result .form-error {
+  margin: 0;
+  padding: 10px 18px;
+}
+.rules-when {
+  white-space: nowrap;
+  color: var(--muted);
+}
+.table small.form-error {
+  display: block;
+}
+.rules-meta {
+  margin: 12px 2px 0;
+}
+@media (max-width: 640px) {
+  .rule {
+    flex-wrap: wrap;
+  }
+  .rule .prow__main {
+    flex-basis: calc(100% - 60px);
+  }
+  .rule .prow__acts {
+    width: 100%;
+    justify-content: flex-end;
+  }
+  .rules-h small {
+    margin-left: 0;
+    flex-basis: 100%;
+  }
+}
+</style>

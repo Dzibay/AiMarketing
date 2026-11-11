@@ -1,268 +1,254 @@
 <template>
-  <section class="panel">
-    <div class="panel__head">
-      <div>
-        <h2>Эксперименты</h2>
-        <p class="hint">
-          Гипотезы, которые ИИ проверяет на тестовых кампаниях: перезапуск копией, новое гео, другие ключи или тип
-          кампании. Прогресс считает код по загруженной статистике — ИИ подключается только по вашей кнопке.
-        </p>
-      </div>
-      <RouterLink class="btn btn--accent" :to="{ path: `/w/${ws.id}/chat`, query: { ask: 'experiment' } }">
-        Предложить эксперимент
-      </RouterLink>
-    </div>
-    <FeatureLockNotice feature="experiments">
-      Эксперименты не входят в ваш тариф: ИИ может предложить гипотезу, но запустить её не получится.
-    </FeatureLockNotice>
-    <p class="notice">
-      Деньги ограничивает только недельный бюджет тестовых кампаний в Директе — сервис сам ничего не останавливает. Срок
-      считается с первого дня показов: копии сначала проходят модерацию.
+  <div class="ws-toolbar">
+    <p class="sync-status">
+      Гипотезы, которые проверяются на тестовых копиях кампаний. Прогресс считает код по загруженной статистике — ИИ
+      подключается только по вашей кнопке.
     </p>
+    <RouterLink class="btn btn--accent exp-ask" :to="{ path: `/w/${ws.id}/chat`, query: { ask: 'experiment' } }">
+      <Sparkles :size="15" aria-hidden="true" />Предложить эксперимент
+    </RouterLink>
+  </div>
+  <FeatureLockNotice feature="experiments">
+    Эксперименты не входят в ваш тариф: ИИ может предложить гипотезу, но запустить её не получится.
+  </FeatureLockNotice>
 
-    <p v-if="loading && !items.length" class="empty">Загружаем эксперименты…</p>
-    <p v-else-if="loadError" class="empty">{{ loadError }}</p>
-    <p v-else-if="!running.length" class="empty">
+  <h2 class="section-h exp-h">
+    Эксперименты <span class="exp-h__n">{{ running.length }}</span>
+    <small>тест идёт на копии кампании, образец не меняется</small>
+  </h2>
+  <p v-if="loading && !items.length" class="ccard ccard--note">Загружаем эксперименты…</p>
+  <p v-else-if="loadError" class="ccard ccard--note">{{ loadError }}</p>
+  <div v-else-if="!running.length" class="ccard exp-empty">
+    <Sparkles :size="22" aria-hidden="true" />
+    <p>
       Идущих экспериментов нет. Попросите ИИ предложить гипотезу — он спросит лимит в неделю, срок и критерий успеха и
       покажет план на согласование.
     </p>
-    <div v-else class="exp-list">
-      <article v-for="e in running" :key="e.id" class="exp-card" :class="{ 'is-due': isDue(e) }">
-        <header class="exp-card__head">
-          <div>
-            <strong>{{ e.title }}</strong>
-            <small>
-              <span class="chip chip--info">{{ e.kind_label }}</span>
-              <span class="chip" :class="PROGRESS_CHIPS[e.progress?.status]">{{ e.progress?.label || e.status_label }}</span>
-              № {{ e.id }} · запущен {{ formatDate(e.started_on) }}
-            </small>
-          </div>
-          <div class="row-actions">
-            <button
-              class="btn"
-              :class="isDue(e) ? 'btn--accent' : 'btn--ghost'"
-              type="button"
-              :disabled="reviewingId !== null"
-              title="ИИ разберёт итоги и предложит, что дальше: масштабировать или остановить"
-              @click="review(e)"
-            >
-              {{ reviewingId === e.id ? 'Запускаем…' : 'Разобрать итоги с ИИ' }}
-            </button>
-            <button class="btn btn--ghost" type="button" :disabled="busyId === e.id" @click="openFinish(e)">
-              Завершить
-            </button>
-            <button class="btn btn--ghost btn--danger" type="button" :disabled="busyId === e.id" @click="cancel(e)">
-              Отменить
-            </button>
-            <RouterLink v-if="e.chat_id" class="btn btn--ghost" :to="`/w/${ws.id}/chat/${e.chat_id}`">Чат</RouterLink>
-          </div>
-        </header>
-
-        <p v-if="e.hypothesis" class="exp-text">{{ e.hypothesis }}</p>
-
-        <dl class="exp-facts">
-          <div>
-            <dt>Критерий успеха</dt>
-            <dd>{{ e.criterion_summary }}</dd>
-          </div>
-          <div>
-            <dt>Лимит</dt>
-            <dd>{{ limitText(e) }}</dd>
-          </div>
-          <div>
-            <dt>Срок</dt>
-            <dd>{{ termText(e) }}</dd>
-          </div>
-        </dl>
-
-        <template v-if="e.progress">
-          <div class="exp-term">
-            <div class="meter" :title="`День ${e.progress.day} из ${e.days}`">
-              <span :style="{ width: `${dayPct(e)}%` }"></span>
-            </div>
-            <p :class="REASON_TONES[e.progress.status]">{{ capitalize(e.progress.reason) }}</p>
-            <small v-if="e.progress.loaded_to" class="hint">
-              Статистика загружена по {{ formatDate(e.progress.loaded_to) }} включительно.
-            </small>
-          </div>
-
-          <div class="metric-grid">
-            <div v-for="col in COLS" :key="col.label" class="metric-grid__item is-static">
-              <small>{{ col.label }}</small>
-              <strong>{{ col.value(e.progress.totals) }}</strong>
-            </div>
-          </div>
-
-          <div class="table-scroll">
-            <table class="table">
-              <thead>
-                <tr>
-                  <th>Тестовая кампания</th>
-                  <th>Статус</th>
-                  <th class="num">Показы</th>
-                  <th class="num">Клики</th>
-                  <th class="num">Расход</th>
-                  <th class="num">Конверсии</th>
-                  <th v-if="e.weekly_limit_rub != null" class="num" title="С понедельника — неделя Директа">
-                    За неделю
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr v-for="c in e.progress.campaigns" :key="c.id">
-                  <td>
-                    <template v-if="c.missing">[{{ c.id }}] — нет в базе</template>
-                    <RouterLink v-else :to="`/w/${ws.id}/campaigns/${c.id}`">{{ c.name }}</RouterLink>
-                  </td>
-                  <td>{{ c.missing ? '—' : stateText(c) }}</td>
-                  <td class="num">{{ num(c.impressions) }}</td>
-                  <td class="num">{{ num(c.clicks) }}</td>
-                  <td class="num">{{ money(c.cost_kopecks) }}</td>
-                  <td class="num">{{ conversionsText(c) }}</td>
-                  <td v-if="e.weekly_limit_rub != null" class="num" :class="{ 'tone-warn': c.limit_hit }">
-                    {{ weekText(c, e) }}
-                  </td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-          <p v-if="e.progress.limit_hit" class="hint tone-warn">
-            Недельный лимит почти израсходован — Директ сам притормозит показы до понедельника.
-          </p>
-
-          <div v-if="e.progress.source" class="exp-source">
-            <h4 class="exp-sub">
-              Образец:
-              <template v-if="e.progress.source.missing">[{{ e.progress.source.id }}] — нет в базе</template>
-              <RouterLink v-else :to="`/w/${ws.id}/campaigns/${e.progress.source.id}`">
-                «{{ e.progress.source.name }}»
-              </RouterLink>
-            </h4>
-            <div v-if="!e.progress.source.missing" class="table-scroll">
-              <table class="table">
-                <thead>
-                  <tr>
-                    <th>Что</th>
-                    <th v-for="col in COLS" :key="col.label" class="num">{{ col.label }}</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr>
-                    <td>
-                      Образец до теста,
-                      {{ formatDate(e.progress.source.before_from) }} — {{ formatDate(e.progress.source.before_to) }}
-                    </td>
-                    <td v-for="col in COLS" :key="col.label" class="num">{{ col.value(e.progress.source.before) }}</td>
-                  </tr>
-                  <tr>
-                    <td>Образец за время теста</td>
-                    <td v-for="col in COLS" :key="col.label" class="num">{{ col.value(e.progress.source.during) }}</td>
-                  </tr>
-                  <tr>
-                    <td><strong>Тест</strong></td>
-                    <td v-for="col in COLS" :key="col.label" class="num">
-                      <strong>{{ col.value(e.progress.totals) }}</strong>
-                    </td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
-          </div>
-        </template>
-
-        <form v-if="finishId === e.id" class="exp-finish" @submit.prevent="finish(e)">
-          <div>
-            <h4 class="exp-sub">Гипотеза</h4>
-            <div class="seg" role="group" aria-label="Гипотеза">
-              <button
-                v-for="(label, id) in VERDICT_LABELS"
-                :key="id"
-                type="button"
-                :class="{ active: verdict === id }"
-                @click="verdict = id"
-              >
-                {{ label }}
-              </button>
-            </div>
-          </div>
-          <div class="field">
-            <label :for="`exp-conclusion-${e.id}`">Вывод</label>
-            <textarea
-              :id="`exp-conclusion-${e.id}`"
-              v-model="conclusion"
-              rows="3"
-              maxlength="2000"
-              placeholder="Что узнали и что делать дальше"
-            ></textarea>
-          </div>
-          <p class="hint">
-            Кампании эксперимента останутся как есть: остановить или масштабировать их — отдельными действиями.
-          </p>
-          <div class="row-actions">
-            <button class="btn btn--accent" type="submit" :disabled="!verdict || busyId === e.id">
-              {{ busyId === e.id ? 'Записываем…' : 'Записать итог' }}
-            </button>
-            <button class="btn btn--ghost" type="button" @click="finishId = null">Не сейчас</button>
-          </div>
-        </form>
-      </article>
-    </div>
-  </section>
-
-  <section v-if="past.length" class="panel">
-    <div class="panel__head">
+  </div>
+  <article v-for="e in running" :key="e.id" class="ccard exp" :class="{ 'is-due': isDue(e) }">
+    <header class="exp__head">
       <div>
-        <h2>Завершённые</h2>
-        <p class="hint">Итоги и выводы. ИИ видит их, когда разбирает проект и предлагает новые тесты.</p>
+        <small>{{ e.kind_label }} · № {{ e.id }} · запущен {{ formatDate(e.started_on) }}</small>
+        <h3>{{ e.title }}</h3>
       </div>
-    </div>
-    <div class="list">
-      <details v-for="e in past" :key="e.id" class="log-row">
-        <summary class="list-row">
-          <div>
-            <strong>{{ e.title }}</strong>
-            <small>
-              <span class="chip chip--info">{{ e.kind_label }}</span>
-              {{ formatDate(e.started_on) }} — {{ formatDate(e.finished_at) }}
-            </small>
-          </div>
-          <div class="log-row__side">
-            <span v-if="e.status === 'cancelled'" class="chip chip--info">отменён</span>
-            <span v-else class="chip" :class="VERDICT_CHIPS[e.verdict]">гипотеза {{ e.verdict_label || '—' }}</span>
-          </div>
-        </summary>
-        <div class="log-row__body">
-          <div>
-            <h4>Гипотеза</h4>
-            <p class="exp-text">{{ e.hypothesis || '—' }}</p>
-            <h4>Критерий успеха</h4>
-            <p class="exp-text">{{ e.criterion_summary }}</p>
-          </div>
-          <div>
-            <h4>Вывод</h4>
-            <p class="exp-text">{{ e.conclusion || '—' }}</p>
-            <h4>За срок теста</h4>
-            <p class="exp-text">{{ totalsLine(e.progress?.totals) }}</p>
-            <p class="exp-text">
-              <template v-for="(c, i) in e.progress?.campaigns || []" :key="c.id">
-                <template v-if="i">, </template>
-                <template v-if="c.missing">[{{ c.id }}]</template>
-                <RouterLink v-else :to="`/w/${ws.id}/campaigns/${c.id}`">{{ c.name }}</RouterLink>
+      <span class="st" :class="ST_TONES[e.progress?.status] || 'st--off'">{{ statusText(e) }}</span>
+    </header>
+    <p v-if="e.hypothesis" class="exp__hyp">{{ e.hypothesis }}</p>
+
+    <dl class="exp__facts">
+      <div>
+        <dt>Критерий успеха</dt>
+        <dd>{{ e.criterion_summary }}</dd>
+      </div>
+      <div>
+        <dt>Лимит</dt>
+        <dd>{{ limitText(e) }}</dd>
+      </div>
+      <div>
+        <dt>Срок</dt>
+        <dd>{{ termText(e) }}</dd>
+      </div>
+    </dl>
+
+    <template v-if="e.progress">
+      <div class="meter exp__meter" :title="`День ${e.progress.day} из ${e.days}`">
+        <span :style="{ width: `${dayPct(e)}%` }"></span>
+      </div>
+      <p class="exp__reason" :class="REASON_TONES[e.progress.status]">{{ capitalize(e.progress.reason) }}</p>
+
+      <div class="table-scroll">
+        <table class="table exp__table">
+          <thead>
+            <tr>
+              <th>Кампания</th>
+              <th class="num">Расход</th>
+              <th class="num">Конверсии</th>
+              <th class="num">Цена конверсии</th>
+              <th v-if="e.weekly_limit_rub != null" class="num" title="С понедельника — неделя Директа">За неделю</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="c in e.progress.campaigns" :key="c.id">
+              <td>
+                <template v-if="c.missing">[{{ c.id }}] — нет в базе</template>
+                <template v-else>
+                  <RouterLink :to="`/w/${ws.id}/campaigns/${c.id}`">{{ c.name }}</RouterLink>
+                  <small>тестовая копия · {{ stateText(c) }}</small>
+                </template>
+              </td>
+              <td class="num">{{ money(c.cost_kopecks) }}</td>
+              <td class="num">{{ conversionsText(c) }}</td>
+              <td class="num"><b>{{ money(cpaOf(c)) }}</b></td>
+              <td v-if="e.weekly_limit_rub != null" class="num" :class="{ 'tone-warn': c.limit_hit }">
+                {{ weekText(c, e) }}
+              </td>
+            </tr>
+            <tr v-if="e.progress.source && !e.progress.source.missing" class="exp__base">
+              <td>
+                <RouterLink :to="`/w/${ws.id}/campaigns/${e.progress.source.id}`">{{ e.progress.source.name }}</RouterLink>
+                <small>образец за время теста, без изменений</small>
+              </td>
+              <td class="num">{{ money(e.progress.source.during?.cost_kopecks) }}</td>
+              <td class="num">{{ conversionsText(e.progress.source.during) }}</td>
+              <td class="num"><b>{{ money(cpaOf(e.progress.source.during)) }}</b></td>
+              <td v-if="e.weekly_limit_rub != null" class="num">—</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <p v-if="e.progress.limit_hit" class="hint tone-warn">
+        Недельный лимит почти израсходован — Директ сам притормозит показы до понедельника.
+      </p>
+
+      <details class="exp__more">
+        <summary>Подробные цифры</summary>
+        <div class="table-scroll">
+          <table class="table">
+            <thead>
+              <tr>
+                <th>Что</th>
+                <th v-for="col in COLS" :key="col.label" class="num">{{ col.label }}</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><b>Тест, всего</b></td>
+                <td v-for="col in COLS" :key="col.label" class="num">
+                  <b>{{ col.value(e.progress.totals) }}</b>
+                </td>
+              </tr>
+              <template v-if="e.progress.source && !e.progress.source.missing">
+                <tr>
+                  <td>Образец за время теста</td>
+                  <td v-for="col in COLS" :key="col.label" class="num">{{ col.value(e.progress.source.during) }}</td>
+                </tr>
+                <tr>
+                  <td>
+                    Образец до теста,
+                    {{ formatDate(e.progress.source.before_from) }} — {{ formatDate(e.progress.source.before_to) }}
+                  </td>
+                  <td v-for="col in COLS" :key="col.label" class="num">{{ col.value(e.progress.source.before) }}</td>
+                </tr>
               </template>
-              <template v-if="e.chat_id">
-                · <RouterLink :to="`/w/${ws.id}/chat/${e.chat_id}`">чат эксперимента</RouterLink>
-              </template>
-            </p>
-          </div>
+            </tbody>
+          </table>
         </div>
+        <p v-if="e.progress.source?.missing" class="hint">Образец [{{ e.progress.source.id }}] — нет в базе.</p>
+        <p v-if="e.progress.loaded_to" class="hint">
+          Статистика загружена по {{ formatDate(e.progress.loaded_to) }} включительно.
+        </p>
       </details>
+    </template>
+
+    <form v-if="finishId === e.id" class="exp-finish" @submit.prevent="finish(e)">
+      <div>
+        <h4 class="exp-sub">Гипотеза</h4>
+        <div class="seg" role="group" aria-label="Гипотеза">
+          <button
+            v-for="(label, id) in VERDICT_LABELS"
+            :key="id"
+            type="button"
+            :class="{ active: verdict === id }"
+            @click="verdict = id"
+          >
+            {{ label }}
+          </button>
+        </div>
+      </div>
+      <div class="field">
+        <label :for="`exp-conclusion-${e.id}`">Вывод</label>
+        <textarea
+          :id="`exp-conclusion-${e.id}`"
+          v-model="conclusion"
+          rows="3"
+          maxlength="2000"
+          placeholder="Что узнали и что делать дальше"
+        ></textarea>
+      </div>
+      <p class="hint">
+        Кампании эксперимента останутся как есть: остановить или масштабировать их — отдельными действиями.
+      </p>
+      <div class="row-actions">
+        <button class="btn btn--accent" type="submit" :disabled="!verdict || busyId === e.id">
+          {{ busyId === e.id ? 'Записываем…' : 'Записать итог' }}
+        </button>
+        <button class="btn btn--ghost" type="button" @click="finishId = null">Не сейчас</button>
+      </div>
+    </form>
+    <div v-else class="exp__acts">
+      <button
+        class="btn"
+        :class="{ 'btn--accent': isDue(e) }"
+        type="button"
+        :disabled="reviewingId !== null"
+        title="ИИ разберёт итоги и предложит, что дальше: масштабировать или остановить"
+        @click="review(e)"
+      >
+        <Sparkles :size="14" aria-hidden="true" />{{ reviewingId === e.id ? 'Запускаем…' : 'Разобрать итоги с ИИ' }}
+      </button>
+      <button class="btn btn--ghost" type="button" :disabled="busyId === e.id" @click="openFinish(e)">
+        Завершить
+      </button>
+      <RouterLink v-if="e.chat_id" class="btn btn--ghost" :to="`/w/${ws.id}/chat/${e.chat_id}`">Чат эксперимента</RouterLink>
+      <button class="btn btn--ghost btn--danger" type="button" :disabled="busyId === e.id" @click="cancel(e)">
+        Отменить
+      </button>
     </div>
-  </section>
+  </article>
+
+  <template v-if="past.length">
+    <h2 class="section-h exp-h">
+      Завершённые <span class="exp-h__n">{{ past.length }}</span>
+      <small>ИИ видит выводы, когда предлагает новые тесты</small>
+    </h2>
+    <article v-for="e in past" :key="e.id" class="ccard exp exp--past">
+      <header class="exp__head">
+        <div>
+          <small>{{ e.kind_label }} · {{ formatDate(e.started_on) }} — {{ formatDate(e.finished_at) }}</small>
+          <h3>{{ e.title }}</h3>
+        </div>
+        <span v-if="e.status === 'cancelled'" class="st st--off">Отменён</span>
+        <span v-else class="st" :class="VERDICT_TONES[e.verdict] || 'st--off'">
+          Гипотеза {{ e.verdict_label || '—' }}
+        </span>
+      </header>
+      <p v-if="e.hypothesis" class="exp__hyp">{{ e.hypothesis }}</p>
+      <dl class="exp__facts">
+        <div>
+          <dt>Критерий успеха</dt>
+          <dd>{{ e.criterion_summary }}</dd>
+        </div>
+        <div>
+          <dt>За срок теста</dt>
+          <dd>{{ totalsLine(e.progress?.totals) }}</dd>
+        </div>
+      </dl>
+      <p v-if="e.conclusion" class="exp__verdict">
+        <Check :size="16" aria-hidden="true" /><span><b>Вывод.</b> {{ e.conclusion }}</span>
+      </p>
+      <p class="exp__links">
+        <template v-for="(c, i) in e.progress?.campaigns || []" :key="c.id">
+          <template v-if="i">, </template>
+          <template v-if="c.missing">[{{ c.id }}]</template>
+          <RouterLink v-else :to="`/w/${ws.id}/campaigns/${c.id}`">{{ c.name }}</RouterLink>
+        </template>
+        <template v-if="e.chat_id">
+          · <RouterLink :to="`/w/${ws.id}/chat/${e.chat_id}`">чат эксперимента</RouterLink>
+        </template>
+      </p>
+    </article>
+  </template>
+
+  <p class="hint exp-note">
+    Деньги ограничивает только недельный бюджет тестовых кампаний в Директе — сервис сам ничего не останавливает. Срок
+    считается с первого дня показов: копии сначала проходят модерацию.
+  </p>
 </template>
 
 <script setup>
 import { computed, onMounted, ref } from 'vue'
 import { RouterLink, useRouter } from 'vue-router'
+import { Check, Sparkles } from '@lucide/vue'
 import { aiApi, errorText } from '../../api/web'
 import FeatureLockNotice from '../../components/FeatureLockNotice.vue'
 import { askConfirm } from '../../composables/useConfirm'
@@ -272,10 +258,10 @@ import { useWs } from './context'
 
 // Исходы, по которым пора разбирать итоги, — как REVIEW_STATUSES на сервере.
 const DUE = new Set(['success', 'fail', 'stalled', 'ready'])
-const PROGRESS_CHIPS = { success: 'chip--ok', fail: 'chip--bad', stalled: 'chip--bad', ready: 'chip--warning', waiting: 'chip--info', no_data: 'chip--info' }
+const ST_TONES = { success: 'st--ok', fail: 'st--bad', stalled: 'st--bad', ready: 'st--warn' }
 const REASON_TONES = { success: 'tone-ok', fail: 'tone-bad', stalled: 'tone-bad', ready: 'tone-warn' }
 const VERDICT_LABELS = { success: 'Подтвердилась', fail: 'Не подтвердилась', unclear: 'Непонятно' }
-const VERDICT_CHIPS = { success: 'chip--ok', fail: 'chip--bad', unclear: 'chip--info' }
+const VERDICT_TONES = { success: 'st--ok', fail: 'st--bad' }
 const COLS = [
   { label: 'Показы', value: (m) => num(m?.impressions) },
   { label: 'Клики', value: (m) => num(m?.clicks) },
@@ -301,6 +287,20 @@ const past = computed(() => items.value.filter((e) => e.status !== 'running'))
 
 function isDue(e) {
   return DUE.has(e.progress?.status)
+}
+
+/** «Идёт · день 5 из 14» — статус прогресса и день теста. */
+function statusText(e) {
+  const p = e.progress
+  const label = p?.label || e.status_label || 'Идёт'
+  return p?.showing_since && e.days ? `${capitalize(label)} · день ${Math.min(p.day, e.days)} из ${e.days}` : capitalize(label)
+}
+
+// Цена конверсии: с сервера для итогов, для строки кампании — расход ÷ конверсии.
+function cpaOf(m) {
+  if (!m) return null
+  if (m.cpa_kopecks != null) return m.cpa_kopecks
+  return m.conversions ? Math.round(m.cost_kopecks / m.conversions) : null
 }
 
 function capitalize(text) {
@@ -425,3 +425,161 @@ async function cancel(e) {
 
 onMounted(load)
 </script>
+
+<style scoped>
+.exp-ask {
+  gap: 6px;
+}
+.exp-h {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+}
+.exp-h__n {
+  color: var(--faint);
+  font-weight: 600;
+}
+.exp-h small {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 500;
+}
+.exp-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 24px 18px;
+  color: var(--muted);
+  text-align: center;
+}
+.exp-empty p {
+  max-width: 520px;
+  margin: 0;
+}
+.exp {
+  display: grid;
+  gap: 12px;
+  margin-bottom: 12px;
+  padding: 18px;
+}
+.exp.is-due {
+  border-color: var(--ink);
+}
+.exp__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+.exp__head small {
+  color: var(--faint);
+  font-size: 12px;
+  font-weight: 600;
+}
+.exp__head h3 {
+  margin: 2px 0 0;
+  font-size: 17px;
+  font-weight: 800;
+}
+.exp__head .st {
+  flex-shrink: 0;
+}
+.exp__hyp {
+  margin: 0;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+.exp__facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 10px 16px;
+  margin: 0;
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: var(--surface-2);
+}
+.exp__facts dt {
+  margin: 0 0 2px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+.exp__facts dd {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.45;
+}
+.exp__meter {
+  margin: 0;
+}
+.exp__reason {
+  margin: -4px 0 0;
+  font-size: 14px;
+}
+.exp__table td small {
+  display: block;
+  color: var(--faint);
+  font-size: 12px;
+}
+.exp__base td {
+  background: var(--surface-2);
+}
+.exp__more summary {
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.exp__more[open] summary {
+  margin-bottom: 8px;
+}
+.exp__more .hint {
+  margin: 8px 0 0;
+}
+.exp__acts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.exp__acts .btn {
+  gap: 6px;
+}
+.exp__verdict {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 0;
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: var(--lime-soft);
+  font-size: 14px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+.exp__verdict svg {
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+.exp__links {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+.exp-note {
+  margin: 12px 2px 0;
+}
+@media (max-width: 640px) {
+  .exp__head {
+    flex-direction: column;
+  }
+  .exp-h small {
+    margin-left: 0;
+    flex-basis: 100%;
+  }
+}
+</style>

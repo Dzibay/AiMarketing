@@ -1,9 +1,8 @@
 <template>
   <RulesManager :workspace="ws" />
   <p class="hint autopilot-note">
-    Правила для всех проектов сразу — в разделе «Автопилот» при фильтре
-    <RouterLink to="/cabinet/autopilot">«Все проекты»</RouterLink>. Что правила уже сделали — в
-    <RouterLink :to="`/w/${ws.id}/history`">Истории</RouterLink>.
+    Правила для всех сайтов сразу — в «Автопилоте» при фильтре
+    <RouterLink to="/cabinet/autopilot">«Все проекты»</RouterLink>.
   </p>
 </template>
 
