@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import copy
+import logging
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 
@@ -17,6 +18,8 @@ from psycopg.types.json import Jsonb
 from app.brief import normalize_brief
 from app.db import pool
 from app.yandex import YandexError
+
+log = logging.getLogger(__name__)
 
 # Категории действий для настроек доступа ИИ. Чтение доступно всегда.
 AI_CATEGORIES = [
@@ -210,7 +213,18 @@ def ensure_workspaces(user_id: int) -> list[int]:
         for r in created:
             events.record(user_id, "project_created", workspace_id=int(r["id"]), counter_id=int(r["counter_id"]), auto=True)
         _attach_loose(user_id)
+        _carry_site_checks(user_id)
     return ids
+
+
+def _carry_site_checks(user_id: int) -> None:
+    """Проверка сайта с лендинга — в чат появившегося проекта этого сайта. Сбой не мешает создать проект."""
+    from app import site_check
+
+    try:
+        site_check.carry_to_projects(user_id)
+    except Exception:  # noqa: BLE001
+        log.exception("Перенос проверки сайта в проект пользователя %s", user_id)
 
 
 def _attach_loose(user_id: int) -> None:
@@ -616,6 +630,7 @@ def create_project_for_counter(user_id: int, counter_id: int) -> dict:
                 "UPDATE workspaces SET archived_at = NULL, updated_at = NOW() WHERE id = %s AND user_id = %s",
                 (existing["id"], user_id),
             )
+        _carry_site_checks(user_id)
         return get_workspace(user_id, int(existing["id"]))
     with pool.connection() as conn:
         created = conn.execute(_INSERT_FOR_COUNTERS, (user_id, [int(row["id"])])).fetchone()
@@ -623,6 +638,7 @@ def create_project_for_counter(user_id: int, counter_id: int) -> dict:
         raise YandexError("exists", "Проект для этого счётчика уже есть")
     events.record(user_id, "project_created", workspace_id=int(created["id"]), counter_id=int(counter_id), auto=False)
     _attach_loose(user_id)
+    _carry_site_checks(user_id)
     return get_workspace(user_id, int(created["id"]))
 
 

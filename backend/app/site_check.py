@@ -356,3 +356,149 @@ def public(check_id: str) -> dict:
             },
         }
     return out
+
+
+# --- Перенос в кабинет ---------------------------------------------------------------------------
+#
+# После регистрации кабинет забирает проверку (claim): полный результат ложится в чат ИИ-помощника.
+# Есть проект с этим сайтом — сразу в его чат, где из проверки собирают черновик кампании. Нет — в общий чат,
+# а когда проект этого сайта появится (подключили Метрику), проверка переезжает и в чат проекта.
+
+RUNNING_TEXT = "Проверка сайта ещё идёт — откроем её, когда закончится"
+
+
+def _site_domain(site: str) -> str:
+    try:
+        return normalize_url(site)[1] if site else ""
+    except YandexError:
+        return ""
+
+
+def _project_for(user_id: int, domain: str) -> int | None:
+    from app.workspaces import list_workspaces
+
+    for ws in list_workspaces(user_id):
+        if _site_domain(ws.get("site") or "") == domain:
+            return int(ws["id"])
+    return None
+
+
+def report_text(domain: str, result: dict, *, in_project: bool) -> str:
+    """Полный результат проверки — сообщением ассистента в чате."""
+    lines = [f"Проверил **{domain}** — вот полный набор с лендинга."]
+    if result.get("niche"):
+        lines += ["", f"**Ниша:** {result['niche']}"]
+    if result.get("offer"):
+        lines += ["", f"**Оффер:** {result['offer']}"]
+    if result.get("headlines"):
+        lines += ["", "**Заголовки объявлений**", *[f"{i}. {h}" for i, h in enumerate(result["headlines"], 1)]]
+    if result.get("groups"):
+        lines += ["", "**Группы и ключевые фразы**"]
+        lines += [f"- **{g['name']}:** {', '.join(g['phrases'])}" for g in result["groups"]]
+    if result.get("minus_words"):
+        lines += ["", f"**Минус-слова ({len(result['minus_words'])}):** {', '.join(result['minus_words'])}"]
+    lines.append("")
+    if in_project:
+        lines.append(
+            "Из этого можно собрать черновик кампании в Директе — напишите «Собери черновик», и пройдём по шагам: "
+            "цели, ключи и группы, объявления, настройки. В Директ ничего не уйдёт без вашего подтверждения."
+        )
+    else:
+        lines.append(
+            "Черновик кампании собирается в чате проекта. Подключите Яндекс Директ и Метрику в «Подключениях» — "
+            "когда появится проект этого сайта, я перенесу туда эту проверку, и там соберём черновик."
+        )
+    return "\n".join(lines)
+
+
+def _seed_chat(user_id: int, workspace_id: int | None, domain: str, result: dict) -> int:
+    from app import ai_agent
+
+    chat = ai_agent.create_chat(user_id, workspace_id, f"Проверка сайта {domain}")
+    with pool.connection() as conn:
+        ai_agent._insert_message(conn, chat["id"], "user", f"Проверь сайт {domain}")
+        ai_agent._insert_message(
+            conn, chat["id"], "assistant", report_text(domain, result, in_project=workspace_id is not None)
+        )
+        conn.execute("UPDATE ai_chats SET updated_at = NOW() WHERE id = %s", (chat["id"],))
+    return int(chat["id"])
+
+
+def _chat_ref(conn, chat_id: int | None) -> dict | None:
+    if not chat_id:
+        return None
+    row = conn.execute("SELECT id, workspace_id FROM ai_chats WHERE id = %s", (chat_id,)).fetchone()
+    return {"chat_id": int(row["id"]), "workspace_id": row["workspace_id"]} if row else None
+
+
+def claim(user_id: int, check_id: str) -> dict:
+    """Забрать проверку в кабинет → {"status": "done", "chat_id", "workspace_id"} или {"status": "running"}."""
+    check_id = str(check_id or "")[:40]
+    with pool.connection() as conn:
+        row = conn.execute(
+            f"""
+            SELECT id, domain, status, result,
+                   status = 'running' AND created_at < NOW() - INTERVAL '{STALE_MINUTES} minutes' AS stale
+            FROM site_checks WHERE id = %s
+            """,
+            (check_id,),
+        ).fetchone()
+        if not row:
+            raise YandexError("not-found", "Проверка не найдена")
+        if row["status"] == "running" and not row["stale"]:
+            return {"status": "running", "message": RUNNING_TEXT}
+        if row["status"] != "done" or not row["result"]:
+            raise YandexError("site-check-failed", FAILED_TEXT)
+        claimed = conn.execute(
+            "SELECT chat_id, project_chat_id FROM site_check_claims WHERE check_id = %s AND user_id = %s",
+            (check_id, user_id),
+        ).fetchone()
+        if claimed:
+            # Уже забрана: открываем тот же чат (проекта — если он есть), второй раз не дублируем.
+            ref = _chat_ref(conn, claimed["project_chat_id"]) or _chat_ref(conn, claimed["chat_id"])
+            if ref:
+                return {"status": "done", **ref}
+    domain = row["domain"]
+    workspace_id = _project_for(user_id, domain)
+    chat_id = _seed_chat(user_id, workspace_id, domain, row["result"])
+    with pool.connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO site_check_claims (check_id, user_id, domain, chat_id, project_chat_id)
+            VALUES (%s, %s, %s, %s, %s)
+            ON CONFLICT (check_id, user_id) DO UPDATE
+                SET chat_id = EXCLUDED.chat_id, project_chat_id = EXCLUDED.project_chat_id
+            """,
+            (check_id, user_id, domain, chat_id, chat_id if workspace_id is not None else None),
+        )
+    from app import events
+
+    events.record(user_id, "site_check_claimed", domain=domain, workspace_id=workspace_id)
+    return {"status": "done", "chat_id": chat_id, "workspace_id": workspace_id}
+
+
+def carry_to_projects(user_id: int) -> list[int]:
+    """Проверки без чата проекта — в чаты появившихся проектов с тем же сайтом. → id новых чатов."""
+    with pool.connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT cl.check_id, cl.domain, sc.result
+            FROM site_check_claims cl JOIN site_checks sc ON sc.id = cl.check_id
+            WHERE cl.user_id = %s AND cl.project_chat_id IS NULL AND sc.result IS NOT NULL
+            ORDER BY cl.created_at
+            """,
+            (user_id,),
+        ).fetchall()
+    created: list[int] = []
+    for r in rows:
+        workspace_id = _project_for(user_id, r["domain"])
+        if workspace_id is None:
+            continue
+        chat_id = _seed_chat(user_id, workspace_id, r["domain"], r["result"])
+        with pool.connection() as conn:
+            conn.execute(
+                "UPDATE site_check_claims SET project_chat_id = %s WHERE check_id = %s AND user_id = %s",
+                (chat_id, r["check_id"], user_id),
+            )
+        created.append(chat_id)
+    return created

@@ -105,7 +105,12 @@
 
           <div v-if="thread.cta && showCard" class="hc__cta" :class="{ 'is-ok': approved }">
             <p>{{ approved ? 'Так это работает в кабинете. Подключите Директ — это пара минут.' : thread.ctaText }}</p>
-            <a class="btn btn--sm" :href="registerHref" data-goal="signup_click" :data-goal-place="place || (compact ? 'final' : 'hero')">
+            <a
+              class="btn btn--sm"
+              :href="ctaHref"
+              :data-goal="thread.report ? 'check_signup' : 'signup_click'"
+              :data-goal-place="place || (compact ? 'final' : 'hero')"
+            >
               Попробовать на своих данных
             </a>
           </div>
@@ -309,6 +314,22 @@ function submit() {
 }
 
 // Живая проверка сайта без регистрации (docs/landing-plan.md, раздел 5): POST создаёт проверку, дальше опрос.
+// Готовую проверку кабинет забирает после регистрации: id уходит в ссылке ?check=… и в localStorage
+// (тот же ключ читает кабинет, если сайт и кабинет на одном домене) — полный результат откроется в чате.
+const CHECK_KEY = 'aimarketing-check'
+const ctaHref = computed(() => {
+  const id = thread.value?.checkId
+  if (!id) return props.registerHref
+  return `${props.registerHref}${props.registerHref.includes('?') ? '&' : '?'}check=${encodeURIComponent(id)}`
+})
+
+function rememberCheck(id) {
+  try {
+    localStorage.setItem(CHECK_KEY, JSON.stringify({ id, at: Date.now() }))
+  } catch {
+    // приватный режим — останется ссылка с ?check=
+  }
+}
 const CHECK_FAILED = 'Не получилось проверить сайт — попробуйте ещё раз чуть позже. В кабинете проверка работает и бесплатна в пробный период.'
 const CHECK_TIMEOUT = 150_000
 let checkSeq = 0
@@ -360,6 +381,7 @@ async function checkSite(value, domain) {
     if (check.status === 'error') throw new Error(check.error || CHECK_FAILED)
     const r = check.result
     goal('check_done', { domain })
+    rememberCheck(started.id)
     const about = [r.niche && `${r.niche[0].toUpperCase()}${r.niche.slice(1)}.`, r.offer].filter(Boolean).join(' ')
     play({
       ask: value,
@@ -367,6 +389,7 @@ async function checkSite(value, domain) {
       answer: about ? `Вот что понял про ${domain}: ${about}` : `Посмотрел ${domain} — вот с чего начать рекламу.`,
       card: null,
       report: r,
+      checkId: started.id,
       cta: true,
       ctaText: 'Зарегистрируйтесь — Толк соберёт из этого черновик кампании. Пробный период бесплатный.',
     })

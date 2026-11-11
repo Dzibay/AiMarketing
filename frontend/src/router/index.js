@@ -8,6 +8,7 @@ import OAuthDoneView from '../views/OAuthDoneView.vue'
 import { ACCESS_EVENT } from '../api/web'
 import { accessRedirect, loadProfile, useProfile } from '../composables/useProfile'
 import { captureRef } from '../composables/useReferral'
+import { captureCheck, claimCheck, hasCheck } from '../composables/useSiteCheck'
 import { getSession } from '../composables/useSession'
 
 const DOCS_PAGES = new Set(['privacy', 'consent', 'offer', 'cookies'])
@@ -268,13 +269,23 @@ router.beforeEach(async (to) => {
     const { ref: _ref, ...query } = to.query
     return { path: to.path, query, hash: to.hash, replace: true }
   }
+  if (to.query.check !== undefined) {
+    // Проверка сайта с лендинга: запоминаем до входа в кабинет, из адреса убираем.
+    captureCheck(to.query.check)
+    const { check: _check, ...query } = to.query
+    return { path: to.path, query, hash: to.hash, replace: true }
+  }
   if (!GATED.test(to.path) || !getSession()) return true
   try {
     await loadProfile()
   } catch {
     return true // 401 и сбои разберёт оболочка кабинета
   }
-  return accessRedirect(useProfile().subscription.value, to.path) || true
+  const redirect = accessRedirect(useProfile().subscription.value, to.path)
+  if (redirect) return redirect
+  // Кабинет открыт — проверка с лендинга переезжает в чат помощника, туда и ведём.
+  if (hasCheck()) return (await claimCheck()) || true
+  return true
 })
 
 // Подписка закончилась или подтверждение включили, пока кабинет открыт: перечитываем профиль и уводим.

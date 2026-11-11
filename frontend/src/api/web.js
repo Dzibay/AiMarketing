@@ -199,6 +199,8 @@ export const aiApi = {
   /** Общие чаты по всем проектам: ИИ читает любой проект, правки — только после подтверждения. */
   generalChats: () => request('/api/web/ai/chats'),
   createGeneralChat: (title = '', modelClass = '') => post('/api/web/ai/chats', { title, model_class: modelClass }),
+  /** Проверка сайта с лендинга → чат с полным результатом: { status, chat_id, workspace_id }. */
+  claimSiteCheck: (id) => post('/api/web/ai/site-check/claim', { id }),
   chat: (id) => request(`/api/web/ai/chats/${id}`),
   renameChat: (id, title) => patch(`/api/web/ai/chats/${id}`, { title }),
   deleteChat: (id) => del(`/api/web/ai/chats/${id}`),

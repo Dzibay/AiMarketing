@@ -5,7 +5,7 @@
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
-from app import ai, ai_agent, billing, events, experiments, insights, workspaces
+from app import ai, ai_agent, billing, events, experiments, insights, site_check, workspaces
 from app.api.web import _http
 from app.web_auth import require_web_user
 from app.yandex import YandexError
@@ -28,6 +28,10 @@ class MessageBody(BaseModel):
     text: str
     # id других проектов пользователя, упомянутых через @: ИИ получит их на чтение.
     refs: list[int] = []
+
+
+class SiteCheckClaimBody(BaseModel):
+    id: str
 
 
 class DecideBody(BaseModel):
@@ -189,6 +193,12 @@ def general_chats_list(user_id: int = Depends(require_web_user)) -> dict:
 @router.post("/ai/chats")
 def general_chats_create(body: ChatBody, user_id: int = Depends(require_web_user)) -> dict:
     return _call(ai_agent.create_chat, user_id, None, body.title, body.model_class)
+
+
+@router.post("/ai/site-check/claim")
+def site_check_claim(body: SiteCheckClaimBody, user_id: int = Depends(require_web_user)) -> dict:
+    """Проверка сайта с лендинга → чат с полным результатом (общий или проекта этого сайта)."""
+    return _call(site_check.claim, user_id, body.id)
 
 
 @router.get("/ai/pending/count")
