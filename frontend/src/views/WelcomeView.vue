@@ -220,7 +220,7 @@ import { loadWorkspaces, useWorkspaces } from '../composables/useWorkspaces'
 import { plural } from '../utils/format'
 import { useHead } from '../utils/useHead'
 
-useHead('Начало работы — AiMarketing', true)
+useHead('Начало работы — Толк', true)
 
 const POLL_MS = 10000
 // Подписи степпера — короче заголовков шагов с сервера.

@@ -1,5 +1,5 @@
 ---
-// Секция 6: две аудитории. Посадочных /direktologam/ и /biznesu/ пока нет — ведём на регистрацию.
+// Секция 6: две аудитории. Основная кнопка — регистрация, вторая ссылка — на посадочную аудитории.
 const cards = [
   {
     tag: 'Директологам и фрилансерам',
@@ -11,6 +11,7 @@ const cards = [
     ],
     cta: 'Подключить кабинеты',
     place: 'audience_freelance',
+    more: '/direktologam/',
   },
   {
     tag: 'Владельцам бизнеса',
@@ -22,6 +23,7 @@ const cards = [
     ],
     cta: 'Разобраться в своей рекламе',
     place: 'audience_business',
+    more: '/biznesu/',
   },
 ]
 ---
@@ -46,6 +48,7 @@ const cards = [
             <a class={`btn ${i === 1 ? 'btn--lime' : ''}`} href="/register" data-goal="signup_click" data-goal-place={c.place}>
               {c.cta}
             </a>
+            <a class="aud__more" href={c.more}>Подробнее</a>
           </article>
         ))
       }
@@ -54,6 +57,10 @@ const cards = [
 </section>
 
 <style>
+  .aud__more {
+    justify-self: start;
+    font-weight: 700;
+  }
   .aud {
     display: grid;
     grid-template-columns: 1fr 1fr;

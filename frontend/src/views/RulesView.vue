@@ -9,5 +9,5 @@
 import RulesManager from '../components/RulesManager.vue'
 import { useHead } from '../utils/useHead'
 
-useHead('Автопилот — AiMarketing', true)
+useHead('Автопилот — Толк', true)
 </script>

@@ -1342,7 +1342,7 @@ def web_telegram_unlink(user_id: int = Depends(require_web_user)) -> dict:
 
 @router.post("/telegram/test")
 def web_telegram_test(user_id: int = Depends(require_web_user)) -> dict:
-    ok = notify_user(user_id, "AiMarketing: тестовое сообщение. Telegram подключён.")
+    ok = notify_user(user_id, "Толк: тестовое сообщение. Telegram подключён.")
     if not ok:
         raise HTTPException(status_code=400, detail="telegram")
     return {"ok": True}

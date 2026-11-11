@@ -40,13 +40,13 @@ async function load() {
   doc.value = null
   try {
     doc.value = await fetchLegalPage(props.page)
-    useHead(doc.value.title || 'Документ — AiMarketing', true)
+    useHead(doc.value.title || 'Документ — Толк', true)
   } catch {
     doc.value = {
       heading: 'Документ недоступен',
       meta: '',
       paragraphs: ['Не удалось загрузить страницу. Попробуйте позже.'],
-      title: 'Документ — AiMarketing',
+      title: 'Документ — Толк',
     }
     useHead(doc.value.title, true)
   }

@@ -315,7 +315,7 @@ def test_api(db, monkeypatch):
     settings = client.put("/api/web/digest", headers=auth, json={"hour": 7}).json()
     assert (settings["enabled"], settings["hour"], settings["telegram_linked"]) == (True, 7, False)
     assert client.put("/api/web/digest", headers=auth, json={"hour": 24}).status_code == 400
-    assert "AiMarketing" in client.get("/api/web/digest/preview", headers=auth).json()["text"]
+    assert "Толк" in client.get("/api/web/digest/preview", headers=auth).json()["text"]
 
     monkeypatch.setattr("app.api.overview.notify_user", lambda user, text: False)
     assert client.post("/api/web/digest/send", headers=auth).status_code == 400

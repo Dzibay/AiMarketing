@@ -6,5 +6,5 @@
 import ActionJournal from '../components/ActionJournal.vue'
 import { useHead } from '../utils/useHead'
 
-useHead('История — AiMarketing', true)
+useHead('История — Толк', true)
 </script>

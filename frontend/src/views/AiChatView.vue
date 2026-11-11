@@ -6,5 +6,5 @@
 import { useHead } from '../utils/useHead'
 import WsChat from './workspace/WsChat.vue'
 
-useHead('ИИ-помощник — AiMarketing', true)
+useHead('ИИ-помощник — Толк', true)
 </script>

@@ -1,10 +1,10 @@
 ---
 import Logo from './Logo.astro'
 import { FOOTER, SLOGAN } from '../lib/site.js'
+import { CONTACTS, phoneHref } from '../lib/contacts.js'
 
-// Реквизиты и почта нужны для проверки сайта ЮKassa — задаются при сборке (site/.env), без них строки не выводятся.
-const legal = import.meta.env.PUBLIC_LEGAL_LINE || ''
-const email = import.meta.env.PUBLIC_SUPPORT_EMAIL || ''
+// Реквизиты, почта и телефон нужны для проверки сайта ЮKassa — задаются при сборке, без них строки не выводятся.
+const { legal, email, phone } = CONTACTS
 const year = new Date().getFullYear()
 ---
 
@@ -14,6 +14,7 @@ const year = new Date().getFullYear()
       <Logo size={36} />
       <p>{SLOGAN}. ИИ-помощник для Яндекс Директа и Метрики, который предлагает — а решаете вы.</p>
       {email && <a class="ftr__mail" href={`mailto:${email}`}>{email}</a>}
+      {phone && <a class="ftr__mail" href={phoneHref(phone)}>{phone}</a>}
     </div>
     {
       FOOTER.map((col) => (
@@ -43,7 +44,7 @@ const year = new Date().getFullYear()
   }
   .ftr__in {
     display: grid;
-    grid-template-columns: 1.6fr repeat(3, 1fr);
+    grid-template-columns: 1.6fr repeat(4, 1fr);
     gap: 40px;
   }
   .ftr__brand {

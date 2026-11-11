@@ -33,3 +33,10 @@ export const FAQ_ITEMS = [
     a: 'Подключение идёт через официальный вход Яндекса, пароль Толку не нужен. Ключи доступа хранятся зашифрованными, а отозвать доступ можно в Яндекс ID в любой момент.',
   },
 ]
+
+// Разметка FAQPage для списка вопросов.
+export const faqLd = (items) => ({
+  '@context': 'https://schema.org',
+  '@type': 'FAQPage',
+  mainEntity: items.map((f) => ({ '@type': 'Question', name: f.q, acceptedAnswer: { '@type': 'Answer', text: f.a } })),
+})

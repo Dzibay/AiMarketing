@@ -1,0 +1,198 @@
+---
+// Примеры работы: пока только демо-сценарии, каждый подписан (docs/landing-plan.md, раздел 9). Шаблон — как у будущих кейсов.
+import Base from '../layouts/Base.astro'
+import PageHero from '../components/page/PageHero.astro'
+import CtaBand from '../components/page/CtaBand.astro'
+
+const crumbs = [{ href: '/primery/', label: 'Примеры' }]
+
+const cases = [
+  {
+    niche: 'Ремонт квартир, Москва',
+    budget: '180 000 ₽ в месяц',
+    period: '30 дней',
+    found:
+      'Поиск и РСЯ в одной кампании без разделения. 27 площадок РСЯ потратили 18 400 ₽ без заявок; 63 запроса вида «своими руками», «вакансии» съедали 22% кликов.',
+    proposed: ['Отключить 27 площадок без конверсий', 'Добавить 63 минус-фразы в 4 кампании', 'Вынести РСЯ в отдельную кампанию'],
+    approved: 'Первые две правки — сразу, разделение кампаний — через неделю, после разговора с Толком о рисках.',
+    result: [
+      ['Цена заявки', '1 240 ₽', '960 ₽'],
+      ['Заявок в месяц', '145', '171'],
+    ],
+  },
+  {
+    niche: 'Стоматология, Казань',
+    budget: '90 000 ₽ в месяц',
+    period: '6 недель',
+    found:
+      'Кампания «Поиск — имплантация» работала 11 месяцев: CTR падал третью неделю подряд, ставки выросли на 30% без роста заявок.',
+    proposed: ['Запустить копию кампании с теми же настройками', 'Старую — на паузу после набора статистики копией', 'Проверить два новых заголовка экспериментом'],
+    approved: 'Все три. Заголовок с ценой в эксперименте выиграл — его оставили.',
+    result: [
+      ['Заявок в неделю', '9', '14'],
+      ['CTR на поиске', '4,1%', '6,3%'],
+    ],
+  },
+  {
+    niche: 'Директолог-фрилансер, 9 клиентов',
+    budget: 'от 40 000 до 300 000 ₽ на клиента',
+    period: '2 месяца',
+    found:
+      'На чистку запросов и площадок уходило около 14 часов в неделю. У двух клиентов просадки замечались только после жалоб.',
+    proposed: ['Сводка по всем 9 кабинетам вместо обхода вкладок', 'Правило: расход без конверсий > 3 000 ₽ за неделю → уведомление', 'Минусовка пачкой раз в неделю'],
+    approved: 'Всё, правило — после недели в тестовом режиме.',
+    result: [
+      ['Часов на рутину в неделю', '14', '5'],
+      ['Клиентов в работе', '9', '12'],
+    ],
+  },
+]
+---
+
+<Base
+  title="Примеры работы Толка в Яндекс Директе"
+  description="Как Толк находит утечки бюджета в Директе: демо-сценарии для ремонта, стоматологии и директолога-фрилансера — что нашёл, что предложил, что одобрили и что изменилось."
+  crumbs={crumbs}
+>
+  <PageHero
+    crumbs={crumbs}
+    ask="А на реальных кабинетах?"
+    title="Примеры: что нашёл, что предложил, что изменилось"
+    lead="Пока это демо-сценарии: цифры придуманы, но типичны для кабинетов без регулярной чистки. Настоящие кейсы появятся здесь по итогам бета-программы."
+  >
+    <a slot="actions" class="btn btn--ghost" href="/beta/">Стать участником беты</a>
+  </PageHero>
+
+  <section class="section section--tight pm">
+    <div class="wrap pm__list">
+      {
+        cases.map((c) => (
+          <article class="pm__case reveal">
+            <header class="pm__head">
+              <span class="chip">Демо-сценарий: цифры для примера</span>
+              <h2>{c.niche}</h2>
+              <dl class="pm__meta">
+                <div>
+                  <dt>Бюджет</dt>
+                  <dd>{c.budget}</dd>
+                </div>
+                <div>
+                  <dt>Период</dt>
+                  <dd>{c.period}</dd>
+                </div>
+              </dl>
+            </header>
+            <div class="pm__body">
+              <div>
+                <h3>Что нашёл Толк</h3>
+                <p>{c.found}</p>
+              </div>
+              <div>
+                <h3>Что предложил</h3>
+                <ul class="ticks">
+                  {c.proposed.map((x) => (
+                    <li>{x}</li>
+                  ))}
+                </ul>
+              </div>
+              <div>
+                <h3>Что одобрили</h3>
+                <p>{c.approved}</p>
+              </div>
+              <div class="pm__result">
+                <h3>Результат</h3>
+                <div class="delta">
+                  {c.result.map((r) => (
+                    <div class="delta__row">
+                      <span>{r[0]}</span>
+                      <span class="delta__val">
+                        <s>{r[1]}</s> → <b>{r[2]}</b>
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </article>
+        ))
+      }
+    </div>
+  </section>
+
+  <CtaBand
+    title="Хотите такой разбор своего кабинета?"
+    lead="Подключите Директ — первый разбор будет сразу. А если готовы поделиться результатом — участвуйте в бете."
+    place="primery_final"
+  >
+    <a class="btn btn--lg btn--ghost" href="/beta/">О бета-программе</a>
+  </CtaBand>
+</Base>
+
+<style>
+  .pm {
+    padding-top: 0;
+  }
+  .pm__list {
+    display: grid;
+    gap: 18px;
+  }
+  .pm__case {
+    display: grid;
+    grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.6fr);
+    gap: clamp(20px, 4vw, 48px);
+    padding: clamp(22px, 3.4vw, 40px);
+    border-radius: 28px;
+    background: var(--surface);
+    border: 1px solid var(--line);
+  }
+  .pm__head {
+    display: grid;
+    gap: 14px;
+    align-content: start;
+  }
+  .pm__head h2 {
+    font-size: clamp(26px, 3vw, 34px);
+  }
+  .pm__meta {
+    display: grid;
+    gap: 10px;
+    margin: 0;
+  }
+  .pm__meta dt {
+    font-size: 13px;
+    color: var(--faint);
+    font-weight: 700;
+  }
+  .pm__meta dd {
+    margin: 0;
+    font-weight: 700;
+  }
+  .pm__body {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 22px 28px;
+  }
+  .pm__body h3 {
+    font-size: 16px;
+    letter-spacing: -0.01em;
+    margin-bottom: 8px;
+  }
+  .pm__body p {
+    color: var(--ink-2);
+    font-size: 15px;
+  }
+  .pm__body .ticks {
+    font-size: 15px;
+  }
+  .pm__result {
+    padding: 16px 18px;
+    border-radius: 18px;
+    background: var(--surface-2);
+  }
+  @media (max-width: 860px) {
+    .pm__case,
+    .pm__body {
+      grid-template-columns: 1fr;
+    }
+  }
+</style>

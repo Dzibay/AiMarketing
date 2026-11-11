@@ -41,7 +41,7 @@ import { errorText, webApi } from '../api/web'
 import { useSession } from '../composables/useSession'
 import { useHead } from '../utils/useHead'
 
-useHead('Вход — AiMarketing', true)
+useHead('Вход — Толк', true)
 
 const router = useRouter()
 const { setSession } = useSession()

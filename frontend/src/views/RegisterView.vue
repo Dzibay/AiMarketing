@@ -72,7 +72,7 @@ import { useSiteConfig } from '../composables/useSiteConfig'
 import { pushToast } from '../composables/useToasts'
 import { useHead } from '../utils/useHead'
 
-useHead('Регистрация — AiMarketing', true)
+useHead('Регистрация — Толк', true)
 
 const router = useRouter()
 const { setSession } = useSession()

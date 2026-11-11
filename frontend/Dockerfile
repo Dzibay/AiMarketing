@@ -31,10 +31,14 @@ ENV NODE_OPTIONS=--max-old-space-size=1536
 ARG PUBLIC_METRIKA_ID=""
 ARG PUBLIC_LEGAL_LINE=""
 ARG PUBLIC_SUPPORT_EMAIL=""
+ARG PUBLIC_SUPPORT_PHONE=""
+ARG PUBLIC_SUPPORT_TELEGRAM=""
 ARG SITE_API_URL=""
 ENV PUBLIC_METRIKA_ID=$PUBLIC_METRIKA_ID \
     PUBLIC_LEGAL_LINE=$PUBLIC_LEGAL_LINE \
     PUBLIC_SUPPORT_EMAIL=$PUBLIC_SUPPORT_EMAIL \
+    PUBLIC_SUPPORT_PHONE=$PUBLIC_SUPPORT_PHONE \
+    PUBLIC_SUPPORT_TELEGRAM=$PUBLIC_SUPPORT_TELEGRAM \
     SITE_API_URL=$SITE_API_URL
 RUN npm run build
 
@@ -42,7 +46,7 @@ RUN npm run build
 FROM nginx:1.27-alpine
 
 # Сайт и кабинет в одном корне. Файлы не пересекаются: ассеты сайта — в /_astro/, кабинета — в /assets/,
-# у кабинета spa.html и свои картинки (favicon.png, logo*.png), у сайта index.html, 404.html, robots.txt, sitemap.
+# у кабинета spa.html, у сайта index.html, 404.html, robots.txt, sitemap. favicon.svg у обоих один и тот же.
 COPY --from=site /app/site/dist/ /usr/share/nginx/html/
 COPY --from=spa /app/frontend/dist/ /usr/share/nginx/html/
 COPY nginx/default.conf /etc/nginx/conf.d/default.conf

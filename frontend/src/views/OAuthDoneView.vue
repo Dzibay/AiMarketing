@@ -22,7 +22,7 @@ import { clearRef } from '../composables/useReferral'
 import { setSession, takeOAuthReturn } from '../composables/useSession'
 import { useHead } from '../utils/useHead'
 
-useHead('Подключение Яндекса — AiMarketing', true)
+useHead('Подключение Яндекса — Толк', true)
 
 const route = useRoute()
 const router = useRouter()

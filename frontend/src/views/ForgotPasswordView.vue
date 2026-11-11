@@ -35,7 +35,7 @@ import SiteHeader from '../components/SiteHeader.vue'
 import { errorText, webApi } from '../api/web'
 import { useHead } from '../utils/useHead'
 
-useHead('Сброс пароля — AiMarketing', true)
+useHead('Сброс пароля — Толк', true)
 
 const email = ref('')
 const error = ref('')

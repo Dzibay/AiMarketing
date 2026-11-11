@@ -144,7 +144,7 @@ def _bind_code(code: str, chat_id: str) -> bool:
             (str(chat_id), row["user_id"]),
         )
         conn.execute("DELETE FROM telegram_link_codes WHERE code = %s", (code,))
-    send_message(chat_id, "AiMarketing: Telegram подключён. Буду присылать срабатывания правил.")
+    send_message(chat_id, "Толк: Telegram подключён. Буду присылать срабатывания правил.")
     return True
 
 
@@ -162,7 +162,7 @@ def handle_update(update: dict) -> None:
             return
         send_message(
             chat_id,
-            "Откройте ссылку привязки в кабинете AiMarketing (раздел Telegram) и нажмите Start ещё раз.",
+            "Откройте ссылку привязки в кабинете Толка (раздел Telegram) и нажмите Start ещё раз.",
         )
 
 
@@ -209,7 +209,7 @@ def format_rule_alert(
 ) -> str:
     mode = "dry-run" if dry_run else "auto"
     lines = [
-        f"AiMarketing · правило «{rule_name}»",
+        f"Толк · правило «{rule_name}»",
         f"Режим: {mode} · действие: {action} · совпало: {len(matched)} · применено: {applied}",
     ]
     if error:

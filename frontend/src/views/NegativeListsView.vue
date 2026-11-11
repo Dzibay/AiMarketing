@@ -246,7 +246,7 @@ import { ERRORS, errorText, jobProgressText, webApi } from '../api/web'
 import { pushToast } from '../composables/useToasts'
 import { useHead } from '../utils/useHead'
 
-useHead('Минус-фразы — AiMarketing', true)
+useHead('Минус-фразы — Толк', true)
 
 const ACTION_LABELS = { attach: 'Привязать', update: 'Обновить', detach: 'Отвязать' }
 const BLOCKED_LABELS = {

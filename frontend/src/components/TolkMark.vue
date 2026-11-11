@@ -1,0 +1,12 @@
+<template>
+  <!-- Знак «Толк» (как на сайте, site/src/components/Logo.astro): пузырь диалога с галочкой на лаймовом квадрате. -->
+  <svg class="tolk-mark" :width="size" :height="size" viewBox="0 0 40 40" aria-hidden="true">
+    <rect width="40" height="40" rx="11" fill="#c6f04a" />
+    <path d="M10 8h20a4 4 0 0 1 4 4v11a4 4 0 0 1-4 4H19l-6 5v-5h-3a4 4 0 0 1-4-4V12a4 4 0 0 1 4-4z" fill="#141413" />
+    <path d="M14 17.5l4 4 8-8" stroke="#c6f04a" stroke-width="3" fill="none" stroke-linecap="round" stroke-linejoin="round" />
+  </svg>
+</template>
+
+<script setup>
+defineProps({ size: { type: [Number, String], default: 28 } })
+</script>

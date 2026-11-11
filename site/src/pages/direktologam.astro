@@ -1,0 +1,288 @@
+---
+// Посадочная для директологов и фрилансеров (docs/landing-plan.md, 4.1). Все цифры — демо и подписаны.
+import Base from '../layouts/Base.astro'
+import PageHero from '../components/page/PageHero.astro'
+import CtaBand from '../components/page/CtaBand.astro'
+import Faq from '../components/Faq.astro'
+import HeroComposer from '../islands/HeroComposer.vue'
+import Calculator from '../islands/Calculator.vue'
+import Pricing from '../islands/Pricing.vue'
+import { faqLd } from '../lib/faq.js'
+import { loadPlans } from '../lib/plans.js'
+
+const plans = await loadPlans()
+const crumbs = [{ href: '/direktologam/', label: 'Директологам' }]
+
+const scenarios = [
+  {
+    ask: 'Где сегодня проблемы у клиентов?',
+    keys: ['клиент', 'проблем', 'сегодня', 'все', 'кабинет', 'сводк'],
+    answer:
+      'Проверил 5 кабинетов. У «Кухни на заказ» с ночи нет показов — закончился дневной бюджет. У «Автосервиса Восток» цена заявки выросла на 38% за неделю. У «Стоматологии Улыбка» — 41 мусорный запрос. Остальные два в норме.',
+    card: {
+      where: 'Автосервис Восток · Поиск',
+      title: 'Добавить 17 минус-фраз и снизить ставки на 3 ключа',
+      rows: [
+        ['Цена заявки за неделю', '2 140 ₽', '~1 600 ₽'],
+        ['Мусорных кликов', '19%', '5%'],
+      ],
+    },
+  },
+  {
+    ask: 'Кого из клиентов почистить первым?',
+    keys: ['почист', 'минус', 'запрос', 'мусор', 'первым'],
+    answer:
+      'Больше всего мусора у «Стоматологии Улыбка»: 41 запрос без заявок, 9 800 ₽ за 14 дней. Дальше — «Окна Плюс» (23 запроса, 4 100 ₽). Собрал минус-фразы для обоих.',
+    card: {
+      where: '2 клиента · 6 кампаний',
+      title: 'Добавить 64 минус-фразы в 6 кампаний',
+      rows: [
+        ['Расход на мусор', '13 900 ₽', '~2 000 ₽'],
+        ['Кампаний для правки', '6', 'одним одобрением'],
+      ],
+    },
+  },
+  {
+    ask: 'Что сказать клиенту про заявки?',
+    keys: ['сказать', 'объясн', 'отчёт', 'отчет', 'заявк', 'почему'],
+    answer:
+      'У «Окон Плюс» заявок на 12% меньше, потому что с понедельника конкуренты подняли ставки на «пластиковые окна цена»: ваша позиция упала, CTR −1,4 п. Расход в норме. Предлагаю поднять ставку на две фразы с лучшей конверсией.',
+    card: {
+      where: 'Окна Плюс · Поиск',
+      title: 'Поднять ставку на 2 фразы с лучшей конверсией',
+      rows: [
+        ['Заявок в неделю', '25', '~29'],
+        ['Расход в неделю', '31 000 ₽', '~33 500 ₽'],
+      ],
+    },
+  },
+]
+const hints = ['Где сегодня проблемы у клиентов?', 'Кого из клиентов почистить первым?', 'Что сказать клиенту про заявки?']
+
+const pains = [
+  { title: '10 вкладок с кабинетами', text: 'Каждое утро — обход всех клиентов, чтобы понять, у кого что случилось.' },
+  { title: 'Минусовка по понедельникам', text: 'Отчёт по запросам, выгрузка, фильтр, копирование минус-фраз — и так по каждой кампании.' },
+  { title: '«Что случилось с заявками?»', text: 'Клиент пишет раньше, чем вы успели посмотреть. Ответ ищете уже под давлением.' },
+]
+
+const rules = [
+  {
+    when: 'Расход без конверсий больше 3 000 ₽ за 7 дней',
+    then: 'Поставить кампанию на паузу и написать в Telegram',
+  },
+  { when: 'Цена конверсии выше 1 500 ₽', then: 'Снизить ставку на ключевую фразу' },
+  { when: 'Запрос потратил 500 ₽ без конверсий', then: 'Добавить его минус-фразой в группу' },
+]
+
+const faq = [
+  {
+    q: 'Клиент узнает о Толке?',
+    a: 'Толк работает через ваш доступ к Директу. Правки, которые вы одобрили, уходят через официальный API от вашего имени — так же, как если бы вы сделали их сами. Клиенту Толк ничего не пишет.',
+  },
+  {
+    q: 'Сколько кабинетов можно подключить?',
+    a: 'Зависит от тарифа: в каждом указано число проектов. Проект — это сайт или клиент со своими кампаниями Директа и счётчиком Метрики.',
+  },
+  {
+    q: 'Агентский аккаунт поддерживается?',
+    a: 'Да. После входа через агентский аккаунт Директа Толк видит его клиентов, и их можно добавить в сводку вместе со своими кабинетами.',
+  },
+  {
+    q: 'Кто отвечает за правки?',
+    a: 'Вы. Толк предлагает, а меняет только после вашего «Одобрить». Каждая правка записывается в журнал, и её можно откатить. Автоправила по умолчанию работают в тестовом режиме: показывают, что бы сделали, пока вы их не включите.',
+  },
+]
+---
+
+<Base
+  title="Сервис для директолога: все кабинеты клиентов в одном окне — Толк"
+  description="Толк для директологов и фрилансеров: сводка проблем по всем кабинетам клиентов, минусовка и площадки пачкой, автоправила и дайджест в Telegram. Попробуйте бесплатно."
+  jsonLd={[faqLd(faq)]}
+  crumbs={crumbs}
+>
+  <PageHero
+    crumbs={crumbs}
+    ask="Для фрилансеров и директологов"
+    title="Все кабинеты клиентов в&nbsp;одном окне"
+    lead="Толк смотрит в Директ и Метрику каждого клиента, говорит, где проблемы сегодня, и готовит правки пачкой. Вы одобряете — он делает."
+  >
+    <div class="dk-hero">
+      <HeroComposer client:load scenarios={scenarios} hints={hints} place="direktologam_hero" />
+    </div>
+  </PageHero>
+
+  <section class="section section--tight" aria-labelledby="pain-h">
+    <div class="wrap">
+      <div class="q-head">
+        <span class="q-ask">Знакомо?</span>
+        <h2 id="pain-h">Рутина съедает время, которое могло уйти на новых клиентов</h2>
+      </div>
+      <div class="tiles">
+        {
+          pains.map((p, i) => (
+            <div class="tile reveal">
+              <span class="tile__num">0{i + 1}</span>
+              <h3>{p.title}</h3>
+              <p>{p.text}</p>
+            </div>
+          ))
+        }
+      </div>
+    </div>
+  </section>
+
+  <section class="section section--tight" aria-label="Что умеет Толк для директолога">
+    <div class="wrap">
+      <div class="split reveal">
+        <div class="split__text">
+          <span class="q-ask">А как это выглядит?</span>
+          <h2>Сводка по всем кабинетам</h2>
+          <p class="q-lead">Один экран: у кого из клиентов упали заявки, кончился бюджет или подорожал клик.</p>
+          <ul class="ticks">
+            <li>Свои кабинеты и клиенты агентского аккаунта — вместе</li>
+            <li>Проблемы отсортированы по важности, а не по алфавиту</li>
+            <li>Из проблемы — сразу в разбор с Толком</li>
+          </ul>
+        </div>
+        <div class="mock" aria-label="Пример сводки">
+          <div class="mock__bar"><span>Сводка · 5 клиентов</span><span class="chip">сегодня</span></div>
+          <div class="mock__row"><i class="dot dot--bad"></i><span><b>Кухни на заказ</b><small>Нет показов с 02:10 — кончился дневной бюджет</small></span><em>срочно</em></div>
+          <div class="mock__row"><i class="dot dot--warn"></i><span><b>Автосервис Восток</b><small>Цена заявки +38% за неделю</small></span><em>2 140 ₽</em></div>
+          <div class="mock__row"><i class="dot dot--warn"></i><span><b>Стоматология Улыбка</b><small>41 мусорный запрос</small></span><em>9 800 ₽</em></div>
+          <div class="mock__row"><i class="dot"></i><span><b>Окна Плюс</b><small>В норме</small></span><em>25 заявок</em></div>
+          <div class="mock__row"><i class="dot"></i><span><b>Юрист Петров</b><small>В норме</small></span><em>11 заявок</em></div>
+          <p class="demo-note">Демо-сценарий: клиенты и цифры для примера</p>
+        </div>
+      </div>
+
+      <div class="split split--flip reveal">
+        <div class="split__text">
+          <span class="q-ask">А рутина?</span>
+          <h2>Рутина пачкой</h2>
+          <p class="q-lead">Чистка запросов и площадок — не по одной кампании, а сразу по нескольким.</p>
+          <ul class="ticks">
+            <li>Мусорные запросы с расходом и без заявок — списком, с причиной</li>
+            <li>Площадки РСЯ без конверсий — к отключению</li>
+            <li>Общие списки минус-слов на несколько кампаний</li>
+          </ul>
+        </div>
+        <div class="mock" aria-label="Пример предложения">
+          <div class="mock__bar"><span>Предложение</span><span class="chip chip--lime">6 кампаний</span></div>
+          <div class="delta">
+            <div class="delta__row"><span>Минус-фраз</span><span class="delta__val"><s>0</s> → <b>64</b></span></div>
+            <div class="delta__row"><span>Площадок РСЯ</span><span class="delta__val"><s>312</s> → <b>271</b></span></div>
+            <div class="delta__row"><span>Расход без заявок</span><span class="delta__val"><s>17 300 ₽</s> → <b>~2 500 ₽</b></span></div>
+          </div>
+          <p class="demo-note">Демо-сценарий: цифры для примера</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="section section--tight dark" aria-labelledby="rules-h">
+    <div class="wrap">
+      <div class="q-head">
+        <span class="q-ask">А если меня нет у компьютера?</span>
+        <h2 id="rules-h">Автопилот по вашим правилам</h2>
+        <p class="q-lead">Правило работает только в заданных вами рамках. Сначала — в тестовом режиме: видно, что оно сделало бы.</p>
+      </div>
+      <div class="tiles">
+        {
+          rules.map((r) => (
+            <div class="tile reveal">
+              <span class="tile__num">Если</span>
+              <h3>{r.when}</h3>
+              <span class="tile__num">то</span>
+              <p>{r.then}</p>
+            </div>
+          ))
+        }
+      </div>
+    </div>
+  </section>
+
+  <section class="section section--tight" aria-label="Перезапуск и дайджест">
+    <div class="wrap tiles tiles--2">
+      <div class="tile reveal">
+        <span class="q-ask">Кампания выгорела?</span>
+        <h3>Перезапуск копией и эксперименты</h3>
+        <p>
+          Толк замечает, когда старая кампания теряет CTR и дорожает, и предлагает копию с теми же настройками. Новые
+          заголовки можно проверить экспериментом: по одному на объявление, с понятным итогом.
+        </p>
+      </div>
+      <div class="tile reveal">
+        <span class="q-ask">А утром?</span>
+        <h3>Утром — в Telegram</h3>
+        <p>Дайджест по всем клиентам в выбранный час: что изменилось за вчера и где нужна ваша реакция.</p>
+        <div class="tg">
+          <p><b>Толк · итоги за вчера</b></p>
+          <p>🔴 Кухни на заказ — нет показов, кончился бюджет</p>
+          <p>🟠 Автосервис Восток — цена заявки +38%</p>
+          <p>✓ Остальные 3 клиента в норме</p>
+        </div>
+        <p class="demo-note">Демо-сценарий</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="section section--tight" id="kalkulyator" aria-labelledby="calc-h">
+    <div class="wrap">
+      <div class="q-head">
+        <span class="q-ask">Сколько я выиграю?</span>
+        <h2 id="calc-h">Сколько клиентов можно взять ещё</h2>
+        <p class="q-lead">Подставьте своё число клиентов и часов — результат пересчитается сразу.</p>
+      </div>
+      <Calculator client:visible={{ rootMargin: '400px' }} variant="freelance" />
+    </div>
+  </section>
+
+  <section class="section section--tight" id="tarify" aria-labelledby="price-h">
+    <div class="wrap">
+      <div class="q-head q-head--center">
+        <span class="q-ask">Сколько стоит?</span>
+        <h2 id="price-h">Тарифы с несколькими кабинетами</h2>
+        <p class="q-lead">В карточке тарифа — число проектов и что в него входит: автопилот, эксперименты, дайджест. Начните с бесплатного пробного периода.</p>
+      </div>
+      <Pricing client:visible={{ rootMargin: '400px' }} initial={plans} />
+      <p class="dk-soon"><span class="note-soon">Скоро: отчёты для клиентов в один клик</span></p>
+    </div>
+  </section>
+
+  <Faq items={faq} ask="А как же…?" title="Вопросы директологов" />
+
+  <CtaBand
+    title="Подключите первого клиента — это пара минут"
+    lead="Вход через Яндекс, без паролей. Сводка по кабинету появится сразу после подключения."
+    cta="Подключить кабинеты"
+    place="direktologam_final"
+  />
+</Base>
+
+<style>
+  .dk-hero {
+    width: 100%;
+    max-width: 760px;
+    margin-top: 6px;
+  }
+  .dk-hero :global(.hc) {
+    margin-inline: 0;
+  }
+  .tg {
+    display: grid;
+    gap: 4px;
+    margin-top: 8px;
+    padding: 14px 16px;
+    border-radius: 16px 16px 16px 6px;
+    background: var(--surface-2);
+    font-size: 14px;
+  }
+  .tg p {
+    color: var(--ink-2);
+  }
+  .dk-soon {
+    display: flex;
+    justify-content: center;
+    margin-top: 22px;
+  }
+</style>

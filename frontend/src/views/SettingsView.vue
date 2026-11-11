@@ -166,7 +166,7 @@ const props = defineProps({ tab: { type: String, default: 'profile' } })
 
 const TAB_TITLES = { profile: 'Профиль', notifications: 'Уведомления', interface: 'Интерфейс' }
 // Вкладки — одна страница: при переходе между ними меняется только заголовок.
-watchEffect(() => useHead(`${TAB_TITLES[props.tab] || 'Настройки'} — AiMarketing`, true))
+watchEffect(() => useHead(`${TAB_TITLES[props.tab] || 'Настройки'} — Толк`, true))
 
 const { expert, setExpert } = useExpert()
 const { isDark, toggleTheme } = useTheme()

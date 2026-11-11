@@ -316,7 +316,7 @@ import { useHead } from '../utils/useHead'
 import { pushToast } from '../composables/useToasts'
 import { formatDate, formatDateTime, formatDay, isoDay, num, pct, plural, rubles } from '../utils/format'
 
-useHead('Тариф и лимит — AiMarketing', true)
+useHead('Тариф и лимит — Толк', true)
 
 const route = useRoute()
 const router = useRouter()

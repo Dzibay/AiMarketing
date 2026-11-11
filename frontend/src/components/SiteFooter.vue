@@ -1,7 +1,7 @@
 <template>
   <footer class="site-footer">
     <div class="wrap site-footer__inner">
-      <span>© {{ year }} AiMarketing</span>
+      <span>© {{ year }} Толк</span>
       <nav>
         <RouterLink to="/privacy">Конфиденциальность</RouterLink>
         <RouterLink to="/consent">Согласие</RouterLink>

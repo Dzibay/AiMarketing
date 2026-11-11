@@ -2,9 +2,9 @@
   <header class="site-header" :class="{ 'is-solid': solid }">
     <div class="wrap site-header__inner">
       <!-- Главная — статический сайт (site/), а не маршрут SPA: обычная ссылка с перезагрузкой. -->
-      <a class="brand" href="/" aria-label="AiMarketing">
-        <i class="brand__dot" aria-hidden="true"><Sparkles /></i>
-        <span class="brand__name">AiMarketing</span>
+      <a class="brand" href="/" aria-label="Толк — на сайт">
+        <TolkMark :size="30" />
+        <span class="brand__name">толк</span>
       </a>
       <nav class="nav">
         <button class="icon-btn" type="button" :aria-label="isDark ? 'Светлая тема' : 'Тёмная тема'" @click="toggleTheme">
@@ -21,7 +21,8 @@
 
 <script setup>
 import { RouterLink } from 'vue-router'
-import { Moon, Sparkles, Sun } from '@lucide/vue'
+import { Moon, Sun } from '@lucide/vue'
+import TolkMark from './TolkMark.vue'
 import { useSession } from '../composables/useSession'
 import { useTheme } from '../composables/useTheme'
 

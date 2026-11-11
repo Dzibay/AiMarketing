@@ -1,4 +1,4 @@
-# AiMarketing API. Сборка из корня репозитория:
+# API Толка. Сборка из корня репозитория:
 #   docker build -f backend/Dockerfile .
 FROM python:3.12-slim-bookworm
 

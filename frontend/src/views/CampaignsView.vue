@@ -233,7 +233,7 @@ import { useExpert } from '../composables/useExpert'
 
 const { expert } = useExpert()
 
-useHead('Кампании — AiMarketing', true)
+useHead('Кампании — Толк', true)
 
 const COLUMNS = [
   { key: 'name', label: 'Кампания' },

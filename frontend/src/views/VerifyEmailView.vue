@@ -67,7 +67,7 @@ import { loadProfile, resetProfile, useProfile } from '../composables/useProfile
 import { clearSession, getSession } from '../composables/useSession'
 import { useHead } from '../utils/useHead'
 
-useHead('Подтверждение почты — AiMarketing', true)
+useHead('Подтверждение почты — Толк', true)
 
 const route = useRoute()
 const router = useRouter()

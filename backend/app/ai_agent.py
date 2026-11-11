@@ -5131,7 +5131,7 @@ def _general_prompt(ctx: Context) -> str:
     if len(projects) > GENERAL_PROMPT_PROJECTS:
         rows.append(f"- …и ещё {len(projects) - GENERAL_PROMPT_PROJECTS}: полный список — list_projects")
     lines = [
-        "Ты — ИИ-ассистент интернет-маркетолога в сервисе AiMarketing (Яндекс Директ + Метрика).",
+        "Ты — ИИ-ассистент интернет-маркетолога в сервисе «Толк» (Яндекс Директ + Метрика).",
         f"Сегодня {today_msk().isoformat()} (Москва).",
         "Это общий чат по всем проектам маркетолога: своего проекта у чата нет.",
         "",
@@ -5185,7 +5185,7 @@ def _system_prompt(ctx: Context) -> str:
         for a in ws.get("accounts") or []
     ) or "нет"
     lines = [
-        "Ты — ИИ-ассистент интернет-маркетолога в сервисе AiMarketing (Яндекс Директ + Метрика).",
+        "Ты — ИИ-ассистент интернет-маркетолога в сервисе «Толк» (Яндекс Директ + Метрика).",
         f"Сегодня {today_msk().isoformat()} (Москва).",
         f"Проект «{ws['name']}», сайт {ws.get('site') or '—'}, счётчик Метрики {ws['counter_id']}"
         + (f", клиент «{ws['client_name']}»" if ws.get("client_name") else "") + ".",

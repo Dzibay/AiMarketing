@@ -2,8 +2,8 @@
   <div class="admin-shell">
     <header class="admin-top">
       <span class="admin-top__brand">
-        <i class="brand__dot" aria-hidden="true"><Sparkles /></i>
-        <span>AiMarketing</span>
+        <TolkMark :size="26" />
+        <span>толк</span>
         <em>админка</em>
       </span>
 
@@ -108,7 +108,8 @@
 <script setup>
 import { computed, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { LogOut, Moon, Sparkles, Sun } from '@lucide/vue'
+import { LogOut, Moon, Sun } from '@lucide/vue'
+import TolkMark from '../components/TolkMark.vue'
 import AdminBridge from './admin/AdminBridge.vue'
 import AdminPayments from './admin/AdminPayments.vue'
 import AdminPlans from './admin/AdminPlans.vue'
@@ -125,7 +126,7 @@ import { pushToast } from '../composables/useToasts'
 import { useHead } from '../utils/useHead'
 import { num, plural, rubles } from '../utils/format'
 
-useHead('Админка — AiMarketing', true)
+useHead('Админка — Толк', true)
 
 const TABS = [
   { id: 'users', label: 'Пользователи' },

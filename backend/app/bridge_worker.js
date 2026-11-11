@@ -1,4 +1,4 @@
-// Мост AiMarketing: пересылает запросы к ИИ-провайдерам из дата-центра Cloudflare в США.
+// Мост Толка: пересылает запросы к ИИ-провайдерам из дата-центра Cloudflare в США.
 // /anthropic/… → api.anthropic.com, /openai/… → api.openai.com, /google/… → generativelanguage.googleapis.com.
 // /trace — откуда Worker выходит в интернет (страна и дата-центр). Пускает только с секретом BRIDGE_TOKEN.
 const UPSTREAMS = {

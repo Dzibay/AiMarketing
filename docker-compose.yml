@@ -1,4 +1,4 @@
-# AiMarketing: Postgres → FastAPI → Nginx → Caddy → сайт.
+# Толк: Postgres → FastAPI → Nginx → Caddy → сайт.
 #
 # Сайт (Vue): /, /login, /register, /cabinet, /oauth/done, /admin-panel,
 # /privacy, /consent, /offer, /cookies.
@@ -71,6 +71,13 @@ services:
     build:
       context: .
       dockerfile: frontend/Dockerfile
+      # Сайт «Толк» статичный: счётчик, реквизиты и контакты вшиваются при сборке (значения — из .env).
+      args:
+        PUBLIC_METRIKA_ID: ${PUBLIC_METRIKA_ID:-}
+        PUBLIC_LEGAL_LINE: ${PUBLIC_LEGAL_LINE:-}
+        PUBLIC_SUPPORT_EMAIL: ${PUBLIC_SUPPORT_EMAIL:-}
+        PUBLIC_SUPPORT_PHONE: ${PUBLIC_SUPPORT_PHONE:-}
+        PUBLIC_SUPPORT_TELEGRAM: ${PUBLIC_SUPPORT_TELEGRAM:-}
     restart: unless-stopped
     depends_on:
       backend:

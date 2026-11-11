@@ -368,7 +368,7 @@ import {
   SEVERITY_LABELS,
 } from '../utils/format'
 
-useHead('Сводка — AiMarketing', true)
+useHead('Сводка — Толк', true)
 
 const PROBLEMS_LIMIT = 30
 const SEVERITY_RANK = { critical: 0, warning: 1, info: 2, '': 3 }

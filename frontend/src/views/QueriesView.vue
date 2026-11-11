@@ -271,7 +271,7 @@ import ExpertHint from '../components/ExpertHint.vue'
 import { CircleCheck, TriangleAlert } from '@lucide/vue'
 import { useExpert } from '../composables/useExpert'
 
-useHead('Чистка запросов — AiMarketing', true)
+useHead('Чистка запросов — Толк', true)
 
 const { expert } = useExpert()
 const words = (n) => plural(n, 'запрос', 'запроса', 'запросов')

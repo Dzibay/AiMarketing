@@ -1,0 +1,146 @@
+---
+// Бета-программа: продлённый пробный период в обмен на согласие опубликовать обезличенный кейс.
+// Отдельной формы на бэкенде нет — заявка письмом на почту поддержки; срок продления сообщаем в ответе.
+import Base from '../layouts/Base.astro'
+import PageHero from '../components/page/PageHero.astro'
+import CtaBand from '../components/page/CtaBand.astro'
+import Faq from '../components/Faq.astro'
+import { faqLd } from '../lib/faq.js'
+import { CONTACTS } from '../lib/contacts.js'
+import { APP } from '../lib/site.js'
+
+const crumbs = [{ href: '/beta/', label: 'Бета-программа' }]
+const { email } = CONTACTS
+const mailto = email
+  ? `mailto:${email}?subject=${encodeURIComponent('Бета-программа Толка')}&body=${encodeURIComponent(
+      'Почта аккаунта в Толке:\nНиша и регион:\nПримерный бюджет в Директе в месяц:\n',
+    )}`
+  : ''
+
+const give = [
+  { title: 'Дольше бесплатно', text: 'Продлеваем пробный период, чтобы Толк успел набрать статистику и показать результат на ваших данных.' },
+  { title: 'Голос в продукте', text: 'Ваши замечания идут прямо в работу: что неудобно, чего не хватает, где Толк ошибся.' },
+  { title: 'Разбор результата', text: 'В конце вместе смотрим, что изменилось в кабинете, — эти цифры станут кейсом.' },
+]
+
+const ask = [
+  { title: 'Пользоваться по-настоящему', text: 'Подключить свой кабинет Директа и разбирать предложения Толка хотя бы раз в неделю.' },
+  { title: 'Рассказать, как было', text: 'Коротко ответить на вопросы о результате: что одобрили, что отклонили и почему.' },
+  { title: 'Разрешить публикацию', text: 'Согласиться, что обезличенный кейс появится в разделе «Примеры». Перед публикацией текст присылаем вам.' },
+]
+
+const faq = [
+  {
+    q: 'Что значит «обезличенный»?',
+    a: 'Без названия компании, сайта, имён и точных адресов. Указываем нишу, регион, порядок бюджета и изменения в цифрах. Если хотите, чтобы вас назвали, — назовём.',
+  },
+  {
+    q: 'А если результат не получится?',
+    a: 'Это тоже результат: разбираем, почему, и улучшаем продукт. Публикуем только то, на что вы согласились, после того как вы увидите текст.',
+  },
+  {
+    q: 'Можно передумать?',
+    a: 'Да. Напишите нам до публикации — кейс не выйдет. Пользоваться Толком при этом можно дальше на обычных условиях.',
+  },
+]
+---
+
+<Base
+  title="Бета-программа Толка"
+  description="Продлённый бесплатный период в Толке в обмен на честную обратную связь и согласие опубликовать обезличенный кейс. Как участвовать."
+  jsonLd={[faqLd(faq)]}
+  crumbs={crumbs}
+>
+  <PageHero
+    crumbs={crumbs}
+    ask="Можно попробовать подольше?"
+    title="Бета-программа"
+    lead="Толк только запускается. Нам нужны настоящие кабинеты и честные отзывы, вам — время, чтобы увидеть результат. Продлим бесплатный период, если вы согласитесь рассказать, что получилось."
+  >
+    {mailto ? <a slot="actions" class="btn btn--lime" href={mailto} data-goal="beta_apply" data-goal-place="beta_hero">Подать заявку письмом</a> : null}
+    <a slot="actions" class="btn btn--ghost" href="/primery/">Как выглядит кейс</a>
+  </PageHero>
+
+  <section class="section section--tight" aria-labelledby="give-h">
+    <div class="wrap">
+      <div class="q-head">
+        <span class="q-ask">Что я получу?</span>
+        <h2 id="give-h">Что даём мы</h2>
+      </div>
+      <div class="tiles">
+        {
+          give.map((f) => (
+            <div class="tile reveal">
+              <h3>{f.title}</h3>
+              <p>{f.text}</p>
+            </div>
+          ))
+        }
+      </div>
+    </div>
+  </section>
+
+  <section class="section section--tight dark" aria-labelledby="ask-h">
+    <div class="wrap">
+      <div class="q-head">
+        <span class="q-ask">А что взамен?</span>
+        <h2 id="ask-h">Что просим вас</h2>
+      </div>
+      <div class="tiles">
+        {
+          ask.map((f) => (
+            <div class="tile reveal">
+              <h3>{f.title}</h3>
+              <p>{f.text}</p>
+            </div>
+          ))
+        }
+      </div>
+    </div>
+  </section>
+
+  <section class="section section--tight" aria-labelledby="how-h">
+    <div class="wrap bt-how">
+      <div class="q-head">
+        <span class="q-ask">Как участвовать?</span>
+        <h2 id="how-h">Три шага</h2>
+      </div>
+      <ol class="bt-steps">
+        <li><b>Зарегистрируйтесь</b> и подключите Директ — это бесплатно.</li>
+        <li>
+          <b>Напишите нам</b>
+          {email ? <>на <a href={mailto}>{email}</a></> : <>в поддержку (<a href="/kontakty/">контакты</a>)</>} с почты аккаунта: ниша, регион и примерный бюджет.
+        </li>
+        <li><b>Получите продление</b> — срок пришлём в ответном письме, он зависит от того, сколько нужно на статистику.</li>
+      </ol>
+      <p class="bt-note">
+        Условия оплаты после бесплатного периода — как в <a href={APP.offer}>оферте</a> и на странице <a href="/tarify/">тарифов</a>.
+      </p>
+    </div>
+  </section>
+
+  <Faq items={faq} ask="А если…?" title="Вопросы о бете" lead="" />
+
+  <CtaBand title="Начните с бесплатного периода" lead="Заявку в бету можно отправить и потом — уже с подключённым кабинетом." place="beta_final" />
+</Base>
+
+<style>
+  .bt-steps {
+    display: grid;
+    gap: 12px;
+    max-width: 760px;
+    margin: 0;
+    padding-left: 22px;
+    font-size: 18px;
+  }
+  .bt-steps li {
+    color: var(--ink-2);
+  }
+  .bt-steps b {
+    color: var(--ink);
+  }
+  .bt-note {
+    margin-top: 22px;
+    color: var(--muted);
+  }
+</style>

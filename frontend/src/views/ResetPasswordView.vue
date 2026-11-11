@@ -34,7 +34,7 @@ import SiteHeader from '../components/SiteHeader.vue'
 import { errorText, webApi } from '../api/web'
 import { useHead } from '../utils/useHead'
 
-useHead('Новый пароль — AiMarketing', true)
+useHead('Новый пароль — Толк', true)
 
 const route = useRoute()
 const token = computed(() => String(route.query.token || ''))

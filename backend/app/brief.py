@@ -141,7 +141,7 @@ def _charset(content_type: str, head: bytes) -> str:
 def fetch_site(raw_url: str) -> tuple[str, str]:
     """→ (итоговый адрес, html). Редиректы проверяем по одному: каждый — на публичный адрес."""
     url = _site_url(raw_url)
-    headers = {"User-Agent": "AiMarketingBriefBot/1.0", "Accept": "text/html,application/xhtml+xml"}
+    headers = {"User-Agent": "TolkBot/1.0 (+https://tolk-ads.ru/bot/)", "Accept": "text/html,application/xhtml+xml"}
     with httpx.Client(timeout=SITE_TIMEOUT, follow_redirects=False, headers=headers) as client:
         for _hop in range(SITE_MAX_REDIRECTS + 1):
             _check_public(url)

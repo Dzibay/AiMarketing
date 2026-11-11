@@ -10,11 +10,28 @@ interface Props {
   description: string
   jsonLd?: object[]
   noindex?: boolean
+  // Хлебные крошки без главной: [{ href, label }] → BreadcrumbList.
+  crumbs?: { href: string; label: string }[]
 }
 
-const { title, description, jsonLd = [], noindex = false } = Astro.props
+const { title, description, jsonLd = [], noindex = false, crumbs = [] } = Astro.props
 const canonical = new URL(Astro.url.pathname, SITE_URL).href
 const fullTitle = title.includes(BRAND) ? title : `${title} — ${BRAND}`
+const ld = crumbs.length
+  ? [
+      ...jsonLd,
+      {
+        '@context': 'https://schema.org',
+        '@type': 'BreadcrumbList',
+        itemListElement: [{ href: '/', label: 'Главная' }, ...crumbs].map((c, i) => ({
+          '@type': 'ListItem',
+          position: i + 1,
+          name: c.label,
+          item: new URL(c.href, SITE_URL).href,
+        })),
+      },
+    ]
+  : jsonLd
 const metrikaId = import.meta.env.PUBLIC_METRIKA_ID || ''
 ---
 
@@ -37,7 +54,7 @@ const metrikaId = import.meta.env.PUBLIC_METRIKA_ID || ''
     <meta property="og:description" content={description} />
     <meta property="og:url" content={canonical} />
 
-    {jsonLd.map((data) => <script type="application/ld+json" set:html={JSON.stringify(data)} />)}
+    {ld.map((data) => <script type="application/ld+json" set:html={JSON.stringify(data)} />)}
 
     <script is:inline>
       // До первой отрисовки: JS есть; вошёл ли человек в кабинет (та же сессия, что у SPA) — меняем кнопки шапки.

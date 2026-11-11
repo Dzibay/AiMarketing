@@ -1,0 +1,124 @@
+---
+// Контакты и реквизиты (нужны для проверки сайта ЮKassa). Значения — из переменных сборки, см. lib/contacts.js.
+import Base from '../layouts/Base.astro'
+import PageHero from '../components/page/PageHero.astro'
+import { CONTACTS, phoneHref } from '../lib/contacts.js'
+import { APP, BRAND, SITE_URL } from '../lib/site.js'
+
+const { email, phone, telegram, legal } = CONTACTS
+const crumbs = [{ href: '/kontakty/', label: 'Контакты' }]
+
+const jsonLd = [
+  {
+    '@context': 'https://schema.org',
+    '@type': 'Organization',
+    name: BRAND,
+    url: SITE_URL,
+    ...(email || phone
+      ? {
+          contactPoint: {
+            '@type': 'ContactPoint',
+            contactType: 'customer support',
+            availableLanguage: 'Russian',
+            ...(email ? { email } : {}),
+            ...(phone ? { telephone: phone } : {}),
+          },
+        }
+      : {}),
+  },
+]
+---
+
+<Base
+  title="Контакты — Толк"
+  description="Как связаться с командой Толка: почта поддержки, телефон, Telegram и реквизиты. Вопросы об оплате, возврате и данных."
+  jsonLd={jsonLd}
+  crumbs={crumbs}
+>
+  <PageHero
+    crumbs={crumbs}
+    ask="Как с вами связаться?"
+    title="Контакты"
+    lead="Ответим на вопросы о сервисе, оплате, возврате и данных."
+  />
+
+  <section class="section section--tight kt">
+    <div class="wrap tiles">
+      <div class="tile">
+        <span class="tile__num">Почта поддержки</span>
+        {email ? <a class="kt__big" href={`mailto:${email}`}>{email}</a> : <p>Скоро появится</p>}
+        <p>Оплата, возврат, удаление данных — пишите с адреса почты аккаунта.</p>
+      </div>
+      {
+        phone && (
+          <div class="tile">
+            <span class="tile__num">Телефон</span>
+            <a class="kt__big" href={phoneHref(phone)}>{phone}</a>
+          </div>
+        )
+      }
+      {
+        telegram && (
+          <div class="tile">
+            <span class="tile__num">Telegram</span>
+            <a class="kt__big" href={`https://t.me/${telegram}`} rel="noopener">@{telegram}</a>
+            <p>Короткие вопросы и помощь с подключением.</p>
+          </div>
+        )
+      }
+      <div class="tile">
+        <span class="tile__num">В кабинете</span>
+        <a class="kt__big" href={APP.cabinet}>Спросить Толк</a>
+        <p>Вопросы о вашей рекламе и о том, как пользоваться сервисом, можно задать прямо в чате кабинета.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="section section--tight kt-legal" aria-labelledby="req-h">
+    <div class="wrap">
+      <h2 id="req-h">Реквизиты и документы</h2>
+      {legal ? <p class="kt__req">{legal}</p> : <p class="kt__req">Реквизиты указываются в чеке и сообщаются по запросу на почту поддержки.</p>}
+      <ul class="kt__docs">
+        <li><a href={APP.offer}>Публичная оферта</a></li>
+        <li><a href={APP.privacy}>Политика конфиденциальности</a></li>
+        <li><a href={APP.consent}>Согласие на обработку персональных данных</a></li>
+        <li><a href={APP.cookies}>Cookies</a></li>
+      </ul>
+    </div>
+  </section>
+</Base>
+
+<style>
+  .kt {
+    padding-top: 0;
+  }
+  .kt__big {
+    font-size: clamp(20px, 2.2vw, 24px);
+    font-weight: 800;
+    letter-spacing: -0.02em;
+    text-decoration: none;
+    overflow-wrap: anywhere;
+  }
+  .kt__big:hover {
+    text-decoration: underline;
+  }
+  .kt-legal {
+    padding-top: 0;
+  }
+  .kt-legal h2 {
+    font-size: clamp(26px, 3vw, 34px);
+    margin-bottom: 14px;
+  }
+  .kt__req {
+    color: var(--ink-2);
+    margin-bottom: 18px;
+  }
+  .kt__docs {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px 22px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+</style>

@@ -30,10 +30,10 @@ export const FEATURES = [
 
 export const NAV = [
   { href: '/#vozmozhnosti', label: 'Возможности' },
-  { href: '/#dlya-kogo', label: 'Для кого' },
-  { href: '/#kalkulyator', label: 'Калькулятор' },
-  { href: '/#tarify', label: 'Тарифы' },
-  { href: '/#faq', label: 'Вопросы' },
+  { href: '/direktologam/', label: 'Директологам' },
+  { href: '/biznesu/', label: 'Бизнесу' },
+  { href: '/tarify/', label: 'Тарифы' },
+  { href: '/bezopasnost/', label: 'Безопасность' },
 ]
 
 export const FOOTER = [
@@ -41,16 +41,24 @@ export const FOOTER = [
     title: 'Продукт',
     links: [
       { href: '/#vozmozhnosti', label: 'Возможности' },
-      { href: '/#tarify', label: 'Тарифы' },
-      { href: '/#bezopasnost', label: 'Безопасность' },
-      { href: '/#kak-nachat', label: 'Как начать' },
+      { href: '/tarify/', label: 'Тарифы' },
+      { href: '/bezopasnost/', label: 'Безопасность' },
+      { href: '/primery/', label: 'Примеры' },
     ],
   },
   {
     title: 'Кому',
     links: [
-      { href: '/#dlya-kogo', label: 'Директологам' },
-      { href: '/#dlya-kogo', label: 'Владельцам бизнеса' },
+      { href: '/direktologam/', label: 'Директологам' },
+      { href: '/biznesu/', label: 'Владельцам бизнеса' },
+    ],
+  },
+  {
+    title: 'Компания',
+    links: [
+      { href: '/kontakty/', label: 'Контакты' },
+      { href: '/beta/', label: 'Бета-программа' },
+      { href: '/bot/', label: 'TolkBot' },
     ],
   },
   {

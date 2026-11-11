@@ -11,24 +11,11 @@ import Audience from '../components/Audience.astro'
 import Security from '../components/Security.astro'
 import Faq from '../components/Faq.astro'
 import { BRAND, SLOGAN, SITE_URL } from '../lib/site.js'
-import { FAQ_ITEMS } from '../lib/faq.js'
+import { FAQ_ITEMS, faqLd } from '../lib/faq.js'
+import { loadPlans, daysWord } from '../lib/plans.js'
 
-// Тарифы берём из API при сборке; если API недоступно — пустой каталог, остров обновит его в браузере.
-const empty = { items: [], features: {}, trial: null }
-async function loadPlans() {
-  const base = import.meta.env.SITE_API_URL || process.env.SITE_API_URL
-  if (!base) return empty
-  try {
-    const r = await fetch(`${base.replace(/\/$/, '')}/api/site/plans`, { signal: AbortSignal.timeout(5000) })
-    return r.ok ? await r.json() : empty
-  } catch {
-    return empty
-  }
-}
 const plans = await loadPlans()
 const trialDays = plans.trial?.days
-const daysWord = (n: number) =>
-  n % 10 === 1 && n % 100 !== 11 ? 'день' : [2, 3, 4].includes(n % 10) && ![12, 13, 14].includes(n % 100) ? 'дня' : 'дней'
 
 const jsonLd = [
   {
@@ -40,15 +27,7 @@ const jsonLd = [
     slogan: SLOGAN,
   },
   { '@context': 'https://schema.org', '@type': 'WebSite', name: BRAND, url: SITE_URL, inLanguage: 'ru' },
-  {
-    '@context': 'https://schema.org',
-    '@type': 'FAQPage',
-    mainEntity: FAQ_ITEMS.map((f) => ({
-      '@type': 'Question',
-      name: f.q,
-      acceptedAnswer: { '@type': 'Answer', text: f.a },
-    })),
-  },
+  faqLd(FAQ_ITEMS),
 ]
 ---
 

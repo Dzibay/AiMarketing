@@ -1,0 +1,273 @@
+---
+// Посадочная для владельцев бизнеса (docs/landing-plan.md, 4.2). Переключатель сценариев — на CSS, без JS.
+import Base from '../layouts/Base.astro'
+import PageHero from '../components/page/PageHero.astro'
+import CtaBand from '../components/page/CtaBand.astro'
+import Faq from '../components/Faq.astro'
+import Security from '../components/Security.astro'
+import Calculator from '../islands/Calculator.vue'
+import Pricing from '../islands/Pricing.vue'
+import { faqLd } from '../lib/faq.js'
+import { loadPlans } from '../lib/plans.js'
+
+const plans = await loadPlans()
+const crumbs = [{ href: '/biznesu/', label: 'Владельцам бизнеса' }]
+
+const today = [
+  {
+    where: 'Поиск — ремонт квартир',
+    title: 'Убрать 38 запросов, по которым не звонят',
+    why: '«Ремонт своими руками», «вакансии прораб» — клики есть, заявок нет.',
+    rows: [['Расход без заявок', '7 900 ₽', '~900 ₽']],
+  },
+  {
+    where: 'РСЯ',
+    title: 'Отключить 19 сайтов и приложений без заявок',
+    why: 'Ваша реклама показывалась в играх и на случайных сайтах.',
+    rows: [['Расход на них', '6 200 ₽', '0 ₽']],
+  },
+  {
+    where: 'Поиск — Москва',
+    title: 'Поднять дневной бюджет с 1 500 до 2 000 ₽',
+    why: 'Бюджет кончается к 14:00 — вечером вас не видно.',
+    rows: [['Заявок в неделю', '14', '~18']],
+  },
+]
+
+const faq = [
+  {
+    q: 'Мне нужно разбираться в Директе?',
+    a: 'Нет. Толк объясняет простыми словами, что происходит и почему, а термины расшифровывает. Решение — «Одобрить» или «Отклонить» — всегда за вами.',
+  },
+  {
+    q: 'Можно ли подключить кабинет подрядчика?',
+    a: 'Да, если у вас есть к нему доступ. Если кабинет записан на подрядчика, попросите у него гостевой или представительский доступ в Директе — после этого подключите его через вход Яндекса.',
+  },
+  {
+    q: 'Если подрядчик против?',
+    a: 'Толк не меняет кампании без вашего одобрения, поэтому можно просто смотреть и задавать вопросы. Хорошему подрядчику прозрачность только на руку: вы видите результат его работы и говорите на одном языке.',
+  },
+  {
+    q: 'Сколько времени это займёт?',
+    a: 'Подключение — пара минут. Дальше достаточно заглядывать раз в день или читать утренний дайджест в Telegram.',
+  },
+]
+---
+
+<Base
+  title="Реклама в Яндекс Директе понятным языком — Толк для владельцев бизнеса"
+  description="Толк объясняет вашу рекламу в Директе простыми словами: за что вы платите, сколько стоит заявка и что сделать сегодня. Ведёте сами или с подрядчиком. Попробуйте бесплатно."
+  jsonLd={[faqLd(faq)]}
+  crumbs={crumbs}
+>
+  <div class="bz">
+    <input class="sr-only" type="radio" name="bz-mode" id="bz-self" checked />
+    <input class="sr-only" type="radio" name="bz-mode" id="bz-agency" />
+
+    <PageHero
+      crumbs={crumbs}
+      ask="Для владельцев бизнеса"
+      title="Реклама в Директе понятным языком"
+      lead="Толк читает ваш кабинет Директа и Метрику и объясняет без жаргона: за что вы платите, сколько стоит заявка и что сделать сегодня."
+    >
+      <div class="bz-switch" role="group" aria-label="Как вы ведёте рекламу">
+        <label for="bz-self">Веду сам</label>
+        <label for="bz-agency">Есть подрядчик</label>
+      </div>
+      <div class="bz-case bz-case--self">
+        <p class="bz-say">Толк объяснит, что происходит, и предложит, что сделать сегодня.</p>
+      </div>
+      <div class="bz-case bz-case--agency">
+        <p class="bz-say">Понимайте, за что платите, и говорите с подрядчиком на одном языке.</p>
+      </div>
+      <div class="bz-act">
+        <a class="btn btn--lg" href="/register" data-goal="signup_click" data-goal-place="biznesu_hero">Разобраться в своей рекламе</a>
+        <a class="btn btn--lg btn--ghost" href="#segodnya">Пример разбора</a>
+      </div>
+    </PageHero>
+
+    <section class="section section--tight" aria-labelledby="plain-h">
+      <div class="wrap split">
+        <div class="split__text">
+          <span class="q-ask">Что значит ДРР 34%?</span>
+          <h2 id="plain-h">Без жаргона</h2>
+          <p class="q-lead">
+            Отчёт Директа — это 40 колонок. Толк пересказывает их одним абзацем и расшифровывает термины.
+          </p>
+        </div>
+        <div class="chat reveal">
+          <p class="chat__me">У меня ДРР 34% — это плохо?</p>
+          <div class="chat__ai">
+            <p>
+              Это значит, что из каждых 100 ₽ выручки с рекламы 34 ₽ уходят на саму рекламу. Для вашей наценки около 50%
+              это много: прибыль с заказа почти съедается.
+            </p>
+            <p>
+              Больше всего тратит кампания «РСЯ — общая»: 41% расхода и 12% заказов. Предлагаю отключить в ней площадки без
+              заказов — ДРР должна опуститься примерно до 26%.
+            </p>
+          </div>
+          <p class="demo-note">Демо-сценарий: цифры для примера</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="section section--tight" id="segodnya" aria-labelledby="today-h">
+      <div class="wrap">
+        <div class="q-head">
+          <span class="q-ask">А что сделать сегодня?</span>
+          <h2 id="today-h">Три правки вместо отчёта</h2>
+          <p class="q-lead">Каждая — с причиной и ожидаемым эффектом. Нажали «Одобрить» — Толк внёс правку в Директ.</p>
+        </div>
+        <div class="tiles">
+          {
+            today.map((c) => (
+              <article class="tile reveal">
+                <span class="chip chip--lime">{c.where}</span>
+                <h3>{c.title}</h3>
+                <p>{c.why}</p>
+                <div class="delta">
+                  {c.rows.map((r) => (
+                    <div class="delta__row">
+                      <span>{r[0]}</span>
+                      <span class="delta__val">
+                        <s>{r[1]}</s> → <b>{r[2]}</b>
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </article>
+            ))
+          }
+        </div>
+        <p class="demo-note bz-note">Демо-сценарий: цифры для примера</p>
+      </div>
+    </section>
+
+    <section class="section section--tight dark bz-case bz-case--agency" aria-labelledby="second-h">
+      <div class="wrap split">
+        <div class="split__text">
+          <span class="q-ask">А если рекламу ведёт подрядчик?</span>
+          <h2 id="second-h">Второе мнение</h2>
+          <p class="q-lead">
+            Толк показывает, как менялись расход, клики и заявки по кампаниям, и объясняет, что за этим стоит. Каждое утро
+            — короткая сводка в Telegram.
+          </p>
+          <p class="q-lead">Хороший подрядчик только выиграет от прозрачности: вы видите результат его работы.</p>
+        </div>
+        <div class="tile">
+          <h3>Как подключить кабинет подрядчика</h3>
+          <ul class="ticks">
+            <li>Если кабинет записан на вас — просто войдите через Яндекс</li>
+            <li>Если на подрядчика — попросите гостевой или представительский доступ в Директе</li>
+            <li>Без вашего одобрения Толк ничего в кабинете не меняет — можно просто смотреть</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="section section--tight" id="kalkulyator" aria-labelledby="calc-h">
+      <div class="wrap">
+        <div class="q-head">
+          <span class="q-ask">Сколько я теряю?</span>
+          <h2 id="calc-h">Посчитайте, сколько можно вернуть</h2>
+        </div>
+        <Calculator client:visible={{ rootMargin: '400px' }} />
+      </div>
+    </section>
+
+    <Security />
+
+    <section class="section section--tight" id="tarify" aria-labelledby="price-h">
+      <div class="wrap">
+        <div class="q-head q-head--center">
+          <span class="q-ask">Сколько стоит?</span>
+          <h2 id="price-h">Начните бесплатно</h2>
+        </div>
+        <Pricing client:visible={{ rootMargin: '400px' }} initial={plans} />
+      </div>
+    </section>
+
+    <Faq items={faq} ask="А если…?" title="Вопросы владельцев бизнеса" />
+  </div>
+
+  <CtaBand
+    title="Поймите свою рекламу за пять минут"
+    lead="Подключение через вход Яндекса. Первый разбор — сразу после подключения."
+    cta="Разобраться в своей рекламе"
+    place="biznesu_final"
+  />
+</Base>
+
+<style>
+  .bz-switch {
+    display: inline-flex;
+    gap: 4px;
+    padding: 5px;
+    border-radius: var(--pill);
+    background: var(--surface-3);
+  }
+  .bz-switch label {
+    padding: 10px 20px;
+    border-radius: var(--pill);
+    font-weight: 700;
+    font-size: 15px;
+    cursor: pointer;
+    color: var(--muted);
+    transition: background 0.15s ease;
+  }
+  .bz:has(#bz-self:checked) label[for='bz-self'],
+  .bz:has(#bz-agency:checked) label[for='bz-agency'] {
+    background: var(--surface);
+    color: var(--ink);
+    box-shadow: var(--shadow-sm);
+  }
+  .bz:has(#bz-self:focus-visible) label[for='bz-self'],
+  .bz:has(#bz-agency:focus-visible) label[for='bz-agency'] {
+    outline: 2px solid var(--ink);
+    outline-offset: 2px;
+  }
+  .bz:has(#bz-self:checked) .bz-case--agency,
+  .bz:has(#bz-agency:checked) .bz-case--self {
+    display: none;
+  }
+  .bz-say {
+    max-width: 560px;
+    padding: 14px 18px;
+    border-radius: 18px 18px 18px 6px;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    font-size: 18px;
+    font-weight: 600;
+  }
+  .bz-act {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+  .bz-note {
+    margin-top: 14px;
+  }
+  .chat {
+    display: grid;
+    gap: 12px;
+  }
+  .chat__me {
+    justify-self: end;
+    max-width: 80%;
+    padding: 12px 16px;
+    border-radius: 18px 18px 6px 18px;
+    background: var(--solid);
+    color: var(--on-solid);
+    font-weight: 600;
+  }
+  .chat__ai {
+    display: grid;
+    gap: 10px;
+    padding: 18px 20px;
+    border-radius: 18px 18px 18px 6px;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    color: var(--ink-2);
+  }
+</style>

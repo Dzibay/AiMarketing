@@ -14,7 +14,7 @@ def _dotenv() -> Path | None:
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=_dotenv(), extra="ignore")
 
-    app_name: str = "AiMarketing"
+    app_name: str = "Толк"
 
     db_host: str = "localhost"
     db_port: int = 5432

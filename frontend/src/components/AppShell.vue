@@ -2,9 +2,9 @@
   <div class="dshell" :class="{ 'is-drawer': drawer, 'is-expert': expert }">
     <aside class="dside" aria-label="Меню" @click="closeDrawerOnLink">
       <div class="dside__scroll">
-        <RouterLink class="dside__brand" to="/cabinet" aria-label="AiMarketing — главная">
-          <i aria-hidden="true"><Sparkles /></i>
-          <span>AiMarketing</span>
+        <RouterLink class="dside__brand" to="/cabinet" aria-label="Толк — главная">
+          <TolkMark :size="28" />
+          <span>толк</span>
           <em v-if="expert" title="Включён экспертный режим">эксперт</em>
         </RouterLink>
 
@@ -213,7 +213,8 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { RouterLink, RouterView, useRoute, useRouter } from 'vue-router'
-import { Layers, Lock, Menu, MessageSquare, Moon, Plus, Settings, SlidersHorizontal, Sparkles, Sun, X } from '@lucide/vue'
+import { Layers, Lock, Menu, MessageSquare, Moon, Plus, Settings, SlidersHorizontal, Sun, X } from '@lucide/vue'
+import TolkMark from './TolkMark.vue'
 import LoadsIndicator from './LoadsIndicator.vue'
 import PlanOffers from './PlanOffers.vue'
 import ProfileMenu from './ProfileMenu.vue'

@@ -79,7 +79,7 @@
 
           <div v-if="thread.cta && showCard" class="hc__cta" :class="{ 'is-ok': approved }">
             <p>{{ approved ? 'Так это работает в кабинете. Подключите Директ — это пара минут.' : thread.ctaText }}</p>
-            <a class="btn btn--sm" :href="registerHref" data-goal="signup_click" :data-goal-place="compact ? 'final' : 'hero'">
+            <a class="btn btn--sm" :href="registerHref" data-goal="signup_click" :data-goal-place="place || (compact ? 'final' : 'hero')">
               Попробовать на своих данных
             </a>
           </div>
@@ -96,10 +96,14 @@ import { goal } from '../lib/goal.js'
 const props = defineProps({
   compact: { type: Boolean, default: false },
   registerHref: { type: String, default: '/register' },
+  // Свои сценарии и подсказки для посадочных; по умолчанию — сценарии главной.
+  scenarios: { type: Array, default: null },
+  hints: { type: Array, default: null },
+  place: { type: String, default: '' },
 })
 
 // Демо-сценарии первого экрана (docs/landing-plan.md, раздел 3). Цифры выдуманы и подписаны как демо.
-const SCENARIOS = [
+const DEFAULT_SCENARIOS = [
   {
     ask: 'Где я сливаю бюджет?',
     keys: ['слив', 'бюджет', 'утека', 'трат', 'площадк', 'рся'],
@@ -144,12 +148,15 @@ const SCENARIOS = [
   },
 ]
 
-const HINTS = [
+const DEFAULT_HINTS = [
   'Где я сливаю бюджет?',
   'Почему подорожала заявка?',
   'Вставьте адрес сайта — подберу заголовки и минус-слова',
   'Какие площадки РСЯ отключить?',
 ]
+
+const SCENARIOS = props.scenarios?.length ? props.scenarios : DEFAULT_SCENARIOS
+const HINTS = props.hints?.length ? props.hints : DEFAULT_HINTS
 
 const inputId = useId()
 const input = ref(null)

@@ -372,7 +372,7 @@ import { useHead } from '../utils/useHead'
 import { useExpert } from '../composables/useExpert'
 import { formatDateTime, num, plural, timeAgo } from '../utils/format'
 
-useHead('Подключения — AiMarketing', true)
+useHead('Подключения — Толк', true)
 
 const SYNC_STATUS = { ok: 'обновлено', error: 'ошибка', partial: 'частично', running: 'идёт' }
 const RUN_KINDS = {

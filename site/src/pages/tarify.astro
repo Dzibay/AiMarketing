@@ -1,0 +1,158 @@
+---
+// Тарифы: цены из GET /api/site/plans (при сборке + обновление в браузере), условия оплаты — как в оферте.
+import Base from '../layouts/Base.astro'
+import PageHero from '../components/page/PageHero.astro'
+import CtaBand from '../components/page/CtaBand.astro'
+import Faq from '../components/Faq.astro'
+import Pricing from '../islands/Pricing.vue'
+import { faqLd } from '../lib/faq.js'
+import { loadPlans, daysWord } from '../lib/plans.js'
+import { APP, BRAND, SITE_URL } from '../lib/site.js'
+
+const plans = await loadPlans()
+const trialDays = plans.trial?.days
+const crumbs = [{ href: '/tarify/', label: 'Тарифы' }]
+
+const included = [
+  'ИИ-помощник: вопросы, разборы и предложения правок',
+  'Чистка поисковых запросов и площадок РСЯ',
+  'Сводка по всем подключённым кабинетам',
+  'Журнал изменений и откат одобренных правок',
+  'Аналитика Директа вместе с целями Метрики',
+]
+
+const pay = [
+  { title: 'Предоплата за период', text: 'Месяц, три месяца или год. Тариф включается сразу после подтверждения оплаты.' },
+  { title: 'Без автосписаний', text: 'Карту не привязываем. Каждый период вы оплачиваете сами, когда решите продлить.' },
+  { title: 'Через ЮKassa', text: 'Банковская карта, СБП и другие способы на странице оплаты. Данные карты мы не получаем.' },
+  { title: 'Чек на почту', text: 'Чек приходит на адрес почты аккаунта сразу после оплаты.' },
+  { title: 'Возврат за неиспользованные дни', text: 'Напишите нам — вернём стоимость полных неиспользованных дней в течение 10 дней.' },
+  { title: 'Рекламный бюджет отдельно', text: 'Бюджет на рекламу вы платите Яндексу напрямую — он не проходит через Толк.' },
+]
+
+const faq = [
+  {
+    q: 'Нужна ли карта для пробного периода?',
+    a: 'Нет. Пробный период включается при регистрации, карта не нужна. Когда он закончится, платные функции остановятся до оплаты, а кабинеты и история сохранятся.',
+  },
+  {
+    q: 'Что такое объём ИИ?',
+    a: 'Сколько вопросов, разборов и генераций входит в месяц. В кабинете видно, какая доля израсходована. Неиспользованный объём на следующий период не переносится.',
+  },
+  {
+    q: 'Что будет, когда объём ИИ закончится?',
+    a: 'ИИ-функции станут недоступны до начала нового периода или перехода на другой тариф. Остальное — сводка, журнал, правила — продолжит работать.',
+  },
+  {
+    q: 'Можно ли сменить тариф?',
+    a: 'Да. Новый тариф подключается с момента оплаты на полный срок. Остаток прежнего периода не переносится; если при переходе действует скидка, вы увидите её до оплаты.',
+  },
+  {
+    q: 'Как вернуть деньги?',
+    a: 'Напишите на почту поддержки с адреса аккаунта и укажите платёж. Вернём стоимость полных неиспользованных дней на то же платёжное средство в течение 10 дней.',
+  },
+]
+
+const jsonLd = [
+  faqLd(faq),
+  {
+    '@context': 'https://schema.org',
+    '@type': 'SoftwareApplication',
+    name: BRAND,
+    url: SITE_URL,
+    applicationCategory: 'BusinessApplication',
+    operatingSystem: 'Web',
+    description: 'ИИ-помощник для Яндекс Директа и Метрики: находит, где утекает бюджет, и предлагает правки.',
+    ...(plans.items?.length
+      ? {
+          offers: plans.items.map((p: { name: string; price_rub: number }) => ({
+            '@type': 'Offer',
+            name: p.name,
+            price: String(p.price_rub),
+            priceCurrency: 'RUB',
+            url: `${SITE_URL}/tarify/`,
+          })),
+        }
+      : {}),
+  },
+]
+---
+
+<Base
+  title="Тарифы — Толк"
+  description="Цены на Толк — ИИ-помощника для Яндекс Директа. Бесплатный пробный период без карты, оплата за месяц, три месяца или год без автосписаний. Возврат за неиспользованные дни."
+  jsonLd={jsonLd}
+  crumbs={crumbs}
+>
+  <PageHero
+    crumbs={crumbs}
+    ask="Сколько стоит?"
+    title="Начните бесплатно, платите, когда понравится"
+    lead={trialDays
+      ? `${trialDays} ${daysWord(trialDays)} пробного периода без карты. Дальше — тариф на месяц, три месяца или год, без автосписаний.`
+      : 'Пробный период без карты. Дальше — тариф на месяц, три месяца или год, без автосписаний.'}
+    center
+  />
+
+  <section class="section section--tight tf-plans" aria-label="Тарифы">
+    <div class="wrap">
+      <Pricing client:load initial={plans} />
+    </div>
+  </section>
+
+  <section class="section section--tight" aria-labelledby="inc-h">
+    <div class="wrap split">
+      <div class="split__text">
+        <span class="q-ask">А что входит?</span>
+        <h2 id="inc-h">Во всех тарифах</h2>
+        <p class="q-lead">
+          Тарифы различаются числом проектов и объёмом ИИ. Автоправила, эксперименты, Вордстат, картинки и дайджест в
+          Telegram перечислены в карточке тарифа, если входят в него.
+        </p>
+      </div>
+      <ul class="ticks tf-inc">
+        {included.map((x) => <li>{x}</li>)}
+      </ul>
+    </div>
+  </section>
+
+  <section class="section section--tight" aria-labelledby="pay-h">
+    <div class="wrap">
+      <div class="q-head">
+        <span class="q-ask">Как платить?</span>
+        <h2 id="pay-h">Оплата и возврат</h2>
+        <p class="q-lead">
+          Полные условия — в <a href={APP.offer}>оферте</a>. Коротко:
+        </p>
+      </div>
+      <div class="tiles">
+        {
+          pay.map((p) => (
+            <div class="tile">
+              <h3>{p.title}</h3>
+              <p>{p.text}</p>
+            </div>
+          ))
+        }
+      </div>
+    </div>
+  </section>
+
+  <Faq items={faq} ask="А если…?" title="Вопросы об оплате" lead="" />
+
+  <CtaBand
+    title="Попробуйте на своём кабинете"
+    lead="Регистрация — минута, подключение Директа — ещё пара. Карта не нужна."
+    place="tarify_final"
+  />
+</Base>
+
+<style>
+  .tf-plans {
+    padding-top: 0;
+  }
+  .tf-inc {
+    gap: 14px;
+    font-size: 18px;
+  }
+</style>

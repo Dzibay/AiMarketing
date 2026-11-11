@@ -1,18 +1,31 @@
 ---
-// Секция 10: FAQ. Разметку FAQPage собирает index.astro из того же списка (FAQ_ITEMS).
+// FAQ-секция. Разметку FAQPage страница собирает из того же списка (faqLd в lib/faq.js).
 import { FAQ_ITEMS } from '../lib/faq.js'
+
+interface Props {
+  items?: { q: string; a: string }[]
+  ask?: string
+  title?: string
+  lead?: string
+}
+const {
+  items = FAQ_ITEMS,
+  ask = 'А ещё?',
+  title = 'Что ещё спрашивают',
+  lead = 'Не нашли ответ — спросите в чате после регистрации, там отвечает и Толк, и мы.',
+} = Astro.props
 ---
 
 <section class="section section--tight" id="faq" aria-labelledby="faq-h">
   <div class="wrap faq">
     <div class="q-head faq__head">
-      <span class="q-ask">А ещё?</span>
-      <h2 id="faq-h">Что ещё спрашивают</h2>
-      <p class="q-lead">Не нашли ответ — спросите в чате после регистрации, там отвечает и Толк, и мы.</p>
+      <span class="q-ask">{ask}</span>
+      <h2 id="faq-h">{title}</h2>
+      {lead && <p class="q-lead">{lead}</p>}
     </div>
     <div class="faq__list">
       {
-        FAQ_ITEMS.map((f, i) => (
+        items.map((f, i) => (
           <details class="faq__item" open={i === 0}>
             <summary>{f.q}</summary>
             <p>{f.a}</p>

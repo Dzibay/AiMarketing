@@ -73,7 +73,7 @@ import { formatDateTime } from '../utils/format'
 import { useHead } from '../utils/useHead'
 import AiChanges from './workspace/AiChanges.vue'
 
-useHead('Ждёт решения — AiMarketing', true)
+useHead('Ждёт решения — Толк', true)
 
 // Карточки вопросов, плана и таблицы решаются только в чате: там весь контекст ответа.
 const ASK_TEXT = {

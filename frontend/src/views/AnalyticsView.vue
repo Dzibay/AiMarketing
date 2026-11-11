@@ -229,7 +229,7 @@ import {
 import { useHead } from '../utils/useHead'
 import { CHART_METRICS, METRICS, METRIC_BY_KEY } from './workspace/metrics'
 
-useHead('Аналитика — AiMarketing', true)
+useHead('Аналитика — Толк', true)
 
 const data = ref(null)
 const loading = ref(false)

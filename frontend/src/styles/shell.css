@@ -42,19 +42,13 @@
   letter-spacing: -0.02em;
 }
 
-.dside__brand i {
-  display: grid;
-  place-items: center;
-  width: 28px;
-  height: 28px;
-  border-radius: 8px;
-  background: var(--lime);
-  color: var(--on-lime);
+.dside__brand .tolk-mark {
+  flex: none;
 }
 
-.dside__brand i svg {
-  width: 16px;
-  height: 16px;
+.dside__brand > span {
+  font-size: 19px;
+  letter-spacing: -0.045em;
 }
 
 .dside__brand em {

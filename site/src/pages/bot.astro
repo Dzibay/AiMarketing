@@ -1,0 +1,98 @@
+---
+// Описание TolkBot для владельцев сайтов: ссылка из User-Agent (backend/app/brief.py). Только факты из кода.
+import Base from '../layouts/Base.astro'
+import PageHero from '../components/page/PageHero.astro'
+import { CONTACTS } from '../lib/contacts.js'
+
+const crumbs = [{ href: '/bot/', label: 'TolkBot' }]
+const { email } = CONTACTS
+
+const facts = [
+  { title: 'Только по запросу человека', text: 'Бот открывает страницу, только когда пользователь Толка сам указал её адрес — например, своего сайта, чтобы описать бизнес для рекламы. Обхода сайтов и индексации нет.' },
+  { title: 'Одна страница', text: 'Бот загружает только указанный адрес и не ходит по ссылкам. Следует не более чем за тремя перенаправлениями.' },
+  { title: 'Бережно к серверу', text: 'Один GET-запрос, ожидание ответа — не дольше 10 секунд, читается не больше 1,5 МБ HTML.' },
+  { title: 'Только публичные адреса', text: 'Внутренние и локальные адреса бот не открывает: каждый адрес и каждое перенаправление проверяются.' },
+]
+---
+
+<Base
+  title="TolkBot — бот сервиса Толк"
+  description="TolkBot загружает страницу сайта, только когда пользователь Толка сам указал её адрес. Одна страница, один запрос, без обхода и индексации. Как узнать бота и как с нами связаться."
+  crumbs={crumbs}
+>
+  <PageHero
+    crumbs={crumbs}
+    ask="Что за бот в моих логах?"
+    title="TolkBot"
+    lead="Это бот сервиса Толк — ИИ-помощника для Яндекс Директа. Он открывает страницу сайта, когда пользователь Толка просит помочь с рекламой для неё."
+  />
+
+  <section class="section section--tight bot">
+    <div class="wrap">
+      <div class="bot__ua">
+        <span class="tile__num">User-Agent</span>
+        <code>TolkBot/1.0 (+https://tolk-ads.ru/bot/)</code>
+      </div>
+      <div class="tiles tiles--2">
+        {
+          facts.map((f) => (
+            <div class="tile">
+              <h3>{f.title}</h3>
+              <p>{f.text}</p>
+            </div>
+          ))
+        }
+      </div>
+      <div class="bot__more">
+        <h2>Что бот делает со страницей</h2>
+        <p>
+          Читает текст страницы — заголовки и описание, — чтобы ИИ составил черновик описания бизнеса: что продаётся,
+          в каком регионе и какие запросы точно не подходят (они пойдут в минус-слова). Черновик видит только
+          пользователь, сохраняет его он сам. Страница никуда не публикуется.
+        </p>
+        <h2>Как ограничить доступ</h2>
+        <p>
+          Бот работает от имени конкретного человека, который сам ввёл адрес, поэтому robots.txt он не читает — как
+          браузер. Если вы хотите закрыть сайт от TolkBot, отклоняйте запросы с этим User-Agent на сервере
+          {email ? <> или напишите нам на <a href={`mailto:${email}`}>{email}</a></> : null}.
+        </p>
+      </div>
+    </div>
+  </section>
+</Base>
+
+<style>
+  .bot {
+    padding-top: 0;
+  }
+  .bot__ua {
+    display: grid;
+    gap: 8px;
+    margin-bottom: 14px;
+    padding: 20px 24px;
+    border-radius: 22px;
+    background: #141413;
+    color: #f1f1ee;
+  }
+  .bot__ua .tile__num {
+    color: #a8a8a2;
+  }
+  .bot__ua code {
+    font-size: clamp(15px, 2vw, 20px);
+    font-weight: 700;
+    overflow-wrap: anywhere;
+  }
+  .bot__more {
+    display: grid;
+    gap: 14px;
+    max-width: 760px;
+    margin-top: clamp(40px, 6vw, 64px);
+  }
+  .bot__more h2 {
+    font-size: clamp(24px, 3vw, 32px);
+    margin-top: 10px;
+  }
+  .bot__more p {
+    color: var(--ink-2);
+  }
+</style>

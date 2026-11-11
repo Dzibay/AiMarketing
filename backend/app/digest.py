@@ -32,7 +32,7 @@ def format_digest(overview: dict, base_url: str = "") -> str:
     summary = f"Расход {rub(totals.get('spend_yesterday', 0))} · конверсий {conversions}"
     if conversions:
         summary += f" · CPA {rub(totals['spend_yesterday'] / conversions)}"
-    lines = [f"AiMarketing · итоги {yesterday:%d.%m}", summary, ""]
+    lines = [f"Толк · итоги {yesterday:%d.%m}", summary, ""]
 
     fires = [p for p in overview["problems"] if p["severity"] in _ICONS]
     if fires:

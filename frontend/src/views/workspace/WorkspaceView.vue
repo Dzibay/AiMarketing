@@ -96,11 +96,11 @@ const error = ref('')
 const locked = ref(false)
 const archiving = ref(false)
 
-useHead('Проект — AiMarketing', true)
+useHead('Проект — Толк', true)
 watch(
   () => ws.value?.name,
   (name) => {
-    if (name) document.title = `${name} — AiMarketing`
+    if (name) document.title = `${name} — Толк`
   },
 )
 

@@ -20,7 +20,27 @@
       </div>
     </div>
 
-    <div class="calc__out dark" aria-live="polite">
+    <div v-if="freelance" class="calc__out dark" aria-live="polite">
+      <span class="calc__cap">Освободится в месяц</span>
+      <strong class="calc__total">≈ {{ freedHours }} ч</strong>
+      <ul class="calc__rows">
+        <li><span>Это ваших денег по ставке часа</span><b>{{ rub(freedHours * state.rate) }}</b></li>
+        <li><span>Можно взять ещё клиентов</span><b>+{{ moreClients }}</b></li>
+      </ul>
+      <a class="btn btn--lime btn--lg" href="/register" data-goal="signup_click" data-goal-place="calculator_freelance">
+        Подключить кабинеты клиентов
+      </a>
+      <details class="calc__how">
+        <summary>Как считаем</summary>
+        <p>
+          Клиенты × часы в неделю на клиента × 4,3 — столько уходит на чистку, площадки и отчёты. Толк берёт на себя
+          примерно 80% этой рутины. Свободные часы делим на часы одного клиента — получаем, сколько ещё клиентов можно
+          вести в том же ритме. Это оценка по вашим допущениям, а не обещание.
+        </p>
+      </details>
+    </div>
+
+    <div v-else class="calc__out dark" aria-live="polite">
       <span class="calc__cap">Можно вернуть в месяц</span>
       <strong class="calc__total">≈ {{ rub(total) }}</strong>
       <ul class="calc__rows">
@@ -49,9 +69,29 @@ import { goal } from '../lib/goal.js'
 const nf = new Intl.NumberFormat('ru-RU')
 const rub = (n) => `${nf.format(Math.round(n / 100) * 100)} ₽`
 
-const state = reactive({ budget: 150000, junk: 15, hours: 4, rate: 1000 })
+const props = defineProps({
+  // default — бюджет и время владельца; freelance — время директолога на клиентов.
+  variant: { type: String, default: 'default' },
+})
+const freelance = props.variant === 'freelance'
 
-const fields = [
+const state = reactive({ budget: 150000, junk: 15, hours: 4, rate: 1000, clients: 8, perClient: 3 })
+
+const FREELANCE_FIELDS = [
+  { key: 'clients', label: 'Клиентов в работе', min: 1, max: 40, step: 1, format: (v) => `${v}` },
+  {
+    key: 'perClient',
+    label: 'Часов в неделю на одного клиента',
+    min: 1,
+    max: 10,
+    step: 0.5,
+    format: (v) => `${String(v).replace('.', ',')} ч`,
+    note: 'Чистка запросов, площадки, ставки, отчёты и ответы «что случилось с заявками?».',
+  },
+  { key: 'rate', label: 'Сколько стоит ваш час', min: 300, max: 5000, step: 100, format: (v) => rub(v) },
+]
+
+const DEFAULT_FIELDS = [
   { key: 'budget', label: 'Бюджет на Директ в месяц', min: 20000, max: 2000000, step: 10000, format: rub },
   {
     key: 'junk',
@@ -66,18 +106,22 @@ const fields = [
   { key: 'rate', label: 'Сколько стоит ваш час', min: 300, max: 5000, step: 100, format: rub },
 ]
 
+const fields = freelance ? FREELANCE_FIELDS : DEFAULT_FIELDS
+
 const fill = (f) => `${((state[f.key] - f.min) / (f.max - f.min)) * 100}%`
 
 const waste = computed(() => (state.budget * state.junk) / 100)
 const hoursMonth = computed(() => Math.round(state.hours * 4.3))
 const timeCost = computed(() => hoursMonth.value * state.rate * 0.8)
 const total = computed(() => waste.value + timeCost.value)
+const freedHours = computed(() => Math.round(state.clients * state.perClient * 4.3 * 0.8))
+const moreClients = computed(() => Math.floor(freedHours.value / (state.perClient * 4.3)))
 
 let sent = false
 function used() {
   if (sent) return
   sent = true
-  goal('calc_used')
+  goal('calc_used', { variant: props.variant })
 }
 </script>
 
@@ -146,6 +190,7 @@ input[type='range']:focus-visible {
 
 .calc__out {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 18px;
   align-content: start;
   padding: clamp(22px, 3vw, 34px);
@@ -188,6 +233,9 @@ input[type='range']:focus-visible {
 }
 .calc__out .btn {
   width: fit-content;
+  max-width: 100%;
+  white-space: normal;
+  text-align: center;
 }
 .calc__how summary {
   cursor: pointer;
@@ -201,7 +249,7 @@ input[type='range']:focus-visible {
 }
 @media (max-width: 860px) {
   .calc {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 </style>

@@ -6,7 +6,7 @@ const loading = ref(false)
 let pending = null
 
 const fallback = {
-  app_name: 'AiMarketing',
+  app_name: 'Толк',
   yandex_oauth: false,
   privacy_url: '/privacy',
   consent_url: '/consent',
