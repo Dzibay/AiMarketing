@@ -21,7 +21,7 @@ from app.direct_reports import fetch_report
 from app.journal import journal_quiet, log_action
 from app.slices import _campaigns, _period
 from app.stats import _count, _rub_to_kopecks, goal_columns
-from app.workspaces import require_workspace
+from app.workspaces import ai_style_prompt, require_workspace
 from app.yandex import YandexError, get_connection_access_token
 
 log = logging.getLogger("app.ad_stats")
@@ -370,7 +370,7 @@ def ai_rewrite_ads(user_id: int, payload: dict, progress: Progress | None = None
     keywords = _group_keywords(user_id, list({ads[i]["adgroup_row_id"] for i in ids}))
     cfg = ai.load_config(user_id, "ads", workspace_id)
     system = _AI_SYSTEM.format(
-        brief=brief_prompt(ws),
+        brief=brief_prompt(ws) + "\n" + ai_style_prompt(ws),
         title_len=ads_mod.TITLE_LEN,
         title2_len=ads_mod.TITLE2_LEN,
         text_len=ads_mod.TEXT_LEN,

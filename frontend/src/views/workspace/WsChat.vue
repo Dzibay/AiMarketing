@@ -54,7 +54,7 @@
           <RouterLink
             v-if="!general && expert"
             class="btn btn--ghost"
-            :to="{ path: `/w/${ws.id}/settings`, hash: '#ai' }"
+            :to="{ path: `/w/${ws.id}/settings`, hash: '#access' }"
           >
             Права ИИ
           </RouterLink>
@@ -602,7 +602,11 @@ const selectedClass = computed(() => {
   const m = aiModels.value
   if (!m) return ''
   if (chat.value) return m.selected || m.default
-  return modelItems.value.some((c) => c.id === pickedClass.value) ? pickedClass.value : m.default
+  const has = (id) => !!id && modelItems.value.some((c) => c.id === id)
+  if (has(pickedClass.value)) return pickedClass.value
+  // Новый чат проекта сервер создаст на модели из настроек «Помощника» — показываем её же.
+  const projectClass = props.general ? '' : ws.value?.ai_style?.model_class
+  return has(projectClass) ? projectClass : m.default
 })
 
 /** Относительный расход класса: ●○○, ●●○, ●●●. */

@@ -120,6 +120,8 @@ class RegisterBody(BaseModel):
 
 class PayBody(BaseModel):
     plan_id: int
+    # На сколько месяцев (сроков тарифа): 1, 3 или 12.
+    months: int = 1
 
 
 class PromoBody(BaseModel):
@@ -559,10 +561,10 @@ def web_plan(user_id: int = Depends(require_web_identity)) -> dict:
 
 
 @router.get("/payments/quote")
-def web_payment_quote(plan_id: int, user_id: int = Depends(require_web_identity)) -> dict:
-    """Сколько стоит тариф для пользователя и продлит он подписку или начнётся заново."""
+def web_payment_quote(plan_id: int, months: int = 1, user_id: int = Depends(require_web_identity)) -> dict:
+    """Сколько стоит тариф на 1, 3 или 12 месяцев и продлит он подписку или начнётся заново."""
     try:
-        return payments.quote(user_id, plan_id)
+        return payments.quote(user_id, plan_id, months)
     except YandexError as exc:
         raise _http(exc) from exc
 
@@ -571,7 +573,7 @@ def web_payment_quote(plan_id: int, user_id: int = Depends(require_web_identity)
 def web_payment_create(body: PayBody, user_id: int = Depends(require_web_identity)) -> dict:
     """Платёж в ЮKassa → ссылка, куда отправить пользователя оплачивать."""
     try:
-        return payments.create_payment(user_id, body.plan_id)
+        return payments.create_payment(user_id, body.plan_id, body.months)
     except YandexError as exc:
         raise _http(exc) from exc
 
@@ -581,6 +583,15 @@ def web_payment_check(payment_id: int, user_id: int = Depends(require_web_identi
     """Вернулись со страницы ЮKassa: перечитываем платёж, оплачен — подписка уже продлена."""
     try:
         return {"payment": payments.check_for_user(user_id, payment_id)}
+    except YandexError as exc:
+        raise _http(exc) from exc
+
+
+@router.get("/referral")
+def web_referral(user_id: int = Depends(require_web_identity)) -> dict:
+    """«Ссылка для друзей»: личная реф-ссылка, сколько по ней зарегистрировались и оплатили, бонус."""
+    try:
+        return referrals.my_link(user_id)
     except YandexError as exc:
         raise _http(exc) from exc
 

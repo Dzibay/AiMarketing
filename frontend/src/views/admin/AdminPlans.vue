@@ -114,6 +114,15 @@
         <input v-model="form.projects_limit" type="number" min="0" step="1" inputmode="numeric" placeholder="без лимита" />
         <small class="field-hint">Проект — счётчик Метрики с его кампаниями.</small>
       </div>
+      <div v-field class="field">
+        <label>Скидка за 3 срока, %</label>
+        <input v-model="form.discount_3_pct" type="number" min="0" max="99" step="any" inputmode="decimal" placeholder="0" />
+      </div>
+      <div v-field class="field">
+        <label>Скидка за 12 сроков, %</label>
+        <input v-model="form.discount_12_pct" type="number" min="0" max="99" step="any" inputmode="decimal" placeholder="0" />
+        <small class="field-hint">Пользователь может оплатить сразу 1, 3 или 12 сроков (месяцев) — скидка к сумме.</small>
+      </div>
       <fieldset>
         <legend>Функции</legend>
         <label v-for="(label, key) in features" :key="key" class="check-row">
@@ -214,6 +223,8 @@ function openNew() {
     days: 30,
     units_limit: '',
     projects_limit: '',
+    discount_3_pct: '',
+    discount_12_pct: '',
     features: Object.fromEntries(Object.keys(features.value).map((k) => [k, true])),
     is_trial: false,
     active: true,
@@ -230,6 +241,8 @@ function openEdit(p) {
     days: p.days,
     units_limit: blank(p.units_limit),
     projects_limit: blank(p.projects_limit),
+    discount_3_pct: p.discount_3_pct ? String(p.discount_3_pct) : '',
+    discount_12_pct: p.discount_12_pct ? String(p.discount_12_pct) : '',
     features: Object.fromEntries(Object.keys(features.value).map((k) => [k, p.features?.[k] !== false])),
     is_trial: p.is_trial,
     active: p.active,
@@ -245,6 +258,8 @@ async function save() {
     days: numberOrNull(f.days),
     units_limit: numberOrNull(f.units_limit),
     projects_limit: numberOrNull(f.projects_limit),
+    discount_3_pct: numberOrNull(f.discount_3_pct) ?? 0,
+    discount_12_pct: numberOrNull(f.discount_12_pct) ?? 0,
     features: { ...f.features },
     is_trial: f.is_trial,
     active: f.active,

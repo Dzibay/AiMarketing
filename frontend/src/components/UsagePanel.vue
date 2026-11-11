@@ -2,14 +2,14 @@
   <section class="panel" id="ai-usage">
     <div class="panel__head">
       <div>
-        <h2>Лимит периода</h2>
+        <h2>{{ breakdown ? 'На что ушёл лимит' : 'Лимит периода' }}</h2>
         <p v-if="usage" class="hint">с {{ formatDate(usage.period_start) }} · новый период — {{ formatDate(usage.period_end) }}</p>
       </div>
       <span v-if="usage" class="chip" :class="chip.cls">{{ chip.text }}</span>
     </div>
     <p v-if="!usage" class="empty">Не удалось загрузить расход.</p>
     <template v-else>
-      <template v-if="usage.limited">
+      <template v-if="usage.limited && !breakdown">
         <div
           class="meter"
           :class="tone"
@@ -32,7 +32,7 @@
         </p>
         <p class="hint">Остаток не переносится: в новом периоде лимит снова полный.</p>
       </template>
-      <p v-else class="hint">Лимита нет. Ниже — на что уходит расход в этом периоде.</p>
+      <p v-else-if="!usage.limited" class="hint">Лимита нет. Ниже — на что уходит расход в этом периоде.</p>
       <p v-if="!usage.by_kind.length" class="empty">В этом периоде ИИ, Вордстат и картинки ещё не использовались.</p>
       <div v-else class="usage-split">
         <div v-for="group in groups" :key="group.key">
@@ -68,7 +68,11 @@ import TrendChart from './TrendChart.vue'
 import { formatDate, num, pct, plural } from '../utils/format'
 
 /** Шкала лимита за период из GET /api/web/plan (usage) или /api/web/ai/usage. */
-const props = defineProps({ usage: { type: Object, default: null } })
+const props = defineProps({
+  usage: { type: Object, default: null },
+  /** Только разбивка расхода — шкала уже показана на странице (тариф). */
+  breakdown: { type: Boolean, default: false },
+})
 
 const tone = computed(() => {
   const p = props.usage?.used_percent ?? 0

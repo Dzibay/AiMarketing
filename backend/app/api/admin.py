@@ -150,6 +150,9 @@ class PlanBody(BaseModel):
     is_trial: bool = False
     active: bool = True
     position: int = 0
+    # Скидка за оплату сразу на 3 и 12 сроков тарифа, %.
+    discount_3_pct: float | None = None
+    discount_12_pct: float | None = None
 
 
 class UpgradeBody(BaseModel):
@@ -441,9 +444,20 @@ class RefLinkBody(BaseModel):
     active: bool = True
 
 
+class RefBonusBody(BaseModel):
+    referrer_days: int = 0
+    invitee_days: int = 0
+
+
 @router.get("/refs")
 def admin_refs() -> dict:
-    return {"items": referrals.list_links()}
+    """Ссылки из админки; личные ссылки пользователей — одной сводкой, и бонус за приглашение."""
+    return {"items": referrals.list_links(), "bonus": referrals.bonus_settings(), "personal": referrals.personal_summary()}
+
+
+@router.put("/ref-bonus")
+def admin_ref_bonus(body: RefBonusBody) -> dict:
+    return _call(referrals.save_bonus_settings, body.model_dump())
 
 
 @router.post("/refs")

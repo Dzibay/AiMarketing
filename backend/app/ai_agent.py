@@ -26,12 +26,14 @@ from app.query_cleaning import examples_prompt, memory_examples
 from app.workspaces import (
     AI_CATEGORIES,
     SCHEME_FACT,
+    ai_style_prompt,
     fact_key,
     get_workspace,
     list_workspace_accounts,
     list_workspaces,
     normalize_ai_access,
     normalize_ai_facts,
+    normalize_ai_style,
     remember_ai_facts,
     require_workspace,
     update_workspace,
@@ -5396,6 +5398,7 @@ def _system_prompt(ctx: Context) -> str:
     examples = examples_prompt(memory_examples(ctx.ws_id, 10))
     if examples:
         lines += ["", "Решения маркетолога по поисковым запросам (учитывай их в предложениях минус-фраз):", examples]
+    lines += ["", "Как писать объявления и тексты для клиентов проекта (настройки маркетолога):", ai_style_prompt(ws)]
     if (ws.get("ai_notes") or "").strip():
         lines += ["", "Заметки маркетолога о проекте:", ws["ai_notes"].strip()]
     files = _context_files_block(ctx)
@@ -6605,9 +6608,13 @@ def list_chats(user_id: int, workspace_id: int | None) -> list[dict]:
 
 def create_chat(user_id: int, workspace_id: int | None, title: str = "", model_class: str = "") -> dict:
     """Новый чат проекта; workspace_id None — общий чат по всем проектам."""
-    if workspace_id is not None:
-        require_workspace(user_id, workspace_id)
+    ws = require_workspace(user_id, workspace_id) if workspace_id is not None else None
     model_class = _usable_class(model_class)
+    if not model_class and ws is not None:
+        # Модель проекта из настроек «Помощник» — если админ её не выключил.
+        preferred = normalize_ai_style(ws.get("ai_style"))["model_class"]
+        if preferred in {c["id"] for c in ai.chat_classes()["items"]}:
+            model_class = preferred
     with pool.connection() as conn:
         row = conn.execute(
             "INSERT INTO ai_chats (user_id, workspace_id, title, model_class) VALUES (%s, %s, %s, %s) RETURNING *",

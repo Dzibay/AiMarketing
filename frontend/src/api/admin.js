@@ -106,7 +106,10 @@ export const adminApi = {
   deletePromo: (id) => send('DELETE', `/promos/${id}`),
 
   /** { items: [{ id, code, name, active, url, visits, registrations, verified, payers, payments, revenue_rub }] }. */
+  /** { items, bonus: { referrer_days, invitee_days }, personal: { links, registrations, bonuses, bonus_days } }. */
   refs: () => call('/refs'),
+  /** Дни бонуса за приглашение по личной ссылке: { referrer_days, invitee_days }. */
+  saveRefBonus: (payload) => send('PUT', '/ref-bonus', payload),
   createRef: (payload) => send('POST', '/refs', payload),
   updateRef: (id, payload) => send('PUT', `/refs/${id}`, payload),
   deleteRef: (id) => send('DELETE', `/refs/${id}`),

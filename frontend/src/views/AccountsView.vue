@@ -1,10 +1,63 @@
 <template>
-  <p class="page-lead">
+  <p v-if="expert" class="page-lead">
     Логины Яндекса, их счётчики Метрики и кабинеты Директа. Каждый счётчик — проект сайта, кампании из любых
     кабинетов добавляются в настройках проекта.
   </p>
+  <p v-else class="page-lead">Откуда сервис берёт данные: аккаунт Яндекса и сайты со счётчиками Метрики.</p>
 
-  <section class="panel">
+  <div v-if="!expert && !loading" class="ccard">
+    <template v-if="connections.length">
+      <div v-for="c in connections" :key="c.id" class="prow">
+        <div class="prow__main">
+          <b class="conn-name"><Plug :size="16" aria-hidden="true" />Яндекс: {{ c.yandex_login || c.display_name || c.yandex_uid }}</b>
+          <p v-if="c.last_sync_status === 'error' && c.last_sync_error">
+            Не получилось обновить: {{ errorDetail(c.last_sync_error) }}. Переподключите аккаунт, если ошибка повторяется.
+          </p>
+          <p v-else>
+            {{ roleText(c) }}. Сервис читает статистику, а менять рекламу может только после вашего «Выполнить».
+          </p>
+        </div>
+        <div class="prow__acts">
+          <span v-if="c.last_sync_status === 'error'" class="st st--warn">
+            <TriangleAlert :size="14" aria-hidden="true" />Ошибка
+          </span>
+          <span v-else class="st st--ok"><CircleCheck :size="14" aria-hidden="true" />Подключён</span>
+          <YandexConnectButton
+            purpose="connect"
+            label="Переподключить"
+            variant="ghost"
+            :wide="false"
+            return-to="/cabinet/connections"
+          />
+        </div>
+      </div>
+      <div class="prow">
+        <div class="prow__main">
+          <b class="conn-name">
+            <RefreshCw :size="16" aria-hidden="true" />
+            {{ lastSyncAt ? `Данные обновлены ${timeAgo(lastSyncAt)}` : 'Данные ещё не обновлялись' }}
+          </b>
+          <p>Обновляются сами: кампании — каждый час, статистика — каждые 6 часов, поисковые запросы — раз в сутки.</p>
+        </div>
+        <div class="prow__acts">
+          <button class="btn" type="button" :disabled="syncingAll || busyId !== null" @click="syncAll">
+            <RefreshCw :size="14" aria-hidden="true" />{{ syncingAll ? 'Обновляем…' : 'Обновить сейчас' }}
+          </button>
+        </div>
+      </div>
+    </template>
+    <div v-else class="prow">
+      <div class="prow__main">
+        <b class="conn-name"><Plug :size="16" aria-hidden="true" />Яндекс не подключён</b>
+        <p>Подключите аккаунт с Директом и Метрикой — сервис загрузит кампании и статистику, обычно за пару минут.</p>
+      </div>
+      <div class="prow__acts">
+        <YandexConnectButton purpose="connect" label="Подключить Яндекс" :wide="false" return-to="/cabinet/connections" />
+      </div>
+    </div>
+  </div>
+
+  <section v-if="expert" class="panel">
     <h2>Подключить</h2>
     <p class="hint">
       На странице Яндекса можно выбрать любой логин — так подключаются кабинеты клиентов с отдельными логинами.
@@ -59,8 +112,11 @@
   <div v-if="loading" class="panel"><p class="empty">Загружаем подключения…</p></div>
 
   <template v-else>
-    <ProjectChoice ref="projectChoice" />
+    <SitesPanel ref="sitesPanel" @changed="reloadAll" />
 
+    <ExpertHint>Логины и их роли, счётчики Метрики, кабинеты Директа, Яндекс Аудитории и история обновлений</ExpertHint>
+
+    <template v-if="expert">
     <section class="panel">
       <h2>Логины Яндекса</h2>
       <p class="hint">
@@ -295,6 +351,7 @@
         <button class="btn btn--ghost" type="button" @click="runsLimit += 20">Показать ещё</button>
       </div>
     </section>
+    </template>
   </template>
 </template>
 
@@ -303,14 +360,17 @@ import { askConfirm } from '../composables/useConfirm'
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { RouterLink } from 'vue-router'
 import LoadStages from '../components/LoadStages.vue'
-import ProjectChoice from '../components/ProjectChoice.vue'
+import { CircleCheck, Plug, RefreshCw, TriangleAlert } from '@lucide/vue'
+import ExpertHint from '../components/ExpertHint.vue'
+import SitesPanel from '../components/SitesPanel.vue'
 import YandexConnectButton from '../components/YandexConnectButton.vue'
 import { errorDetail, errorText, JOB_LABELS, jobProgressText, webApi } from '../api/web'
 import { jobText, refreshLoads, stageErrorText, stageFailure, useLoads } from '../composables/useLoads'
 import { pushToast } from '../composables/useToasts'
 import { loadWorkspaces } from '../composables/useWorkspaces'
 import { useHead } from '../utils/useHead'
-import { formatDateTime, num, plural } from '../utils/format'
+import { useExpert } from '../composables/useExpert'
+import { formatDateTime, num, plural, timeAgo } from '../utils/format'
 
 useHead('Подключения — AiMarketing', true)
 
@@ -340,7 +400,9 @@ const busyId = ref(null)
 const loadBusy = ref('')
 const counterSearch = ref('')
 const accountSearch = ref('')
-const projectChoice = ref(null)
+const sitesPanel = ref(null)
+const syncingAll = ref(false)
+const { expert } = useExpert()
 let jobsTimer = null
 
 // Загрузка закончилась — тихо обновляем счётчики кампаний и проекта.
@@ -349,6 +411,9 @@ const loads = useLoads({ onFinished: () => reloadAll() })
 const connections = computed(() => me.value.connections || [])
 const counters = computed(() => me.value.metrika || [])
 const accounts = computed(() => me.value.direct || [])
+const lastSyncAt = computed(() =>
+  connections.value.reduce((best, c) => (c.last_sync_at && (!best || c.last_sync_at > best) ? c.last_sync_at : best), ''),
+)
 const connById = computed(() => new Map(connections.value.map((c) => [c.id, c])))
 const accountLoads = computed(() => new Map(loads.overview.value.accounts.map((a) => [a.id, a])))
 const counterLoads = computed(() => new Map(loads.overview.value.counters.map((c) => [c.id, c])))
@@ -413,7 +478,7 @@ async function load(quiet = false) {
 }
 
 async function reloadAll() {
-  await Promise.all([load(true), loadWorkspaces(true).catch(() => null), projectChoice.value?.load()])
+  await Promise.all([load(true), loadWorkspaces(true).catch(() => null), sitesPanel.value?.load()])
 }
 
 // Пока на сервере идут задачи (синк сразу после подключения логина), опрашиваем их
@@ -448,6 +513,43 @@ async function syncConnection(c) {
     pushToast(errorText(err), 'error')
   } finally {
     busyId.value = null
+  }
+}
+
+function roleText(c) {
+  if (c.use_direct && c.use_metrika) return 'Доступ к Директу и Метрике'
+  if (c.use_direct) return 'Доступ к Директу'
+  if (c.use_metrika) return 'Доступ к Метрике'
+  return 'Роли выключены'
+}
+
+/** «Обновить сейчас» простого режима: все логины по очереди, один итог. */
+async function syncAll() {
+  syncingAll.value = true
+  let loadsStarted = 0
+  let failed = 0
+  try {
+    for (const c of connections.value) {
+      try {
+        const res = await webApi.syncConnection(c.id, () => {
+          if (!jobsTimer) pollJobs()
+        })
+        loadsStarted += res.loads || 0
+      } catch (err) {
+        failed += 1
+        pushToast(errorText(err), 'error')
+      }
+    }
+    if (!failed) {
+      pushToast(
+        loadsStarted
+          ? 'Данные обновлены. Догружаем кампании и статистику — прогресс в шапке'
+          : 'Данные обновлены',
+      )
+    }
+    await Promise.all([reloadAll(), refreshLoads()])
+  } finally {
+    syncingAll.value = false
   }
 }
 
@@ -546,3 +648,23 @@ onUnmounted(() => {
   loads.stop()
 })
 </script>
+
+<style scoped>
+.conn-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.conn-name svg {
+  flex: none;
+  color: var(--muted);
+}
+.prow__acts .btn {
+  gap: 6px;
+}
+@media (max-width: 640px) {
+  .prow {
+    flex-wrap: wrap;
+  }
+}
+</style>

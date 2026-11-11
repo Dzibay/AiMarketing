@@ -578,3 +578,153 @@ def test_reminder_job_scheduled(db, monkeypatch):
     # Повторная постановка не дублирует задачу.
     workers._enqueue_reminders()
     assert _sql(db, "SELECT COUNT(*) AS n FROM jobs").fetchone()["n"] == 1
+
+
+# --- Оплата на 1, 3 или 12 месяцев --------------------------------------------------------------
+
+
+def test_pay_for_3_and_12_months_with_term_discount(db, kassa, client):
+    pool = db
+    user = make_user(pool)
+    h = admin_headers()
+    base = make_plan(name="Старт", price_rub=1000, days=30)
+    pro = client.post(
+        "/api/admin/plans",
+        headers=h,
+        json={"name": "Про", "price_rub": 3000, "days": 30, "discount_3_pct": 10, "discount_12_pct": 20},
+    ).json()
+    assert (pro["discount_3_pct"], pro["discount_12_pct"]) == (10, 20)
+    bad = {"name": "Плохой", "price_rub": 1, "days": 30, "discount_3_pct": 120}
+    assert client.post("/api/admin/plans", headers=h, json=bad).status_code == 400
+    plans.set_upgrade(base["id"], pro["id"], 50)
+    plans.set_subscription(user, plan_id=base["id"])
+
+    offers = client.get("/api/web/plan", headers=_auth(user)).json()["offers"]
+    offer = next(o for o in offers if o["id"] == pro["id"])
+    assert offer["term_discounts"] == {"1": 0, "3": 10, "12": 20}
+
+    # Переход на 3 месяца: 3000 → 1500 за переход, ×3, −10% за срок.
+    q = client.get(f"/api/web/payments/quote?plan_id={pro['id']}&months=3", headers=_auth(user)).json()
+    assert (q["months"], q["days"], q["price_rub"], q["full_rub"], q["amount_rub"]) == (3, 90, 1500, 4500, 4050)
+    assert (q["change_discount_pct"], q["term_discount_pct"], q["kind"]) == (50, 10, "change")
+    res = client.get(f"/api/web/payments/quote?plan_id={pro['id']}&months=2", headers=_auth(user))
+    assert res.status_code == 400
+
+    res = client.post("/api/web/payments", headers=_auth(user), json={"plan_id": pro["id"], "months": 3})
+    assert res.status_code == 200, res.text
+    pay = res.json()["payment"]
+    assert (pay["amount_rub"], pay["days"], pay["months"]) == (4050, 90, 3)
+    pid = next(iter(kassa.payments))
+    assert kassa.payments[pid]["amount"]["value"] == "4050.00"
+    kassa.pay(pid)
+    _notify(client, "payment.succeeded", {"id": pid})
+    sub = plans.subscription(user)
+    assert sub["plan"]["id"] == pro["id"]
+    assert abs((sub["ends_at"] - now_msk()) - timedelta(days=90)) < timedelta(minutes=1)
+
+    # Продление своего на 12 месяцев: полная цена ×12 −20%, срок добавляется к текущему.
+    before = sub["ends_at"]
+    q = payments.quote(user, pro["id"], 12)
+    assert (q["kind"], q["amount_rub"], q["days"], q["change_discount_pct"]) == ("renew", 28800, 360, 0)
+    pay = client.post("/api/web/payments", headers=_auth(user), json={"plan_id": pro["id"], "months": 12}).json()
+    pid2 = [k for k in kassa.payments if k != pid][0]
+    kassa.pay(pid2)
+    client.post(f"/api/web/payments/{pay['payment']['id']}/check", headers=_auth(user))
+    assert plans.subscription(user)["ends_at"] == before + timedelta(days=360)
+
+
+# --- Личная ссылка и бонус за приглашение ------------------------------------------------------
+
+
+def test_personal_link_stats_and_bonus_once(db, kassa, client, monkeypatch):
+    pool = db
+    resumed = []
+    monkeypatch.setattr(plans, "resume", lambda uid: resumed.append(uid))
+    monkeypatch.setattr(referrals, "public_base_url", lambda: "https://aim.example")
+    monkeypatch.setattr(mailer, "configured", lambda: False)
+    # Бонус — только за настоящие платежи: боевой магазин, ЮKassa отвечает test=false.
+    payments.save_settings(shop_id="123456", test_mode=False, enabled=True)
+    referrals.save_bonus_settings({})  # app_settings между тестами не чистятся
+    h = admin_headers()
+    pro = make_plan(name="Про", price_rub=1000, days=30)
+
+    owner = make_user(pool, "Anton.B@example.com")
+    plans.set_subscription(owner, plan_id=pro["id"], until=(now_msk() - timedelta(days=2)).date().isoformat())
+    me = client.get("/api/web/referral", headers=_auth(owner)).json()
+    assert me["code"].startswith("anton-b-") and me["url"] == f"https://aim.example/?ref={me['code']}"
+    assert (me["registrations"], me["payers"], me["earned_days"]) == (0, 0, 0)
+    assert me["bonus"] == {"referrer_days": 0, "invitee_days": 0}
+    # Ссылка одна и та же; в админском списке ссылок её нет.
+    assert client.get("/api/web/referral", headers=_auth(owner)).json()["code"] == me["code"]
+    assert client.get("/api/admin/refs", headers=h).json()["items"] == []
+
+    res = client.put("/api/admin/ref-bonus", headers=h, json={"referrer_days": 30, "invitee_days": 14})
+    assert res.json() == {"referrer_days": 30, "invitee_days": 14}
+    assert client.put("/api/admin/ref-bonus", headers=h, json={"referrer_days": 999}).status_code == 400
+    assert referrals.bonus_settings() == {"referrer_days": 30, "invitee_days": 14}
+
+    # Регистрация по ссылке — та же цепочка, что для ссылок из админки.
+    body = {"email": "friend@example.com", "password": "secret-pass-1", "ref": me["code"].upper()}
+    friend = client.post("/api/web/register", json=body).json()["user"]["id"]
+    lazy = make_user(pool, "lazy@example.com")
+    assert referrals.attach(lazy, me["code"])
+    assert client.get("/api/web/referral", headers=_auth(owner)).json()["registrations"] == 2
+
+    res = client.post("/api/web/payments", headers=_auth(friend), json={"plan_id": pro["id"]})
+    assert res.status_code == 200, res.text
+    pid = next(iter(kassa.payments))
+    kassa.payments[pid]["test"] = False
+    kassa.pay(pid)
+    _notify(client, "payment.succeeded", {"id": pid})
+
+    # Приглашённый: 30 дней оплаты + 14 бонусных; пригласивший (подписка кончилась) — 30 дней с сегодня.
+    fsub = plans.subscription(friend)
+    assert abs((fsub["ends_at"] - now_msk()) - timedelta(days=44)) < timedelta(minutes=1)
+    osub = plans.subscription(owner)
+    assert not osub["expired"] and abs((osub["ends_at"] - now_msk()) - timedelta(days=30)) < timedelta(minutes=1)
+    assert owner in resumed
+    row = _sql(pool, "SELECT last_day FROM payments WHERE user_id = %s", (friend,)).fetchone()
+    assert row["last_day"].isoformat() == plans.last_day(fsub["ends_at"])
+    me = client.get("/api/web/referral", headers=_auth(owner)).json()
+    assert (me["registrations"], me["payers"], me["earned_days"]) == (2, 1, 30)
+    assert [e["meta"]["days"] for e in events.list_events(owner) if e["kind"] == "ref_bonus"] == [30]
+    hist = client.get("/api/web/plan", headers=_auth(friend)).json()["history"]
+    assert any(x["kind"] == "ref_bonus" for x in hist)
+
+    # Вторая оплата приглашённого бонуса не даёт.
+    before = plans.subscription(owner)["ends_at"]
+    client.post("/api/web/payments", headers=_auth(friend), json={"plan_id": pro["id"]})
+    pid2 = [k for k in kassa.payments if k != pid][0]
+    kassa.payments[pid2]["test"] = False
+    kassa.pay(pid2)
+    _notify(client, "payment.succeeded", {"id": pid2})
+    assert plans.subscription(owner)["ends_at"] == before
+    assert _sql(pool, "SELECT COUNT(*) AS n FROM ref_bonuses").fetchone()["n"] == 1
+    personal = client.get("/api/admin/refs", headers=h).json()["personal"]
+    assert personal == {"links": 1, "registrations": 2, "bonuses": 1, "bonus_days": 44}
+
+
+def test_test_payment_and_admin_link_give_no_bonus(db, kassa, client):
+    pool = db
+    pro = make_plan(name="Про", price_rub=1000, days=30)
+    referrals.save_bonus_settings({"referrer_days": 30, "invitee_days": 14})
+    owner = make_user(pool, "o@example.com")
+    plans.set_subscription(owner, plan_id=pro["id"])
+    code = referrals.my_link(owner)["code"]
+    friend = make_user(pool, "f@example.com")
+    assert referrals.attach(friend, code)
+    referrals.save_link(None, {"code": "blog"})
+    reader = make_user(pool, "r@example.com")
+    assert referrals.attach(reader, "blog")
+
+    # Магазин в тестовом режиме (фикстура kassa) — бонуса нет; ссылка из админки бонуса не даёт никогда.
+    before = plans.subscription(owner)["ends_at"]
+    for uid in (friend, reader):
+        client.post("/api/web/payments", headers=_auth(uid), json={"plan_id": pro["id"]})
+    for pid in list(kassa.payments):
+        kassa.pay(pid)
+        _notify(client, "payment.succeeded", {"id": pid})
+    assert plans.subscription(owner)["ends_at"] == before
+    assert _sql(pool, "SELECT COUNT(*) AS n FROM ref_bonuses").fetchone()["n"] == 0
+    assert referrals.my_link(owner)["payers"] == 0
+    referrals.save_bonus_settings({})

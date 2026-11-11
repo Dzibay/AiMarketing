@@ -175,6 +175,24 @@ def test_update_workspace_validates_and_merges_ai_access(db):
         workspaces.update_workspace(user, ws, name=" ")
 
 
+def test_update_workspace_ai_style(db):
+    s = _seed(db)
+    user, ws = s["user"], s["ws"]
+    assert workspaces.get_workspace(user, ws)["ai_style"] == {"tone": "calm", "address": "vy", "model_class": ""}
+    out = workspaces.update_workspace(user, ws, ai_style={"tone": "sell", "address": "ty", "junk": 1})
+    assert out["ai_style"] == {"tone": "sell", "address": "ty", "model_class": ""}
+    # Частичное обновление не сбрасывает остальное; неизвестный тон — по умолчанию.
+    out = workspaces.update_workspace(user, ws, ai_style={"tone": "loud"})
+    assert out["ai_style"] == {"tone": "calm", "address": "ty", "model_class": ""}
+    prompt = workspaces.ai_style_prompt(out)
+    assert "спокойный" in prompt and "на «ты»" in prompt
+    # Выключенную или неизвестную модель выбрать нельзя, сбросить на «по умолчанию» можно.
+    with pytest.raises(YandexError) as err:
+        workspaces.update_workspace(user, ws, ai_style={"model_class": "nope"})
+    assert err.value.code == "model-class"
+    assert workspaces.update_workspace(user, ws, ai_style={"model_class": ""})["ai_style"]["model_class"] == ""
+
+
 def test_analytics_uses_workspace_campaigns_and_goal(db):
     s = _seed(db)
     user = s["user"]

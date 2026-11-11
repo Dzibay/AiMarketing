@@ -71,6 +71,7 @@ class WorkspacePatchBody(BaseModel):
     goal_id: int | None = None
     ai_notes: str | None = None
     ai_access: dict | None = None
+    ai_style: dict | None = None
     brief: dict | None = None
     archived: bool | None = None
 

@@ -73,6 +73,8 @@ def _plan_out(row: dict) -> dict:
         "is_trial": bool(row["is_trial"]),
         "active": bool(row["active"]),
         "position": int(row["position"]),
+        "discount_3_pct": float(row.get("discount_3_pct") or 0),
+        "discount_12_pct": float(row.get("discount_12_pct") or 0),
     }
 
 
@@ -95,6 +97,18 @@ def list_plans(*, for_admin: bool = False) -> list[dict]:
             item["users"] = int(r["users"])
         out.append(item)
     return out
+
+
+# На сколько сроков тарифа можно оплатить сразу (срок обычно месяц).
+TERMS = (1, 3, 12)
+
+
+def term_discount(plan: dict, months: int) -> float:
+    if months == 3:
+        return float(plan.get("discount_3_pct") or 0)
+    if months == 12:
+        return float(plan.get("discount_12_pct") or 0)
+    return 0.0
 
 
 def get_plan(plan_id: int) -> dict | None:
@@ -137,6 +151,8 @@ def _clean_plan(data: dict) -> dict:
         "is_trial": bool(data.get("is_trial")),
         "active": bool(data.get("active", True)),
         "position": int(data.get("position") or 0),
+        "discount_3_pct": _number(data.get("discount_3_pct"), "Скидка за 3 срока, %", maximum=99) or 0.0,
+        "discount_12_pct": _number(data.get("discount_12_pct"), "Скидка за 12 сроков, %", maximum=99) or 0.0,
     }
 
 
@@ -149,9 +165,10 @@ def save_plan(plan_id: int | None, data: dict) -> dict:
         if plan_id is None:
             row = conn.execute(
                 """
-                INSERT INTO plans (name, price_rub, days, units_limit, projects_limit, features, is_trial, active, position)
+                INSERT INTO plans (name, price_rub, days, units_limit, projects_limit, features, is_trial, active, position,
+                                   discount_3_pct, discount_12_pct)
                 VALUES (%(name)s, %(price_rub)s, %(days)s, %(units_limit)s, %(projects_limit)s, %(features)s,
-                        %(is_trial)s, %(active)s, %(position)s)
+                        %(is_trial)s, %(active)s, %(position)s, %(discount_3_pct)s, %(discount_12_pct)s)
                 RETURNING id
                 """,
                 fields,
@@ -161,7 +178,8 @@ def save_plan(plan_id: int | None, data: dict) -> dict:
                 """
                 UPDATE plans SET name = %(name)s, price_rub = %(price_rub)s, days = %(days)s,
                        units_limit = %(units_limit)s, projects_limit = %(projects_limit)s, features = %(features)s,
-                       is_trial = %(is_trial)s, active = %(active)s, position = %(position)s, updated_at = NOW()
+                       is_trial = %(is_trial)s, active = %(active)s, position = %(position)s,
+                       discount_3_pct = %(discount_3_pct)s, discount_12_pct = %(discount_12_pct)s, updated_at = NOW()
                 WHERE id = %(id)s
                 RETURNING id
                 """,
@@ -513,6 +531,31 @@ def extend_or_switch(conn, user_id: int, plan_id: int, days: int, now: datetime)
     return {"was_expired": was_expired, "renewed": False, "ends_at": new_end}
 
 
+def add_days(conn, user_id: int, days: int, now: datetime) -> dict:
+    """Дни к подписке с тарифом (бонус за приглашение): действует — с конца срока, закончилась — с сегодня.
+
+    Вызывать в транзакции conn. Подписка без тарифа или бессрочная — ничего не добавляем (days = 0).
+    Возвращает {"days", "was_expired", "ends_at"}.
+    """
+    sub = lock_subscription(conn, user_id)
+    if days <= 0 or sub["plan_id"] is None or sub["ends_at"] is None:
+        return {"days": 0, "was_expired": False, "ends_at": sub["ends_at"]}
+    if sub["ends_at"] > now:
+        new_end = sub["ends_at"] + timedelta(days=days)
+        conn.execute("UPDATE subscriptions SET ends_at = %s, updated_at = NOW() WHERE user_id = %s", (new_end, user_id))
+        return {"days": days, "was_expired": False, "ends_at": new_end}
+    new_end = now + timedelta(days=days)
+    conn.execute(
+        """
+        UPDATE subscriptions SET starts_at = %s, ends_at = %s, bonus_units = 0, bonus_period_start = NULL,
+               updated_at = NOW()
+        WHERE user_id = %s
+        """,
+        (now, new_end, user_id),
+    )
+    return {"days": days, "was_expired": True, "ends_at": new_end}
+
+
 def admin_view(user_id: int, sub: dict | None = None) -> dict:
     sub = sub or subscription(user_id)
     return {**public(sub), "units_limit": sub["units_limit"], "overrides": sub["overrides"]}
@@ -575,6 +618,8 @@ def offers(user_id: int) -> list[dict]:
                 "price_with_discount": round(plan["price_rub"] * (100 - pct) / 100, 2),
                 "discount_pct": pct,
                 "days": plan["days"],
+                # Скидка за оплату сразу на 3 и 12 сроков тарифа: {"1": 0, "3": 5, "12": 15}.
+                "term_discounts": {str(m): term_discount(plan, m) for m in TERMS},
                 "projects_limit": plan["projects_limit"],
                 "units_unlimited": plan["units_limit"] is None,
                 "units_factor": factor,

@@ -254,10 +254,16 @@ export const webApi = {
    * last_day, cancel_reason, confirmation_url, refunded_rub, test, created_at }].
    */
   plan: () => request('/api/web/plan'),
-  /** Сколько заплатить за тариф: { plan_name, days, kind: renew | change, amount_rub, extends }. */
-  paymentQuote: (planId) => request(`/api/web/payments/quote?plan_id=${encodeURIComponent(planId)}`),
+  /**
+   * Сколько заплатить за тариф на months (1, 3, 12) месяцев: { plan_name, months, days, kind: renew | change,
+   * price_rub (за месяц, со скидкой за переход), full_rub, change_discount_pct, term_discount_pct, amount_rub, extends }.
+   */
+  paymentQuote: (planId, months = 1) =>
+    request(`/api/web/payments/quote?plan_id=${encodeURIComponent(planId)}&months=${encodeURIComponent(months)}`),
   /** Платёж в ЮKassa: { payment, confirmation_url } — туда уводим пользователя. */
-  createPayment: (planId) => post('/api/web/payments', { plan_id: planId }),
+  createPayment: (planId, months = 1) => post('/api/web/payments', { plan_id: planId, months }),
+  /** «Ссылка для друзей»: { code, url, active, registrations, payers, earned_days, bonus: { referrer_days, invitee_days } }. */
+  referral: () => request('/api/web/referral'),
   /** Перепроверка платежа после возврата с ЮKassa: { payment }. */
   checkPayment: (id) => post(`/api/web/payments/${id}/check`),
   /** Промокод в кабинете: { kind, message, last_day }. */

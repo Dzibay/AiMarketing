@@ -247,7 +247,7 @@ def _days(first: date, stop: date, daily: list[dict], base: float) -> list[dict]
     return out
 
 
-HISTORY_KINDS = ("payment", "plan_changed", "promo")
+HISTORY_KINDS = ("payment", "plan_changed", "promo", "ref_bonus")
 
 
 def plan_history(user_id: int, limit: int = 30) -> list[dict]:

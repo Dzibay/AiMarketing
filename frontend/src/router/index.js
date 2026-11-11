@@ -118,7 +118,7 @@ const router = createRouter({
           path: 'cabinet/plan',
           name: 'plan',
           component: () => import('../views/PlanView.vue'),
-          meta: neutral('plan', 'Тариф'),
+          meta: neutral('plan', 'Тариф и лимит'),
         },
         {
           path: 'cabinet/welcome',
@@ -239,6 +239,8 @@ const router = createRouter({
     // Переключение чатов внутри раздела не прокручивает страницу наверх.
     if (to.name === 'ws-chat' && from.name === 'ws-chat' && to.params.wsId === from.params.wsId) return false
     if (to.name === 'chat' && from.name === 'chat') return false
+    // В настройках проекта #адрес — это вкладка, а не секция: прокручивать не к чему.
+    if (to.name === 'ws-settings') return to.path === from.path ? false : { top: 0 }
     // Якорь на секцию (#ai): страница дорисовывается после загрузки данных — ждём, пока секция появится.
     if (to.hash) {
       return new Promise((resolve) => {

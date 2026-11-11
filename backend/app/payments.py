@@ -25,7 +25,7 @@ from decimal import Decimal, InvalidOperation
 
 import httpx
 
-from app import events, plans
+from app import events, plans, referrals
 from app.clock import MSK, now_msk
 from app.config import settings
 from app.db import pool
@@ -281,6 +281,7 @@ def _public(row: dict) -> dict:
         "plan_id": row.get("plan_id"),
         "plan_name": row.get("plan_name") or "",
         "days": int(row["days"]),
+        "months": int(row.get("months") or 1),
         "kind": row["kind"],
         "amount_rub": float(row["amount_rub"]),
         "refunded_rub": float(row.get("refunded_rub") or 0),
@@ -307,25 +308,36 @@ def _admin(row: dict) -> dict:
     }
 
 
-def quote(user_id: int, plan_id: int) -> dict:
-    """Что пользователь заплатит за тариф: продление своего — по цене тарифа, переход — со скидкой."""
+def quote(user_id: int, plan_id: int, months: int = 1) -> dict:
+    """Что пользователь заплатит за тариф на months сроков (1, 3 или 12): продление своего — по цене
+    тарифа, переход — со скидкой за переход; за 3 и 12 сроков — ещё скидка за срок из тарифа."""
+    if months not in plans.TERMS:
+        raise YandexError("payments-field", "Оплатить можно на 1, 3 или 12 месяцев")
     offer = next((o for o in plans.offers(user_id) if o["id"] == plan_id), None)
     if offer is None:
         raise YandexError("not-found", "Этот тариф сейчас нельзя оплатить")
     sub = plans.subscription(user_id)
     renew = bool(sub["plan"] and sub["plan"]["id"] == plan_id)
-    amount = offer["price_rub"] if renew else offer["price_with_discount"]
+    price = float(offer["price_rub"] if renew else offer["price_with_discount"])
+    term_pct = float(offer["term_discounts"].get(str(months), 0))
+    amount = round(price * months * (100 - term_pct) / 100, 2)
     return {
         "plan_id": plan_id,
         "plan_name": offer["name"],
-        "days": int(offer["days"]),
+        "months": months,
+        "days": int(offer["days"]) * months,
         "kind": "renew" if renew else "change",
-        "amount_rub": round(float(amount), 2),
+        # Цена одного срока (уже со скидкой за переход), без скидки за срок и итог.
+        "price_rub": round(price, 2),
+        "full_rub": round(price * months, 2),
+        "change_discount_pct": 0.0 if renew else float(offer["discount_pct"]),
+        "term_discount_pct": term_pct,
+        "amount_rub": amount,
         "extends": renew and not sub["expired"] and sub["ends_at"] is not None,
     }
 
 
-def create_payment(user_id: int, plan_id: int) -> dict:
+def create_payment(user_id: int, plan_id: int, months: int = 1) -> dict:
     """Платёж в ЮKassa за тариф → {"payment": ..., "confirmation_url"} — туда отправляем пользователя."""
     row = _row()
     if not (_configured(row) and row.get("enabled")):
@@ -333,17 +345,20 @@ def create_payment(user_id: int, plan_id: int) -> dict:
     base = public_base_url()
     if not base:
         raise YandexError("payments-off", "Не задан адрес сайта (PUBLIC_BASE_URL) — ЮKassa некуда вернуть пользователя")
-    q = quote(user_id, plan_id)
+    q = quote(user_id, plan_id, months)
     if q["amount_rub"] < 1:
         raise YandexError("payments-field", "Этот тариф нельзя оплатить онлайн — напишите в поддержку")
     with pool.connection() as conn:
         pay = conn.execute(
             """
-            INSERT INTO payments (user_id, plan_id, plan_name, days, kind, amount_rub, test)
-            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            INSERT INTO payments (user_id, plan_id, plan_name, days, months, kind, amount_rub, test)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
             RETURNING id
             """,
-            (user_id, plan_id, q["plan_name"], q["days"], q["kind"], q["amount_rub"], bool(row.get("test_mode"))),
+            (
+                user_id, plan_id, q["plan_name"], q["days"], q["months"], q["kind"], q["amount_rub"],
+                bool(row.get("test_mode")),
+            ),
         ).fetchone()
     payment_id = int(pay["id"])
     description = f"{settings.app_name}: тариф «{q['plan_name']}» на {q['days']} дн."[:128]
@@ -454,6 +469,10 @@ def apply(payment_id: int) -> dict | None:
                 ("Тариф удалён — продлите подписку вручную", payment_id),
             ).fetchone()
         result = plans.extend_or_switch(conn, int(pay["user_id"]), int(pay["plan_id"]), int(pay["days"]), now)
+        # Первая настоящая оплата приглашённого по личной ссылке — дни ему и пригласившему.
+        bonus = None if pay["test"] else referrals.grant_bonus(conn, int(pay["user_id"]), payment_id, now)
+        if bonus and bonus["invitee"]["days"]:
+            result["ends_at"] = bonus["invitee"]["ends_at"]
         pay = conn.execute(
             """
             UPDATE payments SET applied_at = NOW(), paid_at = COALESCE(paid_at, NOW()), last_day = %s, updated_at = NOW()
@@ -474,7 +493,27 @@ def apply(payment_id: int) -> dict | None:
     )
     if result["was_expired"]:
         plans.resume(user_id)
+    if bonus:
+        _record_bonus(user_id, bonus, payment_id)
     return pay
+
+
+def _record_bonus(invitee_id: int, bonus: dict, payment_id: int) -> None:
+    for uid, part, role in ((invitee_id, bonus["invitee"], "invitee"), (bonus["referrer_id"], bonus["referrer"], "referrer")):
+        if not part["days"]:
+            continue
+        plan = plans.subscription(uid)["plan"]
+        events.record(
+            uid,
+            "ref_bonus",
+            role=role,
+            days=part["days"],
+            plan_id=plan["id"] if plan else None,
+            last_day=plans.last_day(part["ends_at"]),
+            payment_id=payment_id,
+        )
+        if part["was_expired"] and uid != invitee_id:
+            plans.resume(uid)
 
 
 def handle_notification(body: dict) -> str:

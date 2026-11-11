@@ -40,6 +40,14 @@ KPI_TYPES = ("", "cpa", "drr")
 MAX_AI_FACTS = 30
 # Ключ ответа о механике конверсий за 0 ₽.
 SCHEME_FACT = "zero_cost_scheme"
+# Как ИИ пишет объявления и ответы в проекте: тон и обращение — подсказкой модели.
+AI_TONES = {
+    "calm": "спокойный: без давления, восклицаний и громких обещаний",
+    "sell": "продающий: выгода клиента и чёткий призыв к действию, без преувеличений",
+    "expert": "экспертный: факты, цифры, точные формулировки",
+}
+AI_ADDRESS = {"vy": "на «вы»", "ty": "на «ты»"}
+DEFAULT_AI_STYLE = {"tone": "calm", "address": "vy", "model_class": ""}
 
 
 def _iso(value) -> str | None:
@@ -61,6 +69,38 @@ def normalize_ai_access(raw: dict | None) -> dict:
         pct = out["max_change_pct"]
     out["max_change_pct"] = max(0, min(pct, 500))
     return out
+
+
+def normalize_ai_style(raw: dict | None) -> dict:
+    """Тон, обращение и модель проекта; неизвестные значения — по умолчанию."""
+    out = dict(DEFAULT_AI_STYLE)
+    if not isinstance(raw, dict):
+        return out
+    if raw.get("tone") in AI_TONES:
+        out["tone"] = raw["tone"]
+    if raw.get("address") in AI_ADDRESS:
+        out["address"] = raw["address"]
+    out["model_class"] = str(raw.get("model_class") or "").strip()[:40]
+    return out
+
+
+def ai_style_prompt(ws: dict) -> str:
+    """Тон и обращение проекта — строкой для подсказки ИИ."""
+    style = normalize_ai_style(ws.get("ai_style"))
+    return (
+        f"Тон текстов для клиентов — {AI_TONES[style['tone']]}. "
+        f"К клиентам в объявлениях обращаемся {AI_ADDRESS[style['address']]}."
+    )
+
+
+def _clean_ai_style(current: dict, patch: dict) -> dict:
+    merged = normalize_ai_style({**normalize_ai_style(current), **patch})
+    if "model_class" in patch and merged["model_class"]:
+        from app import ai
+
+        if merged["model_class"] not in {c["id"] for c in ai.chat_classes()["items"]}:
+            raise YandexError("model-class", "Эта модель сейчас недоступна")
+    return merged
 
 
 def fact_key(raw) -> str:
@@ -250,7 +290,7 @@ def auto_attach_campaigns(user_id: int, campaign_row_ids: list[int]) -> int:
 _WS_COLUMNS = """
     w.id, w.user_id, w.client_row_id, w.counter_id, w.counter_row_id, w.name, w.site, w.url_template,
     w.kpi_type, w.kpi_target, w.monthly_budget_kopecks, w.goal_id, w.ai_notes, w.ai_access, w.brief,
-    w.ai_facts, w.archived_at, w.created_at, w.updated_at,
+    w.ai_facts, w.ai_style, w.archived_at, w.created_at, w.updated_at,
     cl.name AS client_name, cl.kpi_type AS client_kpi_type, cl.kpi_target AS client_kpi_target,
     m.name AS counter_name, m.site AS counter_site, m.enabled AS counter_enabled,
     y.yandex_login AS counter_login,
@@ -295,6 +335,7 @@ def _ws_out(row: dict) -> dict:
         "ai_notes": row["ai_notes"],
         "brief": normalize_brief(row.get("brief")),
         "ai_access": normalize_ai_access(row.get("ai_access")),
+        "ai_style": normalize_ai_style(row.get("ai_style")),
         "ai_facts": normalize_ai_facts(row.get("ai_facts")),
         "archived": row.get("archived_at") is not None,
         "locked": bool(row.get("_locked")),
@@ -489,6 +530,9 @@ def update_workspace(user_id: int, workspace_id: int, **fields) -> dict:
         merged = normalize_ai_access({**current, **patch})
         sets.append("ai_access = %s")
         params.append(Jsonb(merged))
+    if "ai_style" in fields and fields["ai_style"] is not None:
+        sets.append("ai_style = %s")
+        params.append(Jsonb(_clean_ai_style(ws.get("ai_style"), dict(fields["ai_style"]))))
     if fields.get("archived") is not None:
         sets.append("archived_at = CASE WHEN %s THEN COALESCE(archived_at, NOW()) END")
         params.append(bool(fields["archived"]))

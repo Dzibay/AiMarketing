@@ -875,3 +875,12 @@ def test_chat_model_class_is_picked_per_chat(db, monkeypatch):
     assert chat["model_class"] == "fast"
     setup_ai(api_key=None, model="gpt-test")
     assert ai_agent.get_chat(s["user"], chat["id"])["ai"]["selected"] == "standard"
+
+    # Модель проекта из настроек «Помощник» — для новых чатов без явного выбора; выключена — по умолчанию.
+    setup_ai(api_key=None, model="gpt-test", fast="gpt-fast")
+    workspaces.update_workspace(s["user"], s["ws"], ai_style={"model_class": "fast"})
+    assert ai_agent.create_chat(s["user"], s["ws"])["model_class"] == "fast"
+    assert ai_agent.create_chat(s["user"], s["ws"], model_class="standard")["model_class"] == "standard"
+    assert ai_agent.create_chat(s["user"], None)["model_class"] == ""
+    setup_ai(api_key=None, model="gpt-test")
+    assert ai_agent.create_chat(s["user"], s["ws"])["model_class"] == ""
