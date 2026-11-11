@@ -392,6 +392,7 @@ import { AtSign } from '@lucide/vue'
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
 import { aiApi, errorText, wsApi } from '../../api/web'
+import { takeHomeQuestion } from '../../composables/useHomeAsk'
 import { refreshPending } from '../../composables/usePending'
 import { pushToast } from '../../composables/useToasts'
 import { loadWorkspaces, useWorkspaces } from '../../composables/useWorkspaces'
@@ -1202,8 +1203,16 @@ function generalAskPrompt(q) {
 }
 
 async function handleAsk() {
-  const prompt = props.general ? generalAskPrompt(route.query) : askPrompt(route.query)
-  if (!prompt) return
+  const prompt =
+    route.query.ask === 'text'
+      ? takeHomeQuestion()
+      : props.general
+        ? generalAskPrompt(route.query)
+        : askPrompt(route.query)
+  if (!prompt) {
+    await router.replace({ path: basePath.value })
+    return
+  }
   await router.replace({ path: basePath.value })
   try {
     fillModels(await aiApi.models())

@@ -15,9 +15,13 @@
         <Settings aria-hidden="true" />
         Настройки
       </RouterLink>
+      <RouterLink class="menu-item" role="menuitem" to="/cabinet/connections" @click="open = false">
+        <PlugZap aria-hidden="true" />
+        Подключения
+      </RouterLink>
       <RouterLink class="menu-item" role="menuitem" to="/cabinet/plan" @click="open = false">
         <CreditCard aria-hidden="true" />
-        Тариф<small v-if="planName" class="menu-item__note">{{ planName }}</small>
+        Тариф и лимит<small v-if="planName" class="menu-item__note">{{ planName }}</small>
       </RouterLink>
       <button class="menu-item is-danger" type="button" role="menuitem" @click="$emit('logout')">
         <LogOut aria-hidden="true" />
@@ -30,7 +34,7 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { RouterLink } from 'vue-router'
-import { ChevronDown, CreditCard, LogOut, Settings } from '@lucide/vue'
+import { ChevronDown, CreditCard, LogOut, PlugZap, Settings } from '@lucide/vue'
 import { useProfile } from '../composables/useProfile'
 
 defineEmits(['logout'])

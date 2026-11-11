@@ -1,35 +1,23 @@
-import {
-  ChartLine,
-  CreditCard,
-  History,
-  LayoutDashboard,
-  ListFilter,
-  Megaphone,
-  PlugZap,
-  Settings,
-  SlidersHorizontal,
-  Sparkles,
-  Workflow,
-} from '@lucide/vue'
+import { ChartLine, CreditCard, History, House, ListFilter, Megaphone, PlugZap, Settings, Sparkles, Workflow } from '@lucide/vue'
 
 /**
- * Одно меню, которое не меняется от выбора проекта. Переключатель проекта — фильтр: тот же раздел открывается
- * по всем проектам (/cabinet/…) или по одному (/w/:id/…). Раздел без версии «по всем» (Настройки проекта)
- * при «Все проекты» серый с подсказкой.
+ * Одно меню, которое не меняется от выбора проекта. Список проектов в меню — фильтр: тот же раздел открывается
+ * по всем проектам (/cabinet/…) или по одному (/w/:id/…). Настройки проекта — шестерёнка у выбранного проекта.
  *
  * Страницы помечают раздел в meta маршрута: { section, scope }. scope: 'all' — страница по всем проектам,
  * 'project' — по одному, 'neutral' — от проекта не зависит (подключения, тариф): фильтр на ней не сбрасывается.
+ * expert у раздела или вкладки — виден только в экспертном режиме (Настройки → Интерфейс).
  * feature у вкладки — функция тарифа: выключена — у вкладки замок, раздел открывается с подсказкой о тарифе.
  */
 export const SECTIONS = [
-  { key: 'summary', label: 'Сводка', icon: LayoutDashboard, all: '/cabinet', project: (id) => `/w/${id}/summary` },
+  { key: 'summary', label: 'Главная', icon: House, all: '/cabinet', project: (id) => `/w/${id}/summary` },
   {
     key: 'chat',
     label: 'ИИ-помощник',
-    short: 'ИИ',
     icon: Sparkles,
     all: '/cabinet/chat',
     project: (id) => `/w/${id}/chat`,
+    hidden: true, // в меню — кнопкой «Новый чат»
   },
   {
     key: 'campaigns',
@@ -40,15 +28,15 @@ export const SECTIONS = [
   },
   {
     key: 'queries',
-    label: 'Чистка запросов',
-    short: 'Запросы',
+    label: 'Запросы',
+    title: 'Чистка запросов',
     icon: ListFilter,
     all: '/cabinet/queries',
     project: (id) => `/w/${id}/queries`,
   },
   {
     key: 'analytics',
-    label: 'Аналитика',
+    label: 'Отчёты',
     icon: ChartLine,
     all: '/cabinet/analytics',
     project: (id) => `/w/${id}/analytics`,
@@ -59,27 +47,25 @@ export const SECTIONS = [
     icon: Workflow,
     all: '/cabinet/autopilot',
     project: (id) => `/w/${id}/autopilot`,
+    expert: true,
   },
   { key: 'history', label: 'История', icon: History, all: '/cabinet/history', project: (id) => `/w/${id}/history` },
   {
     key: 'project-settings',
     label: 'Настройки проекта',
-    icon: SlidersHorizontal,
+    icon: Settings,
     all: null,
     project: (id) => `/w/${id}/settings`,
-    hint: 'Выберите проект',
+    hidden: true, // шестерёнка у выбранного проекта
   },
 ]
 
-/** Служебные разделы внизу меню: от проекта не зависят. */
+/** Служебные разделы: в меню профиля, от проекта не зависят. */
 export const SERVICE = [
-  { key: 'connections', label: 'Подключения', icon: PlugZap, to: '/cabinet/connections' },
   { key: 'settings', label: 'Настройки', icon: Settings, to: '/cabinet/settings' },
-  { key: 'plan', label: 'Тариф', icon: CreditCard, to: '/cabinet/plan' },
+  { key: 'connections', label: 'Подключения', icon: PlugZap, to: '/cabinet/connections' },
+  { key: 'plan', label: 'Тариф и лимит', icon: CreditCard, to: '/cabinet/plan' },
 ]
-
-/** На нижней панели телефона — четыре главных раздела, остальные в «Ещё». */
-export const TABBAR_KEYS = ['summary', 'chat', 'campaigns', 'queries']
 
 /** Адрес раздела при выбранном проекте (id) или «Все проекты» (null); null — раздел без версии «по всем». */
 export function sectionTo(section, projectId) {
@@ -87,21 +73,21 @@ export function sectionTo(section, projectId) {
   return section.all
 }
 
-/** Вкладки внутри раздела — в шапке страницы. */
+/** Вкладки внутри раздела — под верхней строкой. Вкладки с expert — только в экспертном режиме. */
 export function sectionTabs(key, projectId) {
   const p = projectId ? `/w/${projectId}` : null
   switch (key) {
     case 'queries':
       return [
         { label: 'Разбор запросов', to: p ? `${p}/queries` : '/cabinet/queries' },
-        { label: 'Списки минус-фраз', to: '/cabinet/negative-lists' },
+        { label: 'Списки минус-фраз', to: '/cabinet/negative-lists', expert: true },
       ]
     case 'analytics':
       if (!p) return []
       return [
         { label: 'Динамика', to: `${p}/analytics` },
-        { label: 'Площадки', to: `${p}/slices` },
-        { label: 'Объявления', to: `${p}/ad-stats` },
+        { label: 'Площадки', to: `${p}/slices`, expert: true },
+        { label: 'Объявления', to: `${p}/ad-stats`, expert: true },
       ]
     case 'autopilot':
       if (!p) return [{ label: 'Общие правила', to: '/cabinet/autopilot', feature: 'autopilot' }]
@@ -113,6 +99,7 @@ export function sectionTabs(key, projectId) {
       return [
         { label: 'Профиль', to: '/cabinet/settings', exact: true },
         { label: 'Уведомления', to: '/cabinet/settings/notifications' },
+        { label: 'Интерфейс', to: '/cabinet/settings/interface' },
       ]
     default:
       return []

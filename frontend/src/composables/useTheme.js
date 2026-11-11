@@ -1,7 +1,7 @@
 import { computed, ref } from 'vue'
 
 const THEME_KEY = 'aimarketing-theme'
-const COLORS = { light: '#eef3ef', dark: '#141a17' }
+const COLORS = { light: '#f4f4f1', dark: '#0f100f' }
 
 const media = window.matchMedia?.('(prefers-color-scheme: dark)')
 const theme = ref(document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light')

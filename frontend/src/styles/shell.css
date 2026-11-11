@@ -1,0 +1,886 @@
+/* ===================== Оболочка кабинета «Диалог» ===================== */
+/* Меню слева на всю высоту (список прокручивается, лимит ИИ всегда внизу), справа — верхняя строка,
+   заголовок с вкладками и страница. До 900px меню выезжает по кнопке. Макет — docs/mockups/dialog.html. */
+
+.dshell {
+  --side-w: 268px;
+  display: grid;
+  grid-template-columns: var(--side-w) minmax(0, 1fr);
+  min-height: 100vh;
+}
+
+/* ---- меню ---- */
+
+.dside {
+  position: sticky;
+  top: 0;
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  background: var(--side);
+}
+
+.dside__scroll {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  overflow: auto;
+  padding: 14px 10px 12px;
+  scrollbar-width: thin;
+}
+
+.dside__brand {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 4px 8px 12px;
+  font-size: 16px;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+}
+
+.dside__brand i {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  background: var(--lime);
+  color: var(--on-lime);
+}
+
+.dside__brand i svg {
+  width: 16px;
+  height: 16px;
+}
+
+.dside__brand em {
+  padding: 2px 7px;
+  border-radius: var(--pill);
+  background: var(--ink);
+  color: var(--bg);
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 700;
+  letter-spacing: 0;
+}
+
+.dside__newchat {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  flex: none;
+  height: 40px;
+  margin-bottom: 8px;
+  padding: 0 12px;
+  border-radius: 11px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.dside__newchat:hover {
+  border-color: var(--faint);
+}
+
+.dside__newchat svg {
+  width: 17px;
+  height: 17px;
+}
+
+.dside__nav {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.srow {
+  appearance: none;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: none;
+  width: 100%;
+  height: 34px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 9px;
+  background: none;
+  color: var(--muted);
+  font-size: 14px;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+
+.srow > svg {
+  flex: none;
+  width: 17px;
+  height: 17px;
+}
+
+.srow__t {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.srow:hover {
+  background: color-mix(in srgb, var(--ink) 6%, transparent);
+  color: var(--ink);
+}
+
+.srow.active {
+  background: var(--surface);
+  color: var(--ink);
+  box-shadow: var(--shadow-sm);
+}
+
+.srow--quiet {
+  color: var(--faint);
+  font-weight: 500;
+}
+
+.srow .srow__lock {
+  width: 14px;
+  height: 14px;
+  color: var(--faint);
+}
+
+.srow-wrap {
+  position: relative;
+  display: flex;
+  flex: none;
+}
+
+.srow-wrap:has(.srow__gear) .srow {
+  padding-right: 36px;
+}
+
+.srow__gear {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 7px;
+  color: var(--muted);
+}
+
+.srow__gear:hover {
+  background: var(--side);
+  color: var(--ink);
+}
+
+.srow__gear svg {
+  width: 15px;
+  height: 15px;
+}
+
+.sdot {
+  display: inline-block;
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--faint);
+}
+
+.sdot--ok {
+  background: var(--ok);
+}
+
+.sdot--warn {
+  background: var(--warn);
+}
+
+.sdot--lime {
+  background: var(--lime);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--lime) 35%, transparent);
+}
+
+.sdot--run {
+  background: var(--ink);
+  animation: sdot-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes sdot-pulse {
+  50% {
+    opacity: 0.3;
+  }
+}
+
+.srow--chat {
+  font-weight: 500;
+}
+
+.srow--chat > .sdot {
+  margin: 0 4px 0 5px;
+}
+
+.srow--chat > svg {
+  width: 15px;
+  height: 15px;
+  color: var(--faint);
+}
+
+.srow__n {
+  flex: none;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 6px;
+  border-radius: var(--pill);
+  background: var(--lime);
+  color: var(--on-lime);
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 20px;
+  text-align: center;
+}
+
+.dside__h {
+  margin: 16px 10px 4px;
+  color: var(--faint);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.dside__group {
+  margin: 10px 10px 2px;
+  color: var(--faint);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.dside__foot {
+  flex: none;
+  display: block;
+  padding: 12px 20px 14px;
+  border-top: 1px solid var(--line);
+}
+
+.dside__foot:hover {
+  background: color-mix(in srgb, var(--ink) 5%, transparent);
+}
+
+.dside__limit {
+  display: flex;
+  justify-content: space-between;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.dside__limit b {
+  color: var(--ink);
+}
+
+.dside__bar {
+  display: block;
+  height: 6px;
+  margin: 6px 0;
+  border-radius: 3px;
+  background: var(--line);
+  overflow: hidden;
+}
+
+.dside__bar i {
+  display: block;
+  height: 100%;
+  border-radius: 3px;
+  background: var(--ink);
+}
+
+.dside__foot.is-near .dside__bar i {
+  background: var(--warn);
+}
+
+.dside__foot.is-over .dside__bar i {
+  background: var(--danger);
+}
+
+.dside__foot small {
+  display: block;
+  color: var(--faint);
+  font-size: 12px;
+}
+
+.dscrim,
+.dbar__burger {
+  display: none;
+}
+
+/* Логотип на страницах вне кабинета (админка). */
+.side__logo {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: var(--accent-soft);
+}
+
+/* ---- верхняя строка ---- */
+
+.dmain {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.dbar {
+  position: sticky;
+  top: 0;
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 56px;
+  padding: 0 20px;
+  background: var(--glass);
+  backdrop-filter: blur(12px);
+}
+
+.dbar__scope {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  margin-right: auto;
+}
+
+.dchip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  height: 28px;
+  padding: 0 10px;
+  border-radius: var(--pill);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.dchip svg {
+  flex: none;
+  width: 14px;
+  height: 14px;
+}
+
+.dchip__t {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.dchip--btn:hover {
+  border-color: var(--faint);
+  color: var(--ink);
+}
+
+.dchip--lime {
+  flex: none;
+  background: var(--lime);
+  border-color: transparent;
+  color: var(--on-lime);
+  font-weight: 700;
+}
+
+.dchip--lime.dchip--btn:hover,
+.dchip--lime.active {
+  border-color: var(--on-lime);
+  color: var(--on-lime);
+}
+
+.dicon {
+  appearance: none;
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 34px;
+  height: 34px;
+  border: 0;
+  border-radius: 9px;
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.dicon:hover {
+  background: var(--side);
+  color: var(--ink);
+}
+
+.dicon svg {
+  width: 18px;
+  height: 18px;
+}
+
+/* Профиль в строке — только аватар. */
+.dbar .profile__toggle {
+  padding: 0;
+  border: 0;
+  background: none;
+}
+
+.dbar .profile__text,
+.dbar .profile__toggle > svg {
+  display: none;
+}
+
+.dbar .profile__avatar {
+  width: 32px;
+  height: 32px;
+  background: var(--ink);
+  color: var(--bg);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.dbar .profile__menu {
+  border-radius: 12px;
+}
+
+/* ---- заголовок страницы и вкладки ---- */
+
+.dpage {
+  width: 100%;
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: 8px 28px 48px;
+}
+
+.dhead {
+  margin-bottom: 20px;
+}
+
+.dhead h1 {
+  margin: 4px 0 0;
+  font-size: 30px;
+  font-weight: 800;
+  line-height: 1.15;
+  letter-spacing: -0.03em;
+}
+
+.dtabs {
+  display: flex;
+  gap: 4px;
+  margin-top: 16px;
+  overflow-x: auto;
+  border-bottom: 1px solid var(--line);
+  scrollbar-width: none;
+}
+
+.dtabs__tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+  height: 38px;
+  padding: 0 12px;
+  color: var(--muted);
+  font-size: 14px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.dtabs__tab:hover {
+  color: var(--ink);
+}
+
+.dtabs__tab.active {
+  color: var(--ink);
+  box-shadow: inset 0 -2px 0 var(--ink);
+}
+
+.dtabs__lock {
+  width: 14px;
+  height: 14px;
+  color: var(--faint);
+}
+
+.app__content > .wrap {
+  width: 100%;
+}
+
+/* ---- раздел экспертного режима в обычном режиме ---- */
+
+.dgate {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 56px 24px;
+  border: 1px dashed var(--line-2);
+  border-radius: var(--r-card);
+  color: var(--muted);
+  text-align: center;
+}
+
+.dgate > svg {
+  width: 26px;
+  height: 26px;
+  color: var(--faint);
+}
+
+.dgate h2 {
+  margin: 0;
+  color: var(--ink);
+  font-size: 19px;
+}
+
+.dgate p {
+  max-width: 480px;
+  margin: 0;
+  font-size: 14px;
+}
+
+.dgate > div {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+/* ---- главная: вопрос ИИ ---- */
+
+.hask {
+  margin: 4px 0 28px;
+}
+
+.hask__title {
+  margin: 0;
+  font-size: 26px;
+  font-weight: 800;
+  letter-spacing: -0.03em;
+}
+
+.hask__lead {
+  max-width: 640px;
+  margin: 6px 0 16px;
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.hask__box {
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+  padding: 12px 12px 12px 18px;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
+}
+
+.hask__box:focus-within {
+  border-color: var(--ink);
+}
+
+.hask__box textarea {
+  flex: 1;
+  min-height: 48px;
+  padding: 6px 0;
+  border: 0;
+  outline: 0;
+  background: none;
+  color: var(--ink);
+  font: inherit;
+  font-size: 16px;
+  resize: none;
+  box-shadow: none;
+}
+
+.hask__send {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 40px;
+  height: 40px;
+  border: 0;
+  border-radius: 12px;
+  background: var(--lime);
+  color: var(--on-lime);
+  cursor: pointer;
+}
+
+.hask__send:disabled {
+  background: var(--side);
+  color: var(--faint);
+  cursor: default;
+}
+
+.hask__send svg {
+  width: 19px;
+  height: 19px;
+}
+
+.hask__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.hask__chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 34px;
+  padding: 0 13px;
+  border: 1px solid var(--line);
+  border-radius: var(--pill);
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.hask__chip:hover {
+  border-color: var(--faint);
+}
+
+.hask__chip svg {
+  width: 15px;
+  height: 15px;
+  color: var(--muted);
+}
+
+/* ---- узкий экран: меню выезжает слева ---- */
+
+@media (max-width: 900px) {
+  .dshell {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .dside {
+    position: fixed;
+    inset: 0 auto 0 0;
+    width: min(300px, 86vw);
+    transform: translateX(-102%);
+    transition: transform 0.22s ease;
+  }
+
+  .dshell.is-drawer .dside {
+    transform: none;
+    box-shadow: var(--shadow-pop);
+  }
+
+  .dshell.is-drawer .dscrim {
+    position: fixed;
+    inset: 0;
+    z-index: 49;
+    display: block;
+    border: 0;
+    background: var(--overlay);
+  }
+
+  .dbar {
+    padding: 0 12px;
+  }
+
+  .dbar__burger {
+    display: grid;
+  }
+
+  .dpage {
+    padding: 4px 16px 40px;
+  }
+
+  .dhead h1 {
+    font-size: 24px;
+  }
+}
+
+@media (max-width: 520px) {
+  .dchip--lime {
+    padding: 0 8px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dside {
+    transition: none;
+  }
+
+  .sdot--run {
+    animation: none;
+  }
+}
+
+/* ===================== Элементы страниц в стиле «Диалога» ===================== */
+/* Общий слой поверх site.css: та же разметка страниц, форма и вес — как в docs/mockups/dialog.html.
+   Кнопки скруглены, а не «таблетки», плоские; карточки без тени; заголовки и цифры жирнее. */
+
+.btn {
+  height: 38px;
+  padding: 0 15px;
+  border-radius: var(--radius);
+  font-size: 14px;
+  font-weight: 700;
+  box-shadow: none;
+}
+
+.btn--accent,
+.btn--accent:hover {
+  box-shadow: none;
+}
+
+.btn--accent:hover:not(:disabled) {
+  filter: brightness(1.12);
+}
+
+.btn--ghost {
+  border-color: var(--line);
+}
+
+.btn--ghost:hover:not(:disabled) {
+  border-color: var(--faint);
+  background: var(--surface);
+}
+
+.btn--xs {
+  height: 30px;
+  padding: 0 10px;
+  border-radius: var(--r-sm);
+  font-size: 13px;
+}
+
+.btn:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: 2px;
+}
+
+.panel,
+.stat-card {
+  box-shadow: none;
+}
+
+.panel {
+  padding: 18px 20px;
+}
+
+.panel h2 {
+  font-size: 17px;
+  font-weight: 800;
+  letter-spacing: -0.015em;
+}
+
+.panel .subhead {
+  font-size: 15px;
+  font-weight: 800;
+}
+
+.page-lead {
+  color: var(--muted);
+  font-size: 15px;
+  line-height: 1.5;
+}
+
+/* Переключатели: квадратные, как вкладки «7 дней / 30 дней» в макете. */
+.seg {
+  gap: 0;
+  padding: 3px;
+  border: 0;
+  border-radius: 10px;
+  background: var(--side);
+}
+
+.seg button {
+  height: 30px;
+  padding: 0 12px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.seg button.active {
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
+}
+
+/* Цифры сводки — крупно и жирно, иконки — квадратные плашки. */
+.stat-card strong {
+  font-size: 26px;
+  font-weight: 800;
+  letter-spacing: -0.03em;
+}
+
+.stat-card small {
+  font-weight: 700;
+}
+
+.stat-card__icon {
+  border-radius: 9px;
+  background: var(--side);
+  color: var(--ink);
+}
+
+.stat-card__icon[class*='is-'] {
+  background: var(--side);
+  color: var(--ink);
+}
+
+.chip {
+  font-weight: 700;
+}
+
+.delta {
+  font-weight: 700;
+}
+
+/* Таблицы: подписи колонок мелко и жирно, строки посвободнее. */
+.table {
+  font-size: 14px;
+}
+
+.table th {
+  padding: 8px 12px;
+  color: var(--faint);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.table td {
+  padding: 10px 12px;
+}
+
+.table tr:last-child td {
+  border-bottom: 0;
+}
+
+/* Поля ввода: тонкая рамка, без цветного свечения в фокусе. */
+.field label {
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.field input,
+.field select,
+.field textarea,
+.field input[type='search'] {
+  border-color: var(--line);
+  border-radius: var(--radius);
+}
+
+.field input:focus,
+.field select:focus,
+.field textarea:focus {
+  border-color: var(--ink);
+  box-shadow: none;
+}

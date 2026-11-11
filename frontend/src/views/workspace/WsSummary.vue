@@ -1,4 +1,6 @@
 <template>
+  <HomeAsk :ws-id="ws?.id" />
+
   <div v-if="loading && !data" class="panel"><p class="empty">Собираем сводку…</p></div>
   <div v-else-if="!data" class="panel">
     <p class="empty">{{ loadError || 'Сводка недоступна.' }}</p>
@@ -244,6 +246,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { RouterLink } from 'vue-router'
 import { BadgePercent, CalendarClock, Crosshair, Landmark, PiggyBank, Target, Wallet } from '@lucide/vue'
+import HomeAsk from '../../components/HomeAsk.vue'
 import Sparkline from '../../components/Sparkline.vue'
 import TrendChart from '../../components/TrendChart.vue'
 import { errorDetail, errorText, jobProgressText, webApi, wsApi } from '../../api/web'

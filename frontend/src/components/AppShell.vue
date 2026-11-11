@@ -1,138 +1,191 @@
 <template>
-  <div class="app" :class="{ 'is-collapsed': collapsed }">
-    <aside class="side" aria-label="Меню">
-      <div class="side__top">
-        <RouterLink class="side__brand" to="/cabinet" aria-label="AiMarketing — сводка">
-          <span class="side__logo"><BrandMark :size="30" /></span>
-          <strong class="side__name">Ai<span>Marketing</span></strong>
+  <div class="dshell" :class="{ 'is-drawer': drawer, 'is-expert': expert }">
+    <aside class="dside" aria-label="Меню" @click="closeDrawerOnLink">
+      <div class="dside__scroll">
+        <RouterLink class="dside__brand" to="/cabinet" aria-label="AiMarketing — главная">
+          <i aria-hidden="true"><Sparkles /></i>
+          <span>AiMarketing</span>
+          <em v-if="expert" title="Включён экспертный режим">эксперт</em>
         </RouterLink>
-        <button
-          class="side__collapse"
-          type="button"
-          :aria-label="collapsed ? 'Развернуть меню' : 'Свернуть меню'"
-          :title="collapsed ? 'Развернуть меню' : 'Свернуть меню'"
-          @click="toggleCollapsed"
-        >
-          <PanelLeftOpen v-if="collapsed" aria-hidden="true" />
-          <PanelLeftClose v-else aria-hidden="true" />
-        </button>
-      </div>
 
-      <ProjectPicker v-if="accessOk" class="side__picker" :compact="collapsed" />
+        <RouterLink v-if="accessOk" class="dside__newchat" :to="chatTo">
+          <Plus aria-hidden="true" />
+          Новый чат
+        </RouterLink>
 
-      <nav class="side__nav" aria-label="Разделы">
-        <template v-for="item in sections" :key="item.key">
+        <nav class="dside__nav" aria-label="Разделы">
           <RouterLink
-            v-if="item.to"
-            class="side__item"
+            v-for="item in sections"
+            :key="item.key"
+            class="srow"
             :class="{ active: item.active }"
             :to="item.to"
-            :title="collapsed ? item.label : undefined"
           >
             <component :is="item.icon" aria-hidden="true" />
-            <span class="side__label">{{ item.label }}</span>
-            <span v-if="item.badge" class="side__badge">{{ item.badge }}</span>
+            <span class="srow__t">{{ item.label }}</span>
           </RouterLink>
-          <span v-else class="side__item is-disabled" :title="item.hint" aria-disabled="true">
-            <component :is="item.icon" aria-hidden="true" />
-            <span class="side__label">
-              {{ item.label }}
-              <small>{{ item.hint }}</small>
-            </span>
-          </span>
+        </nav>
+
+        <template v-if="accessOk">
+          <h4 class="dside__h">Проекты</h4>
+          <button class="srow" :class="{ active: !projectId }" type="button" @click="selectProject(null)">
+            <Layers aria-hidden="true" />
+            <span class="srow__t">Все проекты</span>
+          </button>
+          <template v-for="group in projectGroups" :key="group.id">
+            <h5 v-if="group.name" class="dside__group">{{ group.name }}</h5>
+            <div v-for="ws in group.items" :key="ws.id" class="srow-wrap">
+              <button
+                class="srow"
+                :class="{ active: ws.id === projectId }"
+                type="button"
+                :title="projectHint(ws)"
+                @click="selectProject(ws.id)"
+              >
+                <span class="sdot" :class="`sdot--${projectTone(ws)}`" aria-hidden="true"></span>
+                <span class="srow__t">{{ ws.name }}</span>
+                <Lock v-if="ws.locked" class="srow__lock" aria-label="не входит в тариф" />
+              </button>
+              <RouterLink
+                v-if="ws.id === projectId"
+                class="srow__gear"
+                :to="`/w/${ws.id}/settings`"
+                title="Настройки проекта"
+                aria-label="Настройки проекта"
+              >
+                <Settings aria-hidden="true" />
+              </RouterLink>
+            </div>
+          </template>
+          <RouterLink class="srow srow--quiet" to="/cabinet/connections">
+            <Plus aria-hidden="true" />
+            <span class="srow__t">Добавить сайт</span>
+          </RouterLink>
+
+          <template v-for="block in chatBlocks" :key="block.title">
+            <h4 class="dside__h">{{ block.title }}</h4>
+            <RouterLink
+              v-for="c in block.items"
+              :key="c.id"
+              class="srow srow--chat"
+              :class="{ active: String(c.id) === String(route.params.chatId || '') }"
+              :to="chatLink(c)"
+              :title="c.title"
+            >
+              <span v-if="c.status === 'running'" class="sdot sdot--run" aria-label="ИИ отвечает"></span>
+              <span v-else-if="c.pending_actions" class="sdot sdot--lime" aria-hidden="true"></span>
+              <MessageSquare v-else aria-hidden="true" />
+              <span class="srow__t">{{ c.title }}</span>
+              <span v-if="c.pending_actions" class="srow__n" :title="`Ждут решения: ${c.pending_actions}`">
+                {{ c.pending_actions }}
+              </span>
+            </RouterLink>
+          </template>
+          <RouterLink v-if="chats.length > RECENT_LIMIT" class="srow srow--quiet" :to="chatTo">
+            <span class="srow__t">Все чаты</span>
+          </RouterLink>
         </template>
-      </nav>
-
-      <nav class="side__nav side__nav--service" aria-label="Служебные разделы">
-        <RouterLink
-          v-for="item in SERVICE"
-          :key="item.key"
-          class="side__item"
-          :class="{ active: route.meta.section === item.key }"
-          :to="item.to"
-          :title="collapsed ? item.label : undefined"
-        >
-          <component :is="item.icon" aria-hidden="true" />
-          <span class="side__label">{{ item.label }}</span>
-        </RouterLink>
-        <button
-          class="side__item"
-          type="button"
-          :title="collapsed ? themeLabel : undefined"
-          @click="toggleTheme"
-        >
-          <Sun v-if="isDark" aria-hidden="true" />
-          <Moon v-else aria-hidden="true" />
-          <span class="side__label">{{ themeLabel }}</span>
-        </button>
-      </nav>
-    </aside>
-
-    <div class="app__main">
-      <!-- На телефоне меню нет: логотип, переключатель проекта и профиль — в верхней строке. -->
-      <div class="mobile-top">
-        <RouterLink class="side__logo" to="/cabinet" aria-label="AiMarketing — сводка"><BrandMark :size="28" /></RouterLink>
-        <ProjectPicker v-if="accessOk" class="mobile-top__picker" />
-        <ProfileMenu @logout="logout" />
       </div>
 
-      <header class="page-head">
-        <div class="page-head__title">
-          <h1>{{ title }}</h1>
-          <p v-if="scopeLabel">{{ scopeLabel }}</p>
-        </div>
-        <div class="page-head__tools">
-          <RouterLink
-            v-if="limitChip"
-            class="limit-chip"
-            :class="`is-${limitLevel || 'ok'}`"
-            to="/cabinet/plan"
-            title="Расход лимита и тариф"
-          >
-            <span v-if="limitChip.percent !== null" class="limit-chip__bar" aria-hidden="true">
-              <span :style="{ width: `${limitChip.percent}%` }"></span>
+      <RouterLink
+        v-if="limitChip"
+        class="dside__foot"
+        :class="`is-${limitLevel || 'ok'}`"
+        to="/cabinet/plan"
+        title="Сколько помощника осталось в этом периоде. Нажмите, чтобы открыть тариф"
+      >
+        <template v-if="limitChip.percent !== null">
+          <span class="dside__limit"><span>Лимит ИИ</span><b>{{ limitChip.percentText }}</b></span>
+          <span class="dside__bar" aria-hidden="true"><i :style="{ width: `${limitChip.percent}%` }"></i></span>
+        </template>
+        <small>{{ limitChip.text }}</small>
+      </RouterLink>
+    </aside>
+
+    <button class="dscrim" type="button" aria-label="Закрыть меню" @click="drawer = false"></button>
+
+    <div class="dmain">
+      <header class="dbar">
+        <button class="dicon dbar__burger" type="button" aria-label="Меню" @click="drawer = true">
+          <Menu aria-hidden="true" />
+        </button>
+        <div class="dbar__scope">
+          <template v-if="currentSection">
+            <RouterLink
+              v-if="project"
+              class="dchip dchip--btn"
+              :to="`/w/${project.id}/settings`"
+              title="Открыть настройки проекта"
+            >
+              <span class="sdot" :class="`sdot--${projectTone(project)}`" aria-hidden="true"></span>
+              <span class="dchip__t">{{ project.name }}</span>
+              <Settings aria-hidden="true" />
+            </RouterLink>
+            <span v-else-if="currentSection.all" class="dchip">
+              <Layers aria-hidden="true" />
+              Все проекты
             </span>
-            <span class="limit-chip__text">{{ limitChip.text }}</span>
-          </RouterLink>
-          <RouterLink
-            v-if="accessOk"
-            class="pending-chip"
-            :class="{ 'has-items': pendingCount > 0, active: route.meta.section === 'pending' }"
-            to="/cabinet/pending"
-            title="Предложения ИИ, которые ждут вашего решения"
-          >
-            <Inbox aria-hidden="true" />
-            <span class="pending-chip__label">Ждёт решения:</span>
-            <strong>{{ pendingCount }}</strong>
-          </RouterLink>
-          <LoadsIndicator v-if="accessOk" />
-          <ProfileMenu class="page-head__profile" @logout="logout" />
+          </template>
         </div>
+        <RouterLink
+          v-if="accessOk && pendingCount > 0"
+          class="dchip dchip--btn dchip--lime"
+          :class="{ active: route.meta.section === 'pending' }"
+          to="/cabinet/pending"
+          title="Предложения ИИ, которые ждут вашего решения"
+        >
+          Ждёт решения: {{ pendingCount }}
+        </RouterLink>
+        <LoadsIndicator v-if="accessOk && expert" />
+        <button class="dicon" type="button" :aria-label="themeLabel" :title="themeLabel" @click="toggleTheme">
+          <Sun v-if="isDark" aria-hidden="true" />
+          <Moon v-else aria-hidden="true" />
+        </button>
+        <ProfileMenu @logout="logout" />
       </header>
 
-      <nav v-if="tabs.length > 1" class="page-tabs" :aria-label="title">
-        <RouterLink
-          v-for="tab in tabs"
-          :key="tab.to"
-          class="page-tabs__tab"
-          :class="{ active: pageMatches(tab, route.path) }"
-          :to="tab.to"
-        >
-          {{ tab.label }}
-          <Lock v-if="featureLocked(subscription, tab.feature)" class="page-tabs__lock" aria-label="не входит в тариф" />
-        </RouterLink>
-      </nav>
-
-      <main class="cabinet app__content">
-        <div v-if="limitBanner" class="notice limit-banner" :class="limitBanner.cls" role="status">
-          <span>{{ limitBanner.text }}</span>
-          <RouterLink class="btn btn--ghost btn--xs" :to="limitBanner.to || '/cabinet/plan'">{{ limitBanner.action }}</RouterLink>
-          <button class="icon-btn" type="button" aria-label="Скрыть" @click="dismissBanner">
-            <X aria-hidden="true" />
-          </button>
+      <div class="dpage">
+        <div class="dhead">
+          <h1>{{ title }}</h1>
+          <nav v-if="tabs.length > 1" class="dtabs" :aria-label="title">
+            <RouterLink
+              v-for="tab in tabs"
+              :key="tab.to"
+              class="dtabs__tab"
+              :class="{ active: pageMatches(tab, route.path) }"
+              :to="tab.to"
+            >
+              {{ tab.label }}
+              <Lock v-if="featureLocked(subscription, tab.feature)" class="dtabs__lock" aria-label="не входит в тариф" />
+            </RouterLink>
+          </nav>
         </div>
-        <RouterView />
-      </main>
+
+        <main class="cabinet app__content">
+          <div v-if="limitBanner" class="notice limit-banner" :class="limitBanner.cls" role="status">
+            <span>{{ limitBanner.text }}</span>
+            <RouterLink class="btn btn--ghost btn--xs" :to="limitBanner.to || '/cabinet/plan'">{{ limitBanner.action }}</RouterLink>
+            <button class="icon-btn" type="button" aria-label="Скрыть" @click="dismissBanner">
+              <X aria-hidden="true" />
+            </button>
+          </div>
+
+          <!-- Ручной инструмент открыли по ссылке, а экспертный режим выключен: объясняем, где он, вместо пустой страницы. -->
+          <section v-if="expertGate" class="dgate">
+            <SlidersHorizontal aria-hidden="true" />
+            <h2>Это раздел экспертного режима</h2>
+            <p>
+              В обычном режиме ИИ сам предлагает такие изменения — их видно на главной и в «Ждёт решения». Чтобы
+              настраивать вручную, включите экспертный режим. Выключить его можно там же, в настройках.
+            </p>
+            <div>
+              <button class="btn btn--accent" type="button" @click="setExpert(true)">Включить экспертный режим</button>
+              <RouterLink class="btn btn--ghost" to="/cabinet">На главную</RouterLink>
+            </div>
+          </section>
+          <RouterView v-else />
+        </main>
+      </div>
     </div>
 
     <Modal :open="!!upgrade" :title="upgrade?.title || ''" wide @close="upgrade = null">
@@ -154,81 +207,19 @@
         <RouterLink class="btn btn--accent" to="/cabinet/plan" @click="upgrade = null">Все тарифы</RouterLink>
       </template>
     </Modal>
-
-    <nav class="tabbar" aria-label="Разделы">
-      <RouterLink
-        v-for="item in tabbarItems"
-        :key="item.key"
-        class="tabbar__item"
-        :class="{ active: item.active }"
-        :to="item.to"
-      >
-        <component :is="item.icon" aria-hidden="true" />
-        <span>{{ item.short || item.label }}</span>
-      </RouterLink>
-      <button
-        class="tabbar__item"
-        :class="{ active: moreOpen || moreActive }"
-        type="button"
-        :aria-expanded="moreOpen"
-        @click="moreOpen = !moreOpen"
-      >
-        <Ellipsis aria-hidden="true" />
-        <span>Ещё</span>
-      </button>
-    </nav>
-
-    <template v-if="moreOpen">
-      <div class="tabbar-backdrop" @click="moreOpen = false"></div>
-      <div class="tabbar-sheet" role="menu">
-        <template v-for="item in moreItems" :key="item.key">
-          <RouterLink v-if="item.to" class="menu-item" :class="{ active: item.active }" role="menuitem" :to="item.to">
-            <component :is="item.icon" aria-hidden="true" />
-            {{ item.label }}
-          </RouterLink>
-          <span v-else class="menu-item is-disabled" role="menuitem" aria-disabled="true">
-            <component :is="item.icon" aria-hidden="true" />
-            {{ item.label }}<small class="menu-item__note">{{ item.hint }}</small>
-          </span>
-        </template>
-        <hr />
-        <RouterLink
-          v-for="item in SERVICE"
-          :key="item.key"
-          class="menu-item"
-          :class="{ active: route.meta.section === item.key }"
-          role="menuitem"
-          :to="item.to"
-        >
-          <component :is="item.icon" aria-hidden="true" />
-          {{ item.label }}
-        </RouterLink>
-        <button class="menu-item" type="button" role="menuitem" @click="toggleTheme">
-          <Sun v-if="isDark" aria-hidden="true" />
-          <Moon v-else aria-hidden="true" />
-          {{ themeLabel }}
-        </button>
-        <hr />
-        <button class="menu-item is-danger" type="button" role="menuitem" @click="logout">
-          <LogOut aria-hidden="true" />
-          Выйти
-        </button>
-      </div>
-    </template>
   </div>
 </template>
 
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { RouterLink, RouterView, useRoute, useRouter } from 'vue-router'
-import { Ellipsis, Inbox, Lock, LogOut, Moon, PanelLeftClose, PanelLeftOpen, Sun, X } from '@lucide/vue'
-import BrandMark from './BrandMark.vue'
+import { Layers, Lock, Menu, MessageSquare, Moon, Plus, Settings, SlidersHorizontal, Sparkles, Sun, X } from '@lucide/vue'
 import LoadsIndicator from './LoadsIndicator.vue'
 import PlanOffers from './PlanOffers.vue'
 import ProfileMenu from './ProfileMenu.vue'
-import ProjectPicker from './ProjectPicker.vue'
 import Modal from './ui/Modal.vue'
-import { SECTIONS, SERVICE, TABBAR_KEYS, pageMatches, sectionTabs, sectionTo } from './shellNav'
+import { SECTIONS, pageMatches, sectionTabs, sectionTo } from './shellNav'
+import { useExpert } from '../composables/useExpert'
 import { resetLoads } from '../composables/useLoads'
 import { loadPending, resetPending, usePending } from '../composables/usePending'
 import { loadPlan, resetPlan, usePlan } from '../composables/usePlan'
@@ -236,14 +227,15 @@ import { featureLocked, loadProfile, resetProfile, useProfile } from '../composa
 import { resetProjectFilter, useProjectFilter } from '../composables/useProjectFilter'
 import { clearSession, getSession } from '../composables/useSession'
 import { useTheme } from '../composables/useTheme'
-import { loadWorkspaces, resetWorkspaces } from '../composables/useWorkspaces'
-import { ACCESS_EVENT, ApiError, errorText } from '../api/web'
+import { loadWorkspaces, resetWorkspaces, useWorkspaces } from '../composables/useWorkspaces'
+import { ACCESS_EVENT, ApiError, aiApi, errorText } from '../api/web'
 import { pushToast } from '../composables/useToasts'
 import { formatDay, pct } from '../utils/format'
 
 /**
- * Оболочка кабинета — родительский маршрут всех его страниц: меню слева (не меняется от проекта),
- * шапка страницы с вкладками раздела, шкалой лимита и «Ждёт решения», нижняя панель на телефоне.
+ * Оболочка кабинета «Диалог» — родительский маршрут всех его страниц. Слева — меню: «Новый чат», разделы,
+ * проекты (это фильтр разделов) и лимит ИИ внизу. Сверху — выбранный проект, «Ждёт решения», тема и профиль.
+ * На узком экране меню выезжает по кнопке. Экспертный режим (Настройки → Интерфейс) открывает ручные разделы.
  */
 const route = useRoute()
 const router = useRouter()
@@ -251,59 +243,103 @@ const { isDark, toggleTheme } = useTheme()
 const { subscription } = useProfile()
 const { plan } = usePlan()
 const { pendingCount } = usePending()
-const { projectId, project } = useProjectFilter()
+const { projectId, project, selectProject } = useProjectFilter()
+const { workspaces, grouped } = useWorkspaces()
+const { expert, setExpert } = useExpert()
 
-// Подписка закончилась или почта не подтверждена — данных кабинета нет, переключатель и загрузки не показываем.
+// Подписка закончилась или почта не подтверждена — данных кабинета нет, проекты и загрузки не показываем.
 const accessOk = computed(() => !subscription.value || subscription.value.state === 'ok')
 const themeLabel = computed(() => (isDark.value ? 'Светлая тема' : 'Тёмная тема'))
 
 // --- Меню ---
 
-const COLLAPSE_KEY = 'aimarketing-side-collapsed'
-const collapsed = ref(localStorage.getItem(COLLAPSE_KEY) === '1')
+const drawer = ref(false)
+watch(
+  () => route.fullPath,
+  () => {
+    drawer.value = false
+  },
+)
+// --- Чаты в меню: общие для «Все проекты», чаты проекта — внутри проекта ---
 
-function toggleCollapsed() {
-  collapsed.value = !collapsed.value
-  localStorage.setItem(COLLAPSE_KEY, collapsed.value ? '1' : '0')
+const RECENT_LIMIT = 6
+const chats = ref([])
+let chatsReq = 0
+
+async function loadSideChats() {
+  if (!accessOk.value) return
+  const req = ++chatsReq
+  const wsId = projectId.value
+  try {
+    const res = wsId ? await aiApi.chats(wsId) : await aiApi.generalChats()
+    if (req === chatsReq) chats.value = res.items || []
+  } catch {
+    // Меню без чатов — не ошибка страницы.
+    if (req === chatsReq) chats.value = []
+  }
+}
+
+const chatBlocks = computed(() => {
+  const waiting = chats.value.filter((c) => c.pending_actions > 0)
+  const rest = chats.value.filter((c) => !c.pending_actions).slice(0, Math.max(0, RECENT_LIMIT - waiting.length))
+  return [
+    { title: 'Ждут вашего решения', items: waiting },
+    { title: 'Недавние чаты', items: rest },
+  ].filter((b) => b.items.length)
+})
+
+function chatLink(c) {
+  return c.workspace_id ? `/w/${c.workspace_id}/chat/${c.id}` : `/cabinet/chat/${c.id}`
+}
+
+// Новый чат получает id в адресе, название появляется после первого ответа, решения меняют счётчик —
+// поэтому перечитываем список при смене страницы и счётчика.
+watch([projectId, () => route.path, pendingCount, accessOk], loadSideChats, { immediate: true })
+
+// Ссылка на текущую страницу не меняет адрес — закрываем меню по самому нажатию.
+function closeDrawerOnLink(event) {
+  if (event.target.closest('a')) drawer.value = false
 }
 
 const sections = computed(() =>
-  SECTIONS.map((s) => ({
+  SECTIONS.filter((s) => !s.hidden && (expert.value || !s.expert)).map((s) => ({
     ...s,
-    to: sectionTo(s, projectId.value),
+    to: sectionTo(s, projectId.value) || s.all,
     active: route.meta.section === s.key,
   })),
 )
 
-const tabbarItems = computed(() =>
-  TABBAR_KEYS.map((key) => sections.value.find((s) => s.key === key)).filter((s) => s.to),
-)
-const moreItems = computed(() => sections.value.filter((s) => !TABBAR_KEYS.includes(s.key)))
-const moreActive = computed(
-  () => moreItems.value.some((s) => s.active) || SERVICE.some((s) => s.key === route.meta.section),
-)
+const chatTo = computed(() => sectionTo(SECTIONS.find((s) => s.key === 'chat'), projectId.value))
 
-const moreOpen = ref(false)
-watch(
-  () => route.fullPath,
-  () => {
-    moreOpen.value = false
-  },
-)
+/** В обычном режиме — плоский список проектов, в экспертном — по папкам клиентов. */
+const projectGroups = computed(() => {
+  if (expert.value && grouped.value.length > 1) return grouped.value
+  return [{ id: 'all', name: '', items: workspaces.value }]
+})
 
-// --- Шапка страницы ---
+function projectTone(ws) {
+  if (ws.locked) return 'off'
+  return ws.counter_ok === false ? 'warn' : 'ok'
+}
+
+function projectHint(ws) {
+  if (ws.locked) return 'Проект не входит в тариф'
+  if (ws.counter_ok === false) return 'Счётчик Метрики недоступен или выключен'
+  return ws.site || ''
+}
+
+// --- Верхняя строка и заголовок ---
 
 const currentSection = computed(() => SECTIONS.find((s) => s.key === route.meta.section) || null)
-const title = computed(() => route.meta.title || currentSection.value?.label || '')
-/** Под заголовком раздела — по какому проекту он открыт; у служебных страниц — ничего. */
-const scopeLabel = computed(() => {
-  if (!currentSection.value) return ''
-  if (route.params.wsId) return project.value?.name || ''
-  return 'Все проекты'
-})
-const tabs = computed(() => sectionTabs(route.meta.section, route.params.wsId ? projectId.value : null))
+const title = computed(() => route.meta.title || currentSection.value?.title || currentSection.value?.label || '')
+const tabs = computed(() =>
+  sectionTabs(route.meta.section, route.params.wsId ? projectId.value : null).filter(
+    (t) => expert.value || !t.expert || pageMatches(t, route.path),
+  ),
+)
+const expertGate = computed(() => !!route.meta.expert && !expert.value)
 
-/** «12 декабря» — без года, шапка узкая. */
+/** «12 декабря» — без года, место узкое. */
 function dayMonth(iso) {
   return new Date(`${iso}T00:00:00`).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' })
 }
@@ -313,13 +349,11 @@ const limitChip = computed(() => {
   if (!sub?.plan) return null
   const until = sub.last_day ? ` до ${dayMonth(sub.last_day)}` : ''
   const u = plan.value?.usage
+  const text = `Тариф ${sub.plan.name}${until}`
   if (u?.limited && u.used_percent !== null) {
-    return {
-      percent: Math.min(100, Math.max(0, u.used_percent)),
-      text: `Использовано ${pct(u.used_percent, 0)} · ${sub.plan.name}${until}`,
-    }
+    return { percent: Math.min(100, Math.max(0, u.used_percent)), percentText: pct(u.used_percent, 0), text }
   }
-  return { percent: null, text: `${sub.plan.name}${until}` }
+  return { percent: null, text }
 })
 
 function logout() {
@@ -480,9 +514,14 @@ watch(accessOk, (ok, was) => {
   if (ok && !was) boot()
 })
 
+function onKey(event) {
+  if (event.key === 'Escape') drawer.value = false
+}
+
 onMounted(() => {
   window.addEventListener(ACCESS_EVENT, onAccess)
   document.addEventListener('visibilitychange', pollPending)
+  document.addEventListener('keydown', onKey)
   pendingTimer = setInterval(pollPending, PENDING_MS)
   boot()
 })
@@ -490,6 +529,7 @@ onMounted(() => {
 onBeforeUnmount(() => {
   window.removeEventListener(ACCESS_EVENT, onAccess)
   document.removeEventListener('visibilitychange', pollPending)
+  document.removeEventListener('keydown', onKey)
   clearInterval(pendingTimer)
 })
 </script>

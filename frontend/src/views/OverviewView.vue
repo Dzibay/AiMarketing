@@ -1,4 +1,6 @@
 <template>
+  <HomeAsk />
+
   <div class="page-actions">
     <p class="page-lead">Все проекты на одном экране: расход, KPI, бюджет, баланс и что требует внимания.</p>
     <button class="btn btn--accent" type="button" :disabled="refreshing || loading" @click="refresh">
@@ -299,6 +301,7 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { RouterLink, useRouter } from 'vue-router'
 import { CalendarClock, Coins, Crosshair, Lock, Target, TriangleAlert, Wallet } from '@lucide/vue'
+import HomeAsk from '../components/HomeAsk.vue'
 import OnboardingChecklist from '../components/OnboardingChecklist.vue'
 import Sparkline from '../components/Sparkline.vue'
 import { errorDetail, errorText, jobProgressText, webApi } from '../api/web'

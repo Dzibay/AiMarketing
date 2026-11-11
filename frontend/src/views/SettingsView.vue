@@ -108,6 +108,29 @@
       </template>
     </section>
 
+    <template v-if="tab === 'interface'">
+      <section class="panel">
+        <h2>Экспертный режим</h2>
+        <label class="switch">
+          <input type="checkbox" :checked="expert" @change="setExpert($event.target.checked)" />
+          <span>{{ expert ? 'Включён' : 'Выключен' }}</span>
+        </label>
+        <p class="hint">
+          Без него кабинет показывает главное: сводку, кампании, чистку запросов, отчёты и историю, а ручные
+          настройки ИИ приносит готовыми предложениями. Экспертный режим добавляет «Автопилот» (правила и
+          эксперименты), отчёты по площадкам и объявлениям, списки минус-фраз, папки клиентов в меню и индикатор
+          загрузки данных. Выбор хранится в этом браузере.
+        </p>
+      </section>
+      <section class="panel">
+        <h2>Тема</h2>
+        <div class="seg" role="group" aria-label="Тема">
+          <button type="button" :class="{ active: !isDark }" @click="isDark && toggleTheme($event)">Светлая</button>
+          <button type="button" :class="{ active: isDark }" @click="!isDark && toggleTheme($event)">Тёмная</button>
+        </div>
+      </section>
+    </template>
+
     <section v-if="tab === 'profile'" class="panel">
       <h2>Смена пароля</h2>
       <form class="filters" @submit.prevent="changePassword">
@@ -131,16 +154,22 @@ import { onMounted, reactive, ref, watch, watchEffect } from 'vue'
 import { RouterLink } from 'vue-router'
 import FeatureLockNotice from '../components/FeatureLockNotice.vue'
 import { errorText, webApi } from '../api/web'
+import { useExpert } from '../composables/useExpert'
 import { loadProfile, setUser, useProfile } from '../composables/useProfile'
+import { useTheme } from '../composables/useTheme'
 import { pushToast } from '../composables/useToasts'
 import { useHead } from '../utils/useHead'
 import { formatDate } from '../utils/format'
 
-/** tab: profile — почта, вход, пароль; notifications — Telegram и утренний дайджест. */
+/** tab: profile — почта, вход, пароль; notifications — Telegram и утренний дайджест; interface — режим и тема. */
 const props = defineProps({ tab: { type: String, default: 'profile' } })
 
+const TAB_TITLES = { profile: 'Профиль', notifications: 'Уведомления', interface: 'Интерфейс' }
 // Вкладки — одна страница: при переходе между ними меняется только заголовок.
-watchEffect(() => useHead(`${props.tab === 'notifications' ? 'Уведомления' : 'Профиль'} — AiMarketing`, true))
+watchEffect(() => useHead(`${TAB_TITLES[props.tab] || 'Настройки'} — AiMarketing`, true))
+
+const { expert, setExpert } = useExpert()
+const { isDark, toggleTheme } = useTheme()
 
 const loading = ref(true)
 const { user } = useProfile()

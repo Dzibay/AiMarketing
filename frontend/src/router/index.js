@@ -19,6 +19,8 @@ const all = (section) => ({ section, scope: 'all' })
 const proj = (section) => ({ section, scope: 'project' })
 /** Страница вне проектов: фильтр проекта на ней не сбрасывается. */
 const neutral = (section, title) => ({ section, scope: 'neutral', title })
+/** Страница только для экспертного режима: в обычном вместо неё — подсказка, как его включить. */
+const expert = (meta) => ({ ...meta, expert: true })
 
 const router = createRouter({
   history: createWebHistory(),
@@ -59,7 +61,7 @@ const router = createRouter({
           path: 'cabinet/negative-lists',
           name: 'negative-lists',
           component: () => import('../views/NegativeListsView.vue'),
-          meta: neutral('queries'),
+          meta: expert(neutral('queries')),
         },
         {
           path: 'cabinet/analytics',
@@ -71,7 +73,7 @@ const router = createRouter({
           path: 'cabinet/autopilot',
           name: 'autopilot',
           component: () => import('../views/RulesView.vue'),
-          meta: all('autopilot'),
+          meta: expert(all('autopilot')),
         },
         {
           path: 'cabinet/history',
@@ -103,6 +105,13 @@ const router = createRouter({
           name: 'settings-notifications',
           component: () => import('../views/SettingsView.vue'),
           props: { tab: 'notifications' },
+          meta: neutral('settings', 'Настройки'),
+        },
+        {
+          path: 'cabinet/settings/interface',
+          name: 'settings-interface',
+          component: () => import('../views/SettingsView.vue'),
+          props: { tab: 'interface' },
           meta: neutral('settings', 'Настройки'),
         },
         {
@@ -164,25 +173,25 @@ const router = createRouter({
               path: 'slices',
               name: 'ws-slices',
               component: () => import('../views/workspace/WsSlices.vue'),
-              meta: proj('analytics'),
+              meta: expert(proj('analytics')),
             },
             {
               path: 'ad-stats',
               name: 'ws-ad-stats',
               component: () => import('../views/workspace/WsAdStats.vue'),
-              meta: proj('analytics'),
+              meta: expert(proj('analytics')),
             },
             {
               path: 'autopilot',
               name: 'ws-autopilot',
               component: () => import('../views/workspace/WsAutopilot.vue'),
-              meta: proj('autopilot'),
+              meta: expert(proj('autopilot')),
             },
             {
               path: 'experiments',
               name: 'ws-experiments',
               component: () => import('../views/workspace/WsExperiments.vue'),
-              meta: proj('autopilot'),
+              meta: expert(proj('autopilot')),
             },
             {
               path: 'history',
