@@ -171,7 +171,7 @@
           >
             Проверить
           </button>
-          <details class="bulk-more rule-more">
+          <details class="bulk-more rule-more" @toggle="onMenuToggle">
             <summary class="btn btn--ghost" aria-label="Действия с правилом"><Ellipsis :size="16" /></summary>
             <div class="bulk-more__menu" role="menu" @click="closeMenu">
               <button class="menu-item" type="button" role="menuitem" :disabled="busy" @click="run(rule, false)">
@@ -260,7 +260,7 @@
 
 <script setup>
 import { askConfirm } from '../composables/useConfirm'
-import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { RouterLink } from 'vue-router'
 import { Ellipsis, Eye, Play, Plus, Trash2, Zap } from '@lucide/vue'
 import FeatureLockNotice from './FeatureLockNotice.vue'
@@ -352,6 +352,24 @@ function closeMenu(event) {
   const menu = event.currentTarget.closest('details')
   if (menu) menu.open = false
 }
+
+// Одно открытое меню «⋯» за раз; клик мимо меню закрывает его.
+function closeOtherMenus(keep) {
+  document.querySelectorAll('details.rule-more[open]').forEach((menu) => {
+    if (menu !== keep) menu.open = false
+  })
+}
+
+function onMenuToggle(event) {
+  if (event.currentTarget.open) closeOtherMenus(event.currentTarget)
+}
+
+function onDocClick(event) {
+  if (!event.target.closest?.('details.rule-more')) closeOtherMenus(null)
+}
+
+onMounted(() => document.addEventListener('click', onDocClick))
+onBeforeUnmount(() => document.removeEventListener('click', onDocClick))
 
 const CAMPAIGN_TYPES = ['daily_budget_pct', 'weekly_budget_pct']
 const CAMPAIGN_ACTIONS = ['set_budget', 'set_weekly_budget', 'change_budget_pct']
