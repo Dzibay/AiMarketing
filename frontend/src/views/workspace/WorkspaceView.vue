@@ -81,6 +81,7 @@ import { computed, onBeforeUnmount, provide, ref, watch } from 'vue'
 import { RouterLink, RouterView, useRoute, useRouter } from 'vue-router'
 import { Lock } from '@lucide/vue'
 import { ApiError, errorText, wsApi } from '../../api/web'
+import { SECTIONS } from '../../components/shellNav'
 import { pushToast } from '../../composables/useToasts'
 import { jobPercent, jobText, stageErrorText, stageFailure, stageProblem } from '../../composables/useLoads'
 import { loadWorkspaces, patchWorkspaceInList, rememberWorkspace } from '../../composables/useWorkspaces'
@@ -97,11 +98,16 @@ const locked = ref(false)
 const archiving = ref(false)
 
 useHead('Проект — Толк', true)
+// Во вкладке браузера — раздел и проект, как в меню: «Отчёты · Цветы Ромашка — Толк».
 watch(
-  () => ws.value?.name,
-  (name) => {
-    if (name) document.title = `${name} — Толк`
+  () => [ws.value?.name, route.meta.section, route.meta.title],
+  ([name, key, title]) => {
+    if (!name) return
+    const section = SECTIONS.find((s) => s.key === key)
+    const page = title || section?.title || section?.label
+    document.title = page ? `${page} · ${name} — Толк` : `${name} — Толк`
   },
+  { immediate: true },
 )
 
 const siteUrl = computed(() => {

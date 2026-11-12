@@ -23,6 +23,20 @@
         <CreditCard aria-hidden="true" />
         Тариф и лимит<small v-if="planName" class="menu-item__note">{{ planName }}</small>
       </RouterLink>
+      <hr />
+      <button
+        class="menu-item menu-item--switch"
+        type="button"
+        role="menuitemcheckbox"
+        :aria-checked="expert"
+        title="Добавляет «Автопилот», отчёты по площадкам и объявлениям, списки минус-фраз и папки клиентов в меню"
+        @click="setExpert(!expert)"
+      >
+        <SlidersHorizontal aria-hidden="true" />
+        Экспертный режим
+        <span class="menu-switch" :class="{ 'is-on': expert }" aria-hidden="true"></span>
+      </button>
+      <hr />
       <button class="menu-item is-danger" type="button" role="menuitem" @click="$emit('logout')">
         <LogOut aria-hidden="true" />
         Выйти
@@ -34,12 +48,14 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { RouterLink } from 'vue-router'
-import { ChevronDown, CreditCard, LogOut, PlugZap, Settings } from '@lucide/vue'
+import { ChevronDown, CreditCard, LogOut, PlugZap, Settings, SlidersHorizontal } from '@lucide/vue'
+import { useExpert } from '../composables/useExpert'
 import { useProfile } from '../composables/useProfile'
 
 defineEmits(['logout'])
 
 const { user, subscription } = useProfile()
+const { expert, setExpert } = useExpert()
 const open = ref(false)
 
 const planName = computed(() => subscription.value?.plan?.name || '')

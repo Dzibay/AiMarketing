@@ -80,7 +80,7 @@
     </p>
     <div v-if="done" class="notice">
       {{ done }}
-      <RouterLink :to="`/w/${ws.id}/actions`">Журнал и откат</RouterLink>
+      <RouterLink :to="`/w/${ws.id}/history`">История и откат</RouterLink>
     </div>
     <ul v-if="doneErrors.length" class="notice notice--warn">
       <li v-for="e in doneErrors" :key="e.campaign_row_id">«{{ e.name }}»: {{ e.message || e.error }}</li>

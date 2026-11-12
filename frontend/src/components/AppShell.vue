@@ -28,17 +28,35 @@
 
         <template v-if="accessOk">
           <h4 class="dside__h">Проекты</h4>
-          <button class="srow" :class="{ active: !projectId }" type="button" @click="selectProject(null)">
+          <button
+            class="srow"
+            :class="{ 'is-current': !projectId }"
+            type="button"
+            :aria-current="projectId ? undefined : 'true'"
+            @click="selectProject(null)"
+          >
             <Layers aria-hidden="true" />
             <span class="srow__t">Все проекты</span>
           </button>
           <template v-for="group in projectGroups" :key="group.id">
-            <h5 v-if="group.name" class="dside__group">{{ group.name }}</h5>
-            <div v-for="ws in group.items" :key="ws.id" class="srow-wrap">
+            <button
+              v-if="group.name"
+              class="dside__group"
+              type="button"
+              :aria-expanded="!group.collapsed"
+              :title="group.collapsed ? 'Развернуть' : 'Свернуть'"
+              @click="toggleGroup(group.id)"
+            >
+              <ChevronDown aria-hidden="true" />
+              <span class="dside__group-t">{{ group.name }}</span>
+              <small>{{ group.items.length }}</small>
+            </button>
+            <div v-for="ws in group.shown" :key="ws.id" class="srow-wrap" :class="{ 'is-nested': group.name }">
               <button
                 class="srow"
-                :class="{ active: ws.id === projectId }"
+                :class="{ 'is-current': ws.id === projectId }"
                 type="button"
+                :aria-current="ws.id === projectId ? 'true' : undefined"
                 :title="projectHint(ws)"
                 @click="selectProject(ws.id)"
               >
@@ -81,7 +99,7 @@
               </span>
             </RouterLink>
           </template>
-          <RouterLink v-if="chats.length > RECENT_LIMIT" class="srow srow--quiet" :to="{ path: chatTo, query: { chats: '1' } }">
+          <RouterLink v-if="chats.length > shownChats" class="srow srow--quiet" :to="{ path: chatTo, query: { chats: '1' } }">
             <span class="srow__t">Все чаты</span>
           </RouterLink>
         </template>
@@ -136,7 +154,7 @@
         >
           Ждёт решения: {{ pendingCount }}
         </RouterLink>
-        <LoadsIndicator v-if="accessOk && expert" />
+        <LoadsIndicator v-if="accessOk" :quiet="!expert" />
         <button class="dicon" type="button" :aria-label="themeLabel" :title="themeLabel" @click="toggleTheme">
           <Sun v-if="isDark" aria-hidden="true" />
           <Moon v-else aria-hidden="true" />
@@ -183,7 +201,7 @@
             <h2>Это раздел экспертного режима</h2>
             <p>
               В обычном режиме ИИ сам предлагает такие изменения — их видно на главной и в «Ждёт решения». Чтобы
-              настраивать вручную, включите экспертный режим. Выключить его можно там же, в настройках.
+              настраивать вручную, включите экспертный режим. Выключить его можно в меню профиля.
             </p>
             <div>
               <button class="btn btn--accent" type="button" @click="setExpert(true)">Включить экспертный режим</button>
@@ -220,7 +238,7 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { RouterLink, RouterView, useRoute, useRouter } from 'vue-router'
-import { Layers, Lock, Menu, MessageSquare, Moon, Plus, Settings, SlidersHorizontal, Sun, X } from '@lucide/vue'
+import { ChevronDown, Layers, Lock, Menu, MessageSquare, Moon, Plus, Settings, SlidersHorizontal, Sun, X } from '@lucide/vue'
 import TolkMark from './TolkMark.vue'
 import LoadsIndicator from './LoadsIndicator.vue'
 import PlanOffers from './PlanOffers.vue'
@@ -243,7 +261,7 @@ import { formatDay, pct } from '../utils/format'
 /**
  * Оболочка кабинета «Диалог» — родительский маршрут всех его страниц. Слева — меню: «Новый чат», разделы,
  * проекты (это фильтр разделов) и лимит ИИ внизу. Сверху — выбранный проект, «Ждёт решения», тема и профиль.
- * На узком экране меню выезжает по кнопке. Экспертный режим (Настройки → Интерфейс) открывает ручные разделы.
+ * На узком экране меню выезжает по кнопке. Экспертный режим (меню профиля или Настройки → Интерфейс) открывает ручные разделы.
  */
 const route = useRoute()
 const router = useRouter()
@@ -270,7 +288,7 @@ watch(
 )
 // --- Чаты в меню: общие для «Все проекты», чаты проекта — внутри проекта ---
 
-const RECENT_LIMIT = 6
+const RECENT_LIMIT = 5
 const chats = ref([])
 let chatsReq = 0
 
@@ -295,6 +313,7 @@ const chatBlocks = computed(() => {
     { title: 'Недавние чаты', items: rest },
   ].filter((b) => b.items.length)
 })
+const shownChats = computed(() => chatBlocks.value.reduce((n, b) => n + b.items.length, 0))
 
 function chatLink(c) {
   return c.workspace_id ? `/w/${c.workspace_id}/chat/${c.id}` : `/cabinet/chat/${c.id}`
@@ -319,10 +338,44 @@ const sections = computed(() =>
 
 const chatTo = computed(() => sectionTo(SECTIONS.find((s) => s.key === 'chat'), projectId.value))
 
-/** В обычном режиме — плоский список проектов, в экспертном — по папкам клиентов. */
+const COLLAPSED_KEY = 'aimarketing-side-collapsed'
+const collapsed = ref(new Set(readCollapsed()))
+
+function readCollapsed() {
+  try {
+    const ids = JSON.parse(localStorage.getItem(COLLAPSED_KEY) || '[]')
+    return Array.isArray(ids) ? ids : []
+  } catch {
+    return []
+  }
+}
+
+function toggleGroup(id) {
+  const next = new Set(collapsed.value)
+  if (next.has(id)) next.delete(id)
+  else next.add(id)
+  collapsed.value = next
+  localStorage.setItem(COLLAPSED_KEY, JSON.stringify([...next]))
+}
+
+/**
+ * Обычный режим — плоский список проектов. Экспертный — папки клиентов, в которых два проекта и больше: папку можно
+ * свернуть, выбранный проект виден и в свёрнутой. Клиент с одним проектом и проекты без клиента идут выше папок
+ * без заголовка: заголовок «Мебель Вектор» над единственным «Мебель Вектор» ничего не добавляет.
+ */
 const projectGroups = computed(() => {
-  if (expert.value && grouped.value.length > 1) return grouped.value
-  return [{ id: 'all', name: '', items: workspaces.value }]
+  const loose = (items) => ({ id: 'loose', name: '', items, shown: items, collapsed: false })
+  const folders = expert.value ? grouped.value.filter((g) => g.id && g.items.length > 1) : []
+  if (!folders.length) return [loose(workspaces.value)]
+  const inFolder = new Set(folders.flatMap((g) => g.items.map((w) => w.id)))
+  const rest = workspaces.value.filter((w) => !inFolder.has(w.id))
+  return [
+    ...(rest.length ? [loose(rest)] : []),
+    ...folders.map((g) => {
+      const shut = collapsed.value.has(g.id)
+      return { ...g, collapsed: shut, shown: shut ? g.items.filter((w) => w.id === projectId.value) : g.items }
+    }),
+  ]
 })
 
 function projectTone(ws) {

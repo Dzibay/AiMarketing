@@ -1,5 +1,5 @@
 <template>
-  <div v-if="ready && items.length" ref="root" class="loads-ind" :class="[`is-${tone}`, { 'is-open': open }]">
+  <div v-if="visible" ref="root" class="loads-ind" :class="[`is-${tone}`, { 'is-open': open }]">
     <button class="loads-ind__toggle" type="button" :aria-expanded="open" :title="label" @click="open = !open">
       <span v-if="busy" class="spinner" aria-hidden="true"></span>
       <template v-else>
@@ -7,6 +7,7 @@
         <span class="loads-ind__dot" aria-hidden="true"></span>
       </template>
       <span class="loads-ind__label">{{ label }}</span>
+      <span v-if="short" class="loads-ind__short" aria-hidden="true">{{ short }}</span>
     </button>
 
     <div v-if="open" class="loads-ind__menu">
@@ -47,6 +48,9 @@ import { pct, plural, timeAgo } from '../utils/format'
 
 const MAX_ITEMS = 8
 
+/** quiet — обычный режим: индикатор виден, только пока что-то грузится или есть проблема. */
+const props = defineProps({ quiet: { type: Boolean, default: false } })
+
 const { ready, items, active, busy, waiting, problems, percent, overview, start, stop } = useLoads()
 
 const root = ref(null)
@@ -72,6 +76,11 @@ const label = computed(() => {
   if (tone.value === 'warn') return unitsWait.value ? 'Ждём баллы' : 'Ждёт загрузки'
   return 'Данные загружены'
 })
+
+/** На узком экране вместо подписи — только процент. */
+const short = computed(() => (busy.value && percent.value != null ? pct(percent.value, 0) : ''))
+
+const visible = computed(() => ready.value && items.value.length > 0 && (!props.quiet || tone.value !== 'ok' || open.value))
 
 const summary = computed(() => {
   const n = active.value.length

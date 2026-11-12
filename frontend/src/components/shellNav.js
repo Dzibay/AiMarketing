@@ -29,7 +29,6 @@ export const SECTIONS = [
   {
     key: 'queries',
     label: 'Запросы',
-    title: 'Чистка запросов',
     icon: ListFilter,
     all: '/cabinet/queries',
     project: (id) => `/w/${id}/queries`,
@@ -79,8 +78,8 @@ export function sectionTabs(key, projectId) {
   switch (key) {
     case 'queries':
       return [
-        { label: 'Разбор запросов', to: p ? `${p}/queries` : '/cabinet/queries' },
-        { label: 'Списки минус-фраз', to: '/cabinet/negative-lists', expert: true },
+        { label: 'Разбор', to: p ? `${p}/queries` : '/cabinet/queries' },
+        { label: 'Минус-фразы', to: '/cabinet/negative-lists', expert: true },
       ]
     case 'analytics':
       if (!p) return []

@@ -136,6 +136,24 @@
   box-shadow: var(--shadow-sm);
 }
 
+/* Выбранный проект — жирный текст и точка в кольце, без фона: фоном отмечен только раздел, где вы сейчас. */
+.srow.is-current {
+  color: var(--ink);
+  font-weight: 800;
+}
+
+.srow.is-current > svg {
+  color: var(--ink);
+}
+
+.srow.is-current > .sdot {
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--ink) 16%, transparent);
+}
+
+.srow-wrap.is-nested .srow {
+  padding-left: 25px;
+}
+
 .srow--quiet {
   color: var(--faint);
   font-weight: 500;
@@ -247,11 +265,54 @@
   font-weight: 700;
 }
 
+/* Папка клиента в экспертном режиме — сворачивается по нажатию. */
 .dside__group {
-  margin: 10px 10px 2px;
+  appearance: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+  width: 100%;
+  margin-top: 6px;
+  padding: 5px 10px;
+  border: 0;
+  border-radius: 7px;
+  background: none;
   color: var(--faint);
-  font-size: 11px;
+  font: inherit;
+  font-size: 12px;
   font-weight: 700;
+  text-align: left;
+  cursor: pointer;
+}
+
+.dside__group:hover {
+  color: var(--ink-2);
+}
+
+.dside__group svg {
+  flex: none;
+  width: 13px;
+  height: 13px;
+  transition: transform 0.15s ease;
+}
+
+.dside__group[aria-expanded='false'] svg {
+  transform: rotate(-90deg);
+}
+
+.dside__group-t {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.dside__group small {
+  flex: none;
+  font-size: 11px;
+  font-weight: 600;
 }
 
 .dside__foot {
@@ -410,6 +471,131 @@
 .dicon svg {
   width: 18px;
   height: 18px;
+}
+
+/* Загрузки в строке: в покое — значок, пока грузится или есть проблема — таблетка с подписью и процентом. */
+.dbar .loads-ind__toggle {
+  width: 34px;
+  height: 34px;
+  border: 0;
+  border-radius: 9px;
+  background: none;
+  color: var(--muted);
+}
+
+.dbar .loads-ind__toggle:hover,
+.dbar .loads-ind.is-open .loads-ind__toggle {
+  background: var(--side);
+  color: var(--ink);
+}
+
+.dbar .loads-ind__toggle > svg {
+  width: 18px;
+  height: 18px;
+}
+
+.dbar .loads-ind__dot {
+  top: 6px;
+  right: 6px;
+  width: 7px;
+  height: 7px;
+  box-shadow: 0 0 0 2px var(--bg);
+}
+
+.dbar .loads-ind__short {
+  display: none;
+}
+
+.dbar .loads-ind:not(.is-ok) .loads-ind__toggle {
+  display: inline-flex;
+  gap: 7px;
+  width: auto;
+  height: 28px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--pill);
+  background: var(--surface);
+  color: var(--ink-2);
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.dbar .loads-ind:not(.is-ok) .loads-ind__toggle:hover,
+.dbar .loads-ind.is-open:not(.is-ok) .loads-ind__toggle {
+  border-color: var(--faint);
+  color: var(--ink);
+}
+
+.dbar .loads-ind:not(.is-ok) .loads-ind__toggle > svg {
+  display: none;
+}
+
+.dbar .loads-ind:not(.is-ok) .loads-ind__toggle .spinner {
+  width: 13px;
+  height: 13px;
+}
+
+.dbar .loads-ind:not(.is-ok) .loads-ind__dot {
+  position: static;
+  box-shadow: none;
+}
+
+.dbar .loads-ind:not(.is-ok) .loads-ind__label {
+  position: static;
+  width: auto;
+  height: auto;
+  overflow: visible;
+  clip: auto;
+}
+
+/* Переключатель «Экспертный режим» в меню профиля. */
+.menu-item--switch {
+  white-space: nowrap;
+}
+
+.dbar .profile__menu {
+  min-width: 240px;
+}
+
+.menu-switch {
+  position: relative;
+  flex: none;
+  width: 30px;
+  height: 18px;
+  margin-left: auto;
+  border-radius: var(--pill);
+  background: var(--surface-3);
+  box-shadow: inset 0 0 0 1px var(--line-2);
+  transition: background 0.18s ease;
+}
+
+.menu-switch::after {
+  content: '';
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
+  transition: transform 0.18s ease;
+}
+
+.menu-switch.is-on {
+  background: var(--accent);
+  box-shadow: none;
+}
+
+.menu-switch.is-on::after {
+  transform: translateX(12px);
+}
+
+.profile__menu hr {
+  margin: 0.3rem 0;
+  border: 0;
+  border-top: 1px solid var(--line);
 }
 
 /* Профиль в строке — только аватар. */
@@ -693,6 +879,24 @@
 @media (max-width: 520px) {
   .dchip--lime {
     padding: 0 8px;
+  }
+
+  .dbar .loads-ind:not(.is-ok) .loads-ind__toggle {
+    min-width: 28px;
+    justify-content: center;
+    padding: 0 8px;
+  }
+
+  .dbar .loads-ind:not(.is-ok) .loads-ind__label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+  }
+
+  .dbar .loads-ind__short {
+    display: inline;
   }
 }
 

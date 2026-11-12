@@ -242,8 +242,8 @@
           <RouterLink class="btn btn--ghost" :to="`/w/${ws.id}/campaigns`">Все кампании</RouterLink>
         </div>
         <p v-if="!data.top_campaigns.length" class="empty">
-          Нет расхода за неделю. Загрузите статистику на вкладке
-          <RouterLink :to="`/w/${ws.id}/analytics`">«Аналитика»</RouterLink>.
+          Нет расхода за неделю. Загрузите статистику в разделе
+          <RouterLink :to="`/w/${ws.id}/analytics`">«Отчёты»</RouterLink>.
         </p>
         <div v-else class="list">
           <RouterLink
@@ -267,7 +267,7 @@
       <section class="panel">
         <div class="panel__head">
           <h2>Последние действия</h2>
-          <RouterLink class="btn btn--ghost" :to="`/w/${ws.id}/actions`">Журнал</RouterLink>
+          <RouterLink class="btn btn--ghost" :to="`/w/${ws.id}/history`">История</RouterLink>
         </div>
         <p v-if="!data.recent_actions.length" class="empty">Пока ничего не меняли.</p>
         <div v-else class="list">

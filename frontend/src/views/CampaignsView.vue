@@ -126,7 +126,7 @@
       <RouterLink to="/cabinet/connections">подключениях</RouterLink> — проекты появятся по счётчикам.
     </p>
     <p v-else-if="!data.campaigns.length" class="empty">
-      В проектах нет кампаний. Выберите проект вверху меню и добавьте кампании в его настройках.
+      В проектах нет кампаний. Выберите проект в меню, в списке «Проекты», и добавьте кампании в его настройках.
     </p>
     <p v-else-if="!rows.length" class="empty">Под фильтр ничего не подходит.</p>
     <div v-else class="table-scroll" :class="{ 'is-loading': loading }">
