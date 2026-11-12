@@ -360,7 +360,7 @@ def _http(exc: UsersError | YandexError) -> HTTPException:
         status = 402
     elif code == "not-found":
         status = 404
-    elif code in ("exists", "yandex-taken", "counter-taken", "plan-in-use"):
+    elif code in ("exists", "yandex-taken", "counter-taken", "plan-in-use", "hidden"):
         status = 409
     elif code == "too-soon":
         status = 429

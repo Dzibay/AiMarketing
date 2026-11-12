@@ -13,7 +13,12 @@ const VERBS = [
   [/^записать в директ/i, 'Записать', false],
 ]
 
-export function askConfirm(message, { title = 'Подтвердите действие', confirmText, cancelText = 'Отмена', danger } = {}) {
+// check: { label, hint, confirmText } — флажок под текстом; тогда ответ — false (отмена) или { checked },
+// а подпись кнопки при отмеченном флажке меняется на check.confirmText.
+export function askConfirm(
+  message,
+  { title = 'Подтвердите действие', confirmText, cancelText = 'Отмена', danger, check = null } = {},
+) {
   if (current.value) current.value.resolve(false)
   const text = String(message)
   const verb = VERBS.find(([re]) => re.test(text))
@@ -24,9 +29,13 @@ export function askConfirm(message, { title = 'Подтвердите дейст
       confirmText: confirmText || verb?.[1] || 'Да',
       cancelText,
       danger: danger ?? verb?.[2] ?? false,
+      check: check
+        ? { label: check.label, hint: check.hint || '', confirmText: check.confirmText || '', value: !!check.value }
+        : null,
       resolve: (value) => {
+        const checked = !!current.value?.check?.value
         current.value = null
-        resolve(value)
+        resolve(value && check ? { checked } : value)
       },
     }
   })

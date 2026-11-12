@@ -135,6 +135,7 @@ _CANDIDATES = """
     FROM metrika_counters m
     JOIN yandex_connections y ON y.id = m.connection_id
     WHERE m.user_id = %s AND m.enabled = TRUE AND y.use_metrika = TRUE
+      AND NOT EXISTS (SELECT 1 FROM hidden_counters h WHERE h.user_id = m.user_id AND h.counter_id = m.counter_id)
     ORDER BY m.counter_id, (m.client_row_id IS NULL), m.id
 """
 
@@ -556,6 +557,11 @@ def update_workspace(user_id: int, workspace_id: int, **fields) -> dict:
                 f"UPDATE workspaces SET {', '.join(sets)}, updated_at = NOW() WHERE id = %s AND user_id = %s",
                 (*params, workspace_id, user_id),
             )
+            if fields.get("archived") is False and ws["counter_id"] is not None:
+                # Проект удалённого сайта вернули из архива — сайт возвращается вместе с ним.
+                from app.sites import unhide
+
+                unhide(conn, user_id, int(ws["counter_id"]))
     return get_workspace(user_id, workspace_id, allow_locked=True)
 
 
@@ -600,7 +606,9 @@ def counter_choices(user_id: int) -> dict:
                 "note": f"Счётчик {TAKEN}" if state == "taken" else "",
             }
         )
-    return {"items": items, "projects_limit": limit, "projects_used": used}
+    from app.sites import hidden_sites
+
+    return {"items": items, "hidden": hidden_sites(user_id), "projects_limit": limit, "projects_used": used}
 
 
 def create_project_for_counter(user_id: int, counter_id: int) -> dict:

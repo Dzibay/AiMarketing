@@ -86,21 +86,45 @@
           </form>
         </section>
 
-        <section v-if="expert" class="panel">
+        <section class="panel">
           <div class="panel__head">
             <div>
-              <h2>{{ ws.archived ? 'Проект в архиве' : 'Архив' }}</h2>
+              <h2>{{ ws.archived ? 'Проект в архиве' : ws.counter_id ? 'Удалить сайт' : 'Архив' }}</h2>
               <p class="hint">
-                {{
-                  ws.archived
-                    ? 'Проект скрыт из переключателя и обзора. Кампании и история сохранены.'
-                    : 'Архивный проект скрыт из переключателя и обзора; кампании в Директе не меняются.'
-                }}
+                <template v-if="ws.archived">Проект скрыт из переключателя и обзора. Кампании и история сохранены.</template>
+                <template v-else-if="ws.counter_id">
+                  Сайт пропадёт из Толка: проект уйдёт в архив, данные перестанут загружаться. В Метрике и Директе ничего
+                  не изменится.<template v-if="expert"> «В архив» только прячет проект — сайт останется в «Добавить сайт».</template>
+                </template>
+                <template v-else>Архивный проект скрыт из переключателя и обзора; кампании в Директе не меняются.</template>
               </p>
             </div>
-            <button class="btn btn--ghost" :class="{ 'btn--danger': !ws.archived }" type="button" :disabled="archiveBusy" @click="toggleArchive">
-              {{ ws.archived ? 'Вернуть из архива' : 'В архив' }}
-            </button>
+            <div class="danger-acts">
+              <button v-if="ws.archived" class="btn btn--ghost" type="button" :disabled="archiveBusy" @click="toggleArchive">
+                Вернуть из архива
+              </button>
+              <template v-else>
+                <button
+                  v-if="expert || !ws.counter_id"
+                  class="btn btn--ghost"
+                  :class="{ 'btn--danger': !ws.counter_id }"
+                  type="button"
+                  :disabled="archiveBusy"
+                  @click="toggleArchive"
+                >
+                  В архив
+                </button>
+                <button
+                  v-if="ws.counter_id"
+                  class="btn btn--ghost btn--danger"
+                  type="button"
+                  :disabled="archiveBusy"
+                  @click="removeThisSite"
+                >
+                  <Trash2 :size="15" aria-hidden="true" />Удалить сайт
+                </button>
+              </template>
+            </div>
           </div>
         </section>
       </template>
@@ -520,8 +544,9 @@
 import { askConfirm } from '../../composables/useConfirm'
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
-import { Archive, FileText, Folder, Link2, Lock, Megaphone, SlidersHorizontal, Sparkles } from '@lucide/vue'
+import { Archive, FileText, Folder, Link2, Lock, Megaphone, SlidersHorizontal, Sparkles, Trash2 } from '@lucide/vue'
 import { aiApi, errorText, jobProgressText, webApi, wsApi } from '../../api/web'
+import { removeSite } from '../../composables/useSiteRemoval'
 import { pushToast } from '../../composables/useToasts'
 import { loadWorkspaces, useWorkspaces } from '../../composables/useWorkspaces'
 import { CAMPAIGN_STATES, CAMPAIGN_TYPES, formatDateTime, plural, rub } from '../../utils/format'
@@ -1069,6 +1094,17 @@ async function toggleArchive() {
   }
 }
 
+// Удалить сайт из Толка; проект уходит в архив или удаляется — уходим к списку сайтов.
+async function removeThisSite() {
+  archiveBusy.value = true
+  try {
+    const out = await removeSite({ counterId: ws.value.counter_id, name: ws.value.name })
+    if (out) router.push('/cabinet/connections')
+  } finally {
+    archiveBusy.value = false
+  }
+}
+
 // Проект перечитали (например, после синхронизации целей) — подтягиваем несохранённые формы,
 // только если пользователь их не трогал.
 watch(
@@ -1091,6 +1127,14 @@ onMounted(() => {
 </script>
 
 <style scoped>
+.danger-acts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.danger-acts .btn {
+  gap: 6px;
+}
 .set {
   display: grid;
   grid-template-columns: 220px minmax(0, 1fr);

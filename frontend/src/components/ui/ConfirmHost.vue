@@ -1,6 +1,13 @@
 <template>
   <Modal :open="!!current" :title="current?.title || ''" top @close="answer(false)">
     <p v-if="current?.message" class="confirm-text">{{ current.message }}</p>
+    <label v-if="current?.check" class="check-row confirm-check">
+      <input v-model="current.check.value" type="checkbox" />
+      <span>
+        {{ current.check.label }}
+        <small v-if="current.check.hint">{{ current.check.hint }}</small>
+      </span>
+    </label>
     <form v-if="current?.input" class="confirm-form" @submit.prevent="submit">
       <div class="field">
         <label :for="inputId">{{ current.input.label }}</label>
@@ -25,7 +32,7 @@
         :disabled="blocked"
         @click="submit"
       >
-        {{ current?.confirmText }}
+        {{ current?.check?.value && current.check.confirmText ? current.check.confirmText : current?.confirmText }}
       </button>
     </template>
   </Modal>
@@ -62,3 +69,28 @@ watch(current, async (value) => {
   }
 })
 </script>
+
+<style scoped>
+.confirm-check {
+  align-items: flex-start;
+  margin-top: 14px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  cursor: pointer;
+}
+.confirm-check input {
+  margin-top: 2px;
+}
+.confirm-check span {
+  display: grid;
+  gap: 2px;
+  font-size: 14px;
+  font-weight: 600;
+}
+.confirm-check small {
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 400;
+}
+</style>

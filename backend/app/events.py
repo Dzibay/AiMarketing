@@ -18,6 +18,8 @@ KINDS = {
     "login": "Вход",
     "yandex_connected": "Подключён Яндекс",
     "project_created": "Создан проект",
+    "site_hidden": "Сайт удалён",
+    "site_restored": "Сайт возвращён",
     "ai_question": "Вопрос ИИ",
     "action_applied": "Выполнено предложение ИИ",
     "limit_exhausted": "Лимит исчерпан",

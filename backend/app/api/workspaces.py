@@ -34,7 +34,9 @@ from app.query_cleaning import (
     needs_direct,
     query_queue,
 )
+from app.metrika_sync import canonical_counters
 from app.rules import list_rules, rule_campaigns
+from app.sites import hide_site, restore_site
 from app.web_auth import require_web_user
 from app.workspaces import (
     account_candidates,
@@ -246,6 +248,32 @@ def ws_from_counter(body: FromCounterBody, user_id: int = Depends(require_web_us
         return create_project_for_counter(user_id, body.counter_id)
     except YandexError as exc:
         raise _http(exc) from exc
+
+
+class HideSiteBody(BaseModel):
+    purge: bool = False
+
+
+@router.post("/sites/{counter_id}/hide")
+def ws_hide_site(counter_id: int, body: HideSiteBody, user_id: int = Depends(require_web_user)) -> dict:
+    """Удалить сайт из Толка: проект в архив (purge — удалить вместе с собранными данными)."""
+    try:
+        return hide_site(user_id, counter_id, purge=body.purge)
+    except YandexError as exc:
+        raise _http(exc) from exc
+
+
+@router.post("/sites/{counter_id}/restore")
+def ws_restore_site(counter_id: int, user_id: int = Depends(require_web_user)) -> dict:
+    """Вернуть удалённый сайт; данные Метрики догружаются задачей."""
+    try:
+        out = restore_site(user_id, counter_id)
+    except YandexError as exc:
+        raise _http(exc) from exc
+    for c in canonical_counters(user_id):
+        if int(c["counter_id"]) == counter_id:
+            submit("load_counter", user_id, {"counter_row_id": int(c["id"])}, priority=PRIORITY_USER)
+    return out
 
 
 @router.get("/{workspace_id}")

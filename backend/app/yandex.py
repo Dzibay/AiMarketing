@@ -607,7 +607,17 @@ def set_connection_roles(
             (metrika, direct, connection_id),
         )
         if metrika != row["use_metrika"]:
-            conn.execute("UPDATE metrika_counters SET enabled = %s WHERE connection_id = %s", (metrika, connection_id))
+            # Удалённые из Толка сайты (hidden_counters) остаются выключенными и при включении роли.
+            conn.execute(
+                """
+                UPDATE metrika_counters m SET enabled = %s
+                WHERE m.connection_id = %s
+                  AND NOT (%s AND EXISTS (
+                      SELECT 1 FROM hidden_counters h WHERE h.user_id = m.user_id AND h.counter_id = m.counter_id
+                  ))
+                """,
+                (metrika, connection_id, metrika),
+            )
         if direct != row["use_direct"]:
             conn.execute("UPDATE direct_accounts SET enabled = %s WHERE connection_id = %s", (direct, connection_id))
     return {"id": connection_id, "use_metrika": metrika, "use_direct": direct}
@@ -732,7 +742,12 @@ def upsert_metrika(user_id: int, connection_id: int, counters: list[dict]) -> tu
                 INSERT INTO metrika_counters (
                     user_id, connection_id, counter_id, name, site, enabled, synced_at
                 )
-                VALUES (%s, %s, %s, %s, %s, TRUE, NOW())
+                VALUES (
+                    %s, %s, %s, %s, %s,
+                    -- Удалённый из Толка сайт приходит через другой логин выключенным.
+                    NOT EXISTS (SELECT 1 FROM hidden_counters WHERE user_id = %s AND counter_id = %s),
+                    NOW()
+                )
                 ON CONFLICT (connection_id, counter_id) DO UPDATE SET
                     name = EXCLUDED.name,
                     site = EXCLUDED.site,
@@ -745,6 +760,8 @@ def upsert_metrika(user_id: int, connection_id: int, counters: list[dict]) -> tu
                     item["counter_id"],
                     item.get("name") or "",
                     item.get("site") or "",
+                    user_id,
+                    item["counter_id"],
                 ),
             ).fetchone()
             count += 1
@@ -913,6 +930,7 @@ def _metrika_out(row: dict) -> dict:
         "name": row["name"],
         "site": row["site"],
         "enabled": row["enabled"],
+        "hidden": bool(row.get("hidden")),
         "synced_at": _iso(row.get("synced_at")),
         "load": _counter_load(row),
     }
@@ -959,8 +977,12 @@ def list_metrika(user_id: int) -> list[dict]:
         rows = conn.execute(
             """
             SELECT id, connection_id, client_row_id, counter_id, name, site, enabled, synced_at,
-                   load_state, loaded_at
-            FROM metrika_counters
+                   load_state, loaded_at,
+                   EXISTS (
+                       SELECT 1 FROM hidden_counters h
+                       WHERE h.user_id = m.user_id AND h.counter_id = m.counter_id
+                   ) AS hidden
+            FROM metrika_counters m
             WHERE user_id = %s
             ORDER BY name ASC, counter_id ASC
             """,
@@ -989,12 +1011,27 @@ def list_direct(user_id: int) -> list[dict]:
 
 def set_metrika_enabled(user_id: int, item_id: int, enabled: bool) -> dict:
     with pool.connection() as conn:
+        if enabled:
+            hidden = conn.execute(
+                """
+                SELECT 1 FROM metrika_counters m
+                JOIN hidden_counters h ON h.user_id = m.user_id AND h.counter_id = m.counter_id
+                WHERE m.id = %s AND m.user_id = %s
+                """,
+                (item_id, user_id),
+            ).fetchone()
+            if hidden is not None:
+                raise YandexError("hidden", "Сайт удалён из Толка — верните его в «Сайтах», и счётчик включится")
         row = conn.execute(
             """
-            UPDATE metrika_counters SET enabled = %s
+            UPDATE metrika_counters m SET enabled = %s
             WHERE id = %s AND user_id = %s
             RETURNING id, connection_id, client_row_id, counter_id, name, site, enabled, synced_at,
-                      load_state, loaded_at
+                      load_state, loaded_at,
+                      EXISTS (
+                          SELECT 1 FROM hidden_counters h
+                          WHERE h.user_id = m.user_id AND h.counter_id = m.counter_id
+                      ) AS hidden
             """,
             (enabled, item_id, user_id),
         ).fetchone()

@@ -105,10 +105,14 @@ const WS = (id) => `/api/web/workspaces/${id}`
 export const wsApi = {
   list: (archived = false) => request(`/api/web/workspaces${query({ archived })}`),
   refresh: () => post('/api/web/workspaces/refresh'),
-  /** Счётчики для выбора проектов по тарифу: { items: [{ counter_id, name, site, login, state, workspace_id, note }], projects_limit, projects_used }. */
+  /** Счётчики для выбора проектов по тарифу: { items: [{ counter_id, name, site, login, state, workspace_id, note }], hidden: [{ counter_id, name, site, had_project, hidden_at, workspace_id }], projects_limit, projects_used }. */
   counters: () => request('/api/web/workspaces/counters'),
   /** Сделать счётчик проектом (или вернуть его архивный проект) → проект. */
   fromCounter: (counterId) => post('/api/web/workspaces/from-counter', { counter_id: counterId }),
+  /** Удалить сайт из Толка: проект в архив; purge — вместе с проектом и статистикой Метрики. */
+  hideSite: (counterId, purge = false) => post(`/api/web/workspaces/sites/${counterId}/hide`, { purge }),
+  /** Вернуть удалённый сайт → { counter_id, workspace, note }. */
+  restoreSite: (counterId) => post(`/api/web/workspaces/sites/${counterId}/restore`),
   get: (id) => request(WS(id)),
   load: (id) => request(`${WS(id)}/load`),
   update: (id, payload) => patch(WS(id), payload),

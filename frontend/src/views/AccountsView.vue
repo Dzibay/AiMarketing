@@ -112,7 +112,7 @@
   <div v-if="loading" class="panel"><p class="empty">Загружаем подключения…</p></div>
 
   <template v-else>
-    <SitesPanel ref="sitesPanel" @changed="reloadAll" />
+    <SitesPanel ref="sitesPanel" @changed="onSitesChanged" />
 
     <ExpertHint>Логины и их роли, счётчики Метрики, кабинеты Директа, Яндекс Аудитории и история обновлений</ExpertHint>
 
@@ -198,7 +198,10 @@
           <input v-model="counterSearch" type="search" placeholder="Сайт или номер" />
         </div>
       </div>
-      <p class="hint">Выключенный счётчик не обновляется, его проект остаётся с историей.</p>
+      <p class="hint">
+        Выключенный счётчик не обновляется, его проект остаётся с историей. «Удалить сайт» убирает и проект — в
+        архив или вместе с данными.
+      </p>
       <div v-if="filteredCounters.length" class="list">
         <div v-for="m in filteredCounters" :key="m.id" class="list-row" :class="{ 'is-off': !m.enabled }">
           <div>
@@ -208,7 +211,10 @@
               <template v-if="m.site"> · {{ m.site }}</template>
               · @{{ connectionLogin(m.connection_id) }}
             </small>
-            <template v-if="m.enabled">
+            <p v-if="m.hidden" class="sync-status">
+              Сайт удалён из Толка — счётчик не обновляется и не предлагается в «Добавить сайт».
+            </p>
+            <template v-else-if="m.enabled">
               <p v-if="counterLoad(m).canonical === false" class="sync-status">
                 Этот счётчик виден и через другой подключённый логин — данные загружаются там.
               </p>
@@ -238,9 +244,28 @@
             >
               {{ counterLoad(m).job ? 'Загружается…' : 'Обновить данные' }}
             </button>
-            <button class="btn btn--ghost" type="button" @click="toggleCounter(m)">
-              {{ m.enabled ? 'Выключить' : 'Включить' }}
+            <button
+              v-if="m.hidden"
+              class="btn btn--ghost"
+              type="button"
+              :disabled="loadBusy === `s${m.counter_id}`"
+              @click="restoreCounterSite(m)"
+            >
+              Вернуть
             </button>
+            <template v-else>
+              <button class="btn btn--ghost" type="button" @click="toggleCounter(m)">
+                {{ m.enabled ? 'Выключить' : 'Включить' }}
+              </button>
+              <button
+                class="btn btn--ghost btn--danger"
+                type="button"
+                :disabled="loadBusy === `s${m.counter_id}`"
+                @click="removeCounterSite(m)"
+              >
+                {{ workspaceFor(m) ? 'Удалить сайт' : 'Скрыть' }}
+              </button>
+            </template>
           </div>
         </div>
       </div>
@@ -366,6 +391,7 @@ import SitesPanel from '../components/SitesPanel.vue'
 import YandexConnectButton from '../components/YandexConnectButton.vue'
 import { errorDetail, errorText, JOB_LABELS, jobProgressText, webApi } from '../api/web'
 import { jobText, refreshLoads, stageErrorText, stageFailure, useLoads } from '../composables/useLoads'
+import { dismissCounter, removeSite, restoreSite } from '../composables/useSiteRemoval'
 import { pushToast } from '../composables/useToasts'
 import { loadWorkspaces } from '../composables/useWorkspaces'
 import { useHead } from '../utils/useHead'
@@ -595,6 +621,34 @@ async function toggleCounter(m) {
   } catch (err) {
     pushToast(errorText(err), 'error')
   }
+}
+
+// Удаление и возврат идут через общий composable; список сайтов сообщает об изменении (@changed),
+// и страница перечитывается — в том числе после «Вернуть» из тоста.
+async function removeCounterSite(m) {
+  loadBusy.value = `s${m.counter_id}`
+  try {
+    const ws = workspaceFor(m)
+    // Без проекта удалять нечего — счётчик просто перестаёт предлагаться в «Добавить сайт».
+    if (ws) await removeSite({ counterId: m.counter_id, name: ws.name || m.name || m.site })
+    else await dismissCounter({ counterId: m.counter_id, name: m.site || m.name })
+  } finally {
+    loadBusy.value = ''
+  }
+}
+
+async function restoreCounterSite(m) {
+  loadBusy.value = `s${m.counter_id}`
+  try {
+    await restoreSite({ counterId: m.counter_id, name: m.name || m.site })
+  } finally {
+    loadBusy.value = ''
+  }
+}
+
+async function onSitesChanged() {
+  await reloadAll()
+  refreshLoads()
 }
 
 async function toggleAccount(a) {
