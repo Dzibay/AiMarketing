@@ -2,8 +2,14 @@
   <span class="ui-menu">
     <button
       ref="trigger"
-      class="btn btn--ghost ui-menu__btn"
-      :class="{ 'btn--sm': size === 'sm', 'is-open': open }"
+      class="btn ui-menu__btn"
+      :class="{
+        'btn--sm': size === 'sm',
+        'btn--ghost': !primary,
+        'btn--accent': primary,
+        'ui-menu__btn--text': $slots.trigger,
+        'is-open': open,
+      }"
       type="button"
       :aria-label="label"
       :title="label"
@@ -47,6 +53,8 @@ const props = defineProps({
   size: { type: String, default: 'md' },
   align: { type: String, default: 'end' },
   disabled: { type: Boolean, default: false },
+  // Главная кнопка страницы с текстом в слоте trigger («Новая кампания ▾»), а не «⋯».
+  primary: { type: Boolean, default: false },
 })
 
 const trigger = ref(null)

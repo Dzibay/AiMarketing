@@ -241,6 +241,22 @@ export const CAMPAIGN_TYPES = {
   CPM_BANNER_CAMPAIGN: 'Медийная',
 }
 
+// Короткие подписи для строки под названием кампании; ТГО — по площадкам её стратегии (placement с бэкенда).
+const CAMPAIGN_TYPES_SHORT = {
+  UNIFIED_CAMPAIGN: 'ЕПК',
+  DYNAMIC_TEXT_CAMPAIGN: 'Динамические',
+  SMART_CAMPAIGN: 'Смарт',
+  MOBILE_APP_CAMPAIGN: 'Приложения',
+  CPM_BANNER_CAMPAIGN: 'Медийная',
+}
+const PLACEMENTS = { search: 'Поиск', network: 'РСЯ', both: 'Поиск и РСЯ' }
+
+/** «Поиск», «РСЯ», «ЕПК»… — тип кампании одним-двумя словами. */
+export function campaignTypeShort(c) {
+  if (c?.type === 'TEXT_CAMPAIGN') return PLACEMENTS[c.placement] || 'ТГО'
+  return CAMPAIGN_TYPES_SHORT[c?.type] || CAMPAIGN_TYPES[c?.type] || c?.type || ''
+}
+
 /** Ключевые цели для API: строки без цели пропускаем. Пустую ценность не подменяем:
  *  Директ требует от 0,3 ₽, и сервер назовёт цель, которую нужно заполнить. */
 export function priorityGoalsForApi(goals) {

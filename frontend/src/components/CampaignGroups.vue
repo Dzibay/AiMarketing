@@ -3,7 +3,7 @@
     <section v-for="g in groups" :key="g.id" class="cgroup">
       <h2 class="cgroup__h">
         <span class="st" :class="`st--${g.id}`">
-          <component :is="ICONS[g.id]" :size="14" aria-hidden="true" />{{ g.label }}
+          <component :is="ICONS[g.id]" :size="14" aria-hidden="true" />{{ groupLabel(g) }}
         </span>
         <span class="cgroup__n">{{ g.items.length }}</span>
       </h2>
@@ -29,7 +29,7 @@
           <div class="crow__health">{{ c.health.text }}</div>
           <div class="crow__num num">
             <b>{{ rub(c.cost_kopecks) }}</b>
-            <small>{{ num(c.conversions || 0) }} {{ convWord(c.conversions || 0) }}</small>
+            <small>{{ num(c.conversions || 0) }} {{ leadWord(c.conversions || 0) }}</small>
           </div>
           <label v-if="canToggle(c)" class="switch" :title="c.state === 'ON' ? 'Остановить показы' : 'Запустить показы'">
             <input
@@ -37,7 +37,7 @@
               :checked="c.state === 'ON'"
               :disabled="busy"
               :aria-label="`${c.state === 'ON' ? 'Остановить' : 'Запустить'} «${c.name}»`"
-              @change="$emit('toggle', c)"
+              @click.prevent="$emit('toggle', c)"
             />
           </label>
           <span v-else></span>
@@ -51,12 +51,13 @@
 import { computed } from 'vue'
 import { RouterLink } from 'vue-router'
 import { TriangleAlert, CircleCheck, CircleDashed, CirclePause, OctagonAlert } from '@lucide/vue'
-import { HEALTH_GROUPS, campaignHealth, convWord } from '../utils/campaignHealth'
-import { num, rub } from '../utils/format'
+import { HEALTH_GROUPS, campaignHealth, leadWord } from '../utils/campaignHealth'
+import { num, plural, rub } from '../utils/format'
 
 /**
  * Кампании простого режима: группы «что с ними» вместо таблицы. Каждая строка — название, вывод словами,
- * расход с конверсиями и выключатель показов. kpiOf(c) отдаёт цель проекта кампании.
+ * расход с заявками и выключатель показов. kpiOf(c) отдаёт цель проекта кампании. Выключатель только
+ * сообщает toggle: сам он не переключается — страница спрашивает подтверждение и перечитывает список.
  */
 const props = defineProps({
   rows: { type: Array, required: true },
@@ -64,10 +65,16 @@ const props = defineProps({
   busy: { type: Boolean, default: false },
   // Set выбранных campaign_row_id — тогда у строк галочки (вопрос ИИ про выбранные).
   selected: { type: Set, default: null },
+  // Период статистики в днях — для подписи «Расход без заявок за 7 дней».
+  days: { type: Number, default: 7 },
 })
 defineEmits(['toggle', 'pick'])
 
 const ICONS = { bad: OctagonAlert, warn: TriangleAlert, ok: CircleCheck, idle: CircleDashed, off: CirclePause }
+
+function groupLabel(g) {
+  return g.id === 'bad' ? `${g.label} за ${props.days} ${plural(props.days, 'день', 'дня', 'дней')}` : g.label
+}
 
 const groups = computed(() => {
   const withHealth = props.rows.map((c) => ({ ...c, health: campaignHealth(c, props.kpiOf(c)) }))

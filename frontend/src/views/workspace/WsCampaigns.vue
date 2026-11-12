@@ -1,35 +1,53 @@
 <template>
-  <div class="ws-toolbar">
-    <div class="seg" role="group" aria-label="Период статистики">
-      <button v-for="d in [7, 14, 30]" :key="d" type="button" :class="{ active: days === d }" @click="setDays(d)">
-        {{ d }} дней
-      </button>
-    </div>
-    <p class="sync-status">
+  <PageHeader>
+    <template #description>
       <template v-if="syncing">{{ syncText }}</template>
       <template v-else-if="data">
         {{ formatDate(data.date_from) }} — {{ formatDate(data.date_to) }} ·
         {{ data.conversions_source === 'goal' ? `конверсии по цели «${ws.goal_name}»` : 'конверсии Директа' }}
       </template>
-    </p>
-    <div class="row-actions">
-      <button class="btn btn--ghost" type="button" :disabled="syncing" @click="syncCampaigns">
-        {{ syncing ? 'Синхронизируем…' : 'Обновить из Директа' }}
+    </template>
+    <template #actions>
+      <div class="seg" role="group" aria-label="Период статистики">
+        <button
+          v-for="d in [7, 14, 30]"
+          :key="d"
+          type="button"
+          :class="{ active: days === d }"
+          :aria-pressed="days === d"
+          @click="setDays(d)"
+        >
+          {{ d }} дней
+        </button>
+      </div>
+      <button
+        class="btn btn--ghost"
+        type="button"
+        :disabled="syncing"
+        :title="syncedAgo ? `Данные из Директа обновлены ${syncedAgo}` : 'Обновить кампании из Директа'"
+        @click="syncCampaigns"
+      >
+        <RefreshCw :class="{ spin: syncing }" aria-hidden="true" />
+        <span class="sync-btn">
+          {{ syncing ? 'Обновляем…' : 'Обновить из Директа' }}
+          <small v-if="syncedAgo && !syncing">обновлено {{ syncedAgo }}</small>
+        </span>
       </button>
-      <button class="btn btn--accent" type="button" @click="wizardOpen = true">Новая кампания</button>
-    </div>
-  </div>
+      <button class="btn btn--accent" type="button" @click="wizardOpen = true">
+        <Plus aria-hidden="true" />Новая кампания
+      </button>
+    </template>
+  </PageHeader>
 
   <template v-if="!expert">
     <p v-if="loading && !data" class="empty">Загружаем кампании…</p>
-    <div v-else-if="!data" class="empty">
-      {{ loadError || 'Не удалось загрузить кампании.' }}
-      <button class="btn btn--ghost" type="button" @click="load">Повторить</button>
-    </div>
-    <div v-else-if="!simpleRows.length" class="empty">
+    <EmptyState v-else-if="!data" :icon="CloudOff" :text="loadError || 'Не удалось загрузить кампании.'">
+      <template #action><button class="btn btn--ghost" type="button" @click="load">Повторить</button></template>
+    </EmptyState>
+    <EmptyState v-else-if="!simpleRows.length" :icon="Megaphone">
       В проекте нет кампаний. Нажмите «Новая кампания» или добавьте кабинет в
       <RouterLink :to="`/w/${ws.id}/settings`">настройках</RouterLink>.
-    </div>
+    </EmptyState>
     <CampaignGroups
       v-else
       :class="{ 'is-loading': loading }"
@@ -37,6 +55,7 @@
       :kpi-of="() => data.kpi"
       :busy="busy"
       :selected="selected"
+      :days="days"
       @toggle="quickToggle"
       @pick="toggle"
     />
@@ -53,187 +72,73 @@
   </template>
 
   <section v-else class="panel">
-    <div class="filters">
-      <div v-field class="field field--wide">
-        <label>Поиск</label>
-        <input v-model.trim="filters.search" type="search" placeholder="название или ID кампании" />
-      </div>
-      <div v-if="accounts.length > 1" v-field class="field">
-        <label>Кабинет</label>
-        <select v-model="filters.account">
-          <option value="">Все кабинеты</option>
-          <option v-for="a in accounts" :key="a.id" :value="String(a.id)">
-            {{ a.client_login }}
-          </option>
-        </select>
-      </div>
-      <div v-field class="field">
-        <label>Состояние</label>
-        <select v-model="filters.state">
-          <option value="">Все, кроме архива</option>
-          <option value="ON">Идут показы</option>
-          <option value="OFF">Остановлены</option>
-          <option value="SUSPENDED">Приостановлены</option>
-          <option value="ENDED">Завершены</option>
-          <option value="ARCHIVED">В архиве</option>
-          <option value="*">Все</option>
-        </select>
-      </div>
-      <label class="check-row">
-        <input v-model="filters.wasteOnly" type="checkbox" />
-        Расход без конверсий
-      </label>
-    </div>
-
-    <div v-if="selected.size" class="bulk-bar">
-      <span>Выбрано: {{ selected.size }}</span>
-      <button v-if="picked.canResume" class="btn btn--ghost" type="button" :disabled="busy" @click="bulk('resume')">
-        Запустить
-      </button>
-      <button v-if="picked.canPause" class="btn btn--ghost" type="button" :disabled="busy" @click="bulk('pause')">
-        Остановить
-      </button>
-      <button v-if="picked.active" class="btn btn--ghost" type="button" :disabled="busy" @click="openBudget">
-        Бюджет и стратегия…
-      </button>
-      <button
-        v-if="selected.size === 1"
-        class="btn btn--ghost"
-        type="button"
-        :disabled="busy"
-        @click="openDuplicate(rows.find((r) => selected.has(r.campaign_row_id)))"
-      >
-        Копировать
-      </button>
-      <details ref="moreMenu" class="bulk-more">
-        <summary class="btn btn--ghost">Ещё…</summary>
-        <div class="bulk-more__menu" role="menu">
-          <button v-if="picked.active" class="menu-item" type="button" role="menuitem" :disabled="busy" @click="bulk('archive')">
-            В архив
-          </button>
-          <button v-if="picked.archived" class="menu-item" type="button" role="menuitem" :disabled="busy" @click="bulk('unarchive')">
-            Из архива
-          </button>
-          <button class="menu-item is-danger" type="button" role="menuitem" :disabled="busy" @click="bulk('delete')">
-            Удалить
-          </button>
-        </div>
-      </details>
-      <button class="btn btn--ghost" type="button" @click="selected = new Set()">Снять выбор</button>
-    </div>
-
-    <div v-if="bulkErrors.length" class="notice notice--warn">
-      <strong>Не выполнено для {{ bulkErrors.length }}:</strong>
-      <ul>
-        <li v-for="e in bulkErrors" :key="e.campaign_row_id">
-          {{ e.name || e.campaign_row_id }}<template v-if="e.client_login"> ({{ e.client_login }})</template>:
-          {{ e.message || ERRORS[e.error] || e.error }}
-        </li>
-      </ul>
-    </div>
-    <div v-if="budgetDone.length" class="notice">
-      <strong>Бюджеты и цена цели:</strong>
-      <ul>
-        <li v-for="i in budgetDone" :key="i.campaign_row_id">
-          {{ i.name }}: {{ i.before }} → {{ i.after }}<template v-if="!i.changed"> (без изменений)</template>
-          <template v-if="i.note"> · {{ i.note }}</template>
-        </li>
-      </ul>
-      <button class="btn btn--ghost" type="button" @click="budgetDone = []">Скрыть</button>
-    </div>
-
     <p v-if="loading && !data" class="empty">Загружаем кампании…</p>
-    <div v-else-if="!data" class="empty">
-      {{ loadError || 'Не удалось загрузить кампании.' }}
-      <button class="btn btn--ghost" type="button" @click="load">Повторить</button>
-    </div>
-    <div v-else-if="!data.items.length" class="empty">
+    <EmptyState v-else-if="!data" :icon="CloudOff" :text="loadError || 'Не удалось загрузить кампании.'" plain>
+      <template #action><button class="btn btn--ghost" type="button" @click="load">Повторить</button></template>
+    </EmptyState>
+    <EmptyState v-else-if="!data.items.length" :icon="Megaphone" plain>
       В проекте нет кампаний. Добавьте кабинет и кампании в
       <RouterLink :to="`/w/${ws.id}/settings`">настройках</RouterLink> или создайте новую.
-    </div>
-    <div v-else class="table-scroll" :class="{ 'is-loading': loading }">
-      <table class="table">
-        <thead>
-          <tr>
-            <th class="check-col">
-              <input
-                type="checkbox"
-                :checked="rows.length > 0 && rows.every((r) => selected.has(r.campaign_row_id))"
-                aria-label="Выбрать все"
-                @change="toggleAll($event.target.checked)"
-              />
-            </th>
-            <th v-for="col in COLUMNS" :key="col.key" :class="{ num: col.num }">
-              <button class="th-sort" type="button" @click="sortBy(col.key)">{{ col.label }}{{ sortMark(col.key) }}</button>
-            </th>
-            <th></th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-for="c in rows" :key="c.campaign_row_id" :class="{ 'is-off': c.state !== 'ON' }">
-            <td class="check-col">
-              <input
-                type="checkbox"
-                :checked="selected.has(c.campaign_row_id)"
-                :aria-label="`Выбрать «${c.name}»`"
-                @change="toggle(c.campaign_row_id, $event.target.checked)"
-              />
-            </td>
-            <td>
-              <RouterLink :to="`/w/${ws.id}/campaigns/${c.campaign_row_id}`">{{ c.name }}</RouterLink>
-              <small class="cell-note">
-                {{ c.account_login }} · № {{ c.campaign_id }} · {{ CAMPAIGN_TYPES[c.type] || c.type || '—' }}
-              </small>
-            </td>
-            <td>
-              <UiStatus v-bind="campaignStatus(c)" />
-            </td>
-            <td class="num">
-              <template v-if="c.weekly_budget_rub">{{ rubles(c.weekly_budget_rub) }}/нед.</template>
-              <template v-else-if="c.daily_budget_rub">{{ rubles(c.daily_budget_rub) }}/день</template>
-              <template v-else>—</template>
-              <small v-if="c.strategy_label" class="cell-note">
-                {{ c.strategy_label }}<template v-if="c.target_cpa_rub"> · CPA {{ rubles(c.target_cpa_rub) }}</template
-                ><template v-else-if="c.target_cpc_rub"> · CPC {{ rubles(c.target_cpc_rub, 2) }}</template>
-              </small>
-            </td>
-            <td class="num">{{ rub(c.cost_kopecks) }}</td>
-            <td class="num">{{ num(c.clicks) }}</td>
-            <td class="num">{{ c.ctr != null ? pct(c.ctr, 2) : '—' }}</td>
-            <td class="num" :class="{ 'tone-bad': !c.conversions && c.cost_kopecks > 0 }">{{ num(c.conversions) }}</td>
-            <td class="num">{{ c.cpa_kopecks != null ? rub(c.cpa_kopecks) : '—' }}</td>
-            <td class="row-actions">
-              <button
-                v-if="c.state === 'ON' || c.status !== 'DRAFT'"
-                class="btn btn--ghost"
-                type="button"
-                :disabled="busy"
-                @click="quickToggle(c)"
-              >
-                {{ c.state === 'ON' ? 'Стоп' : 'Старт' }}
-              </button>
-              <button class="btn btn--ghost" type="button" @click="openDuplicate(c)">Копия</button>
-            </td>
-          </tr>
-        </tbody>
-        <tfoot v-if="rows.length > 1">
-          <tr>
-            <td></td>
-            <td>Итого: {{ rows.length }}</td>
-            <td></td>
-            <td class="num" title="Сумма бюджетов запущенных кампаний; дневной × 7">
-              {{ totals.budget ? `${rubles(totals.budget)}/нед.` : '—' }}
-            </td>
-            <td class="num">{{ rub(totals.cost) }}</td>
-            <td class="num">{{ num(totals.clicks) }}</td>
-            <td class="num">{{ totals.impressions ? pct((totals.clicks / totals.impressions) * 100, 2) : '—' }}</td>
-            <td class="num">{{ num(totals.conversions) }}</td>
-            <td class="num">{{ totals.conversions ? rub(totals.cost / totals.conversions) : '—' }}</td>
-            <td></td>
-          </tr>
-        </tfoot>
-      </table>
-    </div>
+    </EmptyState>
+    <CampaignTable
+      v-else
+      v-model:selected="selected"
+      :items="data.items"
+      :link-of="(c) => `/w/${ws.id}/campaigns/${c.campaign_row_id}`"
+      :busy="busy"
+      :loading="loading"
+      :scope="accountScope"
+      @toggle="quickToggle"
+      @duplicate="openDuplicate"
+      @archive="archiveOne"
+      @unarchive="(c) => runBulk('unarchive', {}, [c.campaign_row_id])"
+    >
+      <template #notices>
+        <UiNotice v-if="bulkErrors.length" tone="warn" closable @close="bulkErrors = []">
+          <strong>Не выполнено для {{ bulkErrors.length }}:</strong>
+          <ul class="notice-list">
+            <li v-for="e in bulkErrors" :key="e.campaign_row_id">
+              {{ e.name || e.campaign_row_id }}<template v-if="e.client_login"> ({{ e.client_login }})</template>:
+              {{ e.message || ERRORS[e.error] || e.error }}
+            </li>
+          </ul>
+        </UiNotice>
+        <UiNotice v-if="budgetDone.length" closable @close="budgetDone = []">
+          <strong>Бюджеты и цена цели:</strong>
+          <ul class="notice-list">
+            <li v-for="i in budgetDone" :key="i.campaign_row_id">
+              {{ i.name }}: {{ i.before }} → {{ i.after }}<template v-if="!i.changed"> (без изменений)</template>
+              <template v-if="i.note"> · {{ i.note }}</template>
+            </li>
+          </ul>
+        </UiNotice>
+      </template>
+      <template #bulk>
+        <button v-if="picked.canResume" class="btn btn--ghost btn--sm" type="button" :disabled="busy" @click="bulk('resume')">
+          <Play aria-hidden="true" />Запустить
+        </button>
+        <button v-if="picked.canPause" class="btn btn--ghost btn--sm" type="button" :disabled="busy" @click="bulk('pause')">
+          <Pause aria-hidden="true" />Остановить
+        </button>
+        <button v-if="picked.active" class="btn btn--ghost btn--sm" type="button" :disabled="busy" @click="openBudget">
+          Бюджет и стратегия…
+        </button>
+        <button
+          v-if="selected.size === 1"
+          class="btn btn--ghost btn--sm"
+          type="button"
+          :disabled="busy"
+          @click="openDuplicate(data.items.find((r) => selected.has(r.campaign_row_id)))"
+        >
+          <Copy aria-hidden="true" />Копия
+        </button>
+        <UiMenu size="sm" label="Ещё действия с выбранными" :disabled="busy">
+          <UiMenuItem v-if="picked.active" :icon="Archive" @click="bulk('archive')">В архив</UiMenuItem>
+          <UiMenuItem v-if="picked.archived" :icon="ArchiveRestore" @click="bulk('unarchive')">Из архива</UiMenuItem>
+          <UiMenuItem :icon="Trash2" danger @click="bulk('delete')">Удалить</UiMenuItem>
+        </UiMenu>
+      </template>
+    </CampaignTable>
   </section>
 
   <CampaignWizard :open="wizardOpen" :workspace="ws" @close="wizardOpen = false" @created="onCreated" />
@@ -296,44 +201,31 @@
 </template>
 
 <script setup>
-import { askConfirm } from '../../composables/useConfirm'
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
+import { Archive, ArchiveRestore, CloudOff, Copy, Megaphone, Pause, Play, Plus, RefreshCw, Trash2 } from '@lucide/vue'
 import Modal from '../../components/ui/Modal.vue'
-import UiStatus from '../../components/ui/UiStatus.vue'
+import EmptyState from '../../components/ui/EmptyState.vue'
+import PageHeader from '../../components/ui/PageHeader.vue'
+import UiMenu from '../../components/ui/UiMenu.vue'
+import UiMenuItem from '../../components/ui/UiMenuItem.vue'
+import UiNotice from '../../components/ui/UiNotice.vue'
 import { ERRORS, errorText, jobProgressText, wsApi } from '../../api/web'
+import { askConfirm } from '../../composables/useConfirm'
 import { pushToast } from '../../composables/useToasts'
-import {
-  campaignStatus,
-  CAMPAIGN_TYPES,
-  formatDate,
-  lastDays,
-  num,
-  pct,
-  plural,
-  rub,
-  rubles,
-} from '../../utils/format'
+import { confirmCampaignArchive, confirmCampaignsBulk, confirmCampaignToggle } from '../../utils/campaignConfirm'
+import { campaignTypeShort, formatDate, lastDays, plural, timeAgo } from '../../utils/format'
 import CampaignWizard from './CampaignWizard.vue'
 import DuplicateDialog from './DuplicateDialog.vue'
 import { useWs } from './context'
 import CampaignGroups from '../../components/CampaignGroups.vue'
+import CampaignTable from '../../components/CampaignTable.vue'
 import CampaignAsk from '../../components/CampaignAsk.vue'
 import ExpertHint from '../../components/ExpertHint.vue'
 import { useExpert } from '../../composables/useExpert'
 
 const { expert } = useExpert()
 
-const COLUMNS = [
-  { key: 'name', label: 'Кампания' },
-  { key: 'state', label: 'Состояние' },
-  { key: 'budget_week_rub', label: 'Бюджет', num: true },
-  { key: 'cost_kopecks', label: 'Расход', num: true },
-  { key: 'clicks', label: 'Клики', num: true },
-  { key: 'ctr', label: 'CTR', num: true },
-  { key: 'conversions', label: 'Конв.', num: true },
-  { key: 'cpa_kopecks', label: 'CPA', num: true },
-]
 const ACTION_TEXT = {
   pause: 'Остановлено',
   resume: 'Запущено',
@@ -355,8 +247,6 @@ const syncText = ref('')
 const busy = ref(false)
 const selected = ref(new Set())
 const bulkErrors = ref([])
-const sort = reactive({ key: 'cost_kopecks', desc: true })
-const filters = reactive({ search: '', account: '', state: '', wasteOnly: false })
 const wizardOpen = ref(false)
 const duplicate = reactive({ open: false, campaign: null })
 const BUDGET_MODES = [
@@ -378,6 +268,20 @@ const budgetDone = ref([])
 const budgetProgress = ref('')
 
 const accounts = computed(() => data.value?.accounts || [])
+const accountScope = computed(() => ({
+  label: 'Кабинет',
+  all: 'Все кабинеты',
+  options: accounts.value.map((a) => ({ value: String(a.id), label: a.client_login })),
+  of: (c) => c.account_id,
+}))
+// «обновлено 5 мин назад» — по самому давнему обновлению кабинетов проекта; пересчитываем раз в минуту.
+const now = ref(Date.now())
+const clock = setInterval(() => (now.value = Date.now()), 60_000)
+onBeforeUnmount(() => clearInterval(clock))
+const syncedAgo = computed(() => {
+  const times = accounts.value.map((a) => a.last_sync_at).filter(Boolean).sort()
+  return times.length ? timeAgo(times[0], now.value) : ''
+})
 // Простой режим: фильтры скрыты — всё, кроме архива.
 const simpleRows = computed(() =>
   (data.value?.items || [])
@@ -385,7 +289,7 @@ const simpleRows = computed(() =>
     .map((c) => ({
       ...c,
       link: `/w/${ws.value.id}/campaigns/${c.campaign_row_id}`,
-      where: [CAMPAIGN_TYPES[c.type] || c.type, accounts.value.length > 1 ? c.account_login : '']
+      where: [campaignTypeShort(c), accounts.value.length > 1 ? c.account_login : '']
         .filter(Boolean)
         .join(' · '),
     })),
@@ -403,48 +307,6 @@ const picked = computed(() => {
     canResume: items.some((c) => c.state !== 'ON' && c.state !== 'ARCHIVED' && c.status !== 'DRAFT'),
   }
 })
-const moreMenu = ref(null)
-
-const rows = computed(() => {
-  const q = filters.search.toLowerCase()
-  const list = (data.value?.items || []).filter((c) => {
-    if (filters.account && String(c.account_id) !== filters.account) return false
-    if (filters.state === '' && c.state === 'ARCHIVED') return false
-    if (filters.state && filters.state !== '*' && c.state !== filters.state) return false
-    if (filters.wasteOnly && (c.conversions || !c.cost_kopecks)) return false
-    if (q && !c.name.toLowerCase().includes(q) && !String(c.campaign_id).includes(q)) return false
-    return true
-  })
-  const dir = sort.desc ? -1 : 1
-  return list.map(withWeek).sort((a, b) => {
-    const x = a[sort.key]
-    const y = b[sort.key]
-    if (x == null && y == null) return 0
-    if (x == null) return 1
-    if (y == null) return -1
-    if (typeof x === 'string') return x.localeCompare(y, 'ru') * dir
-    return (x - y) * dir
-  })
-})
-const totals = computed(() =>
-  rows.value.reduce(
-    (t, c) => ({
-      cost: t.cost + (c.cost_kopecks || 0),
-      clicks: t.clicks + (c.clicks || 0),
-      impressions: t.impressions + (c.impressions || 0),
-      conversions: t.conversions + (c.conversions || 0),
-      budget: t.budget + (c.state === 'ON' ? c.budget_week_rub || 0 : 0),
-    }),
-    { cost: 0, clicks: 0, impressions: 0, conversions: 0, budget: 0 },
-  ),
-)
-
-// Бюджет к одной мере — за неделю: так их можно сортировать и складывать.
-function withWeek(c) {
-  const week = c.weekly_budget_rub || (c.daily_budget_rub ? c.daily_budget_rub * 7 : null)
-  return { ...c, budget_week_rub: week }
-}
-
 const selectedKinds = computed(() => {
   const out = { weekly: 0, daily: 0 }
   for (const c of data.value?.items || []) {
@@ -456,27 +318,11 @@ const selectedKinds = computed(() => {
 })
 const budgetReady = computed(() => budgetModal.mode !== 'none' || budgetModal.target)
 
-function sortBy(key) {
-  if (sort.key === key) sort.desc = !sort.desc
-  else {
-    sort.key = key
-    sort.desc = key !== 'name' && key !== 'state'
-  }
-}
-
-function sortMark(key) {
-  return sort.key === key ? (sort.desc ? ' ↓' : ' ↑') : ''
-}
-
 function toggle(id, on) {
   const next = new Set(selected.value)
   if (on) next.add(id)
   else next.delete(id)
   selected.value = next
-}
-
-function toggleAll(on) {
-  selected.value = on ? new Set(rows.value.map((r) => r.campaign_row_id)) : new Set()
 }
 
 async function load() {
@@ -515,8 +361,7 @@ async function syncCampaigns() {
   }
 }
 
-async function runBulk(action, extra = {}) {
-  const ids = [...selected.value]
+async function runBulk(action, extra = {}, ids = [...selected.value]) {
   if (!ids.length) return
   busy.value = true
   bulkErrors.value = []
@@ -538,17 +383,24 @@ async function runBulk(action, extra = {}) {
 }
 
 async function bulk(action) {
-  if (moreMenu.value) moreMenu.value.open = false
   const n = selected.value.size
-  if (action === 'delete' && !await askConfirm(`Удалить в Директе кампаний: ${n}? Удалить можно только черновики и кампании без показов.`))
+  const what = `${n} ${plural(n, 'кампанию', 'кампании', 'кампаний')}`
+  if (action === 'delete' && !(await askConfirm(`Удалить в Директе ${what}? Удалить можно только черновики и кампании без показов.`)))
     return
-  if (action === 'archive' && !await askConfirm(`Отправить в архив кампаний: ${n}?`)) return
+  if (action === 'archive' && !(await askConfirm(`Отправить в архив ${what}?`, { title: 'В архив' }))) return
+  if ((action === 'pause' || action === 'resume') && !(await confirmCampaignsBulk(action, n))) return
   return runBulk(action)
 }
 
-function quickToggle(c) {
-  selected.value = new Set([c.campaign_row_id])
-  return runBulk(c.state === 'ON' ? 'pause' : 'resume')
+// Одна кампания из строки (выключатель или «⋯»): выбор не трогаем.
+async function quickToggle(c) {
+  if (!(await confirmCampaignToggle(c))) return
+  return runBulk(c.state === 'ON' ? 'pause' : 'resume', {}, [c.campaign_row_id])
+}
+
+async function archiveOne(c) {
+  if (!(await confirmCampaignArchive(c))) return
+  return runBulk('archive', {}, [c.campaign_row_id])
 }
 
 function openBudget() {
@@ -630,3 +482,33 @@ onMounted(() => {
   }
 })
 </script>
+
+<style scoped>
+.sync-btn {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-start;
+  line-height: 1.15;
+}
+
+.sync-btn small {
+  color: var(--faint);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.spin {
+  animation: spin 1s linear infinite;
+}
+
+.notice-list {
+  margin: 4px 0 0;
+  padding-left: 18px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .spin {
+    animation: none;
+  }
+}
+</style>

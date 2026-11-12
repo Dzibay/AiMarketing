@@ -70,7 +70,12 @@
   width: 32px;
 }
 
-.ui-menu__btn.is-open {
+.ui-menu__btn.ui-menu__btn--text {
+  width: auto;
+  padding: 0 14px;
+}
+
+.ui-menu__btn.is-open:not(.btn--accent) {
   border-color: var(--faint);
   background: var(--surface-2);
 }
@@ -499,5 +504,100 @@
 
   .ui-select__chev {
     transition: none;
+  }
+}
+
+/* --- Строка инструментов списка: поиск, сегменты, фильтры, переключатель справа --- */
+
+.ltools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  margin-bottom: 14px;
+}
+
+.ltools__search {
+  position: relative;
+  display: flex;
+  align-items: center;
+  flex: 1 1 220px;
+  max-width: 320px;
+}
+
+.ltools__search svg {
+  position: absolute;
+  left: 11px;
+  width: 16px;
+  height: 16px;
+  color: var(--faint);
+  pointer-events: none;
+}
+
+.ltools__search input {
+  width: 100%;
+  height: 36px;
+  padding: 0 12px 0 34px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+  font-size: 14px;
+}
+
+.ltools__search input:focus {
+  outline: none;
+  border-color: var(--ink);
+}
+
+.seg__n {
+  margin-left: 6px;
+  color: var(--faint);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.ltools__switch {
+  margin-left: auto;
+  font-size: 13px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+/* Панель массовых действий — снизу экрана, пока есть выбранные. */
+.bulk-dock {
+  position: sticky;
+  bottom: 12px;
+  z-index: 6;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 14px;
+  padding: 10px 12px 10px 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-card);
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+
+.bulk-dock b {
+  margin-right: 4px;
+  font-size: 14px;
+}
+
+.bulk-dock__end {
+  margin-left: auto;
+}
+
+@media (max-width: 640px) {
+  .ltools__search {
+    max-width: none;
+    flex-basis: 100%;
+  }
+
+  .ltools__switch {
+    margin-left: 0;
   }
 }

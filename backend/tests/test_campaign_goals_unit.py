@@ -9,6 +9,7 @@ from app.direct_sync import _changes
 from app.stats import goal_columns, parse_goal_day_rows
 from app.strategy_info import (
     brief_label,
+    budget_brief,
     campaign_goal_ids,
     goal_label,
     micros_to_rub,
@@ -169,3 +170,19 @@ def test_first_sync_with_strategy_and_goals_is_not_a_change():
     assert _changes(old, new) == []
     # Директ не отдал поля целей (None): записанные цели не считаем изменившимися.
     assert _changes(new, {**new, "priority_goals": None, "attribution_model": None}) == []
+
+
+def test_budget_brief_placement():
+    """Короткий тип в списке кампаний: только поиск, только сети или оба — по стратегии."""
+    assert budget_brief(pay_for(ORDER))["placement"] == "search"
+    only_network = {
+        "Search": {"BiddingStrategyType": "SERVING_OFF"},
+        "Network": {"BiddingStrategyType": "WB_MAXIMUM_CLICKS"},
+    }
+    assert budget_brief(only_network)["placement"] == "network"
+    both = {
+        "Search": {"BiddingStrategyType": "HIGHEST_POSITION"},
+        "Network": {"BiddingStrategyType": "NETWORK_DEFAULT"},
+    }
+    assert budget_brief(both)["placement"] == "both"
+    assert budget_brief(None)["placement"] is None

@@ -17,10 +17,19 @@
           <h2>Группы объявлений</h2>
           <p class="hint">Выберите группу — объявления и фразы ниже отфильтруются по ней.</p>
         </div>
-        <form class="filters filters--inline" @submit.prevent="createGroup">
-          <input v-model.trim="groupForm.name" type="text" placeholder="Название новой группы" maxlength="255" />
-          <button class="btn btn--accent" type="submit" :disabled="busy || !groupForm.name">Создать группу</button>
+        <form v-if="!groupBlock" class="filters filters--inline" @submit.prevent="createGroup">
+          <input
+            v-model.trim="groupForm.name"
+            type="text"
+            placeholder="Название новой группы"
+            aria-label="Название новой группы"
+            maxlength="255"
+          />
+          <button class="btn btn--ghost" type="submit" :disabled="busy || !groupForm.name">
+            <Plus aria-hidden="true" />Создать группу
+          </button>
         </form>
+        <p v-else-if="campaign" class="hint">{{ groupBlock }}</p>
       </div>
       <div v-if="adgroups.length" class="list">
         <div
@@ -389,6 +398,7 @@ import { emptyExtras, extrasDiff, extrasEmpty, extrasFromApi, extrasPayload, ext
 import { errorText, jobProgressText, webApi, wsApi } from '../api/web'
 import { pushToast } from '../composables/useToasts'
 import { CAMPAIGN_STATES, CAMPAIGN_STATUSES, formatDate, formatDateTime, num, rub, rubles } from '../utils/format'
+import { Plus } from '@lucide/vue'
 
 const props = defineProps({
   workspaceId: { type: Number, required: true },
@@ -438,6 +448,15 @@ const autoBids = computed(() => {
 })
 // Комбинаторное объявление: так Директ создаёт новые объявления в текстовых кампаниях и ЕПК.
 const RESPONSIVE_CAMPAIGNS = new Set(['TEXT_CAMPAIGN', 'UNIFIED_CAMPAIGN'])
+// Группы мы создаём только текстовые и ЕПК; в архивной кампании Директ ничего не меняет.
+const groupBlock = computed(() => {
+  const camp = campaign.value
+  if (!camp) return 'Загружаем кампанию…'
+  if (camp.state === 'ARCHIVED') return 'Кампания в архиве — чтобы добавить группу, сначала верните её из архива.'
+  const type = camp.campaign_type || camp.type
+  if (type && !RESPONSIVE_CAMPAIGNS.has(type)) return 'В кампаниях этого типа группы создаются в интерфейсе Директа.'
+  return ''
+})
 const adResponsive = computed(() =>
   adModal.item
     ? adModal.item.type === 'RESPONSIVE_AD'

@@ -1,247 +1,265 @@
 <template>
-  <div class="ws-toolbar">
-    <p class="sync-status">
-      Общие списки минус-фраз для кампаний разных клиентов. В Директ пишем только после предпросмотра и вашего
-      подтверждения.
-    </p>
-    <details ref="newMenu" class="bulk-more neg-new">
-      <summary class="btn btn--accent"><Plus :size="15" aria-hidden="true" />Новый список</summary>
-      <div class="bulk-more__menu" role="menu">
-        <button class="menu-item" type="button" role="menuitem" @click="startDraft('blank')">
-          <FilePlus aria-hidden="true" />Пустой список
-        </button>
-        <button
+  <PageHeader
+    description="Общие списки минус-фраз для кампаний разных клиентов. В Директ пишем только после предпросмотра и вашего подтверждения."
+  >
+    <template #actions>
+      <UiMenu primary label="Новый список: пустой или из шаблона">
+        <template #trigger><Plus aria-hidden="true" />Новый список<ChevronDown aria-hidden="true" /></template>
+        <UiMenuItem :icon="FilePlus" @click="startDraft('blank')">Пустой список</UiMenuItem>
+        <UiMenuItem
           v-for="t in templates"
           :key="t.key"
-          class="menu-item"
-          type="button"
-          role="menuitem"
+          :icon="ListPlus"
+          :hint="`${t.phrases.length} ${plural(t.phrases.length, 'фраза', 'фразы', 'фраз')}`"
           @click="startDraft(t.key)"
         >
-          <ListPlus aria-hidden="true" />{{ t.name }} <small>{{ t.phrases.length }}</small>
-        </button>
-      </div>
-    </details>
-  </div>
+          {{ t.name }}
+        </UiMenuItem>
+      </UiMenu>
+    </template>
+  </PageHeader>
 
   <div v-if="loading" class="ccard ccard--note">Загружаем списки…</div>
 
-  <template v-else>
-    <h2 class="section-h">Списки <span class="cgroup__n">{{ lists.length }}</span></h2>
-    <div v-if="lists.length" class="ccard">
-      <button
-        v-for="l in lists"
-        :key="l.id"
-        class="prow neg-row"
-        :class="{ 'is-sel': l.id === selectedId }"
-        type="button"
-        :aria-pressed="l.id === selectedId"
-        @click="selectList(l.id)"
-      >
-        <span class="prow__main">
-          <b>{{ l.name }}</b>
-          <p>
-            {{ l.phrases_count }} {{ plural(l.phrases_count, 'фраза', 'фразы', 'фраз') }} ·
-            {{ l.linked ? `в ${l.linked} ${plural(l.linked, 'кампании', 'кампаниях', 'кампаниях')}` : 'ещё не применён' }}
-          </p>
-        </span>
-        <span v-if="l.stale" class="st st--warn">ждут обновления: {{ l.stale }}</span>
-        <ChevronRight class="neg-row__go" :size="16" aria-hidden="true" />
-      </button>
-    </div>
-    <div v-else class="ccard ccard--note">
-      Списков пока нет. Начните с шаблона — например, «Работа и вакансии» — и поправьте под своих клиентов.
-    </div>
-
-    <section v-if="editing" class="ccard neg-edit">
-      <h3>{{ selectedId ? 'Список' : 'Новый список' }}</h3>
-      <form @submit.prevent="save">
-        <div v-field class="field">
-          <label>Название</label>
-          <input v-model="form.name" type="text" maxlength="255" placeholder="Общие стоп-слова" />
-        </div>
-        <div v-field class="field">
-          <label>Минус-фразы — по одной в строке</label>
-          <textarea v-model="form.text" rows="10" placeholder="бесплатно&#10;скачать&#10;своими руками" />
-        </div>
-        <p class="neg-count">
-          {{ draftPhrases.length }} {{ plural(draftPhrases.length, 'фраза', 'фразы', 'фраз') }} ·
-          {{ draftChars.toLocaleString('ru-RU') }} из 20 000 символов. Можно вставить строку из Директа вида
-          «-бесплатно -скачать».
-        </p>
-        <p v-if="selectedId && detail?.stale" class="neg-stale">
-          Список менялся после применения: {{ detail.stale }}
-          {{ plural(detail.stale, 'кампания ждёт', 'кампании ждут', 'кампаний ждут') }} обновления. Откройте
-          предпросмотр и примените заново.
-        </p>
-        <div class="neg-foot">
-          <button class="btn btn--accent" type="submit" :disabled="busy || !dirty">
-            {{ selectedId ? 'Сохранить' : 'Создать список' }}
-          </button>
-          <button v-if="dirty" class="btn btn--ghost" type="button" :disabled="busy" @click="resetForm">
-            {{ selectedId ? 'Отменить правки' : 'Отмена' }}
-          </button>
-          <button
-            v-if="selectedId"
-            class="btn btn--ghost neg-del"
-            type="button"
-            :disabled="busy || detail?.linked > 0"
-            :title="detail?.linked ? 'Сначала снимите список со всех кампаний' : ''"
-            @click="remove"
-          >
-            <Trash2 :size="15" aria-hidden="true" />Удалить
-          </button>
-        </div>
-      </form>
-    </section>
-
-    <template v-if="selectedId && detail">
-      <div class="neg-camps-h">
-        <h2 class="section-h">Где работает список</h2>
-        <div class="field neg-search">
-          <input v-model="search" type="search" aria-label="Поиск кампании" placeholder="Клиент или кампания" />
-        </div>
-      </div>
-      <p class="neg-lead">
-        Отметьте кампании, где должен работать список. Если снять галочку у кампании со списком, из неё уйдут только
-        фразы, которые добавил этот список.
-      </p>
-
-      <div v-if="groups.length" class="ccard neg-camps">
-        <div v-for="g in groups" :key="g.key" class="neg-group">
-          <label class="neg-group__h">
-            <input
-              type="checkbox"
-              :checked="g.allChecked"
-              :indeterminate.prop="g.someChecked && !g.allChecked"
-              :disabled="!g.selectable.length"
-              @change="toggleGroup(g, $event.target.checked)"
-            />
-            <b>{{ g.name }}</b>
-            <span class="cgroup__n">{{ g.checkedCount }} из {{ g.items.length }}</span>
-          </label>
-          <label v-for="t in g.items" :key="t.id" class="neg-target" :class="{ 'is-off': isDisabled(t) }">
-            <input
-              type="checkbox"
-              :checked="checked.has(t.id)"
-              :disabled="isDisabled(t)"
-              @change="toggle(t.id, $event.target.checked)"
-            />
-            <span class="neg-target__name">
-              {{ t.name }}
-              <small>
-                {{ t.client_login }} · № {{ t.campaign_id }} · минус-фраз {{ t.negatives }}
-                <template v-if="t.state"> · {{ t.state }}</template>
-              </small>
-            </span>
-            <span v-if="linkOf(t.id)" class="st" :class="linkOf(t.id).stale ? 'st--warn' : 'st--ok'">
-              {{ linkOf(t.id).stale ? 'ждёт обновления' : 'применён' }}
-            </span>
-            <span v-if="t.blocked" class="st st--off">{{ blockedLabel(t.blocked) }}</span>
-          </label>
-        </div>
-      </div>
-      <div v-else-if="targets.length" class="ccard ccard--note">Ничего не нашлось.</div>
-      <div v-else class="ccard ccard--note">
-        Кампаний нет. Подключите Яндекс и загрузите кабинеты на странице «Кампании».
-      </div>
-
-      <div class="neg-bar">
-        <span>
-          Отмечено {{ checked.size }}
-          <template v-if="selectionDiff.attach || selectionDiff.detach">
-            · привязать {{ selectionDiff.attach }} · отвязать {{ selectionDiff.detach }}
-          </template>
-        </span>
-        <span v-if="dirty" class="sync-status">Сначала сохраните правки списка.</span>
+  <div v-else class="neg-layout">
+    <aside class="neg-side" aria-label="Списки минус-фраз">
+      <h2 class="section-h">Списки <span class="cgroup__n">{{ lists.length }}</span></h2>
+      <div v-if="lists.length" class="ccard">
         <button
-          class="btn btn--accent"
+          v-for="l in lists"
+          :key="l.id"
+          class="prow neg-row"
+          :class="{ 'is-sel': l.id === selectedId }"
           type="button"
-          :disabled="previewing || applying || dirty || !canPreview"
-          @click="loadPreview"
+          :aria-pressed="l.id === selectedId"
+          @click="selectList(l.id)"
         >
-          {{ previewing ? 'Считаем…' : 'Показать, что изменится' }}
+          <span class="prow__main">
+            <b>{{ l.name }}</b>
+            <p>
+              {{ l.phrases_count }} {{ plural(l.phrases_count, 'фраза', 'фразы', 'фраз') }} ·
+              {{ l.linked ? `в ${l.linked} ${plural(l.linked, 'кампании', 'кампаниях', 'кампаниях')}` : 'ещё не применён' }}
+            </p>
+            <span v-if="l.stale" class="st st--warn">ждут обновления: {{ l.stale }}</span>
+          </span>
         </button>
       </div>
-    </template>
+      <div v-else class="ccard ccard--note">
+        Списков пока нет. Начните с шаблона — например, «Работа и вакансии» — и поправьте под своих клиентов.
+      </div>
+    </aside>
 
-    <template v-if="preview">
-      <h2 class="section-h">Что изменится в Директе</h2>
-      <p class="neg-lead">
-        Список «{{ preview.list.name }}». Посчитано по последней загрузке{{
-          preview.synced_at ? ` (${formatTime(preview.synced_at)})` : ''
-        }}; перед записью минус-фразы перечитываются из Директа, а добавленные вручную фразы не трогаем.
-      </p>
-      <div class="bigstats">
-        <div class="bigstat"><span>Изменится кампаний</span><b>{{ preview.totals.changed }}</b></div>
-        <div class="bigstat"><span>Добавим фраз</span><b>{{ preview.totals.add }}</b></div>
-        <div class="bigstat"><span>Уберём фраз</span><b>{{ preview.totals.remove }}</b></div>
-        <div class="bigstat">
-          <span>Пропустим</span><b>{{ preview.totals.blocked }}</b>
-          <small v-if="preview.totals.blocked" class="is-warn">архив, медийные или лимит</small>
+    <div class="neg-main">
+      <h2 class="section-h">{{ editing ? (selectedId ? detail?.name || 'Список' : 'Новый список') : 'Список' }}</h2>
+      <EmptyState
+        v-if="!editing"
+        :icon="ListX"
+        text="Выберите список слева или создайте новый — пустой или из шаблона."
+      />
+
+      <section v-else class="ccard neg-edit">
+        <form @submit.prevent="save">
+          <div v-field class="field">
+            <label>Название</label>
+            <input v-model="form.name" type="text" maxlength="255" placeholder="Общие стоп-слова" />
+          </div>
+          <div v-field class="field">
+            <label>Минус-фразы — по одной в строке</label>
+            <textarea
+              ref="phrasesEl"
+              v-model="form.text"
+              rows="6"
+              placeholder="бесплатно&#10;скачать&#10;своими руками"
+              @input="grow"
+            />
+          </div>
+          <div class="neg-under">
+            <span>Подойдёт строка из Директа: «-бесплатно -скачать».</span>
+            <span class="neg-count" :class="{ 'is-over': draftChars > CHAR_LIMIT }">
+              {{ draftPhrases.length }} {{ plural(draftPhrases.length, 'фраза', 'фразы', 'фраз') }} ·
+              {{ draftChars.toLocaleString('ru-RU') }} из 20 000 символов
+            </span>
+          </div>
+          <p v-if="selectedId && detail?.stale" class="neg-stale">
+            Список менялся после применения: {{ detail.stale }}
+            {{ plural(detail.stale, 'кампания ждёт', 'кампании ждут', 'кампаний ждут') }} обновления. Откройте
+            предпросмотр и примените заново.
+          </p>
+          <div class="neg-foot">
+            <button
+              v-if="selectedId"
+              class="btn btn--danger neg-del"
+              type="button"
+              :disabled="busy || detail?.linked > 0"
+              :title="detail?.linked ? 'Сначала снимите список со всех кампаний' : ''"
+              @click="remove"
+            >
+              <Trash2 :size="15" aria-hidden="true" />Удалить
+            </button>
+            <button v-if="dirty" class="btn btn--ghost" type="button" :disabled="busy" @click="resetForm">
+              {{ selectedId ? 'Отменить правки' : 'Отмена' }}
+            </button>
+            <button class="btn btn--accent" type="submit" :disabled="busy || !dirty">
+              {{ selectedId ? 'Сохранить' : 'Создать список' }}
+            </button>
+          </div>
+        </form>
+      </section>
+
+      <!-- Панель снизу липнет только внутри своего блока и не закрывает редактор выше. -->
+      <section v-if="selectedId && detail" class="neg-block">
+        <div class="neg-camps-h">
+          <h2 class="section-h">Где работает список</h2>
+          <div class="field neg-search">
+            <input v-model="search" type="search" aria-label="Поиск кампании" placeholder="Клиент или кампания" />
+          </div>
         </div>
-      </div>
+        <p class="neg-lead">
+          Отметьте кампании, где должен работать список. Если снять галочку у кампании со списком, из неё уйдут только
+          фразы, которые добавил этот список.
+        </p>
 
-      <div v-if="previewRows.length" class="ccard table-scroll neg-preview">
-        <table class="table">
-          <thead>
-            <tr>
-              <th>Кампания</th>
-              <th>Действие</th>
-              <th>Добавим</th>
-              <th>Уберём</th>
-              <th class="num">Фраз было → станет</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="row in previewRows" :key="row.campaign_row_id" :class="{ 'is-off': row.blocked }">
-              <td>
-                {{ row.campaign_name }}
-                <span class="cell-note">{{ row.client_name || row.client_login }}</span>
-              </td>
-              <td>
-                <span v-if="row.blocked" class="st st--off">{{ blockedLabel(row.blocked) }}</span>
-                <template v-else>{{ ACTION_LABELS[row.action] }}</template>
-              </td>
-              <td :title="row.add.join(', ')">{{ phraseSample(row.add) }}</td>
-              <td :title="row.remove.join(', ')">{{ phraseSample(row.remove) }}</td>
-              <td class="num">
-                {{ row.before }} → {{ row.after }}
-                <span class="cell-note">{{ row.chars.toLocaleString('ru-RU') }} симв.</span>
-              </td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-      <p v-if="unchangedCount" class="meta-note">
-        Без изменений в Директе: {{ unchangedCount }}
-        {{ plural(unchangedCount, 'кампания', 'кампании', 'кампаний') }} — нужные фразы там уже есть.
-      </p>
+        <div v-if="groups.length" class="ccard neg-camps">
+          <div v-for="g in groups" :key="g.key" class="neg-group">
+            <label class="neg-group__h">
+              <input
+                type="checkbox"
+                :checked="g.allChecked"
+                :indeterminate.prop="g.someChecked && !g.allChecked"
+                :disabled="!g.selectable.length"
+                @change="toggleGroup(g, $event.target.checked)"
+              />
+              <b>{{ g.name }}</b>
+              <span class="cgroup__n">{{ g.checkedCount }} из {{ g.items.length }}</span>
+            </label>
+            <label v-for="t in g.items" :key="t.id" class="neg-target" :class="{ 'is-off': isDisabled(t) }">
+              <input
+                type="checkbox"
+                :checked="checked.has(t.id)"
+                :disabled="isDisabled(t)"
+                @change="toggle(t.id, $event.target.checked)"
+              />
+              <span class="neg-target__name">
+                {{ t.name }}
+                <small>
+                  {{ t.client_login }} · № {{ t.campaign_id }} · минус-фраз {{ t.negatives }}
+                  <template v-if="t.state"> · {{ t.state }}</template>
+                </small>
+              </span>
+              <span v-if="linkOf(t.id)" class="st" :class="linkOf(t.id).stale ? 'st--warn' : 'st--ok'">
+                {{ linkOf(t.id).stale ? 'ждёт обновления' : 'применён' }}
+              </span>
+              <span v-if="t.blocked" class="st st--off">{{ blockedLabel(t.blocked) }}</span>
+            </label>
+          </div>
+        </div>
+        <div v-else-if="targets.length" class="ccard ccard--note">Ничего не нашлось.</div>
+        <div v-else class="ccard ccard--note">
+          Кампаний нет. Подключите Яндекс и загрузите кабинеты на странице «Кампании».
+        </div>
 
-      <div class="neg-bar">
-        <span v-if="applying" class="sync-status">{{ applyText }}</span>
-        <button class="btn btn--ghost" type="button" :disabled="applying" @click="preview = null">Отмена</button>
-        <button class="btn btn--accent" type="button" :disabled="applying || !canApply" @click="apply">
-          {{ applying ? 'Применяем…' : 'Применить в Директ' }}
-        </button>
-      </div>
-    </template>
+        <div class="neg-bar">
+          <span>
+            Отмечено {{ checked.size }}
+            <template v-if="selectionDiff.attach || selectionDiff.detach">
+              · привязать {{ selectionDiff.attach }} · отвязать {{ selectionDiff.detach }}
+            </template>
+          </span>
+          <span v-if="dirty" class="neg-bar__why">Сначала сохраните правки списка</span>
+          <span v-else-if="!canPreview" class="neg-bar__why">Отметьте хотя бы одну кампанию</span>
+          <button
+            class="btn btn--accent"
+            type="button"
+            :disabled="previewing || applying || dirty || !canPreview"
+            @click="loadPreview"
+          >
+            {{ previewing ? 'Считаем…' : 'Показать, что изменится' }}
+          </button>
+        </div>
+      </section>
 
-    <section v-if="result" class="ccard neg-result" :class="result.status === 'ok' ? 'is-ok' : 'is-warn'">
-      <b>{{ resultSummary(result) }}</b>
-      <ul v-if="result.errors.length">
-        <li v-for="(e, i) in result.errors" :key="i">
-          {{ errorWhere(e) }}: {{ e.message || ERRORS[e.error] || e.error }}
-        </li>
-      </ul>
-    </section>
-  </template>
+      <section v-if="preview" class="neg-block">
+        <h2 class="section-h">Что изменится в Директе</h2>
+        <p class="neg-lead">
+          Список «{{ preview.list.name }}». Посчитано по последней загрузке{{
+            preview.synced_at ? ` (${formatTime(preview.synced_at)})` : ''
+          }}; перед записью минус-фразы перечитываются из Директа, а добавленные вручную фразы не трогаем.
+        </p>
+        <div class="bigstats">
+          <div class="bigstat"><span>Изменится кампаний</span><b>{{ preview.totals.changed }}</b></div>
+          <div class="bigstat"><span>Добавим фраз</span><b>{{ preview.totals.add }}</b></div>
+          <div class="bigstat"><span>Уберём фраз</span><b>{{ preview.totals.remove }}</b></div>
+          <div class="bigstat">
+            <span>Пропустим</span><b>{{ preview.totals.blocked }}</b>
+            <small v-if="preview.totals.blocked" class="is-warn">архив, медийные или лимит</small>
+          </div>
+        </div>
+
+        <div v-if="previewRows.length" class="ccard table-scroll neg-preview">
+          <table class="table">
+            <thead>
+              <tr>
+                <th>Кампания</th>
+                <th>Действие</th>
+                <th>Добавим</th>
+                <th>Уберём</th>
+                <th class="num">Фраз было → станет</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="row in previewRows" :key="row.campaign_row_id" :class="{ 'is-off': row.blocked }">
+                <td>
+                  {{ row.campaign_name }}
+                  <span class="cell-note">{{ row.client_name || row.client_login }}</span>
+                </td>
+                <td>
+                  <span v-if="row.blocked" class="st st--off">{{ blockedLabel(row.blocked) }}</span>
+                  <template v-else>{{ ACTION_LABELS[row.action] }}</template>
+                </td>
+                <td :title="row.add.join(', ')">{{ phraseSample(row.add) }}</td>
+                <td :title="row.remove.join(', ')">{{ phraseSample(row.remove) }}</td>
+                <td class="num">
+                  {{ row.before }} → {{ row.after }}
+                  <span class="cell-note">{{ row.chars.toLocaleString('ru-RU') }} симв.</span>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <p v-if="unchangedCount" class="meta-note">
+          Без изменений в Директе: {{ unchangedCount }}
+          {{ plural(unchangedCount, 'кампания', 'кампании', 'кампаний') }} — нужные фразы там уже есть.
+        </p>
+
+        <div class="neg-bar">
+          <span v-if="applying" class="sync-status">{{ applyText }}</span>
+          <button class="btn btn--ghost" type="button" :disabled="applying" @click="preview = null">Отмена</button>
+          <button class="btn btn--accent" type="button" :disabled="applying || !canApply" @click="apply">
+            {{ applying ? 'Применяем…' : 'Применить в Директ' }}
+          </button>
+        </div>
+      </section>
+
+      <section v-if="result" class="ccard neg-result" :class="result.status === 'ok' ? 'is-ok' : 'is-warn'">
+        <b>{{ resultSummary(result) }}</b>
+        <ul v-if="result.errors.length">
+          <li v-for="(e, i) in result.errors" :key="i">
+            {{ errorWhere(e) }}: {{ e.message || ERRORS[e.error] || e.error }}
+          </li>
+        </ul>
+      </section>
+    </div>
+  </div>
 </template>
 
 <script setup>
 import { askConfirm } from '../composables/useConfirm'
-import { computed, onMounted, reactive, ref, watch } from 'vue'
-import { ChevronRight, FilePlus, ListPlus, Plus, Trash2 } from '@lucide/vue'
+import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
+import { ChevronDown, FilePlus, ListPlus, ListX, Plus, Trash2 } from '@lucide/vue'
+import EmptyState from '../components/ui/EmptyState.vue'
+import PageHeader from '../components/ui/PageHeader.vue'
+import UiMenu from '../components/ui/UiMenu.vue'
+import UiMenuItem from '../components/ui/UiMenuItem.vue'
 import { ERRORS, errorText, jobProgressText, webApi } from '../api/web'
 import { pushToast } from '../composables/useToasts'
 import { useHead } from '../utils/useHead'
@@ -256,6 +274,7 @@ const BLOCKED_LABELS = {
   'negatives-limit': 'больше 20 000 симв.',
 }
 const SAMPLE_SIZE = 4
+const CHAR_LIMIT = 20000
 // Те же правила, что parse_phrases на бэкенде: счётчик под полем, а не валидация.
 const NOT_COUNTED = /[\s\-!+"[\]]/g
 const MINUS_SPLIT = /\s+-(?=\S)/
@@ -268,7 +287,7 @@ const targets = ref([])
 const selectedId = ref(null)
 const detail = ref(null)
 const drafting = ref(false)
-const newMenu = ref(null)
+const phrasesEl = ref(null)
 const form = reactive({ name: '', text: '' })
 const saved = reactive({ name: '', text: '' })
 const checked = ref(new Set())
@@ -403,6 +422,16 @@ function resultSummary(r) {
   return `${head}: ${parts.join(', ')}.`
 }
 
+// Поле растёт вместе со списком до 60 % экрана, дальше — прокрутка внутри.
+function grow() {
+  const el = phrasesEl.value
+  if (!el) return
+  el.style.height = 'auto'
+  el.style.height = `${Math.min(el.scrollHeight + 2, Math.round(window.innerHeight * 0.6))}px`
+}
+
+watch([() => form.text, editing], () => nextTick(grow))
+
 function toggle(id, on) {
   const next = new Set(checked.value)
   if (on) next.add(id)
@@ -434,7 +463,6 @@ function resetForm() {
 }
 
 function startDraft(key) {
-  if (newMenu.value) newMenu.value.open = false
   const tpl = templates.value.find((t) => t.key === key)
   selectedId.value = null
   detail.value = null
@@ -572,16 +600,24 @@ onMounted(async () => {
 </script>
 
 <style scoped>
-.ws-toolbar .btn,
+.neg-layout {
+  display: grid;
+  grid-template-columns: minmax(240px, 300px) minmax(0, 1fr);
+  gap: 24px;
+  align-items: start;
+}
+.neg-side .section-h,
+.neg-main > .section-h {
+  margin-top: 0;
+}
+.neg-main {
+  min-width: 0;
+}
+.neg-block {
+  margin-top: 20px;
+}
 .neg-foot .btn {
   gap: 6px;
-}
-.neg-new .bulk-more__menu {
-  min-width: 260px;
-}
-.neg-new .menu-item small {
-  margin-left: auto;
-  color: var(--faint);
 }
 .neg-row {
   width: 100%;
@@ -600,38 +636,55 @@ onMounted(async () => {
 .neg-row:hover {
   background: var(--surface-2);
 }
-.neg-row.is-sel {
-  background: color-mix(in srgb, var(--lime) 14%, transparent);
+/* Выбранный список — нейтральный фон и полоска слева, без цветной заливки. */
+.neg-row.is-sel,
+.neg-row.is-sel:hover {
+  background: var(--surface-2);
+  box-shadow: inset 3px 0 0 var(--ink);
 }
-.neg-row__go {
-  flex-shrink: 0;
-  color: var(--faint);
+.neg-row .st {
+  margin-top: 4px;
+  font-size: 12px;
 }
 .neg-edit {
-  margin-top: 12px;
   padding: 18px;
-}
-.neg-edit h3 {
-  margin: 0 0 12px;
-  font-size: 15px;
 }
 .neg-edit form {
   display: grid;
   gap: 12px;
 }
 .neg-edit textarea {
-  min-height: 200px;
+  min-height: 140px;
   resize: vertical;
+  overflow-y: auto;
 }
-.neg-count,
-.neg-lead {
+.neg-edit form > .field {
   margin: 0;
+}
+/* Подсказка слева, счётчик справа — прямо под полем. */
+.neg-under {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 4px 16px;
+  margin-top: -6px;
   color: var(--faint);
   font-size: 13px;
 }
-.neg-lead {
-  margin-bottom: 10px;
+.neg-count {
+  margin-left: auto;
   color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.neg-count.is-over {
+  color: var(--danger);
+  font-weight: 700;
+}
+.neg-lead {
+  margin: 0 0 10px;
+  color: var(--muted);
+  font-size: 13px;
 }
 .neg-stale {
   margin: 0;
@@ -641,11 +694,11 @@ onMounted(async () => {
 .neg-foot {
   display: flex;
   flex-wrap: wrap;
+  justify-content: flex-end;
   gap: 8px;
 }
 .neg-del {
-  margin-left: auto;
-  color: var(--danger);
+  margin-right: auto;
 }
 .neg-camps-h {
   display: flex;
@@ -722,6 +775,10 @@ onMounted(async () => {
   color: var(--muted);
   font-size: 14px;
 }
+.neg-bar__why {
+  color: var(--faint);
+  font-size: 13px;
+}
 .neg-preview {
   margin-top: 12px;
 }
@@ -750,6 +807,12 @@ onMounted(async () => {
   padding-left: 18px;
   color: var(--danger);
   font-size: 14px;
+}
+@media (max-width: 900px) {
+  .neg-layout {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 16px;
+  }
 }
 @media (max-width: 720px) {
   .neg-row {

@@ -139,3 +139,14 @@ def test_partial_undo_and_unknown_step(env, monkeypatch):
 def test_existing_skips_deleted_objects(env):
     assert undo._existing(env["user"], "direct_campaigns", [env["camp"], 999999]) == [env["camp"]]
     assert undo._existing(env["user"], "direct_campaigns", []) == []
+
+
+def test_list_filters_by_kind(env):
+    budget = _log(env)
+    pause = _log(env, action="pause")
+    negatives = _log(env, action="negatives")
+    ids = lambda **kw: [r["id"] for r in list_action_logs(env["user"], **kw)]  # noqa: E731
+    assert ids(kind="budget") == [budget]
+    assert ids(kind="state") == [pause]
+    assert ids(kind="negatives") == [negatives]
+    assert ids(kind="unknown") == [negatives, pause, budget]

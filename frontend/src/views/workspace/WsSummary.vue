@@ -356,7 +356,7 @@ const conversionsSource = computed(() =>
 )
 
 const HEALTH_BADGE = {
-  bad: { icon: OctagonAlert, text: 'Тратит впустую' },
+  bad: { icon: OctagonAlert, text: 'Расход без заявок' },
   warn: { icon: TriangleAlert, text: 'Дороже цели' },
   ok: { icon: CircleCheck, text: 'Хорошо' },
   idle: { icon: CircleDashed, text: 'Без расхода' },

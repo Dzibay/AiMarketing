@@ -22,7 +22,7 @@
               :checked="state === 'ON'"
               :disabled="busy || !state"
               :aria-label="state === 'ON' ? 'Остановить показы' : 'Запустить показы'"
-              @change="toggleState"
+              @click.prevent="toggleState"
             />
           </span>
           {{ state === 'ON' ? 'Идут показы' : 'Остановлена' }}
@@ -55,12 +55,12 @@
             <small v-else>{{ num(row.clicks || 0) }} {{ plural(row.clicks || 0, 'клик', 'клика', 'кликов') }}</small>
           </div>
           <div class="bigstat">
-            <span>Конверсии</span>
+            <span>Заявки</span>
             <b>{{ num(row.conversions || 0) }}</b>
             <small>из {{ num(row.clicks || 0) }} {{ plural(row.clicks || 0, 'клика', 'кликов', 'кликов') }}</small>
           </div>
           <div class="bigstat">
-            <span>{{ kpi?.type === 'drr' ? 'Доля расходов' : 'Цена конверсии' }}</span>
+            <span>{{ kpi?.type === 'drr' ? 'Доля расходов' : 'Цена заявки' }}</span>
             <b>{{ kpiNow }}</b>
             <small :class="kpiTone">{{ kpiGoal }}</small>
           </div>
@@ -136,27 +136,41 @@
           </p>
         </div>
         <div class="row-actions">
-          <button
-            v-if="state === 'ON' || status !== 'DRAFT'"
-            class="btn btn--ghost"
-            type="button"
-            :disabled="busy || !state"
-            @click="toggleState"
-          >
+          <button v-if="canToggle" class="btn btn--ghost" type="button" :disabled="busy || !state" @click="toggleState">
+            <component :is="state === 'ON' ? Pause : Play" aria-hidden="true" />
             {{ state === 'ON' ? 'Остановить' : 'Запустить' }}
           </button>
-          <button class="btn btn--ghost" type="button" :disabled="busy" @click="moderate">На модерацию</button>
-          <button class="btn btn--ghost" type="button" :disabled="busy" @click="duplicateOpen = true">Копия</button>
-          <button v-if="state === 'ARCHIVED'" class="btn btn--ghost" type="button" :disabled="busy" @click="bulk('unarchive')">
-            Из архива
-          </button>
-          <button v-else class="btn btn--ghost" type="button" :disabled="busy" @click="bulk('archive')">В архив</button>
-          <button class="btn btn--ghost btn--danger" type="button" :disabled="busy" @click="bulk('delete')">Удалить</button>
-          <RouterLink class="btn btn--accent" :to="aiLink">Разобрать с ИИ</RouterLink>
+          <RouterLink class="btn btn--accent" :to="aiLink"><Sparkles aria-hidden="true" />Разобрать с ИИ</RouterLink>
+          <UiMenu label="Другие действия с кампанией">
+            <UiMenuItem :icon="Copy" :disabled="busy" @click="duplicateOpen = true">Копия</UiMenuItem>
+            <UiMenuItem
+              :icon="Send"
+              :disabled="busy || state === 'ARCHIVED'"
+              hint="черновики объявлений и фраз"
+              @click="moderate"
+            >
+              На модерацию
+            </UiMenuItem>
+            <UiMenuItem v-if="state === 'ARCHIVED'" :icon="ArchiveRestore" :disabled="busy" @click="bulk('unarchive')">
+              Из архива
+            </UiMenuItem>
+            <UiMenuItem
+              v-else
+              :icon="Archive"
+              :disabled="busy || state === 'ON'"
+              :hint="state === 'ON' ? 'сначала остановите' : ''"
+              @click="bulk('archive')"
+            >
+              В архив
+            </UiMenuItem>
+            <UiMenuItem :icon="Trash2" danger :disabled="busy" hint="только черновики и кампании без показов" @click="bulk('delete')">
+              Удалить
+            </UiMenuItem>
+          </UiMenu>
         </div>
       </div>
 
-      <div v-if="row" class="metric-grid">
+      <div v-if="row" class="metric-grid camp-metrics">
         <div class="metric-grid__item is-static">
           <small>Расход 7 дн.</small>
           <strong>{{ rub(row.cost_kopecks) }}</strong>
@@ -215,10 +229,27 @@
 import { askConfirm } from '../../composables/useConfirm'
 import { computed, ref, watch } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
-import { CircleCheck, CircleDashed, CirclePause, OctagonAlert, TriangleAlert } from '@lucide/vue'
+import {
+  Archive,
+  ArchiveRestore,
+  CircleCheck,
+  CircleDashed,
+  CirclePause,
+  Copy,
+  OctagonAlert,
+  Pause,
+  Play,
+  Send,
+  Sparkles,
+  Trash2,
+  TriangleAlert,
+} from '@lucide/vue'
 import CampaignStructure from '../../components/CampaignStructure.vue'
 import ExpertHint from '../../components/ExpertHint.vue'
+import UiMenu from '../../components/ui/UiMenu.vue'
+import UiMenuItem from '../../components/ui/UiMenuItem.vue'
 import UiStatus from '../../components/ui/UiStatus.vue'
+import { confirmCampaignArchive, confirmCampaignToggle } from '../../utils/campaignConfirm'
 import { useExpert } from '../../composables/useExpert'
 import { campaignHealth } from '../../utils/campaignHealth'
 import { errorText, wsApi } from '../../api/web'
@@ -242,8 +273,8 @@ import { useWs } from './context'
 
 const HEALTH_ICONS = { bad: OctagonAlert, warn: TriangleAlert, ok: CircleCheck, idle: CircleDashed, off: CirclePause }
 const HEALTH_LABELS = {
-  bad: 'Тратит впустую',
-  warn: 'Чуть дороже цели',
+  bad: 'Расход без заявок',
+  warn: 'Дороже цели',
   ok: 'Работает хорошо',
   idle: 'Без расхода',
   off: 'Остановлена',
@@ -372,7 +403,8 @@ async function bulk(action) {
   const name = row.value?.name || campaign.value?.name || ''
   if (action === 'delete' && !await askConfirm(`Удалить кампанию «${name}» в Директе? Удаляются только черновики и кампании без показов.`))
     return
-  if (action === 'archive' && !await askConfirm(`Отправить «${name}» в архив?`)) return
+  if (action === 'archive' && !await confirmCampaignArchive({ name })) return
+  if ((action === 'pause' || action === 'resume') && !(await confirmCampaignToggle({ name, state: state.value }))) return
   busy.value = true
   try {
     const res = await wsApi.bulk(ws.value.id, { campaign_ids: [campaignId.value], action })
@@ -448,6 +480,20 @@ watch(expert, (on) => {
 </script>
 
 <style scoped>
+/* Шесть показателей: одним рядом, 3 + 3 или 2 + 2 + 2 — без одинокой плитки внизу. */
+.camp-metrics {
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+}
+@media (max-width: 1100px) {
+  .camp-metrics {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+@media (max-width: 520px) {
+  .camp-metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
 .camp-head {
   display: flex;
   flex-wrap: wrap;

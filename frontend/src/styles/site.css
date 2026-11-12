@@ -1532,9 +1532,12 @@ input[type='radio'] {
   opacity: 0.55;
 }
 
-.list-row.is-selected {
-  border-color: var(--accent);
-  background: var(--accent-soft);
+/* Выбранная строка — как активный пункт меню: светлый фон и тень, без цветной рамки. */
+.list-row.is-selected,
+.list-row.is-link.is-selected:hover {
+  border-color: var(--line);
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
   cursor: pointer;
 }
 

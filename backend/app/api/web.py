@@ -1219,6 +1219,7 @@ def web_search_query_bulk(
 @router.get("/actions")
 def web_action_logs(
     source: str = "",
+    kind: str = "",
     before_id: int | None = None,
     workspace_id: int | None = None,
     limit: int = 50,
@@ -1227,7 +1228,12 @@ def web_action_logs(
     """Журнал по всем проектам; workspace_id — фильтр проекта (список и так только свой: user_id)."""
     return {
         "items": list_action_logs(
-            user_id, limit=limit, workspace_id=workspace_id, source=source or None, before_id=before_id
+            user_id,
+            limit=limit,
+            workspace_id=workspace_id,
+            source=source or None,
+            kind=kind or None,
+            before_id=before_id,
         )
     }
 

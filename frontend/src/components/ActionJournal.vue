@@ -1,27 +1,23 @@
 <template>
-  <PageHeader :description="description">
-    <template v-if="showProjectFilter || expert" #actions>
-      <UiSelect
-        v-if="showProjectFilter"
-        v-model="project"
-        :options="projectOptions"
-        aria-label="Проект"
-        @change="reload"
-      />
-      <div v-if="expert" class="seg" role="group" aria-label="Кто менял">
-        <button
-          v-for="s in SOURCES"
-          :key="s.id"
-          type="button"
-          :class="{ active: source === s.id }"
-          :aria-pressed="source === s.id"
-          @click="setSource(s.id)"
-        >
-          {{ s.label }}
-        </button>
-      </div>
-    </template>
-  </PageHeader>
+  <PageHeader :description="description" />
+
+  <div class="ltools" role="search" aria-label="Фильтры истории">
+    <UiSelect v-if="showProjectFilter" v-model="project" size="sm" :options="projectOptions" aria-label="Проект" />
+    <UiSelect v-model="kind" size="sm" :options="KINDS" aria-label="Тип действия" />
+    <div class="seg" role="group" aria-label="Кто менял">
+      <button
+        v-for="s in SOURCES"
+        :key="s.id"
+        type="button"
+        :class="{ active: source === s.id }"
+        :aria-pressed="source === s.id"
+        @click="source = s.id"
+      >
+        {{ s.label }}
+      </button>
+    </div>
+    <button v-if="filtered" class="btn btn--ghost btn--sm" type="button" @click="resetFilters">Сбросить</button>
+  </div>
 
   <UiNotice v-if="loadError" tone="error">
     Не удалось загрузить историю. {{ loadError }}
@@ -32,33 +28,66 @@
 
   <div v-if="loading && !items.length" class="ccard" aria-busy="true" aria-label="Загружаем историю">
     <div v-for="n in 4" :key="n" class="hrow">
-      <span class="ui-skel hskel__who" />
+      <span class="ui-skel hskel__kind" />
       <div class="hrow__main">
         <span class="ui-skel" :style="{ width: `${62 - n * 7}%` }" />
         <span class="ui-skel hskel__sub" />
       </div>
     </div>
   </div>
-  <EmptyState v-else-if="!items.length && !loadError" :icon="History" :text="emptyText" />
+  <EmptyState v-else-if="!items.length && !loadError" :icon="History" :text="emptyText">
+    <template v-if="filtered" #action>
+      <button class="btn btn--ghost" type="button" @click="resetFilters">Показать всё</button>
+    </template>
+  </EmptyState>
 
-  <section v-else-if="items.length && !expert" class="hist">
+  <section v-else-if="items.length" class="hist">
     <template v-for="d in days" :key="d.label">
       <h3 class="section-h">{{ d.label }}</h3>
       <div class="ccard">
-        <div v-for="a in d.items" :key="a.id" class="hrow" :class="{ 'is-undone': a.undone_at }">
-          <i class="hrow__who" :title="ACTION_SOURCES[a.source] || a.source">
-            <component :is="WHO_ICONS[a.source] || User" :size="16" aria-hidden="true" />
+        <div
+          v-for="a in d.items"
+          :key="a.id"
+          class="hrow"
+          :class="{ 'is-undone': a.undone_at, 'is-open': open.has(a.id) }"
+        >
+          <i class="hrow__kind">
+            <component :is="ACTION_ICONS[a.action] || CircleDot" :size="16" aria-hidden="true" />
           </i>
           <div class="hrow__main">
             <b>{{ a.title || a.action }}</b>
-            <small>
-              {{ timeOf(a.created_at) }} · {{ ACTION_SOURCES[a.source] || a.source }}
-              <template v-if="!workspaceId && a.workspace_id">
-                ·
-                <RouterLink :to="`/w/${a.workspace_id}/history`">{{ a.workspace_name || `Проект ${a.workspace_id}` }}</RouterLink>
-              </template>
+            <small class="hrow__meta">
+              <span>{{ timeOf(a.created_at) }}</span>
+              <!-- «Вы» не пишем: это почти каждая запись. Отмечаем только ИИ и правила. -->
+              <span v-if="WHO[a.source]" class="hwho" :class="`hwho--${a.source}`">
+                <component :is="WHO[a.source].icon" aria-hidden="true" />{{ WHO[a.source].label }}
+              </span>
+              <RouterLink v-if="!workspaceId && a.workspace_id" :to="`/w/${a.workspace_id}/history`">
+                {{ a.workspace_name || `Проект ${a.workspace_id}` }}
+              </RouterLink>
+              <span v-if="expert && summaryLine(a)">{{ summaryLine(a) }}</span>
             </small>
+
+            <div v-if="open.has(a.id)" :id="`hmore-${a.id}`" class="hrow__more">
+              <template v-if="problemsOf(a).length">
+                <p class="hrow__errh">{{ isFailed(a) ? 'Директ не принял изменение' : 'Применилось не всё' }}</p>
+                <ul class="hrow__errs">
+                  <li v-for="(e, i) in problemsOf(a)" :key="i">{{ e }}</li>
+                </ul>
+              </template>
+              <div v-if="expert" class="log-row__body">
+                <div>
+                  <h4>Параметры</h4>
+                  <pre>{{ pretty(a.payload) }}</pre>
+                </div>
+                <div>
+                  <h4>Ответ</h4>
+                  <pre>{{ pretty(a.result) }}</pre>
+                </div>
+              </div>
+            </div>
           </div>
+
           <div class="hrow__acts">
             <UiStatus
               v-if="a.undone_at"
@@ -67,72 +96,60 @@
               label="Возвращено"
               :hint="`Вернули ${formatDateTime(a.undone_at)}`"
             />
-            <UiStatus v-else-if="isFailed(a)" tone="bad" label="Директ не принял" :hint="summaryLine(a)" />
-            <UiStatus v-else-if="a.status === 'partial'" tone="warn" label="Частично" :hint="summaryLine(a)" />
             <button
-              v-if="!a.undone_at && a.undo"
+              v-else-if="a.undo"
               class="btn btn--ghost btn--sm"
+              :class="{ 'btn--danger': a.undo.danger }"
               type="button"
               :title="a.undo.label"
               @click="undoId = a.id"
             >
-              <Undo2 aria-hidden="true" />
-              Вернуть как было
+              <Undo2 aria-hidden="true" />{{ expert ? 'Откатить' : 'Вернуть как было' }}
+            </button>
+
+            <template v-if="!a.undone_at">
+              <button
+                v-if="result(a).problem"
+                class="hres"
+                :class="`hres--${result(a).tone}`"
+                type="button"
+                :aria-label="`${result(a).label} — показать подробности`"
+                :title="result(a).label"
+                :aria-expanded="open.has(a.id)"
+                :aria-controls="`hmore-${a.id}`"
+                @click="toggleOpen(a.id)"
+              >
+                <component :is="result(a).icon" aria-hidden="true" />
+              </button>
+              <span
+                v-else
+                class="hres"
+                :class="`hres--${result(a).tone}`"
+                role="img"
+                :aria-label="result(a).label"
+                :title="result(a).label"
+              >
+                <component :is="result(a).icon" aria-hidden="true" />
+              </span>
+            </template>
+
+            <button
+              v-if="expert"
+              class="hres hres--more"
+              type="button"
+              :aria-label="open.has(a.id) ? 'Скрыть параметры' : 'Параметры и ответ Директа'"
+              :title="open.has(a.id) ? 'Скрыть параметры' : 'Параметры и ответ Директа'"
+              :aria-expanded="open.has(a.id)"
+              :aria-controls="`hmore-${a.id}`"
+              @click="toggleOpen(a.id)"
+            >
+              <ChevronDown aria-hidden="true" />
             </button>
           </div>
         </div>
       </div>
     </template>
-    <ExpertHint>Фильтр по источнику, параметры каждого изменения и ответ Директа</ExpertHint>
-  </section>
-
-  <section v-else-if="items.length" class="panel">
-    <div class="list">
-      <details v-for="a in items" :key="a.id" class="log-row" :class="{ 'is-undone': a.undone_at }">
-        <summary class="list-row">
-          <div>
-            <strong>{{ a.title || a.action }}</strong>
-            <small>
-              <span class="chip" :class="`chip--src-${a.source}`">{{ ACTION_SOURCES[a.source] || a.source }}</span>
-              <RouterLink
-                v-if="!workspaceId && a.workspace_id"
-                class="log-row__project"
-                :to="`/w/${a.workspace_id}/history`"
-                @click.stop
-              >
-                {{ a.workspace_name || `Проект ${a.workspace_id}` }}
-              </RouterLink>
-              {{ formatDateTime(a.created_at) }}
-              <template v-if="summaryLine(a)"> · {{ summaryLine(a) }}</template>
-            </small>
-          </div>
-          <div class="log-row__side">
-            <UiStatus v-if="a.undone_at" tone="off" :icon="Undo2" label="Откачено" :hint="formatDateTime(a.undone_at)" />
-            <UiStatus v-else v-bind="STATUS[a.status] || { tone: 'info', label: a.status || '—' }" />
-            <button
-              v-if="!a.undone_at && a.undo"
-              class="btn btn--ghost btn--sm"
-              :class="{ 'btn--danger': a.undo.danger }"
-              type="button"
-              :title="a.undo.label"
-              @click.prevent.stop="undoId = a.id"
-            >
-              Откатить
-            </button>
-          </div>
-        </summary>
-        <div class="log-row__body">
-          <div>
-            <h4>Параметры</h4>
-            <pre>{{ pretty(a.payload) }}</pre>
-          </div>
-          <div>
-            <h4>Результат</h4>
-            <pre>{{ pretty(a.result) }}</pre>
-          </div>
-        </div>
-      </details>
-    </div>
+    <ExpertHint v-if="!expert">Параметры каждого изменения и ответ Директа</ExpertHint>
   </section>
 
   <div v-if="hasMore && items.length" class="pager">
@@ -146,7 +163,36 @@
 <script setup>
 import { computed, onMounted, ref, watch } from 'vue'
 import { RouterLink, useRoute } from 'vue-router'
-import { History, Sparkles, Undo2, User, Zap } from '@lucide/vue'
+import {
+  Archive,
+  ArchiveRestore,
+  Ban,
+  Check,
+  ChevronDown,
+  CircleDot,
+  Copy,
+  FilePlus,
+  FolderTree,
+  History,
+  KeyRound,
+  Link2,
+  ListX,
+  Megaphone,
+  Pause,
+  Pencil,
+  Play,
+  SearchCheck,
+  Send,
+  Settings2,
+  SlidersHorizontal,
+  Sparkles,
+  Trash2,
+  TriangleAlert,
+  Undo2,
+  Wallet,
+  X,
+  Zap,
+} from '@lucide/vue'
 import ExpertHint from './ExpertHint.vue'
 import EmptyState from './ui/EmptyState.vue'
 import PageHeader from './ui/PageHeader.vue'
@@ -157,9 +203,9 @@ import { useExpert } from '../composables/useExpert'
 import UndoDialog from './UndoDialog.vue'
 import { errorText, webApi, wsApi } from '../api/web'
 import { useWorkspaces } from '../composables/useWorkspaces'
-import { ACTION_SOURCES, formatDateTime } from '../utils/format'
+import { formatDateTime } from '../utils/format'
 
-/** Журнал изменений с откатом: по одному проекту (workspaceId) или по всем — с фильтром проекта и источника. */
+/** Журнал изменений с откатом: по одному проекту (workspaceId) или по всем — с фильтрами проекта, типа и источника. */
 const props = defineProps({ workspaceId: { type: Number, default: null } })
 
 const PAGE = 50
@@ -169,14 +215,48 @@ const SOURCES = [
   { id: 'ai', label: 'ИИ' },
   { id: 'rule', label: 'Правила' },
 ]
-const STATUS = {
-  ok: { tone: 'ok', label: 'Выполнено' },
-  partial: { tone: 'warn', label: 'Частично' },
-  error: { tone: 'bad', label: 'Ошибка' },
-  failed: { tone: 'bad', label: 'Ошибка' },
+// Те же группы, что ACTION_KINDS в backend/app/journal.py.
+const KINDS = [
+  { value: '', label: 'Все действия' },
+  { value: 'budget', label: 'Бюджеты и ставки' },
+  { value: 'negatives', label: 'Минус-фразы и площадки' },
+  { value: 'state', label: 'Запуск, остановка, архив' },
+  { value: 'edits', label: 'Кампании, группы, объявления' },
+  { value: 'undo', label: 'Возвраты' },
+]
+const ACTION_ICONS = {
+  set_budget: Wallet,
+  budget: Wallet,
+  bid_adjust: SlidersHorizontal,
+  negatives: ListX,
+  negative_list_apply: ListX,
+  queries: SearchCheck,
+  exclude_sites: Ban,
+  pause: Pause,
+  resume: Play,
+  archive: Archive,
+  unarchive: ArchiveRestore,
+  delete: Trash2,
+  moderate: Send,
+  create: FilePlus,
+  update: Pencil,
+  settings: Settings2,
+  duplicate: Copy,
+  keywords: KeyRound,
+  ads: Megaphone,
+  adgroups: FolderTree,
+  links: Link2,
+  undo: Undo2,
 }
-
-const WHO_ICONS = { ai: Sparkles, user: User, rule: Zap }
+const WHO = {
+  ai: { label: 'ИИ', icon: Sparkles },
+  rule: { label: 'Правило', icon: Zap },
+}
+const RESULTS = {
+  ok: { tone: 'ok', icon: Check, label: 'Выполнено' },
+  partial: { tone: 'warn', icon: TriangleAlert, label: 'Выполнено частично', problem: true },
+  error: { tone: 'bad', icon: X, label: 'Директ не принял', problem: true },
+}
 
 const { expert } = useExpert()
 const { workspaces } = useWorkspaces()
@@ -196,15 +276,18 @@ const description = computed(() =>
 const items = ref([])
 const loading = ref(false)
 const loadError = ref('')
-// «Что правила изменили» с Автопилота открывает журнал сразу с фильтром: ?source=rule.
+// Ссылки вида «Что правила изменили» открывают журнал сразу с фильтром: ?source=rule, ?kind=budget.
 const route = useRoute()
-const source = ref(expert.value && SOURCES.some((s) => s.id && s.id === route.query.source) ? route.query.source : '')
+const source = ref(SOURCES.some((s) => s.id && s.id === route.query.source) ? route.query.source : '')
+const kind = ref(KINDS.some((k) => k.value && k.value === route.query.kind) ? route.query.kind : '')
 const project = ref(0)
 const hasMore = ref(false)
 const undoId = ref(null)
+const open = ref(new Set())
 
-function dayKey(iso) {
-  const d = new Date(iso)
+const filtered = computed(() => !!(source.value || kind.value || project.value))
+
+function dayKey(d) {
   return `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`
 }
 
@@ -223,7 +306,7 @@ function dayLabel(iso) {
 
 const timeOf = (iso) => new Date(iso).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })
 
-/** Записи по дням — как в макете: «Сегодня», «Вчера», дальше дата. */
+/** Записи по дням: «Сегодня», «Вчера», дальше дата. */
 const days = computed(() => {
   const byDay = new Map()
   for (const a of items.value) {
@@ -235,11 +318,34 @@ const days = computed(() => {
 })
 
 const emptyText = computed(() => {
-  if (source.value) return 'Таких изменений пока нет.'
+  if (source.value || kind.value) return 'Таких изменений пока нет.'
   return props.workspaceId || project.value ? 'В этом проекте ещё ничего не меняли.' : 'Ещё ничего не меняли.'
 })
 
 const isFailed = (a) => a.status === 'error' || a.status === 'failed'
+
+function result(a) {
+  if (isFailed(a)) return RESULTS.error
+  return RESULTS[a.status] || RESULTS.ok
+}
+
+/** Тексты ошибок из ответа: общая причина и ошибки по кампаниям — по клику на ✕. */
+function problemsOf(a) {
+  const r = a.result || {}
+  const out = []
+  if (r.message || r.error) out.push(String(r.message || r.error))
+  if (Array.isArray(r.errors)) {
+    for (const e of r.errors.slice(0, 10)) {
+      if (typeof e === 'string') out.push(e)
+      else if (e) out.push([e.name || e.campaign_name, e.message || e.error].filter(Boolean).join(': ') || '—')
+    }
+    if (r.errors.length > 10) out.push(`и ещё ${r.errors.length - 10}`)
+  } else if (typeof r.errors === 'number' && r.errors) {
+    out.push(`Ошибок: ${r.errors}`)
+  }
+  if (!out.length && result(a).problem) out.push('Директ не прислал причину. Попробуйте ещё раз или откройте кампанию в Директе.')
+  return out
+}
 
 function pretty(value) {
   if (value == null || (typeof value === 'object' && !Object.keys(value).length)) return '—'
@@ -253,10 +359,14 @@ function summaryLine(a) {
   if (r.applied != null) parts.push(`применено ${r.applied}`)
   if (r.negative != null && r.target != null) parts.push(`минус ${r.negative}, целевых ${r.target}`)
   else if (r.added != null && r.removed != null) parts.push(`+${r.added} / −${r.removed}`)
-  if (Array.isArray(r.errors) && r.errors.length) parts.push(`ошибок ${r.errors.length}`)
-  else if (typeof r.errors === 'number' && r.errors) parts.push(`ошибок ${r.errors}`)
-  if (r.error) parts.push(String(r.message || r.error))
   return parts.join(', ')
+}
+
+function toggleOpen(id) {
+  const next = new Set(open.value)
+  if (next.has(id)) next.delete(id)
+  else next.add(id)
+  open.value = next
 }
 
 async function fetchPage(beforeId) {
@@ -265,6 +375,7 @@ async function fetchPage(beforeId) {
   try {
     const params = { limit: PAGE }
     if (source.value) params.source = source.value
+    if (kind.value) params.kind = kind.value
     if (beforeId) params.before_id = beforeId
     let data
     if (props.workspaceId) {
@@ -285,12 +396,14 @@ async function fetchPage(beforeId) {
 
 function reload() {
   items.value = []
+  open.value = new Set()
   return fetchPage()
 }
 
-function setSource(id) {
-  source.value = id
-  reload()
+function resetFilters() {
+  source.value = ''
+  kind.value = ''
+  project.value = 0
 }
 
 function loadMore() {
@@ -298,19 +411,15 @@ function loadMore() {
   if (last) fetchPage(last.id)
 }
 
+watch([source, kind, project], reload)
 onMounted(() => fetchPage())
-
-// Фильтра по источнику в простом режиме нет — сбрасываем его, чтобы не прятать записи молча.
-watch(expert, (on) => {
-  if (!on && source.value) setSource('')
-})
 </script>
 
 <style scoped>
 .hist > .section-h:first-child {
   margin-top: 0;
 }
-.hskel__who {
+.hskel__kind {
   flex: none;
   width: 32px;
   height: 32px;
@@ -331,7 +440,7 @@ watch(expert, (on) => {
 .hrow:first-child {
   border-top: 0;
 }
-.hrow__who {
+.hrow__kind {
   display: grid;
   place-items: center;
   flex: none;
@@ -339,7 +448,7 @@ watch(expert, (on) => {
   height: 32px;
   border-radius: 50%;
   background: color-mix(in srgb, var(--ink) 7%, transparent);
-  color: var(--muted);
+  color: var(--ink-2, var(--ink));
   font-style: normal;
 }
 .hrow__main {
@@ -350,12 +459,35 @@ watch(expert, (on) => {
   display: block;
   font-size: 15px;
 }
-.hrow__main small {
+.hrow__meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px 10px;
+  margin-top: 2px;
   color: var(--faint);
   font-size: 12px;
 }
-.hrow__main small a {
-  color: inherit;
+.hrow__meta a {
+  color: var(--muted);
+}
+.hwho {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 8px 1px 6px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--ink);
+  font-weight: 600;
+}
+.hwho svg {
+  width: 12px;
+  height: 12px;
+}
+.hwho--ai {
+  background: var(--solid);
+  color: var(--on-solid);
 }
 .hrow__acts {
   display: flex;
@@ -363,25 +495,87 @@ watch(expert, (on) => {
   align-items: center;
   gap: 6px;
 }
+.hrow__acts .btn {
+  gap: 6px;
+}
+/* Результат — одной иконкой; ошибка раскрывается по клику. */
+.hres {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--faint);
+  font: inherit;
+}
+.hres svg {
+  width: 16px;
+  height: 16px;
+}
+button.hres {
+  cursor: pointer;
+}
+button.hres:hover {
+  border-color: var(--line);
+  background: var(--surface-2);
+}
+.hres--ok {
+  color: var(--ok);
+}
+.hres--warn {
+  color: var(--warn);
+}
+.hres--bad {
+  color: var(--danger);
+}
+.hres--more svg {
+  transition: transform 0.15s ease;
+}
+.hres--more[aria-expanded='true'] svg {
+  transform: rotate(180deg);
+}
+.hrow__more {
+  margin-top: 10px;
+}
+.hrow__errh {
+  margin: 0 0 4px;
+  font-size: 13px;
+  font-weight: 700;
+}
+.hrow__errs {
+  margin: 0;
+  padding-left: 18px;
+  color: var(--muted);
+  font-size: 13px;
+}
+.hrow__more .log-row__body {
+  padding: 10px 0 0;
+}
 .hrow.is-undone b {
   color: var(--faint);
   font-weight: 500;
   text-decoration: line-through;
 }
-/* На узком экране статус и «Вернуть» уходят под текст, чтобы заголовок не сжимался в столбик. */
+/* На узком экране кнопки с текстом уходят под заголовок, чтобы он не сжимался в столбик;
+   одна иконка результата остаётся справа. */
 @media (max-width: 640px) {
   .hrow {
+    gap: 12px;
+    padding: 12px 14px;
+  }
+  .hrow:has(.hrow__acts .btn, .hrow__acts .ui-status) {
     display: grid;
     grid-template-columns: 32px minmax(0, 1fr);
-    column-gap: 14px;
-    row-gap: 10px;
+    column-gap: 12px;
+    row-gap: 8px;
   }
-  .hrow__acts {
+  .hrow:has(.hrow__acts .btn, .hrow__acts .ui-status) .hrow__acts {
     grid-column: 2;
     flex-wrap: wrap;
-  }
-  .hrow__acts:empty {
-    display: none;
   }
 }
 </style>

@@ -783,6 +783,7 @@ def ws_moderate_campaign(workspace_id: int, campaign_row_id: int, user_id: int =
 def ws_actions(
     workspace_id: int,
     source: str = "",
+    kind: str = "",
     before_id: int | None = None,
     limit: int = 50,
     user_id: int = Depends(require_web_user),
@@ -790,7 +791,12 @@ def ws_actions(
     _ws(user_id, workspace_id)
     return {
         "items": list_action_logs(
-            user_id, limit, workspace_id=workspace_id, source=source or None, before_id=before_id
+            user_id,
+            limit,
+            workspace_id=workspace_id,
+            source=source or None,
+            kind=kind or None,
+            before_id=before_id,
         )
     }
 

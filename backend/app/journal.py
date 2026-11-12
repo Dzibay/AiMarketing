@@ -35,6 +35,15 @@ ACTION_TITLES = {
     "undo": "Откат",
 }
 
+# Группы для фильтра «Тип» в истории: что меняли — деньги, минус-слова, состояние или содержимое кампании.
+ACTION_KINDS = {
+    "budget": ("set_budget", "budget", "bid_adjust"),
+    "negatives": ("negatives", "negative_list_apply", "queries", "exclude_sites"),
+    "state": ("pause", "resume", "archive", "unarchive", "delete", "moderate"),
+    "edits": ("create", "update", "settings", "duplicate", "keywords", "ads", "adgroups", "links"),
+    "undo": ("undo",),
+}
+
 # --- Кто действует -----------------------------------------------------------------------------
 # Журнал показывает источник действия: пользователь, ИИ-агент или правило автоматизации.
 # Агент и правила оборачивают свои вызовы в acting_as(...), сами функции действий об этом не знают.
@@ -194,6 +203,7 @@ def list_action_logs(
     *,
     workspace_id: int | None = None,
     source: str | None = None,
+    kind: str | None = None,
     before_id: int | None = None,
 ) -> list[dict]:
     limit = max(1, min(int(limit), 200))
@@ -205,6 +215,9 @@ def list_action_logs(
     if source in ("user", "ai", "rule"):
         where.append("l.source = %s")
         params.append(source)
+    if kind in ACTION_KINDS:
+        where.append("l.action = ANY(%s)")
+        params.append(list(ACTION_KINDS[kind]))
     if before_id:
         where.append("l.id < %s")
         params.append(before_id)
