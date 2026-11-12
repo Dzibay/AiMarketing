@@ -2,7 +2,7 @@
   <div class="action-card ai-ask ai-plan" :class="`is-${action.status}`">
     <div class="action-card__head">
       <strong>{{ action.label }}</strong>
-      <span class="chip" :class="CHIPS[action.status]">{{ STATUS[action.status] || action.status }}</span>
+      <UiStatus :tone="TONES[action.status] || 'off'" :label="STATUS[action.status] || action.status" />
     </div>
     <p v-if="args.goal" class="ai-ask__lead">{{ args.goal }}</p>
 
@@ -61,6 +61,7 @@
 <script setup>
 /** Карточка плана ИИ: шаги «было → станет → зачем»; маркетолог отмечает, какие делать. */
 import { computed, ref } from 'vue'
+import UiStatus from '../../components/ui/UiStatus.vue'
 
 const props = defineProps({
   action: { type: Object, required: true },
@@ -71,7 +72,7 @@ const props = defineProps({
 const emit = defineEmits(['submit'])
 
 const STATUS = { pending: 'ждёт решения', done: 'согласован', rejected: 'не согласован' }
-const CHIPS = { pending: 'chip--warning', done: 'chip--ok' }
+const TONES = { pending: 'wait', done: 'ok', rejected: 'off', error: 'bad' }
 
 const args = computed(() => props.action.args || {})
 const steps = computed(() => args.value.steps || [])

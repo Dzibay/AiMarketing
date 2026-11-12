@@ -4,7 +4,7 @@
       <strong>{{ args.title || action.label }}</strong>
       <span class="ai-items__chips">
         <span v-if="stage" class="chip">этап: {{ stage }}</span>
-        <span class="chip" :class="CHIPS[action.status]">{{ STATUS[action.status] || action.status }}</span>
+        <UiStatus :tone="TONES[action.status] || 'off'" :label="STATUS[action.status] || action.status" />
       </span>
     </div>
     <p v-if="args.intro" class="ai-ask__lead">{{ args.intro }}</p>
@@ -80,6 +80,7 @@
 import { computed, ref } from 'vue'
 import AdPreview from './AdPreview.vue'
 import AiCheckTable from './AiCheckTable.vue'
+import UiStatus from '../../components/ui/UiStatus.vue'
 
 const props = defineProps({
   action: { type: Object, required: true },
@@ -101,7 +102,7 @@ const STAGES = {
   settings: 'настройки',
 }
 const STATUS = { pending: 'ждёт решения', done: 'согласовано', rejected: 'не согласовано' }
-const CHIPS = { pending: 'chip--warning', done: 'chip--ok' }
+const TONES = { pending: 'wait', done: 'ok', rejected: 'off', error: 'bad' }
 
 const args = computed(() => props.action.args || {})
 const result = computed(() => props.action.result || {})

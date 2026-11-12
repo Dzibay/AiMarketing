@@ -81,7 +81,7 @@
               </span>
             </RouterLink>
           </template>
-          <RouterLink v-if="chats.length > RECENT_LIMIT" class="srow srow--quiet" :to="chatTo">
+          <RouterLink v-if="chats.length > RECENT_LIMIT" class="srow srow--quiet" :to="{ path: chatTo, query: { chats: '1' } }">
             <span class="srow__t">Все чаты</span>
           </RouterLink>
         </template>

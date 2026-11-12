@@ -1,8 +1,55 @@
 <template>
-  <div class="chat" :class="build ? ['chat--board', `is-tab-${tab}`, { 'is-chats-open': chatsOpen }] : null">
-    <aside class="chat__side panel" :aria-label="general ? 'Общие чаты' : 'Чаты проекта'">
-      <button class="btn btn--accent chat__new" type="button" :disabled="sending" @click="newChat">Новый чат</button>
-      <p v-if="chatsError" class="empty">{{ chatsError }}</p>
+  <div
+    ref="root"
+    class="chat"
+    :class="[build ? ['chat--board', `is-tab-${tab}`] : 'chat--solo', { 'chat--hello': showIntro }]"
+  >
+    <PageHeader :description="chat?.title || ''">
+      <template #actions>
+        <UiSelect
+          v-if="!general && expert"
+          class="chat__rights"
+          size="sm"
+          :model-value="accessMode"
+          :options="accessOptions"
+          :disabled="accessBusy"
+          aria-label="Права ИИ в этом проекте"
+          title="Права ИИ в этом проекте"
+          @change="setAccessMode"
+        />
+        <button v-if="chats.length || chatsError" class="btn btn--ghost btn--sm" type="button" @click="chatsOpen = true">
+          <History aria-hidden="true" />
+          Все чаты
+        </button>
+        <UiMenu v-if="chat" size="sm" label="Действия с чатом">
+          <UiMenuItem
+            v-if="!general && !isFirst"
+            :icon="ScanSearch"
+            :disabled="!canReview"
+            hint="в новом чате"
+            @click="startReview()"
+          >
+            Разбор проекта
+          </UiMenuItem>
+          <UiMenuItem :icon="Pencil" @click="renameChat">Переименовать</UiMenuItem>
+          <UiMenuItem :icon="Trash2" danger @click="deleteChat">Удалить чат</UiMenuItem>
+        </UiMenu>
+      </template>
+    </PageHeader>
+
+    <!-- Все чаты: выезжают слева по кнопке в шапке или по ссылке «Все чаты» в меню. -->
+    <aside class="chat__side" :class="{ 'is-open': chatsOpen }" :aria-label="general ? 'Общие чаты' : 'Чаты проекта'">
+      <div class="chat__side-head">
+        <strong>{{ general ? 'Общие чаты' : 'Чаты проекта' }}</strong>
+        <button class="chat__side-x" type="button" aria-label="Закрыть список чатов" @click="chatsOpen = false">
+          <X aria-hidden="true" />
+        </button>
+      </div>
+      <button class="btn btn--accent chat__new" type="button" :disabled="sending" @click="newChat">
+        <Plus aria-hidden="true" />
+        Новый чат
+      </button>
+      <p v-if="chatsError" class="hint">{{ chatsError }}</p>
       <p v-else-if="!chats.length" class="hint">Чатов пока нет.</p>
       <nav v-else class="chat__list" aria-label="Чаты">
         <RouterLink
@@ -15,56 +62,16 @@
           <span class="chat__item-title">{{ c.title }}</span>
           <small>
             <span v-if="c.status === 'running'" class="tone-warn">отвечает…</span>
-            <span v-else-if="c.pending_actions" class="ws-tabs__badge">{{ c.pending_actions }}</span>
+            <span v-else-if="c.pending_actions" class="chat__item-wait">ждёт решения: {{ c.pending_actions }}</span>
             <span v-else-if="c.status === 'error'" class="tone-bad">ошибка</span>
             {{ formatDateTime(c.updated_at) }}
           </small>
         </RouterLink>
       </nav>
     </aside>
+    <div v-if="chatsOpen" class="chat-backdrop" @click="chatsOpen = false" />
 
-    <section class="chat__main panel">
-      <header class="chat__head">
-        <div class="chat__title">
-          <h2>{{ chat?.title || 'Новый чат' }}</h2>
-          <p class="hint">{{ accessText }}</p>
-        </div>
-        <div class="row-actions">
-          <button v-if="build" class="btn btn--ghost chat__chats-toggle" type="button" @click="chatsOpen = true">
-            Чаты
-          </button>
-          <button
-            v-if="!isFirst && !general"
-            class="btn"
-            type="button"
-            :disabled="!canReview"
-            title="Что работает, что затухает и почему, что стоит повторить"
-            @click="startReview()"
-          >
-            {{ reviewing ? 'Запускаем…' : 'Разбор' }}
-          </button>
-          <label
-            v-if="!general && expert"
-            class="switch"
-            :title="access.full_access ? 'Выключить полный доступ' : 'Включить полный доступ'"
-          >
-            <input type="checkbox" :checked="access.full_access" :disabled="accessBusy" @change="toggleFullAccess($event)" />
-            <span>Полный доступ</span>
-          </label>
-          <RouterLink
-            v-if="!general && expert"
-            class="btn btn--ghost"
-            :to="{ path: `/w/${ws.id}/settings`, hash: '#access' }"
-          >
-            Права ИИ
-          </RouterLink>
-          <template v-if="chat">
-            <button class="btn btn--ghost" type="button" @click="renameChat">Переименовать</button>
-            <button class="btn btn--ghost btn--danger" type="button" @click="deleteChat">Удалить</button>
-          </template>
-        </div>
-      </header>
-
+    <section class="chat__main">
       <div v-if="build" class="seg seg--sm chat__tabs" role="tablist" aria-label="Чат или доска кампании">
         <button type="button" role="tab" :class="{ active: tab === 'chat' }" :aria-selected="tab === 'chat'" @click="tab = 'chat'">
           Чат
@@ -74,266 +81,232 @@
         </button>
       </div>
 
-      <p v-if="!aiConfigured" class="notice notice--warn">
+      <UiNotice v-if="!aiConfigured" tone="warn" class="chat__wide">
         ИИ временно недоступен: администратор ещё не подключил модель. Напишите в поддержку — подключим.
-      </p>
+      </UiNotice>
 
-      <div ref="scroller" class="chat__messages" @scroll="onScroll">
-        <p v-if="loadError" class="empty">{{ loadError }}</p>
-        <p v-else-if="chatId && !data" class="empty">Загружаем чат…</p>
+      <div v-if="showIntro" class="chat__hello">
+        <h2>{{ helloTitle }}</h2>
+        <p>{{ helloText }}</p>
+      </div>
 
-        <div v-else-if="!items.length" class="chat__intro">
-          <template v-if="general">
-            <h3>Чем помочь по всем проектам?</h3>
-            <p class="hint">
-              ИИ читает статистику, кампании, фразы, объявления и запросы любого вашего проекта и сравнивает их между
-              собой. Правки он предлагает карточками — каждая выполняется только после вашего подтверждения. Новую
-              кампанию удобнее собирать в чате самого проекта: там доска сборки. Напишите @, чтобы указать проект.
-            </p>
-          </template>
-          <h3 v-else>Чем помочь с «{{ ws.name }}»?</h3>
-          <p v-if="general" hidden></p>
-          <p v-else-if="isFirst" class="hint">
-            Кампаний здесь пока нет, поэтому разбирать нечего. ИИ соберёт первую по этапам — цели, анализ спроса,
-            группы и фразы, объявления, настройки. Рядом с чатом появится доска кампании: на ней вы согласуете
-            этапы, поправите фразы, заголовки и тексты и увидите объявление в выдаче. Любое изменение в Директе ИИ
-            сначала покажет вам.
-          </p>
-          <p v-else class="hint">
-            ИИ видит статистику, кампании, ключевые фразы, объявления и поисковые запросы этого проекта. Любое
-            изменение в Директе он сначала покажет вам на согласование.
-          </p>
-          <div v-if="!general" class="chat__review">
-            <button
-              v-if="isFirst"
-              class="btn btn--accent"
-              type="button"
-              :disabled="!canSendStarter"
-              @click="send(NEW_CAMPAIGN_PROMPT)"
-            >
-              Собрать первую кампанию
-            </button>
-            <button v-else class="btn btn--accent" type="button" :disabled="!canReview" @click="startReview()">
-              {{ reviewing ? 'Запускаем…' : 'Разбор проекта' }}
-            </button>
-            <span v-if="isFirst" class="hint">
-              ИИ задаст вопросы по продукту, гео, бюджету и цели, изучит спрос в Вордстате и предложит направления.
-            </span>
-            <span v-else class="hint">
-              Что работает, что затухает и почему, что стоит повторить. Сигналы за 30 дней считает код — ИИ получает
-              короткую выжимку, а не сырые таблицы.
-            </span>
+      <div v-else ref="scroller" class="chat__messages" @scroll="onScroll">
+        <div class="chat__thread">
+          <UiNotice v-if="loadError" tone="error">{{ loadError }}</UiNotice>
+          <div v-else-if="chatId && !chat" class="chat__loading" role="status" aria-label="Загружаем чат…">
+            <span class="ui-skel chat__loading-q" />
+            <span class="ui-skel" />
+            <span class="ui-skel" />
+            <span class="ui-skel chat__loading-short" />
           </div>
 
-          <p v-if="signalsError" class="hint">Сигналы не посчитались: {{ signalsError }}</p>
-          <template v-else-if="signals?.suggestions.length">
-            <h4 class="chat__subhead">Заметил в данных</h4>
-            <div class="chat__suggestions">
-              <template v-for="s in signals.suggestions" :key="`${s.kind}${s.account_id || ''}${s.experiment_id || ''}`">
-                <RouterLink v-if="!s.prompt" class="quick-action quick-action--warn" to="/cabinet/connections">
-                  <strong>{{ s.title }}</strong>
-                  <small>{{ s.detail }}</small>
-                </RouterLink>
-                <button v-else type="button" class="quick-action" :disabled="!canReview" @click="startReview(s)">
-                  <strong>{{ s.title }}</strong>
-                  <small>{{ s.detail }}</small>
-                  <small v-if="s.campaigns.length" class="quick-action__more">{{ campaignsText(s) }}</small>
+          <template v-for="item in items" :key="item.key">
+            <div v-if="item.role === 'user'" class="msg msg--user">
+              <div class="msg__bubble"><template v-for="(part, i) in mentionParts(item)" :key="i"><RouterLink v-if="part.ref" class="mention" :to="`/w/${part.ref.id}/summary`">{{ part.text }}</RouterLink><template v-else>{{ part.text }}</template></template></div>
+              <time v-if="item.created" class="msg__time" :datetime="item.created">{{ formatDateTime(item.created) }}</time>
+            </div>
+
+            <p v-else-if="item.role === 'note'" class="chat-note">
+              <PencilLine aria-hidden="true" />
+              Правки на доске: {{ item.content }}
+            </p>
+
+            <UiNotice v-else-if="item.role === 'error'" tone="error" class="chat-error">
+              {{ item.content }}
+              <template v-if="errorInFeed && item.key === lastMessageKey" #action>
+                <button class="btn btn--ghost btn--sm" type="button" :disabled="!canRetry" @click="retryTurn">
+                  <RotateCcw aria-hidden="true" />
+                  Повторить
                 </button>
               </template>
+            </UiNotice>
+
+            <div v-else class="msg msg--ai">
+              <div v-if="item.content" class="msg__text md" v-html="renderMarkdown(item.content)" />
+
+              <details v-if="item.reads.length" class="chat-steps">
+                <summary>
+                  Что я посмотрел · {{ item.reads.length }}
+                  <span v-if="item.reads.some((r) => r.failed)" class="tone-bad">· есть ошибки</span>
+                </summary>
+                <ul>
+                  <li v-for="r in item.reads" :key="r.id">
+                    <details v-if="expert && (hasArgs(r.args) || r.result != null)" class="chat-step">
+                      <summary>
+                        {{ r.label }}
+                        <span v-if="r.result == null" class="hint">…</span>
+                        <span v-else-if="r.failed" class="tone-bad">ошибка</span>
+                      </summary>
+                      <pre v-if="hasArgs(r.args)">{{ pretty(r.args) }}</pre>
+                      <pre v-if="r.result != null">{{ r.result }}</pre>
+                    </details>
+                    <template v-else>
+                      {{ r.label }}
+                      <span v-if="r.result == null" class="hint">…</span>
+                      <span v-else-if="r.failed" class="tone-bad">— ошибка</span>
+                    </template>
+                  </li>
+                </ul>
+              </details>
+
+              <template v-for="a in item.asks" :key="a.key">
+                <div v-if="a.plaque" class="board-plaque" :class="`is-${a.status}`" :data-action="a.id">
+                  <span>{{ a.plaque }}</span>
+                  <small v-if="a.result?.comment">Комментарий: {{ a.result.comment }}</small>
+                  <button class="ai-check__link" type="button" @click="toBoard(a.id)">К доске</button>
+                </div>
+                <AiPlanCard
+                  v-else-if="a.tool === 'propose_plan'"
+                  :action="a"
+                  :progress="planProgress(a)"
+                  :disabled="deciding || status === 'running'"
+                  @submit="respond(() => aiApi.plan(a.id, $event))"
+                />
+                <AiItemsCard
+                  v-else-if="a.tool === 'propose_items'"
+                  :data-action="a.id"
+                  :action="a"
+                  :site="ws.site || ''"
+                  :disabled="deciding || status === 'running'"
+                  @submit="respond(() => aiApi.items(a.id, $event))"
+                />
+                <AiQuestionsCard
+                  v-else
+                  :action="a"
+                  :caps="caps"
+                  :disabled="deciding || status === 'running'"
+                  @submit="respond(() => aiApi.answer(a.id, $event))"
+                />
+              </template>
+
+              <template v-for="a in item.writes" :key="a.key">
+                <div v-if="a.plaque" class="board-plaque" :class="`is-${a.status}`" :data-action="a.id">
+                  <span>{{ a.plaque }}</span>
+                  <button class="ai-check__link" type="button" @click="toBoard(a.id)">К доске</button>
+                </div>
+                <div v-else-if="isLater(a)" class="action-card action-card--later" :data-action="a.id">
+                  <div class="action-card__head">
+                    <strong class="action-card__title">{{ a.label }}</strong>
+                    <UiStatus tone="off" :icon="Clock" label="отложено" />
+                  </div>
+                  <p v-if="projectName(a)" class="action-card__meta"><span>{{ projectName(a) }}</span></p>
+                  <p class="action-card__summary">{{ a.summary }}</p>
+                  <p class="hint">
+                    Ничего не изменилось. Предложение ждёт на главной в «Ждут вашего решения»; новое сообщение в этом чате
+                    его отклонит.
+                  </p>
+                  <div class="action-card__buttons">
+                    <button class="btn btn--ghost btn--sm" type="button" @click="setLater(a, false)">Решить сейчас</button>
+                  </div>
+                </div>
+                <div v-else class="action-card" :class="`is-${a.status}`" :data-action="a.id">
+                  <div class="action-card__head">
+                    <span v-if="a.status === 'pending'" class="action-card__tag">
+                      <Sparkles aria-hidden="true" />
+                      Предлагаю
+                    </span>
+                    <strong class="action-card__title">{{ a.label }}</strong>
+                    <UiStatus v-if="a.status !== 'pending'" :tone="STATUS_UI[a.status] || 'off'" :label="STATUS_LABELS[a.status] || a.status" />
+                  </div>
+                  <p v-if="projectName(a) || a.plan_step || a.auto" class="action-card__meta">
+                    <span v-if="projectName(a)">{{ projectName(a) }}</span>
+                    <span v-if="a.plan_step">шаг {{ a.plan_step }} плана</span>
+                    <span v-if="a.auto">без согласования</span>
+                  </p>
+                  <p class="action-card__summary">{{ a.summary }}</p>
+                  <AiChanges v-if="a.changes?.length" :changes="a.changes" />
+                  <div v-if="a.status === 'pending' && a.picks" class="ai-picks">
+                    <p class="hint">Снимите галочки с того, что не нужно, — этого не будет в действии.</p>
+                    <AiCheckTable
+                      v-model:off="excluded[a.id]"
+                      :columns="a.picks.columns"
+                      :rows="a.picks.rows"
+                      :groups="a.picks.groups"
+                      :disabled="deciding"
+                    />
+                  </div>
+                  <p v-if="a.removed?.length" class="hint ai-removed">
+                    Снято перед выполнением ({{ a.removed.length }}):
+                    <s v-for="(r, i) in a.removed.slice(0, 12)" :key="i">{{ r.section ? `${r.section}: ${r.text}` : r.text }}</s>
+                    <span v-if="a.removed.length > 12">и ещё {{ a.removed.length - 12 }}</span>
+                  </p>
+                  <p v-if="a.reason" class="hint">Зачем: {{ a.reason }}</p>
+                  <p v-if="expert && a.categories?.length" class="action-card__cats">
+                    <span v-for="c in a.categories" :key="c.id" class="chip">{{ c.label }}</span>
+                  </p>
+                  <details v-if="expert && hasArgs(a.argsShown)" class="action-card__details">
+                    <summary>Параметры</summary>
+                    <pre>{{ pretty(a.argsShown) }}</pre>
+                  </details>
+                  <p v-if="a.status === 'error' && a.error" class="tone-bad">{{ a.error }}</p>
+                  <details v-if="expert && a.status === 'done' && a.result != null" class="action-card__details">
+                    <summary>Результат</summary>
+                    <pre>{{ pretty(a.result) }}</pre>
+                  </details>
+                  <p v-if="a.status === 'rejected' && a.error" class="hint">{{ a.error }}</p>
+                  <div v-if="a.status === 'pending' && a.id" class="action-card__buttons">
+                    <button class="btn btn--accent" type="button" :disabled="deciding || allOff(a)" @click="decide(a, true)">
+                      <Check aria-hidden="true" />
+                      {{ offCount(a) ? `Выполнить без снятых (${offCount(a)})` : 'Выполнить' }}
+                    </button>
+                    <button class="btn btn--ghost" type="button" :disabled="deciding" @click="decide(a, false)">Отклонить</button>
+                    <button
+                      class="btn btn--ghost"
+                      type="button"
+                      :disabled="deciding"
+                      title="Свернуть карточку: решить можно позже здесь или на главной"
+                      @click="setLater(a, true)"
+                    >
+                      Позже
+                    </button>
+                    <span v-if="allOff(a)" class="hint">Сняты все строки — отклоните действие</span>
+                    <label
+                      v-if="!general && a.categories?.length && !a.categories.some((c) => c.id === 'destructive')"
+                      class="check-row"
+                    >
+                      <input v-model="remember[a.id]" type="checkbox" />
+                      <span>Больше не спрашивать для «{{ a.categories.map((c) => c.label).join('», «') }}»</span>
+                    </label>
+                    <p v-if="!expert" class="action-card__note">
+                      Ничего не изменится, пока вы не нажмёте «Выполнить». Вернуть как было можно в «Истории».
+                    </p>
+                  </div>
+                </div>
+              </template>
+
+              <p v-if="item.content && (item.created || (expert && item.model))" class="msg__meta">
+                <span v-if="expert && item.model">{{ item.model }}</span>
+                <time v-if="item.created" :datetime="item.created">{{ formatDateTime(item.created) }}</time>
+              </p>
             </div>
           </template>
-          <details v-if="signals?.notes.length" class="chat__notes">
-            <summary>Заметки о данных: {{ signals.notes.length }}</summary>
-            <ul>
-              <li v-for="n in signals.notes" :key="n">{{ n }}</li>
-            </ul>
-          </details>
 
-          <h4 class="chat__subhead">Или спросите сами</h4>
-          <div class="chat__suggestions">
-            <button v-for="s in starters" :key="s" type="button" class="quick-action" :disabled="!aiConfigured" @click="send(s)">
-              {{ s }}
-            </button>
+          <div v-if="status === 'running'" class="msg msg--ai msg--thinking" role="status">
+            <span class="spinner" aria-hidden="true" />
+            {{ thinkingText }}
           </div>
-        </div>
-
-        <template v-for="item in items" :key="item.key">
-          <div v-if="item.role === 'user'" class="msg msg--user">
-            <div class="msg__bubble"><template v-for="(part, i) in mentionParts(item)" :key="i"><RouterLink v-if="part.ref" class="mention" :to="`/w/${part.ref.id}/summary`">{{ part.text }}</RouterLink><template v-else>{{ part.text }}</template></template></div>
-          </div>
-
-          <p v-else-if="item.role === 'note'" class="chat-note">
-            <span aria-hidden="true">✎</span> Правки на доске: {{ item.content }}
-          </p>
-
-          <div v-else-if="item.role === 'error'" class="notice notice--warn chat-error">
-            <span>{{ item.content }}</span>
-            <button
-              v-if="errorInFeed && item.key === lastMessageKey"
-              class="btn btn--ghost btn--xs"
-              type="button"
-              :disabled="!canRetry"
-              @click="retryTurn"
-            >
-              Повторить
-            </button>
-          </div>
-
-          <div v-else class="msg msg--ai">
-            <div v-if="item.content" class="msg__bubble md" v-html="renderMarkdown(item.content)" />
-            <small v-if="expert && item.content && item.model" class="msg__model">{{ item.model }}</small>
-
-            <div v-if="item.reads.length" class="chat-steps">
-              <details v-for="r in item.reads" :key="r.id" class="chat-step">
-                <summary>
-                  <span class="chat-step__label">{{ r.label }}</span>
-                  <span v-if="r.result == null" class="hint">…</span>
-                  <span v-else-if="r.failed" class="tone-bad">ошибка</span>
-                </summary>
-                <pre v-if="hasArgs(r.args)">{{ pretty(r.args) }}</pre>
-                <pre v-if="r.result != null">{{ r.result }}</pre>
-              </details>
-            </div>
-
-            <template v-for="a in item.asks" :key="a.key">
-              <div v-if="a.plaque" class="board-plaque" :class="`is-${a.status}`" :data-action="a.id">
-                <span>{{ a.plaque }}</span>
-                <small v-if="a.result?.comment">Комментарий: {{ a.result.comment }}</small>
-                <button class="ai-check__link" type="button" @click="toBoard(a.id)">К доске</button>
-              </div>
-              <AiPlanCard
-                v-else-if="a.tool === 'propose_plan'"
-                :action="a"
-                :progress="planProgress(a)"
-                :disabled="deciding || status === 'running'"
-                @submit="respond(() => aiApi.plan(a.id, $event))"
-              />
-              <AiItemsCard
-                v-else-if="a.tool === 'propose_items'"
-                :data-action="a.id"
-                :action="a"
-                :site="ws.site || ''"
-                :disabled="deciding || status === 'running'"
-                @submit="respond(() => aiApi.items(a.id, $event))"
-              />
-              <AiQuestionsCard
-                v-else
-                :action="a"
-                :caps="caps"
-                :disabled="deciding || status === 'running'"
-                @submit="respond(() => aiApi.answer(a.id, $event))"
-              />
+          <UiNotice v-if="status === 'error' && chat?.error && !errorInFeed" tone="error" class="chat-error">
+            {{ chat.error }}
+            <template #action>
+              <button class="btn btn--ghost btn--sm" type="button" :disabled="!canRetry" @click="retryTurn">
+                <RotateCcw aria-hidden="true" />
+                Повторить
+              </button>
             </template>
-
-            <template v-for="a in item.writes" :key="a.key">
-              <div v-if="a.plaque" class="board-plaque" :class="`is-${a.status}`" :data-action="a.id">
-                <span>{{ a.plaque }}</span>
-                <button class="ai-check__link" type="button" @click="toBoard(a.id)">К доске</button>
-              </div>
-              <div v-else-if="isLater(a)" class="action-card action-card--later" :data-action="a.id">
-                <div class="action-card__head">
-                  <strong>{{ a.label }}</strong>
-                  <span class="chip">отложено</span>
-                  <span v-if="projectName(a)" class="chip chip--project">{{ projectName(a) }}</span>
-                </div>
-                <p class="action-card__summary">{{ a.summary }}</p>
-                <p class="hint">
-                  Ничего не изменилось. Предложение ждёт на главной в «Ждут вашего решения»; новое сообщение в этом чате
-                  его отклонит.
-                </p>
-                <div class="action-card__buttons">
-                  <button class="btn btn--ghost" type="button" @click="setLater(a, false)">Решить сейчас</button>
-                </div>
-              </div>
-              <div v-else class="action-card" :class="`is-${a.status}`" :data-action="a.id">
-                <div class="action-card__head">
-                  <strong>{{ a.label }}</strong>
-                  <span class="chip" :class="STATUS_CHIPS[a.status]">{{ STATUS_LABELS[a.status] || a.status }}</span>
-                  <span v-if="projectName(a)" class="chip chip--project">{{ projectName(a) }}</span>
-                  <span v-if="a.plan_step" class="chip">шаг {{ a.plan_step }} плана</span>
-                  <span v-if="a.auto" class="chip">без согласования</span>
-                </div>
-                <p class="action-card__summary">{{ a.summary }}</p>
-                <AiChanges v-if="a.changes?.length" :changes="a.changes" />
-                <div v-if="a.status === 'pending' && a.picks" class="ai-picks">
-                  <p class="hint">Снимите галочки с того, что не нужно, — этого не будет в действии.</p>
-                  <AiCheckTable
-                    v-model:off="excluded[a.id]"
-                    :columns="a.picks.columns"
-                    :rows="a.picks.rows"
-                    :groups="a.picks.groups"
-                    :disabled="deciding"
-                  />
-                </div>
-                <p v-if="a.removed?.length" class="hint ai-removed">
-                  Снято перед выполнением ({{ a.removed.length }}):
-                  <s v-for="(r, i) in a.removed.slice(0, 12)" :key="i">{{ r.section ? `${r.section}: ${r.text}` : r.text }}</s>
-                  <span v-if="a.removed.length > 12">и ещё {{ a.removed.length - 12 }}</span>
-                </p>
-                <p v-if="a.reason" class="hint">Зачем: {{ a.reason }}</p>
-                <p v-if="a.categories?.length" class="action-card__cats">
-                  <span v-for="c in a.categories" :key="c.id" class="chip">{{ c.label }}</span>
-                </p>
-                <details v-if="expert && hasArgs(a.argsShown)" class="action-card__details">
-                  <summary>Параметры</summary>
-                  <pre>{{ pretty(a.argsShown) }}</pre>
-                </details>
-                <p v-if="a.status === 'error' && a.error" class="tone-bad">{{ a.error }}</p>
-                <details v-if="expert && a.status === 'done' && a.result != null" class="action-card__details">
-                  <summary>Результат</summary>
-                  <pre>{{ pretty(a.result) }}</pre>
-                </details>
-                <p v-if="a.status === 'rejected' && a.error" class="hint">{{ a.error }}</p>
-                <div v-if="a.status === 'pending' && a.id" class="action-card__buttons">
-                  <button class="btn btn--accent" type="button" :disabled="deciding || allOff(a)" @click="decide(a, true)">
-                    {{ offCount(a) ? `Выполнить без снятых (${offCount(a)})` : 'Выполнить' }}
-                  </button>
-                  <button class="btn btn--ghost" type="button" :disabled="deciding" @click="decide(a, false)">Отклонить</button>
-                  <button
-                    class="btn btn--ghost"
-                    type="button"
-                    :disabled="deciding"
-                    title="Свернуть карточку: решить можно позже здесь или на главной"
-                    @click="setLater(a, true)"
-                  >
-                    Позже
-                  </button>
-                  <span v-if="allOff(a)" class="hint">Сняты все строки — отклоните действие</span>
-                  <label
-                    v-if="!general && a.categories?.length && !a.categories.some((c) => c.id === 'destructive')"
-                    class="check-row"
-                  >
-                    <input v-model="remember[a.id]" type="checkbox" />
-                    <span>Больше не спрашивать для «{{ a.categories.map((c) => c.label).join('», «') }}»</span>
-                  </label>
-                  <p v-if="!expert" class="hint action-card__note">
-                    Ничего не изменится, пока вы не нажмёте «Выполнить». Вернуть как было можно в «Истории».
-                  </p>
-                </div>
-              </div>
-            </template>
-          </div>
-        </template>
-
-        <div v-if="status === 'running'" class="msg msg--ai">
-          <div class="msg__bubble msg__bubble--thinking"><span class="spinner" /> {{ thinkingText }}</div>
-        </div>
-        <div v-if="status === 'error' && chat?.error && !errorInFeed" class="notice notice--warn chat-error">
-          <span>{{ chat.error }}</span>
-          <button class="btn btn--ghost btn--xs" type="button" :disabled="!canRetry" @click="retryTurn">Повторить</button>
+          </UiNotice>
         </div>
       </div>
 
-      <div v-if="activeWrites.length > 1" class="chat__pending">
-        <span>
-          Ждут решения: {{ activeWrites.length }}<template v-if="laterCount">, отложено: {{ laterCount }}</template>
-        </span>
-        <button class="btn btn--accent" type="button" :disabled="deciding" @click="decideAll(true)">Выполнить все</button>
-        <button class="btn btn--ghost" type="button" :disabled="deciding" @click="decideAll(false)">Отклонить все</button>
-      </div>
+      <div class="chat__foot">
+        <div v-if="activeWrites.length > 1" class="chat__pending">
+          <span>
+            Ждут решения: {{ activeWrites.length }}<template v-if="laterCount">, отложено: {{ laterCount }}</template>
+          </span>
+          <button class="btn btn--accent btn--sm" type="button" :disabled="deciding" @click="decideAll(true)">Выполнить все</button>
+          <button class="btn btn--ghost btn--sm" type="button" :disabled="deciding" @click="decideAll(false)">Отклонить все</button>
+        </div>
 
-      <form class="chat__composer" @submit.prevent="send()">
-        <div class="chat__field">
+        <form class="composer" :class="{ 'composer--big': showIntro, 'is-off': inputOff }" @submit.prevent="send()">
           <div v-if="picker.open" id="mention-list" class="menu-pop mention-pop" role="listbox" aria-label="Проекты">
             <button
               v-for="(w, i) in picker.items"
@@ -354,12 +327,13 @@
           <textarea
             ref="input"
             v-model="draft"
-            rows="2"
+            class="composer__input"
+            rows="1"
             maxlength="8000"
             aria-label="Сообщение ИИ"
             :aria-controls="picker.open ? 'mention-list' : null"
             :aria-activedescendant="picker.open && picker.items[picker.index] ? `mention-${picker.items[picker.index].id}` : null"
-            :disabled="status === 'running' || !aiConfigured"
+            :disabled="inputOff"
             :placeholder="placeholder"
             @input="updatePicker"
             @click="updatePicker"
@@ -368,60 +342,146 @@
             @blur="closePicker"
             @keydown="onKeydown"
           />
-        </div>
-        <div class="chat__send">
-          <select
-            v-if="modelItems.length > 1"
-            class="chat__model-pick"
-            :value="selectedClass"
-            :disabled="modelBusy || status === 'running' || !aiConfigured"
-            aria-label="Модель ответа"
-            title="Модель ответа: больше точек — подробнее думает и быстрее расходует лимит"
-            @change="chooseModel($event.target.value)"
-          >
-            <option v-for="m in modelItems" :key="m.id" :value="m.id">{{ m.name }} {{ dots(m.dots) }}</option>
-          </select>
+          <div class="composer__row">
+            <button
+              v-if="otherProjects.length"
+              class="composer__icon"
+              type="button"
+              :title="general ? 'Указать проект' : 'Сослаться на другой проект'"
+              :aria-label="general ? 'Указать проект' : 'Сослаться на другой проект'"
+              :disabled="inputOff"
+              @mousedown.prevent
+              @click="insertAt"
+            >
+              <AtSign aria-hidden="true" />
+            </button>
+            <UiSelect
+              v-if="modelItems.length > 1"
+              class="composer__model"
+              size="sm"
+              :model-value="selectedClass"
+              :options="modelOptions"
+              :disabled="modelBusy || inputOff"
+              aria-label="Модель ответа"
+              title="Модель ответа"
+              @change="chooseModel"
+            />
+            <span class="composer__tip">{{ composerTip }}</span>
+            <button
+              class="composer__send"
+              type="submit"
+              :disabled="!canSend"
+              :aria-label="busy ? 'ИИ отвечает' : 'Отправить'"
+              :title="busy ? 'ИИ отвечает' : 'Отправить'"
+            >
+              <span v-if="busy" class="spinner" aria-hidden="true" />
+              <ArrowUp v-else aria-hidden="true" />
+            </button>
+          </div>
+        </form>
+        <p class="chat__access">
+          {{ accessText }}
+          <RouterLink v-if="!general && expert" :to="{ path: `/w/${ws.id}/settings`, hash: '#access' }">Настроить права</RouterLink>
+        </p>
+      </div>
+
+      <div v-if="showIntro" class="chat__intro">
+        <div class="starters">
           <button
-            v-if="otherProjects.length"
-            class="icon-btn"
+            v-if="!general && isFirst"
+            class="starter starter--main"
             type="button"
-            :title="general ? 'Указать проект' : 'Сослаться на другой проект'"
-            :aria-label="general ? 'Указать проект' : 'Сослаться на другой проект'"
-            :disabled="status === 'running' || !aiConfigured"
-            @mousedown.prevent
-            @click="insertAt"
+            :disabled="!canSendStarter"
+            title="ИИ задаст вопросы по продукту, гео, бюджету и цели, изучит спрос в Вордстате и предложит направления"
+            @click="send(NEW_CAMPAIGN_PROMPT)"
           >
-            <AtSign />
+            <Sparkles aria-hidden="true" />
+            Собрать первую кампанию
           </button>
-          <button class="btn btn--accent" type="submit" :disabled="!canSend">
-            {{ sending ? 'Отправляем…' : 'Отправить' }}
+          <button
+            v-else-if="!general"
+            class="starter starter--main"
+            type="button"
+            :disabled="!canReview"
+            title="Что работает, что затухает и почему, что стоит повторить. Сигналы за 30 дней считает код — ИИ получает короткую выжимку"
+            @click="startReview()"
+          >
+            <ScanSearch aria-hidden="true" />
+            {{ reviewing ? 'Запускаем…' : 'Разбор проекта' }}
+          </button>
+          <button
+            v-for="s in starters"
+            :key="s.label"
+            class="starter"
+            type="button"
+            :title="s.prompt"
+            :disabled="!canSendStarter"
+            @click="send(s.prompt)"
+          >
+            {{ s.label }}
           </button>
         </div>
-      </form>
+
+        <p v-if="signalsError" class="hint">Сигналы не посчитались: {{ signalsError }}</p>
+        <template v-else-if="signals?.suggestions.length">
+          <h3 class="chat__subhead">Заметил в данных</h3>
+          <div class="chat__signals">
+            <template v-for="s in signals.suggestions" :key="`${s.kind}${s.account_id || ''}${s.experiment_id || ''}`">
+              <RouterLink v-if="!s.prompt" class="quick-action quick-action--warn" to="/cabinet/connections">
+                <strong>{{ s.title }}</strong>
+                <small>{{ s.detail }}</small>
+              </RouterLink>
+              <button v-else type="button" class="quick-action" :disabled="!canReview" @click="startReview(s)">
+                <strong>{{ s.title }}</strong>
+                <small>{{ s.detail }}</small>
+                <small v-if="s.campaigns.length" class="quick-action__more">{{ campaignsText(s) }}</small>
+              </button>
+            </template>
+          </div>
+        </template>
+        <details v-if="signals?.notes.length" class="chat__notes">
+          <summary>Заметки о данных: {{ signals.notes.length }}</summary>
+          <ul>
+            <li v-for="n in signals.notes" :key="n">{{ n }}</li>
+          </ul>
+        </details>
+      </div>
     </section>
 
-    <template v-if="build">
-      <CampaignBoard
-        ref="board"
-        class="chat__board"
-        :build="build"
-        :actions="actions"
-        :site="ws.site || ''"
-        :ws-id="ws.id"
-        :image-gen="caps.image_gen"
-        :disabled="deciding || status === 'running'"
-        :edit="editBoard"
-        @decide="(id, payload) => respond(() => aiApi.items(id, payload))"
-        @draft="(approve) => decide({ id: build.draft.action_id }, approve)"
-      />
-      <div v-if="chatsOpen" class="chat-backdrop" @click="chatsOpen = false" />
-    </template>
+    <CampaignBoard
+      v-if="build"
+      ref="board"
+      class="chat__board"
+      :build="build"
+      :actions="actions"
+      :site="ws.site || ''"
+      :ws-id="ws.id"
+      :image-gen="caps.image_gen"
+      :disabled="deciding || status === 'running'"
+      :edit="editBoard"
+      @decide="(id, payload) => respond(() => aiApi.items(id, payload))"
+      @draft="(approve) => decide({ id: build.draft.action_id }, approve)"
+    />
   </div>
 </template>
 
 <script setup>
 import { askConfirm, askText } from '../../composables/useConfirm'
-import { AtSign } from '@lucide/vue'
+import {
+  ArrowUp,
+  AtSign,
+  Check,
+  Clock,
+  History,
+  Pencil,
+  PencilLine,
+  Plus,
+  RotateCcw,
+  ScanSearch,
+  Sparkles,
+  Trash2,
+  X,
+} from '@lucide/vue'
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
 import { aiApi, errorText, wsApi } from '../../api/web'
@@ -439,29 +499,48 @@ import AiQuestionsCard from './AiQuestionsCard.vue'
 import CampaignBoard from './CampaignBoard.vue'
 import { useWs } from './context'
 import { useExpert } from '../../composables/useExpert'
+import PageHeader from '../../components/ui/PageHeader.vue'
+import UiMenu from '../../components/ui/UiMenu.vue'
+import UiMenuItem from '../../components/ui/UiMenuItem.vue'
+import UiNotice from '../../components/ui/UiNotice.vue'
+import UiSelect from '../../components/ui/UiSelect.vue'
+import UiStatus from '../../components/ui/UiStatus.vue'
 
 const POLL_MS = 1500
 const NEW_CAMPAIGN_PROMPT = 'Хочу собрать новую кампанию. Задай вопросы, которых не хватает, и веди меня по этапам'
+// Подсказки пустого чата: на кнопке — коротко, ИИ уходит полный запрос (он же во всплывающей подсказке).
 const SUGGESTIONS = [
-  NEW_CAMPAIGN_PROMPT,
-  'Проанализируй кампании за последние 7 дней и дай рекомендации',
-  'Где сливается бюджет? Найди кампании и фразы с расходом без конверсий',
-  'Почисти поисковые запросы: предложи минус-фразы',
-  'Составь план оптимизации на неделю',
+  { label: 'Где сливается бюджет?', prompt: 'Где сливается бюджет? Найди кампании и фразы с расходом без конверсий' },
+  { label: 'Минус-фразы из запросов', prompt: 'Почисти поисковые запросы: предложи минус-фразы' },
+  { label: 'План на неделю', prompt: 'Составь план оптимизации на неделю' },
+  { label: 'Новая кампания', prompt: NEW_CAMPAIGN_PROMPT },
 ]
 // В проекте без кампаний нет ни статистики, ни запросов: спрашивать про них нечего.
 const FIRST_SUGGESTIONS = [
-  'Помоги заполнить бриф: продукт, оффер, гео, бюджет и цель',
-  'Какую стратегию и какой бюджет выбрать для первой кампании?',
+  { label: 'Заполнить бриф', prompt: 'Помоги заполнить бриф: продукт, оффер, гео, бюджет и цель' },
+  { label: 'Стратегия и бюджет для старта', prompt: 'Какую стратегию и какой бюджет выбрать для первой кампании?' },
 ]
 // Общий чат: ИИ сравнивает проекты и предлагает правки в любом из них.
 const GENERAL_SUGGESTIONS = [
-  'Сравни проекты за последние 7 дней: расход, конверсии, CPA',
-  'Где во всех проектах сливается бюджет без конверсий?',
-  'Какие проекты выбиваются из KPI и почему?',
-  'Найди кампании, которые стоит остановить, и те, что стоит масштабировать',
-  'Составь план работ на неделю по всем проектам',
+  { label: 'Сравнить проекты за 7 дней', prompt: 'Сравни проекты за последние 7 дней: расход, конверсии, CPA' },
+  { label: 'Где сливается бюджет?', prompt: 'Где во всех проектах сливается бюджет без конверсий?' },
+  { label: 'Кто выбивается из KPI?', prompt: 'Какие проекты выбиваются из KPI и почему?' },
+  {
+    label: 'Что остановить, что масштабировать',
+    prompt: 'Найди кампании, которые стоит остановить, и те, что стоит масштабировать',
+  },
+  { label: 'План работ на неделю', prompt: 'Составь план работ на неделю по всем проектам' },
 ]
+// Подсказка к классу модели в списке «Модель ответа».
+const MODEL_HINTS = {
+  1: 'Быстрые ответы, расходует меньше лимита',
+  2: 'Для большинства задач',
+  3: 'Думает дольше, расходует лимит быстрее',
+}
+const FULL_ACCESS_CONFIRM =
+  'Включить полный доступ? ИИ сможет менять бюджеты и ставки, создавать, копировать и удалять кампании без подтверждения.'
+// Поле ввода растёт с текстом до ~8 строк, дальше — своя прокрутка.
+const INPUT_MAX = 200
 // Общий чат живёт вне проекта: заглушка вместо проекта, чтобы шаблон не ветвился на каждом шаге.
 const GENERAL_WS = {
   id: null,
@@ -478,7 +557,7 @@ const STATUS_LABELS = {
   rejected: 'отклонено',
   error: 'ошибка',
 }
-const STATUS_CHIPS = { pending: 'chip--warning', done: 'chip--ok', error: 'chip--bad' }
+const STATUS_UI = { pending: 'wait', approved: 'info', done: 'ok', rejected: 'off', error: 'bad' }
 const STATUS_TONES = { pending: 'tone-warn', done: 'tone-ok', error: 'tone-bad' }
 
 const props = defineProps({
@@ -511,6 +590,7 @@ const accessBusy = ref(false)
 const remember = reactive({})
 // {id действия: [id снятых строк]} — что маркетолог убрал из карточки перед «Выполнить».
 const excluded = reactive({})
+const root = ref(null)
 const scroller = ref(null)
 const input = ref(null)
 let pollTimer = null
@@ -575,7 +655,7 @@ const caps = computed(() => ({ image_gen: !!data.value?.image_gen?.configured })
 const onBoard = computed(() => new Set(build.value?.action_ids || []))
 const boardWaiting = computed(() => pendingActions.value.filter((a) => onBoard.value.has(a.id)).length)
 const board = ref(null)
-// С доской список чатов выезжает по кнопке, а на узком экране чат и доска — вкладками.
+// Список чатов выезжает слева по кнопке «Все чаты»; с доской на узком экране чат и доска — вкладками.
 const chatsOpen = ref(false)
 const tab = ref('chat')
 
@@ -594,6 +674,35 @@ const accessText = computed(() => {
   return `Без согласования (до ${pct(a.max_change_pct, 0)}): ${allowed.join('; ')}. Остальное — после подтверждения.`
 })
 
+// Права ИИ в шапке (эксперт): «с согласованием» или «полный доступ»; категории без согласования — в настройках.
+const autoCategories = computed(() => (ws.value.ai_categories || []).filter((c) => access.value.categories?.[c.key]))
+const accessMode = computed(() => (access.value.full_access ? 'full' : 'ask'))
+const accessOptions = computed(() => {
+  const auto = autoCategories.value.map((c) => c.label.toLowerCase())
+  return [
+    auto.length
+      ? { value: 'ask', label: 'ИИ: частично сам', hint: `Сам: ${auto.join(', ')}. Остальное — после подтверждения` }
+      : { value: 'ask', label: 'ИИ: с согласованием', hint: 'Каждое изменение — после вашего подтверждения' },
+    { value: 'full', label: 'ИИ: полный доступ', hint: 'Выполняет любые действия без подтверждения' },
+  ]
+})
+
+async function setAccessMode(mode) {
+  const on = mode === 'full'
+  if (on === !!access.value.full_access || accessBusy.value) return
+  if (on && !(await askConfirm(FULL_ACCESS_CONFIRM, { danger: true }))) return
+  accessBusy.value = true
+  try {
+    const updated = await wsApi.update(ws.value.id, { ai_access: { full_access: on } })
+    patch(updated)
+    pushToast(on ? 'Полный доступ включён' : 'Полный доступ выключен', on ? 'warn' : 'ok')
+  } catch (err) {
+    pushToast(errorText(err), 'error')
+  } finally {
+    accessBusy.value = false
+  }
+}
+
 // Класс модели: у открытого чата — сохранённый, у нового — выбранный здесь до первого сообщения.
 const pickedClass = ref('')
 const modelBusy = ref(false)
@@ -609,11 +718,9 @@ const selectedClass = computed(() => {
   return has(projectClass) ? projectClass : m.default
 })
 
-/** Относительный расход класса: ●○○, ●●○, ●●●. */
-function dots(n) {
-  const k = Math.max(1, Math.min(3, Number(n) || 1))
-  return '●'.repeat(k) + '○'.repeat(3 - k)
-}
+const modelOptions = computed(() =>
+  modelItems.value.map((m) => ({ value: m.id, label: m.name, hint: MODEL_HINTS[m.dots] || '' })),
+)
 
 function fillModels(res) {
   aiModels.value = res || null
@@ -643,13 +750,18 @@ const placeholder = computed(() => {
   }
   if (pendingAsks.value.length) {
     return pendingWrites.value.length
-      ? 'Ответьте в карточке или напишите своими словами; действия, которые ждут решения, будут отклонены'
+      ? 'Ответьте в карточке; сообщение отклонит предложения'
       : 'Ответьте в карточке или напишите своими словами'
   }
-  if (pendingWrites.value.length) return 'Новое сообщение отклонит действия, которые ждут решения'
-  const tip = otherProjects.value.length ? (props.general ? ', @ — указать проект' : ', @ — сослаться на другой проект') : ''
-  return `Задача для ИИ: проанализировать, найти проблемы, создать, поправить… (Enter — отправить, Shift+Enter — новая строка${tip})`
+  if (pendingWrites.value.length) return 'Новое сообщение отклонит ждущие предложения'
+  return showIntro.value ? 'Спросите или поручите задачу…' : 'Уточните или попросите что-то ещё…'
 })
+const composerTip = computed(
+  () => `Enter — отправить · Shift+Enter — перенос${otherProjects.value.length ? ' · @ — проект' : ''}`,
+)
+// Пока ИИ отвечает, писать нельзя: остановить ход нечем, новое сообщение ушло бы в середину ответа.
+const inputOff = computed(() => status.value === 'running' || !aiConfigured.value)
+const busy = computed(() => sending.value || status.value === 'running')
 const canSend = computed(
   () => !!draft.value.trim() && !sending.value && status.value !== 'running' && aiConfigured.value,
 )
@@ -658,9 +770,21 @@ const canReview = computed(
 )
 // Первая кампания: «Разбор» и сигналы без данных пусты, вместо них — сборка по этапам.
 const isFirst = computed(() => !ws.value.campaigns_count)
+// «Собрать первую кампанию» и «Разбор проекта» — главная кнопка перед подсказками, в подсказках их нет.
 const starters = computed(() => {
   if (props.general) return GENERAL_SUGGESTIONS
-  return isFirst.value ? [NEW_CAMPAIGN_PROMPT, ...FIRST_SUGGESTIONS] : SUGGESTIONS
+  return isFirst.value ? FIRST_SUGGESTIONS : SUGGESTIONS
+})
+const helloTitle = computed(() => (props.general ? 'Чем помочь по всем проектам?' : `Чем помочь с «${ws.value.name}»?`))
+const helloText = computed(() => {
+  if (props.general) {
+    return 'Сравню проекты, найду, где сливается бюджет, и предложу правки. Новую кампанию удобнее собирать в чате проекта.'
+  }
+  if (isFirst.value) {
+    return 'Кампаний пока нет — соберу первую по этапам: цели, спрос, группы и фразы, объявления, настройки. Каждый этап согласуете на доске рядом с чатом.'
+  }
+  // Что ИИ может менять сам, говорит строка прав под полем ввода — здесь не повторяем (и не обещаем лишнего при полном доступе).
+  return 'Вижу статистику, кампании, фразы, объявления и поисковые запросы проекта — отвечу и предложу, что поправить.'
 })
 
 /** Проект карточки действия в общем чате — чтобы не перепутать, где ИИ что-то меняет. */
@@ -712,7 +836,9 @@ const items = computed(() => {
   }
   const out = []
   for (const m of data.value.messages) {
-    if (m.role === 'user') out.push({ key: `m${m.id}`, role: 'user', content: m.content, refs: m.refs || [] })
+    if (m.role === 'user') {
+      out.push({ key: `m${m.id}`, role: 'user', content: m.content, refs: m.refs || [], created: m.created_at || '' })
+    }
     if (m.role === 'error') out.push({ key: `m${m.id}`, role: 'error', content: m.content })
     if (m.role === 'assistant') {
       const item = assistantItem(m, results, byCall)
@@ -758,7 +884,16 @@ function assistantItem(m, results, byCall) {
     }
   }
   if (!m.content && !reads.length && !asks.length && !writes.length) return null
-  return { key: `m${m.id}`, role: 'assistant', content: m.content, model: m.model || '', reads, asks, writes }
+  return {
+    key: `m${m.id}`,
+    role: 'assistant',
+    content: m.content,
+    model: m.model || '',
+    created: m.created_at || '',
+    reads,
+    asks,
+    writes,
+  }
 }
 
 /** Плашка вместо таблицы этапа или карточки создания, которые решаются на доске; '' — карточка в чате. */
@@ -900,15 +1035,59 @@ async function loadChats() {
   }
 }
 
-function onScroll() {
+/** Что прокручивается: лента сама — рядом с доской, иначе вся страница (поле ввода прилипает к низу окна). */
+function scrollBox() {
   const el = scroller.value
-  if (el) stickToBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80
+  if (el && getComputedStyle(el).overflowY !== 'visible') return el
+  return document.scrollingElement
+}
+
+function onScroll() {
+  const box = scrollBox()
+  if (box) stickToBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 120
 }
 
 async function scrollDown(force = false) {
   await nextTick()
-  const el = scroller.value
-  if (el && (force || stickToBottom)) el.scrollTop = el.scrollHeight
+  const box = scrollBox()
+  if (box && (force || stickToBottom)) box.scrollTop = box.scrollHeight
+}
+
+// Чат занимает окно от своей верхней границы до низа: поле ввода внизу и в коротком разговоре.
+let topObserver = null
+let topFrame = 0
+function measureTop() {
+  const el = root.value
+  if (!el) return
+  const top = `${Math.max(0, Math.ceil(el.getBoundingClientRect().top + window.scrollY))}px`
+  if (el.style.getPropertyValue('--chat-top') !== top) el.style.setProperty('--chat-top', top)
+}
+// Замер меняет высоту страницы — из колбэка ResizeObserver переносим его на следующий кадр, иначе браузер ругается на цикл.
+function measureTopLater() {
+  cancelAnimationFrame(topFrame)
+  topFrame = requestAnimationFrame(measureTop)
+}
+
+function autosize() {
+  const el = input.value
+  if (!el) return
+  el.style.height = 'auto'
+  // Пустое поле меряем по подсказке: длинная подсказка на узком экране иначе обрезается на первой строке.
+  const empty = !el.value
+  if (empty) el.value = el.placeholder
+  const height = el.scrollHeight
+  if (empty) el.value = ''
+  el.style.height = `${Math.min(height, INPUT_MAX)}px`
+  el.style.overflowY = height > INPUT_MAX ? 'auto' : 'hidden'
+}
+
+function onResize() {
+  measureTop()
+  autosize()
+}
+
+function onWindowKey(event) {
+  if (event.key === 'Escape' && chatsOpen.value) chatsOpen.value = false
 }
 
 async function loadChat(id, quiet = false) {
@@ -1177,32 +1356,9 @@ async function decideAll(approve) {
   }
 }
 
-async function toggleFullAccess(event) {
-  const on = event.target.checked
-  if (
-    on &&
-    !await askConfirm(
-      'Включить полный доступ? ИИ сможет менять бюджеты и ставки, создавать, копировать и удалять кампании без подтверждения.',
-    )
-  ) {
-    event.target.checked = false
-    return
-  }
-  accessBusy.value = true
-  try {
-    const updated = await wsApi.update(ws.value.id, { ai_access: { full_access: on } })
-    patch(updated)
-    pushToast(on ? 'Полный доступ включён' : 'Полный доступ выключен', on ? 'warn' : 'ok')
-  } catch (err) {
-    event.target.checked = !on
-    pushToast(errorText(err), 'error')
-  } finally {
-    accessBusy.value = false
-  }
-}
-
 function newChat() {
   stopPolling()
+  chatsOpen.value = false
   data.value = null
   draft.value = ''
   router.push(basePath.value)
@@ -1321,7 +1477,36 @@ watch(chatId, (id) => {
   }
 })
 
+// «Все чаты» в боковом меню ведут сюда с ?chats=1: открываем список и убираем метку из адреса.
+// Стоит после слежения за chatId — оно закрывает список при смене чата.
+watch(
+  () => route.query.chats,
+  (open) => {
+    if (!open) return
+    chatsOpen.value = true
+    const { chats: _chats, ...query } = route.query
+    router.replace({ query })
+  },
+  { immediate: true },
+)
+
+watch(chatsOpen, (open) => {
+  if (open) nextTick(() => root.value?.querySelector('.chat__side-x')?.focus())
+})
+
+watch([draft, showIntro, placeholder], () => nextTick(autosize))
+
 onMounted(async () => {
+  window.addEventListener('scroll', onScroll, { passive: true })
+  window.addEventListener('resize', onResize)
+  window.addEventListener('keydown', onWindowKey)
+  const page = root.value?.closest('.dpage')
+  if (page && typeof ResizeObserver !== 'undefined') {
+    topObserver = new ResizeObserver(measureTopLater)
+    topObserver.observe(page)
+  }
+  measureTop()
+  autosize()
   loadChats()
   if (route.query.ask) {
     await handleAsk()
@@ -1335,5 +1520,12 @@ onMounted(async () => {
       .catch(() => {})
 })
 
-onBeforeUnmount(stopPolling)
+onBeforeUnmount(() => {
+  stopPolling()
+  topObserver?.disconnect()
+  cancelAnimationFrame(topFrame)
+  window.removeEventListener('scroll', onScroll)
+  window.removeEventListener('resize', onResize)
+  window.removeEventListener('keydown', onWindowKey)
+})
 </script>

@@ -2,7 +2,7 @@
   <div class="action-card ai-ask" :class="`is-${action.status}`">
     <div class="action-card__head">
       <strong>{{ action.label }}</strong>
-      <span class="chip" :class="CHIPS[action.status]">{{ STATUS[action.status] || action.status }}</span>
+      <UiStatus :tone="TONES[action.status] || 'off'" :label="STATUS[action.status] || action.status" />
     </div>
     <p v-if="args.understanding" class="ai-ask__lead">{{ args.understanding }}</p>
 
@@ -91,6 +91,7 @@
 <script setup>
 /** Карточка вопросов ИИ перед работой: варианты ответа и свой текст; ответы с key запоминаются для клиента. */
 import { computed, reactive, ref } from 'vue'
+import UiStatus from '../../components/ui/UiStatus.vue'
 
 const props = defineProps({
   action: { type: Object, required: true },
@@ -101,7 +102,7 @@ const props = defineProps({
 const emit = defineEmits(['submit'])
 
 const STATUS = { pending: 'ждёт ответа', done: 'отвечено', rejected: 'без ответа' }
-const CHIPS = { pending: 'chip--warning', done: 'chip--ok' }
+const TONES = { pending: 'wait', done: 'ok', rejected: 'off', error: 'bad' }
 const NEED_TEXT = { image_gen: 'Генерация картинок временно недоступна' }
 
 function locked(q, option) {

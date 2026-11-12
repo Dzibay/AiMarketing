@@ -1,0 +1,1180 @@
+/* ===================== ИИ-чат (views/workspace/WsChat.vue и карточки Ai*Card) =====================
+   Без доски — одна колонка по центру: страница прокручивается окном, поле ввода прилипает к низу.
+   С доской сборки на широком экране — две колонки во всю высоту окна, лента прокручивается сама. */
+
+.chat {
+  --chat-bg: var(--bg);
+  position: relative;
+}
+
+/* Поле ввода стоит вплотную к низу окна — отступы страницы под чатом не нужны. */
+.dpage:has(.chat--solo),
+.dpage:has(.chat--board.is-tab-chat),
+.cabinet:has(> .chat--solo),
+.cabinet:has(> .chat--board.is-tab-chat) {
+  padding-bottom: 0;
+}
+
+.chat__main {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: calc(100dvh - var(--chat-top, 160px));
+}
+
+.chat__thread,
+.chat__hello,
+.chat__foot,
+.chat__intro {
+  width: 100%;
+  max-width: 760px;
+  margin-inline: auto;
+}
+
+.ui-notice.chat__wide {
+  width: 100%;
+  max-width: 760px;
+  margin: 0 auto 16px;
+}
+
+.chat__messages {
+  flex: 1 0 auto;
+}
+
+.chat__thread {
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+  padding: 8px 0 20px;
+}
+
+.chat__thread > .ui-notice {
+  margin: 0;
+}
+
+.chat__loading {
+  display: grid;
+  gap: 12px;
+}
+
+.chat__loading-q {
+  justify-self: end;
+  width: 42%;
+  height: 40px;
+  margin-bottom: 8px;
+  border-radius: 18px;
+}
+
+.chat__loading-short {
+  width: 58%;
+}
+
+/* ---------- Пустой чат: приветствие, большое поле, подсказки ---------- */
+
+.chat--hello .chat__main {
+  justify-content: center;
+  padding: 16px 0 8vh;
+}
+
+.chat__hello {
+  margin-bottom: 20px;
+  text-align: center;
+}
+
+.chat__hello h2 {
+  margin: 0;
+  font-size: clamp(24px, 3vw, 30px);
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+}
+
+.chat__hello p {
+  max-width: 60ch;
+  margin: 10px auto 0;
+  color: var(--muted);
+  font-size: 15px;
+  line-height: 1.5;
+}
+
+.chat__intro {
+  margin-top: 18px;
+}
+
+.starters {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+}
+
+.starter {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 34px;
+  padding: 0 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--pill);
+  background: var(--surface);
+  color: var(--ink-2);
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: border-color 0.15s ease, color 0.15s ease, opacity 0.15s ease;
+}
+
+.starter:hover:not(:disabled) {
+  border-color: var(--faint);
+  color: var(--ink);
+}
+
+.starter:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.starter svg {
+  flex: none;
+  width: 15px;
+  height: 15px;
+}
+
+.starter--main {
+  border-color: transparent;
+  background: var(--accent);
+  color: var(--on-accent);
+}
+
+.starter--main:hover:not(:disabled) {
+  border-color: transparent;
+  color: var(--on-accent);
+  opacity: 0.88;
+}
+
+.chat__subhead {
+  margin: 30px 0 10px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.chat__signals {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.quick-action {
+  appearance: none;
+  display: grid;
+  align-content: start;
+  gap: 4px;
+  min-width: 0;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-card);
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+  text-align: left;
+  text-decoration: none;
+  cursor: pointer;
+  transition: border-color 0.15s ease;
+}
+
+.quick-action:hover:not(:disabled) {
+  border-color: var(--faint);
+}
+
+.quick-action:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.quick-action strong {
+  font-size: 14.5px;
+  font-weight: 700;
+  line-height: 1.35;
+}
+
+.quick-action small {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.quick-action--warn {
+  border-color: transparent;
+  background: var(--warn-soft);
+}
+
+.quick-action__more {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat__notes {
+  margin-top: 14px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.chat__notes summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.chat__notes ul {
+  margin: 6px 0 0;
+  padding-left: 18px;
+}
+
+/* ---------- Сообщения ---------- */
+
+.msg {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.msg--user {
+  align-items: flex-end;
+  gap: 4px;
+}
+
+.msg--user .msg__bubble {
+  max-width: 82%;
+  padding: 11px 16px;
+  border-radius: 18px 18px 4px 18px;
+  background: var(--side);
+  color: var(--ink);
+  font-weight: 600;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+[data-theme='dark'] .msg--user .msg__bubble {
+  background: var(--surface-2);
+}
+
+.msg__time {
+  color: var(--faint);
+  font-size: 11.5px;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+
+.msg--user:hover .msg__time,
+.msg--user:focus-within .msg__time {
+  opacity: 1;
+}
+
+@media (hover: none) {
+  .msg__time {
+    opacity: 1;
+  }
+}
+
+.msg--ai {
+  gap: 14px;
+  line-height: 1.6;
+}
+
+.msg__text {
+  font-size: 15px;
+  overflow-wrap: anywhere;
+}
+
+.msg__meta {
+  display: flex;
+  flex-wrap: wrap;
+  margin: -6px 0 0;
+  color: var(--faint);
+  font-size: 12px;
+}
+
+.msg__meta > * + *::before {
+  content: '·';
+  margin: 0 6px;
+}
+
+.msg--thinking {
+  flex-direction: row;
+  align-items: center;
+  gap: 10px;
+  color: var(--muted);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+/* @Проект в сообщении — ссылкой-чипом. */
+.mention {
+  padding: 1px 8px;
+  border-radius: var(--pill);
+  background: var(--surface);
+  box-shadow: inset 0 0 0 1px var(--line);
+  color: inherit;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.mention:hover {
+  box-shadow: inset 0 0 0 1px var(--faint);
+}
+
+/* «Что я посмотрел»: шаги чтения одной строкой, раскрываются по клику. */
+.chat-steps {
+  font-size: 13px;
+}
+
+.chat-steps > summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--faint);
+  font-weight: 700;
+  list-style: none;
+  cursor: pointer;
+}
+
+/* Шеврон вместо треугольника браузера — у общего списка и у вложенных шагов эксперта. */
+.chat-steps summary::-webkit-details-marker {
+  display: none;
+}
+
+.chat-steps summary::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  margin-top: -3px;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: rotate(-45deg);
+  transition: transform 0.15s ease;
+}
+
+.chat-steps details[open] > summary::before,
+.chat-steps[open] > summary::before {
+  margin-top: -4px;
+  transform: rotate(45deg);
+}
+
+.chat-steps > summary:hover {
+  color: var(--muted);
+}
+
+.chat-steps ul {
+  display: grid;
+  gap: 4px;
+  margin: 8px 0 0 2px;
+  padding: 0 0 0 14px;
+  border-left: 2px solid var(--line);
+  color: var(--muted);
+  line-height: 1.45;
+  list-style: none;
+}
+
+.chat-step > summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  list-style: none;
+  cursor: pointer;
+}
+
+.chat-step > summary:hover {
+  color: var(--ink-2);
+}
+
+.chat-step > pre {
+  margin-top: 6px;
+}
+
+.chat-note {
+  display: inline-flex;
+  align-items: center;
+  align-self: center;
+  gap: 6px;
+  margin: 0;
+  padding: 5px 12px;
+  border-radius: var(--pill);
+  background: var(--surface-2);
+  color: var(--muted);
+  font-size: 12.5px;
+  text-align: center;
+}
+
+.chat-note svg {
+  flex: none;
+  width: 14px;
+  height: 14px;
+}
+
+.chat-error {
+  overflow-wrap: anywhere;
+}
+
+/* ---------- Ответ ИИ в разметке Markdown ---------- */
+
+.md > :first-child {
+  margin-top: 0;
+}
+
+.md > :last-child {
+  margin-bottom: 0;
+}
+
+.md p,
+.md ul,
+.md ol {
+  margin: 0 0 10px;
+}
+
+.md ul,
+.md ol {
+  padding-left: 22px;
+}
+
+.md li + li {
+  margin-top: 4px;
+}
+
+.md h3,
+.md h4,
+.md h5,
+.md h6 {
+  margin: 16px 0 6px;
+  font-size: 15px;
+  font-weight: 800;
+}
+
+.md h3 {
+  font-size: 16.5px;
+}
+
+.md strong {
+  font-weight: 700;
+}
+
+.md code {
+  padding: 1px 6px;
+  border-radius: 6px;
+  background: var(--surface-3);
+  font-size: 0.86em;
+}
+
+.md pre {
+  margin: 0 0 10px;
+  padding: 12px 14px;
+  overflow-x: auto;
+  border-radius: 12px;
+  background: var(--solid);
+  color: var(--on-solid);
+  font-size: 13px;
+}
+
+.md pre code {
+  padding: 0;
+  background: transparent;
+}
+
+.md a {
+  color: inherit;
+  font-weight: 600;
+  text-decoration: underline;
+  text-decoration-color: var(--faint);
+  text-underline-offset: 3px;
+}
+
+.md a:hover {
+  text-decoration-color: currentColor;
+}
+
+.md hr {
+  margin: 14px 0;
+  border: 0;
+  border-top: 1px solid var(--line);
+}
+
+.md-table {
+  margin: 0 0 12px;
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+}
+
+.md-table table {
+  width: 100%;
+  border-collapse: collapse;
+  background: var(--surface);
+  font-size: 13.5px;
+  line-height: 1.45;
+}
+
+.md-table th,
+.md-table td {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+  vertical-align: top;
+}
+
+.md-table th + th,
+.md-table td + td {
+  border-left: 1px solid var(--line);
+}
+
+.md-table tr:last-child td {
+  border-bottom: 0;
+}
+
+.md-table th {
+  background: var(--surface-2);
+  color: var(--muted);
+  font-size: 12.5px;
+  font-weight: 700;
+}
+
+/* ---------- Карточки предложений, вопросов и плана ---------- */
+
+.action-card {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  padding: 16px 18px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-card);
+  background: var(--surface);
+  line-height: 1.5;
+}
+
+/* Ждёт решения — выделена лаймом, как «Предложение» в макете. */
+.action-card.is-pending {
+  border-color: transparent;
+  background: var(--lime-soft);
+}
+
+.action-card.is-rejected {
+  color: var(--ink-2);
+}
+
+.action-card__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+}
+
+.action-card__head > strong {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 15px;
+  font-weight: 700;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.action-card__tag {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 4px;
+  height: 22px;
+  padding: 0 8px;
+  border-radius: 6px;
+  background: var(--lime);
+  color: var(--on-lime);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.action-card__tag svg {
+  width: 13px;
+  height: 13px;
+}
+
+.action-card__meta {
+  display: flex;
+  flex-wrap: wrap;
+  margin: -4px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.action-card__meta > span + span::before {
+  content: '·';
+  margin: 0 6px;
+}
+
+.action-card__summary {
+  margin: 0;
+  white-space: pre-line;
+}
+
+.action-card__cats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 0;
+}
+
+.action-card__details summary {
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.action-card__details pre {
+  margin-top: 6px;
+}
+
+.action-card__buttons {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 10px;
+  margin-top: 2px;
+}
+
+.action-card__buttons .check-row {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.action-card__note {
+  flex-basis: 100%;
+  margin: 0;
+  color: var(--muted);
+  font-size: 12.5px;
+}
+
+/* «Позже»: свёрнутая карточка, на сервере действие так и ждёт решения. */
+.action-card.action-card--later {
+  gap: 6px;
+  border-color: var(--line);
+  background: var(--surface-2);
+}
+
+.action-card--later .hint {
+  margin: 0;
+}
+
+/* Этап или черновик, которые решаются на доске, — плашкой со ссылкой «К доске». */
+.board-plaque {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 12px;
+  padding: 10px 14px;
+  border-radius: 12px;
+  background: var(--lime-soft);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.board-plaque small {
+  flex-basis: 100%;
+  color: var(--muted);
+  font-size: 12.5px;
+  font-weight: 500;
+}
+
+.board-plaque .ai-check__link {
+  margin-left: auto;
+}
+
+.board-plaque.is-done {
+  background: var(--ok-soft);
+}
+
+.board-plaque.is-rejected,
+.board-plaque.is-approved {
+  background: var(--surface-2);
+}
+
+.board-plaque.is-error {
+  background: var(--danger-soft);
+}
+
+/* ---------- Низ: «Ждут решения», поле ввода, права ИИ ---------- */
+
+.chat__foot {
+  position: sticky;
+  bottom: 0;
+  z-index: 5;
+  padding: 12px 0 14px;
+  background: linear-gradient(to bottom, transparent, var(--chat-bg) 18px);
+}
+
+.chat--hello .chat__foot {
+  position: static;
+  padding: 0;
+  background: none;
+}
+
+.chat__pending {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 10px;
+  margin-bottom: 8px;
+  padding: 8px 8px 8px 16px;
+  border-radius: 14px;
+  background: var(--lime-soft);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.chat__pending > span {
+  margin-right: auto;
+}
+
+.composer {
+  position: relative;
+  padding: 12px 12px 10px 16px;
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  background: var(--surface);
+  box-shadow: var(--shadow);
+  transition: border-color 0.15s ease;
+}
+
+.composer:focus-within {
+  border-color: var(--faint);
+}
+
+.composer.is-off {
+  background: var(--surface-2);
+  box-shadow: none;
+}
+
+.composer--big {
+  padding: 18px 14px 12px 22px;
+  border-radius: 26px;
+}
+
+.composer .composer__input {
+  display: block;
+  width: 100%;
+  min-height: 24px;
+  margin: 0;
+  padding: 2px 0 8px;
+  overflow-y: hidden;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  color: var(--ink);
+  font-size: 15px;
+  line-height: 1.5;
+  resize: none;
+  outline: none;
+}
+
+.composer--big .composer__input {
+  min-height: 60px;
+  font-size: 17px;
+}
+
+.composer__input::placeholder {
+  color: var(--faint);
+}
+
+.composer__input:disabled {
+  cursor: not-allowed;
+}
+
+.composer__row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.composer__icon {
+  appearance: none;
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  background: var(--surface);
+  color: var(--ink-2);
+  cursor: pointer;
+}
+
+.composer__icon:hover:not(:disabled) {
+  border-color: var(--faint);
+  color: var(--ink);
+}
+
+.composer__icon:disabled {
+  color: var(--faint);
+  cursor: not-allowed;
+}
+
+.composer__icon svg {
+  width: 16px;
+  height: 16px;
+}
+
+.composer__model {
+  flex: none;
+}
+
+.composer__model .ui-select__btn {
+  border-color: var(--line);
+  border-radius: var(--pill);
+  background: var(--surface-2);
+  font-weight: 700;
+}
+
+.composer__tip {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--faint);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer__send {
+  appearance: none;
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  margin-left: auto;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: var(--lime);
+  color: var(--on-lime);
+  cursor: pointer;
+  transition: transform 0.12s ease, background 0.15s ease;
+}
+
+.composer__send:hover:not(:disabled) {
+  transform: translateY(-1px);
+}
+
+.composer__send:disabled {
+  background: var(--surface-3);
+  color: var(--faint);
+  cursor: not-allowed;
+}
+
+.composer__send svg {
+  width: 18px;
+  height: 18px;
+  stroke-width: 2.4;
+}
+
+.composer__send .spinner {
+  border-color: var(--line-2);
+  border-top-color: var(--ink);
+}
+
+.chat__access {
+  margin: 8px 8px 0;
+  color: var(--faint);
+  font-size: 12px;
+  line-height: 1.4;
+  text-align: center;
+}
+
+.chat__access a {
+  margin-left: 6px;
+  color: var(--muted);
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+/* @-упоминания: список проектов над полем ввода. */
+.mention-pop {
+  top: auto;
+  right: auto;
+  bottom: calc(100% + 8px);
+  left: 0;
+  width: min(420px, 100%);
+  max-height: 16rem;
+  overflow-y: auto;
+}
+
+.mention-pop__item {
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.mention-pop__item strong,
+.mention-pop__item small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mention-pop__item small {
+  flex-shrink: 1;
+  min-width: 0;
+  color: var(--muted);
+}
+
+.mention-pop__item.is-active {
+  background: var(--surface-2);
+}
+
+/* ---------- Все чаты: выезжают слева ---------- */
+
+.chat__side {
+  position: fixed;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 61;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: min(340px, 88vw);
+  padding: 16px 14px;
+  border-right: 1px solid var(--line);
+  border-radius: 0 22px 22px 0;
+  background: var(--surface);
+  box-shadow: var(--shadow-pop);
+  transform: translateX(-105%);
+  visibility: hidden;
+}
+
+/* Выезжает плавно, а прячется сразу — иначе при переходе в другой чат список проезжал бы по экрану. */
+.chat__side.is-open {
+  transform: none;
+  visibility: visible;
+  transition: transform 0.25s ease;
+}
+
+.chat__side-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding-left: 4px;
+}
+
+.chat__side-head strong {
+  font-size: 16px;
+  font-weight: 800;
+}
+
+.chat__side-x {
+  appearance: none;
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.chat__side-x:hover {
+  background: var(--surface-2);
+  color: var(--ink);
+}
+
+.chat__side-x svg {
+  width: 18px;
+  height: 18px;
+}
+
+.chat__side .hint {
+  margin: 0;
+  padding: 0 4px;
+}
+
+.chat__new {
+  width: 100%;
+}
+
+.chat__list {
+  display: grid;
+  align-content: start;
+  gap: 2px;
+  min-height: 0;
+  margin: 0 -6px;
+  padding: 0 6px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.chat__item {
+  display: grid;
+  gap: 2px;
+  padding: 9px 10px;
+  border-radius: 10px;
+  color: var(--ink);
+  text-decoration: none;
+}
+
+.chat__item:hover {
+  background: var(--surface-2);
+}
+
+.chat__item.active {
+  background: var(--side);
+}
+
+[data-theme='dark'] .chat__item.active {
+  background: var(--surface-3);
+}
+
+.chat__item-title {
+  overflow: hidden;
+  font-size: 14px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat__item small {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 6px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.chat__item-wait {
+  color: var(--ink);
+  font-weight: 700;
+}
+
+.chat-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  background: var(--overlay);
+}
+
+/* ---------- Сборка кампании: чат и доска ---------- */
+
+.chat__tabs {
+  display: none;
+}
+
+.chat--board {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 20px;
+  align-items: start;
+}
+
+@media (min-width: 1100px) {
+  .chat--board {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  /* Обе колонки — во всю высоту окна под шапкой; лента и доска прокручиваются сами. */
+  .chat--board .chat__main,
+  .chat--board .chat__board {
+    position: sticky;
+    top: 72px;
+    height: calc(100dvh - 88px);
+    min-height: 460px;
+  }
+
+  .chat--board .chat__messages {
+    flex: 1 1 0;
+    min-height: 0;
+    margin-right: -10px;
+    padding-right: 10px;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+
+  .chat--board .chat__foot {
+    position: static;
+    padding-bottom: 0;
+  }
+
+  .chat__board {
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+}
+
+@media (max-width: 1099.98px) {
+  .chat--board .chat__tabs {
+    display: inline-flex;
+    align-self: flex-start;
+    margin: 0 0 12px;
+  }
+
+  .chat--board.is-tab-chat .chat__board {
+    display: none;
+  }
+
+  .chat--board.is-tab-board .chat__main {
+    min-height: 0;
+  }
+
+  .chat--board.is-tab-board .chat__main > :not(.chat__tabs) {
+    display: none;
+  }
+}
+
+/* ---------- Узкий экран ---------- */
+
+@media (max-width: 640px) {
+  .chat__signals {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .msg--user .msg__bubble {
+    max-width: 90%;
+  }
+
+  .action-card {
+    padding: 14px;
+  }
+
+  .composer--big {
+    padding: 14px 12px 10px 16px;
+    border-radius: 22px;
+  }
+
+  .composer--big .composer__input {
+    font-size: 16px;
+  }
+
+  .composer__tip {
+    display: none;
+  }
+
+  .chat--hello .chat__main {
+    justify-content: flex-start;
+    padding-bottom: 24px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chat__side.is-open,
+  .composer__send,
+  .msg__time {
+    transition: none;
+  }
+}
