@@ -29,8 +29,8 @@ export function campaignHealth(c, kpi) {
 
   if (type === 'drr' && target) {
     if (c.drr == null) return { id: 'bad', text: `${rub(cost)} за период, дохода нет` }
-    if (c.drr <= target) return { id: 'ok', text: `ДРР ${pct(c.drr)} — в цели ${pct(target)}` }
-    return { id: 'warn', text: `ДРР ${pct(c.drr)} — выше цели ${pct(target)}` }
+    if (c.drr <= target) return { id: 'ok', text: `Доля расходов на рекламу ${pct(c.drr)} — в цели ${pct(target)}` }
+    return { id: 'warn', text: `Доля расходов на рекламу ${pct(c.drr)} — выше цели ${pct(target)}` }
   }
 
   if (!conv) {

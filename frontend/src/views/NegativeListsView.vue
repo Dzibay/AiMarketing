@@ -262,6 +262,7 @@ import UiMenu from '../components/ui/UiMenu.vue'
 import UiMenuItem from '../components/ui/UiMenuItem.vue'
 import { ERRORS, errorText, jobProgressText, webApi } from '../api/web'
 import { pushToast } from '../composables/useToasts'
+import { undoAction } from '../composables/useUndo'
 import { useHead } from '../utils/useHead'
 
 useHead('Минус-фразы — Толк', true)
@@ -576,7 +577,14 @@ async function apply() {
     })
     result.value = out
     preview.value = null
-    pushToast(resultSummary(out), out.status === 'ok' ? 'info' : 'error')
+    pushToast(
+      resultSummary(out),
+      out.status === 'ok' ? 'info' : 'error',
+      undoAction(out, () => {
+        result.value = null
+        return Promise.all([loadLists(), loadTargets(), loadDetail()])
+      }),
+    )
   } catch (err) {
     pushToast(errorText(err), 'error')
   } finally {

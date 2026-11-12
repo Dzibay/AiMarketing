@@ -129,6 +129,7 @@ import { RouterLink, useRouter } from 'vue-router'
 import { ChevronDown, CloudOff, Megaphone, Pause, Play, Plus } from '@lucide/vue'
 import { ERRORS, errorText, webApi, wsApi } from '../api/web'
 import { pushToast } from '../composables/useToasts'
+import { undoAction } from '../composables/useUndo'
 import { useWorkspaces } from '../composables/useWorkspaces'
 import { useExpert } from '../composables/useExpert'
 import { confirmCampaignArchive, confirmCampaignsBulk, confirmCampaignToggle } from '../utils/campaignConfirm'
@@ -237,15 +238,18 @@ async function runBulk(action, ids = [...selected.value]) {
   busy.value = true
   bulkErrors.value = []
   let applied = 0
+  let last = null
   try {
     for (const [projectId, campaignIds] of byProject) {
-      const res = await wsApi.bulk(projectId, { campaign_ids: campaignIds, action })
-      applied += res.applied || 0
-      bulkErrors.value.push(...(res.errors || []))
+      last = await wsApi.bulk(projectId, { campaign_ids: campaignIds, action })
+      applied += last.applied || 0
+      bulkErrors.value.push(...(last.errors || []))
     }
     pushToast(
       `${ACTION_TEXT[action]}: ${applied}${bulkErrors.value.length ? `, ошибок: ${bulkErrors.value.length}` : ''}`,
       bulkErrors.value.length ? 'error' : 'ok',
+      // Кампании из разных проектов — разные записи журнала: одной кнопкой их не отменить.
+      byProject.size === 1 ? undoAction(last, load) : {},
     )
     await load()
   } catch (err) {
@@ -285,6 +289,7 @@ function onDuplicated(result) {
     `Копия готова: групп ${result.groups ?? 0}, фраз ${result.keywords ?? 0}, объявлений ${result.ads ?? 0}` +
       (warnings.length ? `. Предупреждения: ${warnings.slice(0, 3).join('; ')}` : ''),
     warnings.length ? 'warn' : 'ok',
+    undoAction(result, () => (router.currentRoute.value.path === '/cabinet/campaigns' ? load() : router.push('/cabinet/campaigns'))),
   )
   const target = result.target_workspace_id || duplicate.workspace?.id
   if (target && result.campaign?.id) {

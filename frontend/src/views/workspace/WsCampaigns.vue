@@ -213,6 +213,7 @@ import UiNotice from '../../components/ui/UiNotice.vue'
 import { ERRORS, errorText, jobProgressText, wsApi } from '../../api/web'
 import { askConfirm } from '../../composables/useConfirm'
 import { pushToast } from '../../composables/useToasts'
+import { undoAction } from '../../composables/useUndo'
 import { confirmCampaignArchive, confirmCampaignsBulk, confirmCampaignToggle } from '../../utils/campaignConfirm'
 import { campaignTypeShort, formatDate, lastDays, plural, timeAgo } from '../../utils/format'
 import CampaignWizard from './CampaignWizard.vue'
@@ -371,6 +372,7 @@ async function runBulk(action, extra = {}, ids = [...selected.value]) {
     pushToast(
       `${ACTION_TEXT[action] || 'Готово'}: ${res.applied || 0}${bulkErrors.value.length ? `, ошибок: ${bulkErrors.value.length}` : ''}`,
       bulkErrors.value.length ? 'error' : 'ok',
+      undoAction(res, load),
     )
     if (action === 'delete') selected.value = new Set()
     await load()
@@ -429,6 +431,7 @@ async function applyBudget() {
     pushToast(
       `Изменено: ${res.applied || 0}${bulkErrors.value.length ? `, ошибок: ${bulkErrors.value.length}` : ''}`,
       bulkErrors.value.length ? 'error' : 'ok',
+      undoAction(res, load),
     )
     budgetModal.open = false
     await load()
@@ -452,6 +455,7 @@ function onCreated(result) {
   pushToast(
     warnings.length ? `Кампания создана. Директ предупреждает: ${warnings.join('; ')}` : 'Кампания создана черновиком',
     warnings.length ? 'warn' : 'ok',
+    undoAction(result, afterUndoCreate),
   )
   reloadWs()
   router.push(`/w/${ws.value.id}/campaigns/${result.campaign.id}`)
@@ -464,6 +468,7 @@ function onDuplicated(result) {
     `Копия готова: групп ${result.groups ?? 0}, фраз ${result.keywords ?? 0}, объявлений ${result.ads ?? 0}` +
       (warnings.length ? `. Предупреждения: ${warnings.slice(0, 3).join('; ')}` : ''),
     warnings.length ? 'warn' : 'ok',
+    undoAction(result, afterUndoCreate),
   )
   if (result.target_workspace_id && result.target_workspace_id !== ws.value.id) {
     router.push(`/w/${result.target_workspace_id}/campaigns/${result.campaign.id}`)
@@ -471,6 +476,14 @@ function onDuplicated(result) {
   }
   reloadWs()
   load()
+}
+
+// Откат создания или копии удаляет кампанию — со страницы удалённой кампании уходим к списку.
+function afterUndoCreate() {
+  const list = `/w/${ws.value.id}/campaigns`
+  reloadWs()
+  if (router.currentRoute.value.path === list) load()
+  else router.push(list)
 }
 
 onMounted(() => {

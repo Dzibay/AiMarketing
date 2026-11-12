@@ -249,6 +249,7 @@ import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { RouterLink } from 'vue-router'
 import { errorText, jobProgressText, webApi, wsApi } from '../api/web'
 import { pushToast } from '../composables/useToasts'
+import { undoAction } from '../composables/useUndo'
 import { formatDateTime, num, plural, rubles } from '../utils/format'
 import { useHead } from '../utils/useHead'
 import TermHint from '../components/TermHint.vue'
@@ -443,6 +444,7 @@ async function applySelected() {
   busy.value = true
   problems.value = []
   let applied = 0
+  const undo = []
   try {
     for (const [projectId, group] of byProject) {
       busyText.value = `${group.name}: применяем…`
@@ -457,6 +459,7 @@ async function applySelected() {
         const res = await wsApi.queriesApply(projectId, { items }, (job) => {
           busyText.value = `${group.name}: ${jobProgressText(job)}`
         })
+        undo.push(res)
         for (const it of res.items || []) {
           if (it.status === 'ok' || it.status === 'partial') applied += 1
           if (it.status !== 'ok' && (it.status !== 'partial' || it.message))
@@ -469,6 +472,8 @@ async function applySelected() {
     pushToast(
       `Применено: ${applied}${problems.value.length ? `, с проблемами: ${problems.value.length}` : ''}`,
       problems.value.length ? 'warn' : 'ok',
+      // Одной кнопкой отменяется только применение в одном проекте — иначе откат по одному в «Истории».
+      byProject.size === 1 && undo.length === 1 ? undoAction(undo[0], load) : {},
     )
     selected.value = new Set()
     preview.open = false

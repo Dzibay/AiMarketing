@@ -662,6 +662,7 @@ import UndoDialog from '../../components/UndoDialog.vue'
 import { errorText, jobProgressText, wsApi } from '../../api/web'
 import { askConfirm } from '../../composables/useConfirm'
 import { pushToast } from '../../composables/useToasts'
+import { undoAction } from '../../composables/useUndo'
 import { campaignLabel, repeatedNames } from '../../utils/campaignNames'
 import { aiUsageText, formatDate, formatDateTime, limitPct, num, plural, rubles } from '../../utils/format'
 import { useWs } from './context'
@@ -1282,7 +1283,11 @@ async function apply(list, { force = false, bid = null } = {}) {
         .filter((i) => i.status !== 'ok' && (i.status !== 'partial' || i.message))
         .map((i) => ({ ...i, query: names[i.query_norm] || i.query_norm })),
     }
-    pushToast(resultTitle.value, res.status === 'ok' ? 'ok' : res.status === 'partial' ? 'warn' : 'error')
+    pushToast(
+      resultTitle.value,
+      res.status === 'ok' ? 'ok' : res.status === 'partial' ? 'warn' : 'error',
+      undoAction(res, onUndone),
+    )
     await load()
   } catch (err) {
     pushToast(errorText(err), 'error')

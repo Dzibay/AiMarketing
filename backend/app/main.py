@@ -9,6 +9,7 @@ from app.api.ai import router as ai_router
 from app.api.negative_lists import router as negative_lists_router
 from app.api.overview import router as overview_router
 from app.api.site import router as site_router
+from app.api.undo_header import UndoLogHeader
 from app.api.web import router as web_router
 from app.api.workspaces import router as workspaces_router
 from app.config import settings
@@ -44,6 +45,7 @@ async def lifespan(_app: FastAPI):
 
 
 app = FastAPI(title=settings.app_name, lifespan=lifespan, docs_url=None, redoc_url=None)
+app.add_middleware(UndoLogHeader)
 
 
 @app.get("/api/health")

@@ -72,6 +72,32 @@ def journal_quiet():
         _quiet.reset(token)
 
 
+# Записи с откатом, сделанные за один запрос кабинета или одну фоновую задачу: кабинет предлагает
+# «Отменить» прямо в сообщении о результате, не отправляя в историю.
+_undoable: contextvars.ContextVar[list[int] | None] = contextvars.ContextVar("journal_undoable", default=None)
+
+
+@contextmanager
+def collect_undoable():
+    ids: list[int] = []
+    token = _undoable.set(ids)
+    try:
+        yield ids
+    finally:
+        _undoable.reset(token)
+
+
+def note_undoable(log_id: int) -> None:
+    ids = _undoable.get()
+    if ids is not None:
+        ids.append(log_id)
+
+
+def single_undoable(ids: list[int]) -> int | None:
+    """Отменить одной кнопкой можно, только если действие оставило ровно одну запись с откатом."""
+    return ids[0] if len(ids) == 1 else None
+
+
 def current_source() -> str:
     return _source.get()
 
@@ -194,7 +220,10 @@ def log_action(
                 undo_of,
             ),
         ).fetchone()
-    return int(row["id"])
+    log_id = int(row["id"])
+    if undo is not None:
+        note_undoable(log_id)
+    return log_id
 
 
 def list_action_logs(

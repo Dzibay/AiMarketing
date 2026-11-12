@@ -38,10 +38,10 @@
       <RouterLink :to="`/w/${ws.id}/campaigns`">
         {{ ws.campaigns_count }} {{ plural(ws.campaigns_count, 'кампания', 'кампании', 'кампаний') }}
       </RouterLink>
-      <RouterLink v-if="ws.kpi_type" :to="settingsPath" title="Изменить KPI в настройках проекта">
-        KPI: {{ ws.kpi_type === 'cpa' ? 'CPA' : 'ДРР' }}
+      <RouterLink v-if="ws.kpi_type" :to="settingsPath" title="Изменить цель в настройках проекта">
+        {{ expert ? `KPI: ${ws.kpi_type === 'cpa' ? 'CPA' : 'ДРР'}` : KPI_PLAIN[ws.kpi_type] }}
         <template v-if="ws.kpi_target != null">
-          ≤ {{ ws.kpi_type === 'cpa' ? rubles(ws.kpi_target) : pct(ws.kpi_target) }}
+          {{ expert ? '≤' : 'до' }} {{ ws.kpi_type === 'cpa' ? rubles(ws.kpi_target) : pct(ws.kpi_target) }}
         </template>
       </RouterLink>
       <RouterLink v-if="ws.goal_name" :to="settingsPath" title="Изменить цель в настройках проекта">
@@ -55,7 +55,7 @@
     </p>
 
     <p v-if="!ws.counter_ok" class="notice notice--warn">
-      Счётчик № {{ ws.counter_id }} сейчас не виден ни одному подключённому логину Метрики или выключен — визиты и цели
+      Счётчик{{ expert ? ` № ${ws.counter_id}` : ' Метрики' }} сейчас не виден ни одному подключённому логину Метрики или выключен — визиты и цели
       не обновляются. Проверьте доступ в <RouterLink to="/cabinet/connections">Подключениях</RouterLink>.
     </p>
     <p v-if="ws.archived" class="notice">
@@ -118,7 +118,7 @@ import { jobPercent, jobText, stageErrorText, stageFailure, stageProblem } from 
 import { useExpert } from '../../composables/useExpert'
 import { loadWorkspaces, patchWorkspaceInList, rememberWorkspace } from '../../composables/useWorkspaces'
 import { useHead } from '../../utils/useHead'
-import { pct, plural, rubles } from '../../utils/format'
+import { KPI_PLAIN, pct, plural, rubles } from '../../utils/format'
 import { WS_KEY } from './context'
 
 const route = useRoute()

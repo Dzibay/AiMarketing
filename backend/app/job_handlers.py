@@ -19,7 +19,7 @@ from app.digest import send_digest
 from app.direct_balance import sync_balances_for_user
 from app.direct_sync import sync_account_campaigns
 from app.entity_stats import sync_campaign_entity_stats
-from app.journal import acting_as
+from app.journal import acting_as, collect_undoable, single_undoable
 from app.jobs import PRIORITY_BACKGROUND, PRIORITY_USER, complete, enqueue, fail, heartbeat, set_progress
 from app.keywords import sync_campaign_keywords
 from app.metrika_sync import canonical_counters, sync_counter_goals
@@ -384,7 +384,8 @@ def run_job(job: dict, worker_id: str) -> str:
         daemon=True,
     ).start()
     try:
-        result = handler(job["user_id"], job.get("payload") or {}, progress)
+        with collect_undoable() as undoable:
+            result = handler(job["user_id"], job.get("payload") or {}, progress)
     except YandexError as exc:
         status = fail(job, worker_id, error_code=exc.code, error=exc.message or "")
         log.warning("job %s %s: %s → %s", job["id"], job["kind"], exc.code, status)
@@ -394,5 +395,9 @@ def run_job(job: dict, worker_id: str) -> str:
         return fail(job, worker_id, error_code="internal", error=str(exc)[:300])
     finally:
         done.set()
+    undo_log_id = single_undoable(undoable)
+    if undo_log_id is not None and isinstance(result, dict):
+        # Кабинет покажет «Отменить» в сообщении о результате.
+        result = {**result, "undo_log_id": undo_log_id}
     complete(job["id"], worker_id, result)
     return "done"

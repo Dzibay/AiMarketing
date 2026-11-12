@@ -153,6 +153,7 @@ import ScheduleGrid from '../../components/ScheduleGrid.vue'
 import StrategyFields from '../../components/StrategyFields.vue'
 import { errorText, webApi, wsApi } from '../../api/web'
 import { pushToast } from '../../composables/useToasts'
+import { undoAction } from '../../composables/useUndo'
 import { priorityGoalsForApi } from '../../utils/format'
 
 const props = defineProps({
@@ -312,6 +313,11 @@ async function load() {
   }
 }
 
+function afterUndo() {
+  load()
+  emit('saved')
+}
+
 async function save() {
   const payload = changes.value
   if (!Object.keys(payload).length) return
@@ -322,6 +328,7 @@ async function save() {
     pushToast(
       `Сохранено: ${(res.changed || []).join(', ')}${warnings.length ? `. Директ предупреждает: ${warnings.join('; ')}` : ''}`,
       warnings.length ? 'warn' : 'ok',
+      undoAction(res, afterUndo),
     )
     emit('saved')
     await load()
@@ -338,8 +345,8 @@ async function saveBasic() {
     const payload = { negative_text: basic.negative_text }
     if (basic.name && basic.name !== props.campaign?.name) payload.name = basic.name
     if (basic.daily_budget_rub !== '') payload.daily_budget_rub = Number(basic.daily_budget_rub)
-    await webApi.updateCampaign(props.campaignId, payload)
-    pushToast('Сохранено в Директ', 'ok')
+    const res = await webApi.updateCampaign(props.campaignId, payload)
+    pushToast('Сохранено в Директ', 'ok', undoAction(res, afterUndo))
     emit('saved')
   } catch (err) {
     pushToast(errorText(err), 'error')

@@ -55,12 +55,12 @@
             <small v-else>{{ num(row.clicks || 0) }} {{ plural(row.clicks || 0, 'клик', 'клика', 'кликов') }}</small>
           </div>
           <div class="bigstat">
-            <span>Заявки</span>
+            <span>Заявки<TermHint term="leads" /></span>
             <b>{{ num(row.conversions || 0) }}</b>
             <small>из {{ num(row.clicks || 0) }} {{ plural(row.clicks || 0, 'клика', 'кликов', 'кликов') }}</small>
           </div>
           <div class="bigstat">
-            <span>{{ kpi?.type === 'drr' ? 'Доля расходов' : 'Цена заявки' }}</span>
+            <span>{{ KPI_PLAIN[kpi?.type === 'drr' ? 'drr' : 'cpa'] }}<TermHint :term="kpi?.type === 'drr' ? 'drr' : 'cpa'" /></span>
             <b>{{ kpiNow }}</b>
             <small :class="kpiTone">{{ kpiGoal }}</small>
           </div>
@@ -246,6 +246,7 @@ import {
 } from '@lucide/vue'
 import CampaignStructure from '../../components/CampaignStructure.vue'
 import ExpertHint from '../../components/ExpertHint.vue'
+import TermHint from '../../components/TermHint.vue'
 import UiMenu from '../../components/ui/UiMenu.vue'
 import UiMenuItem from '../../components/ui/UiMenuItem.vue'
 import UiStatus from '../../components/ui/UiStatus.vue'
@@ -254,8 +255,10 @@ import { useExpert } from '../../composables/useExpert'
 import { campaignHealth } from '../../utils/campaignHealth'
 import { errorText, wsApi } from '../../api/web'
 import { pushToast } from '../../composables/useToasts'
+import { undoAction } from '../../composables/useUndo'
 import {
   ACTION_SOURCES,
+  KPI_PLAIN,
   campaignStatus,
   CAMPAIGN_TYPES,
   formatDateTime,
@@ -388,6 +391,11 @@ function setTab(name) {
   router.replace({ query: { ...route.query, tab: name === 'structure' ? undefined : name } })
 }
 
+function reloadCampaign() {
+  loadRow()
+  if (!expert.value) loadSimple()
+}
+
 async function loadRow() {
   try {
     const data = await wsApi.campaigns(ws.value.id, lastDays(7))
@@ -414,12 +422,12 @@ async function bulk(action) {
       return
     }
     if (action === 'delete') {
-      pushToast('Кампания удалена', 'ok')
+      pushToast('Кампания удалена', 'ok', undoAction(res, reloadWs))
       reloadWs()
       router.push(`/w/${ws.value.id}/campaigns`)
       return
     }
-    pushToast('Готово', 'ok')
+    pushToast('Готово', 'ok', undoAction(res, reloadCampaign))
     await loadRow()
     if (!expert.value) loadSimple()
   } catch (err) {
@@ -454,7 +462,16 @@ async function moderate() {
 
 function onDuplicated(result) {
   duplicateOpen.value = false
-  pushToast(`Копия готова: групп ${result.groups ?? 0}, фраз ${result.keywords ?? 0}, объявлений ${result.ads ?? 0}`, 'ok')
+  const list = `/w/${ws.value.id}/campaigns`
+  pushToast(
+    `Копия готова: групп ${result.groups ?? 0}, фраз ${result.keywords ?? 0}, объявлений ${result.ads ?? 0}`,
+    'ok',
+    // Откат удаляет копию — со страницы копии уходим к списку кампаний.
+    undoAction(result, () => {
+      reloadWs()
+      router.push(list)
+    }),
+  )
   reloadWs()
   const target = result.target_workspace_id || ws.value.id
   router.push(`/w/${target}/campaigns/${result.campaign.id}`)

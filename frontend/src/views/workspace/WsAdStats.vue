@@ -264,6 +264,7 @@ import { RouterLink } from 'vue-router'
 import { errorText, jobProgressText, wsApi } from '../../api/web'
 import { askConfirm } from '../../composables/useConfirm'
 import { pushToast } from '../../composables/useToasts'
+import { undoAction } from '../../composables/useUndo'
 import { aiUsageText, formatDate, num, pct, plural, rub } from '../../utils/format'
 import { useWs } from './context'
 import HeadlinesPanel from './HeadlinesPanel.vue'
@@ -507,7 +508,16 @@ async function createAb() {
       `Добавлено ${n} ${plural(n, 'объявление', 'объявления', 'объявлений')}` +
       (moderate.value ? `, на модерацию — ${res.moderated}.` : ' черновиками.')
     doneErrors.value = res.errors || []
-    pushToast(done.value, res.errors?.length || res.moderate_errors?.length ? 'warn' : 'ok')
+    // После отката объявления удалены — снимаем отметку «добавлено» с их строк.
+    const sources = res.created.map((a) => a.source_ad_row_id)
+    pushToast(
+      done.value,
+      res.errors?.length || res.moderate_errors?.length ? 'warn' : 'ok',
+      undoAction(res, () => {
+        done.value = ''
+        created.value = new Set([...created.value].filter((id) => !sources.includes(id)))
+      }),
+    )
     for (const e of res.moderate_errors || []) pushToast(`Модерация: ${e}`, 'warn')
     const next = new Set(created.value)
     for (const a of res.created) {

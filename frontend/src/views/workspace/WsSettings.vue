@@ -20,11 +20,12 @@
           <div class="panel__head">
             <div>
               <h2>Цель и бюджет</h2>
-              <p class="hint">
+              <p v-if="expert || !ws.counter_name" class="hint">
                 Счётчик Метрики № {{ ws.counter_id }}{{ ws.counter_name ? ` · ${ws.counter_name}` : '' }}{{
-                  ws.counter_login ? ` · доступ через ${ws.counter_login}` : ''
+                  expert && ws.counter_login ? ` · доступ через ${ws.counter_login}` : ''
                 }}
               </p>
+              <p v-else class="hint">Счётчик Метрики «{{ ws.counter_name }}»</p>
             </div>
           </div>
           <p v-if="!ws.counter_ok" class="notice notice--warn">
@@ -46,8 +47,8 @@
               <small class="field-hint">Сервис предупредит, если деньги уходят быстрее плана.</small>
             </div>
             <div v-field class="field">
-              <label>KPI<TermHint term="kpi" /></label>
-              <UiSelect v-model="general.kpi_type" :options="KPI_OPTIONS" />
+              <label>{{ expert ? 'KPI' : 'Главный показатель' }}<TermHint term="kpi" /></label>
+              <UiSelect v-model="general.kpi_type" :options="kpiOptions" />
             </div>
             <div v-field class="field">
               <label>Целевое значение</label>
@@ -56,7 +57,7 @@
                 :digits="2"
                 :suffix="general.kpi_type === 'drr' ? '%' : general.kpi_type === 'cpa' ? '₽' : ''"
                 :disabled="!general.kpi_type"
-                :placeholder="general.kpi_type ? '' : 'сначала выберите KPI'"
+                :placeholder="general.kpi_type ? '' : 'сначала выберите показатель'"
               />
             </div>
             <div v-field class="field field--wide">
@@ -67,7 +68,13 @@
                   {{ goalsBusy ? 'Обновляем…' : 'Обновить цели' }}
                 </button>
               </div>
-              <small class="field-hint">Конверсии, CPA и ДРР в сводке и аналитике считаются по этой цели.</small>
+              <small class="field-hint">
+                {{
+                  expert
+                    ? 'Конверсии, CPA и ДРР в сводке и аналитике считаются по этой цели.'
+                    : 'Заявки и их цена в сводке и отчётах считаются по этой цели.'
+                }}
+              </small>
             </div>
             <p v-if="generalError" class="form-error field--wide">{{ generalError }}</p>
             <div class="form-actions field--wide">
@@ -607,11 +614,20 @@ function generalFromWs(w) {
 
 const general = reactive(generalFromWs(ws.value))
 
-const KPI_OPTIONS = [
-  { value: '', label: 'Не задан' },
-  { value: 'cpa', label: 'CPA — цена конверсии', hint: 'Сколько стоит одна заявка или покупка, ₽' },
-  { value: 'drr', label: 'ДРР — доля рекламных расходов', hint: 'Какая часть выручки уходит на рекламу, %' },
-]
+// В обычном режиме — без жаргона, термин в скобках подсказки.
+const kpiOptions = computed(() =>
+  expert.value
+    ? [
+        { value: '', label: 'Не задан' },
+        { value: 'cpa', label: 'CPA — цена конверсии', hint: 'Сколько стоит одна заявка или покупка, ₽' },
+        { value: 'drr', label: 'ДРР — доля рекламных расходов', hint: 'Какая часть выручки уходит на рекламу, %' },
+      ]
+    : [
+        { value: '', label: 'Не задан' },
+        { value: 'cpa', label: 'Цена заявки', hint: 'Сколько стоит одна заявка или покупка, ₽ (CPA)' },
+        { value: 'drr', label: 'Доля расходов на рекламу', hint: 'Какая часть выручки уходит на рекламу, % (ДРР)' },
+      ],
+)
 const goalOptions = computed(() => [
   { value: null, label: 'Все цели (сумма конверсий)' },
   ...(ws.value.goals || []).map((g) => ({ value: g.goal_id, label: g.name, hint: `№ ${g.goal_id}` })),
@@ -643,7 +659,7 @@ const generalChanged = computed(() => Object.keys(generalPayload.value).length >
 async function saveGeneral() {
   generalError.value = ''
   if (general.kpi_type && !(numOrNull(general.kpi_target) > 0)) {
-    generalError.value = 'Укажите целевое значение KPI больше нуля.'
+    generalError.value = 'Укажите целевое значение больше нуля.'
     return
   }
   generalBusy.value = true

@@ -2,11 +2,20 @@
   <div class="dshell" :class="{ 'is-drawer': drawer, 'is-expert': expert }">
     <aside ref="sideEl" class="dside" aria-label="Меню" :inert="narrow && !drawer" @click="closeDrawerOnLink">
       <div class="dside__scroll">
-        <RouterLink class="dside__brand" to="/cabinet" aria-label="Толк — главная">
-          <TolkMark :size="28" />
-          <span>толк</span>
-          <em v-if="expert" title="Включён экспертный режим">эксперт</em>
-        </RouterLink>
+        <div class="dside__head">
+          <RouterLink class="dside__brand" to="/cabinet" aria-label="Толк — главная">
+            <TolkMark :size="28" />
+            <span>толк</span>
+          </RouterLink>
+          <RouterLink
+            v-if="expert"
+            class="dside__mode"
+            to="/cabinet/settings/interface"
+            title="Включён экспертный режим — что он добавляет и как выключить"
+          >
+            эксперт
+          </RouterLink>
+        </div>
 
         <RouterLink v-if="accessOk" class="dside__newchat" :to="chatTo">
           <Plus aria-hidden="true" />
@@ -232,6 +241,21 @@
         <RouterLink class="btn btn--accent" to="/cabinet/plan" @click="upgrade = null">Все тарифы</RouterLink>
       </template>
     </Modal>
+    <Modal :open="hotkeysOpen" title="Горячие клавиши" @close="hotkeysOpen = false">
+      <dl class="hotkeys">
+        <template v-for="h in HOTKEYS" :key="h.text">
+          <dt>
+            <template v-for="(k, i) in h.keys" :key="k">
+              <span v-if="i">затем</span>
+              <kbd>{{ k }}</kbd>
+            </template>
+          </dt>
+          <dd>{{ h.text }}</dd>
+        </template>
+      </dl>
+      <p class="hint">Работают в экспертном режиме, когда курсор не в поле ввода.</p>
+    </Modal>
+    <UndoHost />
   </div>
 </template>
 
@@ -240,6 +264,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { RouterLink, RouterView, useRoute, useRouter } from 'vue-router'
 import { ChevronDown, Layers, Lock, Menu, MessageSquare, Moon, Plus, Settings, SlidersHorizontal, Sun, X } from '@lucide/vue'
 import TolkMark from './TolkMark.vue'
+import UndoHost from './UndoHost.vue'
 import LoadsIndicator from './LoadsIndicator.vue'
 import PlanOffers from './PlanOffers.vue'
 import ProfileMenu from './ProfileMenu.vue'
@@ -606,6 +631,59 @@ watch(accessOk, (ok, was) => {
 
 function onKey(event) {
   if (event.key === 'Escape') closeDrawer()
+  else onHotkey(event)
+}
+
+// Горячие клавиши экспертного режима. Буквы — по физической клавише (event.code), чтобы работали и в русской
+// раскладке; «/» и «?» — по символу или по клавише «/».
+const hotkeysOpen = ref(false)
+const HOTKEYS = [
+  { keys: ['/'], text: 'Поиск на странице' },
+  { keys: ['N'], text: 'Новый чат' },
+  { keys: ['G', 'H'], text: 'Главная' },
+  { keys: ['G', 'C'], text: 'Кампании' },
+  { keys: ['G', 'Q'], text: 'Запросы' },
+  { keys: ['?'], text: 'Этот список' },
+  { keys: ['Esc'], text: 'Закрыть окно или меню' },
+]
+const GO_TO = { KeyH: 'summary', KeyC: 'campaigns', KeyQ: 'queries' }
+const GO_WINDOW_MS = 1500
+let goPressedAt = 0
+
+function typingIn(el) {
+  return el instanceof HTMLElement && (el.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName))
+}
+
+function pageSearch() {
+  return [...document.querySelectorAll('.cabinet input[type="search"]')].find(
+    (el) => !el.disabled && el.getClientRects().length,
+  )
+}
+
+function onHotkey(event) {
+  if (!expert.value || event.defaultPrevented || event.repeat || event.isComposing) return
+  if (event.ctrlKey || event.metaKey || event.altKey || typingIn(event.target)) return
+  if (document.querySelector('[aria-modal="true"]')) return
+  const afterG = Date.now() - goPressedAt < GO_WINDOW_MS
+  goPressedAt = 0
+  const slashKey = event.code === 'Slash'
+  if (event.key === '?' || (slashKey && event.shiftKey)) {
+    event.preventDefault()
+    hotkeysOpen.value = true
+  } else if (event.key === '/' || slashKey) {
+    const input = pageSearch()
+    if (!input) return
+    event.preventDefault()
+    input.focus()
+    input.select()
+  } else if (afterG && GO_TO[event.code]) {
+    const to = sectionTo(SECTIONS.find((s) => s.key === GO_TO[event.code]), projectId.value)
+    if (to && accessOk.value) router.push(to)
+  } else if (event.code === 'KeyG') {
+    goPressedAt = Date.now()
+  } else if (event.code === 'KeyN' && accessOk.value) {
+    router.push(chatTo.value)
+  }
 }
 
 onMounted(() => {

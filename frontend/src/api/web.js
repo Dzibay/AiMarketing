@@ -46,6 +46,9 @@ export async function request(path, { token, ...options } = {}) {
     if (ownSession) notifyAccess(err)
     throw err
   }
+  // Действие оставило одну запись журнала с откатом — кабинет предложит «Отменить» (useUndo.undoAction).
+  const undoLog = Number(response.headers.get('X-Undo-Log'))
+  if (undoLog && body && typeof body === 'object' && !Array.isArray(body)) body.undo_log_id = undoLog
   return body
 }
 

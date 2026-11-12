@@ -192,6 +192,9 @@ export function kpiGoal(kpi) {
   return `цель ${kpi.type === 'cpa' ? rubles(kpi.target) : pct(kpi.target)}`
 }
 
+/** Обычный режим: показатель цели проекта без жаргона. Термин (CPA, ДРР) — в подсказке TermHint. */
+export const KPI_PLAIN = { cpa: 'Цена заявки', drr: 'Доля расходов на рекламу' }
+
 export function kpiTarget(kpi) {
   if (!kpi?.type) return 'KPI не задан'
   return `${kpi.type === 'cpa' ? 'CPA' : 'ДРР'}, ${kpiGoal(kpi)}`

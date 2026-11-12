@@ -176,7 +176,7 @@ def campaign_anomalies(
         found.append(
             {
                 "kind": "cpa_spike",
-                "title": f"CPA вырос в {round(cost / conversions / base_cpa, 1):g} раза",
+                "title": f"Цена заявки выросла в {round(cost / conversions / base_cpa, 1):g} раза",
                 "detail": f"Вчера {rub(cost / conversions)} при обычных {rub(base_cpa)}",
             }
         )
@@ -189,8 +189,8 @@ def campaign_anomalies(
             found.append(
                 {
                     "kind": "no_conversions",
-                    "title": "Расход без конверсий",
-                    "detail": f"Вчера {rub(cost)} и ни одной конверсии (CPA-ориентир {rub(threshold)})",
+                    "title": "Расход без заявок",
+                    "detail": f"Вчера {rub(cost)} и ни одной заявки (ориентир цены заявки {rub(threshold)})",
                 }
             )
     return found
@@ -575,12 +575,12 @@ def build_overview(user_id: int, today: date | None = None, now: datetime | None
             over = f"+{round((kpi['ratio'] - 1) * 100)}%"
             if kpi_type == "cpa":
                 title = (
-                    f"CPA за 7 дней {rub(kpi['value'])} при цели {rub(target * 100)} ({over})"
+                    f"Цена заявки за 7 дней {rub(kpi['value'])} при цели {rub(target * 100)} ({over})"
                     if kpi["value"] is not None
-                    else f"{rub(s['cost_7d'])} за 7 дней без конверсий при цели CPA {rub(target * 100)}"
+                    else f"{rub(s['cost_7d'])} за 7 дней без заявок при цели {rub(target * 100)} за заявку"
                 )
             else:
-                title = f"ДРР за 7 дней {kpi['value']:g}% при цели {target:g}% ({over})"
+                title = f"Доля расходов на рекламу за 7 дней {kpi['value']:g}% при цели {target:g}% ({over})"
             # Плохой KPI — не пожар (деньги не стоят), но первое, что разбирать после пожаров.
             problems.append(_problem("warning" if kpi["status"] == "bad" else "info", "kpi", title, **where))
         elif kpi_type == "drr" and s["cost_7d"] > 0 and not s["revenue_7d"]:
@@ -588,7 +588,7 @@ def build_overview(user_id: int, today: date | None = None, now: datetime | None
                 _problem(
                     "info",
                     "kpi",
-                    "Цель по ДРР задана, но дохода в отчётах Директа нет",
+                    "Цель по доле расходов на рекламу задана, но дохода в отчётах Директа нет",
                     "Проверьте ценность ключевых целей в кампаниях или передачу дохода из Метрики",
                     **where,
                 )

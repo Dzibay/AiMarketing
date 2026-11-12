@@ -150,6 +150,7 @@ import { computed, h, onMounted, ref, watch } from 'vue'
 import { errorText, jobProgressText, wsApi } from '../../api/web'
 import { askConfirm } from '../../composables/useConfirm'
 import { pushToast } from '../../composables/useToasts'
+import { undoAction } from '../../composables/useUndo'
 import { plural } from '../../utils/format'
 import { useWs } from './context'
 
@@ -285,6 +286,7 @@ async function fix(ids) {
     pushToast(
       `Исправлено — ${parts.join(', ')}` + (errors.length ? `. Не вышло: ${errors[0]}` : ''),
       errors.length ? 'error' : 'ok',
+      undoAction(res, load),
     )
     await load()
   } catch (err) {

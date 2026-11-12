@@ -298,6 +298,7 @@ import { RouterLink } from 'vue-router'
 import { errorText, jobProgressText, wsApi } from '../../api/web'
 import { askConfirm } from '../../composables/useConfirm'
 import { pushToast } from '../../composables/useToasts'
+import { undoAction } from '../../composables/useUndo'
 import { aiUsageText, delta, formatDate, num, pct, plural, rub } from '../../utils/format'
 import { useWs } from './context'
 import TermHint from '../../components/TermHint.vue'
@@ -545,7 +546,16 @@ async function excludeSelected() {
     )
     done.value = `Запрещено площадок: ${res.sites} в ${res.applied} ${plural(res.applied, 'кампании', 'кампаниях', 'кампаниях')}.`
     doneErrors.value = res.errors || []
-    pushToast(done.value, res.errors?.length ? 'warn' : 'ok')
+    const keys = rows.map((r) => r.key)
+    pushToast(
+      done.value,
+      res.errors?.length ? 'warn' : 'ok',
+      // После отката площадки снова разрешены — снимаем с их строк отметку «запрещено».
+      undoAction(res, () => {
+        done.value = ''
+        excluded.value = new Set([...excluded.value].filter((k) => !keys.includes(k)))
+      }),
+    )
     const failed = new Set((res.errors || []).map((e) => e.campaign_row_id))
     const next = new Set(excluded.value)
     for (const r of rows) if (!r.campaigns.some((c) => failed.has(c.campaign_row_id))) next.add(r.key)
@@ -586,7 +596,7 @@ async function applyAdjust() {
     )
     done.value = `Корректировки обновлены в ${res.applied} ${plural(res.applied, 'кампании', 'кампаниях', 'кампаниях')}.`
     doneErrors.value = res.errors || []
-    pushToast(done.value, res.errors?.length ? 'warn' : 'ok')
+    pushToast(done.value, res.errors?.length ? 'warn' : 'ok', undoAction(res, loadReport))
     for (const c of list) {
       const r = items.value.find((i) => i.key === c.key)
       if (r) {

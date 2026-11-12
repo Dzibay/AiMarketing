@@ -399,6 +399,7 @@ import AdExtrasFields from './AdExtrasFields.vue'
 import { emptyExtras, extrasDiff, extrasEmpty, extrasFromApi, extrasPayload, extrasProblem } from '../utils/adExtras'
 import { errorText, jobProgressText, webApi, wsApi } from '../api/web'
 import { pushToast } from '../composables/useToasts'
+import { undoAction } from '../composables/useUndo'
 import { CAMPAIGN_STATES, CAMPAIGN_STATUSES, formatDate, formatDateTime, num, rub, rubles } from '../utils/format'
 import { Plus } from '@lucide/vue'
 
@@ -623,8 +624,8 @@ function bulkQueryAction(action) {
   if (action === 'add_keyword' && selectedGroup.value) payload.adgroup_row_id = Number(selectedGroup.value)
   return run(async () => {
     const res = await webApi.searchQueryActions(payload)
-    pushToast(`Готово: ${res.applied || 0}${res.skipped ? `, пропущено: ${res.skipped}` : ''}`)
-    await Promise.all([load(), loadSearchQueries()])
+    pushToast(`Готово: ${res.applied || 0}${res.skipped ? `, пропущено: ${res.skipped}` : ''}`, 'info', undoAction(res, reloadWithQueries))
+    await reloadWithQueries()
   })
 }
 
@@ -635,9 +636,9 @@ function addQueryKeyword(q) {
     return
   }
   return run(async () => {
-    await webApi.searchQueryAddKeyword(q.id, { adgroup_row_id: Number(adgroupId) })
-    pushToast('Добавлено в ключевые фразы')
-    await Promise.all([load(), loadSearchQueries()])
+    const res = await webApi.searchQueryAddKeyword(q.id, { adgroup_row_id: Number(adgroupId) })
+    pushToast('Добавлено в ключевые фразы', 'info', undoAction(res, reloadWithQueries))
+    await reloadWithQueries()
   })
 }
 
@@ -647,22 +648,32 @@ function addQueryNegative(q, scope) {
     return
   }
   return run(async () => {
-    await webApi.searchQueryAddNegative(q.id, { scope })
-    pushToast(scope === 'campaign' ? 'Добавлено в минус-фразы кампании' : 'Добавлено в минус-фразы группы')
-    await Promise.all([load(), loadSearchQueries()])
+    const res = await webApi.searchQueryAddNegative(q.id, { scope })
+    pushToast(
+      scope === 'campaign' ? 'Добавлено в минус-фразы кампании' : 'Добавлено в минус-фразы группы',
+      'info',
+      undoAction(res, reloadWithQueries),
+    )
+    await reloadWithQueries()
   })
+}
+
+function reloadWithQueries() {
+  return Promise.all([load(), loadSearchQueries()])
 }
 
 function createGroup() {
   if (!groupForm.name) return
   return run(async () => {
     const hadGroups = adgroups.value.length > 0
-    await webApi.createAdGroup(props.campaignId, { name: groupForm.name })
+    const res = await webApi.createAdGroup(props.campaignId, { name: groupForm.name })
     groupForm.name = ''
     pushToast(
       hadGroups
         ? 'Группа создана с регионами первой группы кампании (поменять можно в Директе)'
         : 'Группа создана (регион — Россия, поменять можно в Директе)',
+      'info',
+      undoAction(res, load),
     )
     await load()
   })
@@ -672,7 +683,8 @@ async function renameGroup(g) {
   const name = await askText('Название группы', { title: 'Переименовать группу', value: g.name, required: true })
   if (!name || !name.trim() || name.trim() === g.name) return
   return run(async () => {
-    await webApi.patchAdGroup(g.id, { name: name.trim() })
+    const res = await webApi.patchAdGroup(g.id, { name: name.trim() })
+    pushToast('Группа переименована', 'info', undoAction(res, load))
     await load()
   })
 }
@@ -680,9 +692,9 @@ async function renameGroup(g) {
 async function removeGroup(g) {
   if (!await askConfirm(`Удалить группу «${g.name}» в Директе вместе с объявлениями и фразами?`)) return
   return run(async () => {
-    await webApi.deleteAdGroups([g.id])
+    const res = await webApi.deleteAdGroups([g.id])
     if (selectedGroup.value === g.id) selectedGroup.value = null
-    pushToast('Группа удалена')
+    pushToast('Группа удалена', 'info', undoAction(res, load))
     await load()
   })
 }
@@ -690,8 +702,8 @@ async function removeGroup(g) {
 function saveNegatives() {
   if (!selectedGroup.value) return
   return run(async () => {
-    await webApi.patchAdGroup(selectedGroup.value, { negative_text: negForm.text })
-    pushToast('Минус-фразы группы сохранены')
+    const res = await webApi.patchAdGroup(selectedGroup.value, { negative_text: negForm.text })
+    pushToast('Минус-фразы группы сохранены', 'info', undoAction(res, load))
     await load()
   })
 }
@@ -745,14 +757,17 @@ function saveAd() {
       : { title: adForm.title, title2: adForm.title2, text: adForm.text, href: adForm.href }
     if (changed) fields.extras = changed
     else if (editable && !adModal.item && !extrasEmpty(adExtras)) fields.extras = extrasPayload(adExtras)
-    if (adModal.item) await webApi.patchAd(adModal.item.id, fields)
-    else await webApi.createAd({ adgroup_row_id: Number(adForm.adgroup_row_id), ...fields })
+    const res = adModal.item
+      ? await webApi.patchAd(adModal.item.id, fields)
+      : await webApi.createAd({ adgroup_row_id: Number(adForm.adgroup_row_id), ...fields })
     pushToast(
       !adModal.item
         ? 'Объявление создано черновиком'
         : adModal.item.status === 'DRAFT'
           ? 'Черновик объявления обновлён'
           : 'Объявление обновлено — уйдёт на модерацию',
+      'info',
+      undoAction(res, load),
     )
     adModal.open = false
     await load()
@@ -765,7 +780,7 @@ async function adAction(action) {
   if (action === 'delete' && !await askConfirm(`Удалить объявлений: ${ids.length}?`)) return
   return run(async () => {
     const res = await webApi.adActions({ ad_ids: ids, action })
-    pushToast(`Готово: ${res.applied}`)
+    pushToast(`Готово: ${res.applied}`, 'info', undoAction(res, load))
     await load()
   })
 }
@@ -781,7 +796,7 @@ function createKeywords() {
     const res = await webApi.createKeywords(payload)
     kwForm.text = ''
     kwForm.bid_rub = ''
-    pushToast(`Добавлено фраз: ${res.created || 0}`)
+    pushToast(`Добавлено фраз: ${res.created || 0}`, 'info', undoAction(res, load))
     await load()
   })
 }
@@ -801,8 +816,8 @@ async function editKeywordBid(kw) {
     return
   }
   return run(async () => {
-    await webApi.patchKeyword(kw.id, { bid_rub: bid })
-    pushToast('Ставка обновлена')
+    const res = await webApi.patchKeyword(kw.id, { bid_rub: bid })
+    pushToast('Ставка обновлена', 'info', undoAction(res, load))
     await load()
   })
 }
@@ -811,8 +826,8 @@ async function editKeywordText(kw) {
   const text = await askText('Ключевая фраза', { title: 'Изменить фразу', value: kw.keyword, required: true })
   if (text == null || !text.trim() || text.trim() === kw.keyword) return
   return run(async () => {
-    await webApi.patchKeyword(kw.id, { keyword: text.trim() })
-    pushToast('Фраза обновлена')
+    const res = await webApi.patchKeyword(kw.id, { keyword: text.trim() })
+    pushToast('Фраза обновлена', 'info', undoAction(res, load))
     await load()
   })
 }
@@ -823,7 +838,7 @@ async function keywordAction(action) {
   if (action === 'delete' && !await askConfirm(`Удалить фраз: ${ids.length}?`)) return
   return run(async () => {
     const res = await webApi.keywordActions({ keyword_ids: ids, action })
-    pushToast(`Готово: ${res.applied}`)
+    pushToast(`Готово: ${res.applied}`, 'info', undoAction(res, load))
     await load()
   })
 }

@@ -7,7 +7,7 @@
         v-model="text"
         rows="2"
         maxlength="4000"
-        placeholder="Например: почему вырос CPA на этой неделе?"
+        placeholder="Например: почему подорожали заявки на этой неделе?"
         aria-label="Вопрос ИИ"
         @keydown.enter.exact.prevent="submit()"
       />
@@ -66,7 +66,7 @@ const presets = computed(() =>
         { ask: 'first', label: 'С чего начать', icon: Sparkles },
         { ask: 'cleanup', label: 'Почистить запросы', icon: SearchCheck },
         { ask: 'analytics', label: 'Сравнить проекты', icon: TrendingUp },
-        { ask: 'kpi', label: 'Проверить цели и KPI', icon: Target },
+        { ask: 'kpi', label: 'Проверить цели проектов', icon: Target },
       ],
 )
 

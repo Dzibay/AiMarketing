@@ -32,7 +32,7 @@
       </h2>
       <div class="bigstats">
         <div v-for="t in weekTiles" :key="t.label" class="bigstat">
-          <span>{{ t.label }}</span>
+          <span>{{ t.label }}<TermHint v-if="t.term" :term="t.term" /></span>
           <b>{{ t.value }}</b>
           <small :class="t.tone">{{ t.note }}</small>
         </div>
@@ -313,12 +313,14 @@ import { useExpert } from '../composables/useExpert'
 import { pushToast } from '../composables/useToasts'
 import { useWorkspaces } from '../composables/useWorkspaces'
 import { useHead } from '../utils/useHead'
+import { leadWord } from '../utils/campaignHealth'
 import {
   asOfNote,
   balanceTone,
   BUDGET_TONES,
   daysShort,
   KPI_TONES,
+  KPI_PLAIN,
   kpiTarget,
   kpiValue,
   num,
@@ -403,9 +405,10 @@ const weekTiles = computed(() => {
   const c = weekChange.value
   return [
     { label: 'Потрачено', value: rub(t.spend_7d), ...versus(c.cost, 'больше', 'меньше', true) },
-    { label: 'Конверсии', value: num(t.conversions_7d || 0), ...versus(c.conv, 'больше', 'меньше') },
+    { label: 'Заявки', term: 'leads', value: num(t.conversions_7d || 0), ...versus(c.conv, 'больше', 'меньше') },
     {
-      label: 'Цена конверсии',
+      label: 'Цена заявки',
+      term: 'cpa',
       value: t.conversions_7d ? rub(t.spend_7d / t.conversions_7d) : '—',
       ...versus(c.cpa, 'дороже', 'дешевле', true),
     },
@@ -430,9 +433,9 @@ const projectCards = computed(() =>
       else if (w.kpi?.type && w.kpi.value != null) {
         const k = w.kpi
         const target = k.target == null ? '' : `, цель ${k.type === 'cpa' ? rubles(k.target) : pct(k.target)}`
-        verdict = `${k.type === 'cpa' ? 'CPA' : 'ДРР'} за неделю ${kpiValue(k)}${target}`
+        verdict = `${KPI_PLAIN[k.type]} за неделю — ${kpiValue(k)}${target}`
       }
-      else if (w.spend_7d) verdict = `${rub(w.spend_7d)} за неделю, ${num(w.conversions_7d || 0)} конв.`
+      else if (w.spend_7d) verdict = `${rub(w.spend_7d)} за неделю, ${num(w.conversions_7d || 0)} ${leadWord(w.conversions_7d || 0)}`
       else verdict = 'За неделю расхода не было'
       return { ...w, status, verdict }
     })

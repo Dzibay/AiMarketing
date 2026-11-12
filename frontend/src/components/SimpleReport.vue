@@ -18,7 +18,7 @@
     <p class="meta-note simple-report__dates">{{ formatDate(data.date_from) }} — {{ formatDate(data.date_to) }}</p>
     <div class="bigstats" :class="{ 'is-loading': loading }">
       <div v-for="t in tiles" :key="t.label" class="bigstat">
-        <span>{{ t.label }}</span>
+        <span>{{ t.label }}<TermHint v-if="t.term" :term="t.term" /></span>
         <b>{{ t.value }}</b>
         <small :class="t.tone">{{ t.note }}</small>
       </div>
@@ -59,8 +59,9 @@ import { RouterLink } from 'vue-router'
 import { Sparkles } from '@lucide/vue'
 import TrendChart from './TrendChart.vue'
 import ExpertHint from './ExpertHint.vue'
-import { formatDate, kpiTarget, num, pct, rub } from '../utils/format'
-import { convWord } from '../utils/campaignHealth'
+import TermHint from './TermHint.vue'
+import { formatDate, kpiGoal, num, pct, rub } from '../utils/format'
+import { leadWord } from '../utils/campaignHealth'
 
 const PERIODS = [
   { key: 7, label: '7 дней' },
@@ -101,15 +102,15 @@ const tiles = computed(() => {
   const kpi = d.kpi?.type ? d.kpi : null
   const drr = kpi?.type === 'drr'
   const third = drr
-    ? { label: 'Доля расходов на рекламу', value: t.drr != null ? pct(t.drr) : '—', ...change(c.drr, 'больше', 'меньше', true) }
-    : { label: 'Цена конверсии', value: t.cpa_kopecks != null ? rub(t.cpa_kopecks) : '—', ...change(c.cpa_kopecks, 'дороже', 'дешевле', true) }
+    ? { label: 'Доля расходов на рекламу', term: 'drr', value: t.drr != null ? pct(t.drr) : '—', ...change(c.drr, 'больше', 'меньше', true) }
+    : { label: 'Цена заявки', term: 'cpa', value: t.cpa_kopecks != null ? rub(t.cpa_kopecks) : '—', ...change(c.cpa_kopecks, 'дороже', 'дешевле', true) }
   if (kpi) {
-    third.note = kpiTarget(kpi)
+    third.note = kpiGoal(kpi)
     third.tone = kpi.status === 'ok' ? 'is-ok' : kpi.status === 'none' ? '' : 'is-warn'
   }
   return [
     { label: 'Потрачено', value: rub(t.cost_kopecks), ...change(c.cost_kopecks, 'больше', 'меньше', true) },
-    { label: 'Конверсии', value: num(t.conversions), ...change(c.conversions, 'больше', 'меньше') },
+    { label: 'Заявки', term: 'leads', value: num(t.conversions), ...change(c.conversions, 'больше', 'меньше') },
     third,
   ]
 })
@@ -125,7 +126,7 @@ const bars = computed(() => {
     share: Math.max(1, (c.cost_kopecks / max) * 100).toFixed(1),
     note: [
       c.where,
-      c.conversions ? `${num(c.conversions)} ${convWord(c.conversions)} по ${rub(c.cpa_kopecks)}` : 'конверсий нет',
+      c.conversions ? `${num(c.conversions)} ${leadWord(c.conversions)} по ${rub(c.cpa_kopecks)}` : 'заявок нет',
     ]
       .filter(Boolean)
       .join(' · '),

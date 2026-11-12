@@ -18,7 +18,7 @@
     </h2>
     <div class="bigstats">
       <div v-for="t in weekTiles" :key="t.label" class="bigstat">
-        <span>{{ t.label }}</span>
+        <span>{{ t.label }}<TermHint v-if="t.term" :term="t.term" /></span>
         <b>{{ t.value }}</b>
         <small :class="t.tone">
           <RouterLink v-if="t.settings" :to="`/w/${ws.id}/settings`">{{ t.note }}</RouterLink>
@@ -40,7 +40,7 @@
         <div class="crow__health">{{ c.health.text }}</div>
         <div class="crow__num">
           <b>{{ rub(c.cost_kopecks) }}</b>
-          <small>{{ num(c.conversions) }} {{ convWord(c.conversions) }}</small>
+          <small>{{ num(c.conversions) }} {{ leadWord(c.conversions) }}</small>
         </div>
         <span class="st" :class="`st--${c.health.id}`">
           <component :is="HEALTH_BADGE[c.health.id].icon" :size="14" aria-hidden="true" />
@@ -246,11 +246,12 @@ import MetricGrid from '../../components/MetricGrid.vue'
 import PendingDecisions from '../../components/PendingDecisions.vue'
 import ProblemList from '../../components/ProblemList.vue'
 import SignalCards from '../../components/SignalCards.vue'
+import TermHint from '../../components/TermHint.vue'
 import TrendChart from '../../components/TrendChart.vue'
 import PageHeader from '../../components/ui/PageHeader.vue'
 import UiSelect from '../../components/ui/UiSelect.vue'
 import { useExpert } from '../../composables/useExpert'
-import { campaignHealth, convWord } from '../../utils/campaignHealth'
+import { campaignHealth, leadWord } from '../../utils/campaignHealth'
 import { errorText, jobProgressText, webApi, wsApi } from '../../api/web'
 import { pushToast } from '../../composables/useToasts'
 import {
@@ -266,7 +267,6 @@ import {
   formatDate,
   formatDateTime,
   kpiGoal,
-  kpiTarget,
   kpiValue,
   num,
   pct,
@@ -334,10 +334,10 @@ const weekTiles = computed(() => {
   const kpi = w.kpi?.type ? w.kpi : null
   const third =
     kpi?.type === 'drr'
-      ? { label: 'Доля расходов на рекламу', value: t.drr != null ? pct(t.drr) : kpiValue(kpi), ...versus(c.drr, 'больше', 'меньше', true) }
-      : { label: 'Цена конверсии', value: rub(t.cpa_kopecks), ...versus(c.cpa_kopecks, 'дороже', 'дешевле', true) }
+      ? { label: 'Доля расходов на рекламу', term: 'drr', value: t.drr != null ? pct(t.drr) : kpiValue(kpi), ...versus(c.drr, 'больше', 'меньше', true) }
+      : { label: 'Цена заявки', term: 'cpa', value: rub(t.cpa_kopecks), ...versus(c.cpa_kopecks, 'дороже', 'дешевле', true) }
   if (kpi) {
-    third.note = kpiTarget(kpi)
+    third.note = kpiGoal(kpi)
     third.tone = kpi.status === 'ok' ? 'is-ok' : kpi.status === 'none' ? '' : 'is-warn'
   } else {
     third.note = 'цель не задана — задать'
@@ -347,7 +347,7 @@ const weekTiles = computed(() => {
   const days = r.days_on_balance
   return [
     { label: 'Потрачено', value: rub(t.cost_kopecks), ...versus(c.cost_kopecks, 'больше', 'меньше', true) },
-    { label: 'Конверсии', value: num(t.conversions || 0), ...versus(c.conversions, 'больше', 'меньше') },
+    { label: 'Заявки', term: 'leads', value: num(t.conversions || 0), ...versus(c.conversions, 'больше', 'меньше') },
     third,
     {
       label: 'Деньги в Директе',
