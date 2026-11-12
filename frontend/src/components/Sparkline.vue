@@ -8,13 +8,19 @@
   >
     <defs>
       <linearGradient :id="gradId" x1="0" y1="0" x2="0" y2="1">
-        <stop offset="0%" :style="{ stopColor: color, stopOpacity: 0.22 }" />
+        <stop offset="0%" :style="{ stopColor: color, stopOpacity: 0.12 }" />
         <stop offset="100%" :style="{ stopColor: color, stopOpacity: 0 }" />
       </linearGradient>
     </defs>
     <path v-if="prevLine" class="is-prev" :d="prevLine" vector-effect="non-scaling-stroke" />
     <path :d="area" :fill="`url(#${gradId})`" />
     <path class="is-line" :d="line" :style="{ stroke: color }" vector-effect="non-scaling-stroke" />
+    <!-- Последний день — точкой. SVG растянут по ширине, поэтому круг рисуем круглым концом штриха нулевой
+         длины: non-scaling-stroke держит его круглым при любой ширине. -->
+    <template v-if="dot">
+      <path class="is-dot-ring" :d="dot" vector-effect="non-scaling-stroke" />
+      <path class="is-dot" :d="dot" :style="{ stroke: color }" vector-effect="non-scaling-stroke" />
+    </template>
   </svg>
 </template>
 
@@ -27,7 +33,8 @@ const props = defineProps({
   /** Предыдущий период той же длины — бледный пунктир под основной линией. */
   prevPoints: { type: Array, default: () => [] },
   valueKey: { type: String, default: 'cost_kopecks' },
-  color: { type: String, default: 'var(--accent)' },
+  // Один цвет на все плитки — чернила; цвет значит оценку, а у линии её нет.
+  color: { type: String, default: 'var(--ink)' },
   height: { type: Number, default: 46 },
 })
 
@@ -51,5 +58,10 @@ function toPlot(list) {
 
 const line = computed(() => linePath(toPlot(values.value)))
 const area = computed(() => areaPath(toPlot(values.value), props.height))
+const dot = computed(() => {
+  const pts = toPlot(values.value)
+  const last = [...pts].reverse().find((p) => p.y !== null)
+  return last ? `M${last.x.toFixed(1)},${last.y.toFixed(1)}h0.01` : ''
+})
 const prevLine = computed(() => (prevValues.value.some((v) => v !== null) ? linePath(toPlot(prevValues.value)) : ''))
 </script>

@@ -352,34 +352,46 @@ def _spend_fields(s: dict[str, int]) -> dict:
     }
 
 
-def _budget_problems(budget: dict | None, where: dict, *, label: str = "") -> list[dict]:
-    if not budget:
-        return []
-    prefix = f"{label}: " if label else ""
-    plan = f"бюджет {rub(budget['budget_kopecks'])}, потрачено {rub(budget['spent_kopecks'])}"
+def _approx_rub(kopecks: int) -> str:
+    """Прогноз — не точная сумма: «~322 000 ₽», до тысяч рублей (до сотен — у маленьких сумм)."""
+    step = 100_000 if kopecks >= 1_000_000 else 10_000
+    return "~" + rub(round(kopecks / step) * step)
+
+
+def _sentence(text: str) -> str:
+    return text[:1].upper() + text[1:]
+
+
+def budget_texts(budget: dict) -> tuple[str, str] | None:
+    """Заголовок и пояснение проблемы бюджета человеческими словами — в рублях, а не в процентах темпа."""
+    spent = f"С начала месяца потрачено {rub(budget['spent_kopecks'])}"
     if budget["status"] == "exhausted":
-        return [_problem("warning", "budget", f"{prefix}месячный бюджет исчерпан".capitalize(), plan, **where)]
+        return "месячный бюджет исчерпан", f"{spent} при бюджете {rub(budget['budget_kopecks'])}"
+    forecast = budget.get("forecast_kopecks")
+    if forecast is None:
+        return None
+    daily = rub(budget["daily_allowed_kopecks"])
     if budget["status"] == "over":
-        return [
-            _problem(
-                "warning",
-                "budget",
-                f"{prefix}перерасход: прогноз {budget['pace_pct']}% бюджета".capitalize(),
-                f"{plan}; чтобы уложиться — до {rub(budget['daily_allowed_kopecks'])} в день",
-                **where,
-            )
-        ]
+        return (
+            f"к концу месяца уйдёт {_approx_rub(forecast)} при бюджете {rub(budget['budget_kopecks'])}",
+            f"{spent}; чтобы уложиться, тратьте до {daily} в день",
+        )
     if budget["status"] == "under":
-        return [
-            _problem(
-                "info",
-                "budget",
-                f"{prefix}недорасход: прогноз {budget['pace_pct']}% бюджета".capitalize(),
-                f"{plan}; можно тратить до {rub(budget['daily_allowed_kopecks'])} в день",
-                **where,
-            )
-        ]
-    return []
+        return (
+            f"к концу месяца уйдёт лишь {_approx_rub(forecast)} из бюджета {rub(budget['budget_kopecks'])}",
+            f"{spent}; можно тратить до {daily} в день",
+        )
+    return None
+
+
+def _budget_problems(budget: dict | None, where: dict, *, label: str = "") -> list[dict]:
+    texts = budget_texts(budget) if budget else None
+    if not texts:
+        return []
+    title, detail = texts
+    title = f"{label}: {title}" if label else _sentence(title)
+    severity = "info" if budget["status"] == "under" else "warning"
+    return [_problem(severity, "budget", title, detail, **where)]
 
 
 def build_overview(user_id: int, today: date | None = None, now: datetime | None = None) -> dict:

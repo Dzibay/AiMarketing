@@ -19,9 +19,8 @@
       <p v-if="s.note">{{ s.note }}</p>
       <div class="sig__acts">
         <RouterLink v-if="s.link" class="btn btn--accent" :to="s.link.to">{{ s.link.label }}</RouterLink>
-        <button class="btn btn--ghost" type="button" title="Спросить ИИ об этом" @click="ask(s)">
-          <Sparkles :size="15" aria-hidden="true" />
-          Спросить
+        <button class="sig__ask" type="button" title="Спросить ИИ об этом" aria-label="Спросить ИИ об этом" @click="ask(s)">
+          <Sparkles :size="16" aria-hidden="true" />
         </button>
       </div>
     </article>
@@ -116,7 +115,7 @@ function ask(s) {
 }
 .sigs {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
   gap: 12px;
 }
 .sig {
@@ -156,11 +155,39 @@ function ask(s) {
 }
 .sig__acts {
   display: flex;
-  flex-wrap: wrap;
   align-items: center;
   gap: 8px;
   margin-top: auto;
   padding-top: 14px;
+}
+.sig__acts .btn {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* «Спросить ИИ» — квадратная кнопка-иконка справа, чтобы главное действие не делило с ней ширину. */
+.sig__ask {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  margin-left: auto;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: var(--surface);
+  color: var(--ink-2);
+  cursor: pointer;
+}
+.sig__ask:hover {
+  border-color: var(--ink);
+  color: var(--ink);
+}
+.sig__ask:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: 2px;
 }
 .sig__hide {
   display: grid;

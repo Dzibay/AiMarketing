@@ -1,12 +1,14 @@
 <template>
   <HomeAsk />
 
-  <div v-if="expert" class="page-actions">
-    <p class="page-lead">Все проекты на одном экране: расход, KPI, бюджет, баланс и что требует внимания.</p>
-    <button class="btn btn--accent" type="button" :disabled="refreshing || loading" @click="refresh">
-      {{ refreshing ? 'Обновляем…' : 'Обновить расход за сегодня' }}
-    </button>
-  </div>
+  <PageHeader v-if="expert && rows.length">
+    <template #actions>
+      <button class="btn btn--ghost" type="button" :disabled="refreshing || loading" @click="refresh">
+        <RefreshCw aria-hidden="true" />
+        {{ refreshing ? 'Обновляем…' : 'Обновить расход за сегодня' }}
+      </button>
+    </template>
+  </PageHeader>
 
   <OnboardingChecklist @advanced="load" />
 
@@ -60,227 +62,194 @@
     </section>
 
     <template v-else>
-      <p class="sync-status overview-updated">
-        <template v-if="refreshing">{{ refreshText }}</template>
-        <template v-else-if="data.today_updated_at">
-          Расход за сегодня — на {{ formatDateTime(data.today_updated_at) }}, Директ отдаёт его с задержкой.
-        </template>
-        <template v-else>Расход за сегодня ещё не загружался — нажмите «Обновить».</template>
-      </p>
+      <p v-if="refreshing" class="sync-status overview-updated">{{ refreshText }}</p>
 
-      <div class="stats-grid">
-        <div class="stat-card">
-          <div class="stat-card__head">
-            <span class="stat-card__icon"><CalendarClock aria-hidden="true" /></span>
-            <small>Сегодня</small>
-          </div>
-          <strong>{{ rub(totals.spend_today) }}</strong>
-          <span v-if="weekAgo.today" class="cell-note">
-            {{ WEEKDAY_LAST[weekdayOf(weekAgo.today.day)] }} — {{ rub(weekAgo.today.cost_kopecks) }} за день
-          </span>
-        </div>
-        <div class="stat-card">
-          <div class="stat-card__head">
-            <span class="stat-card__icon is-teal"><Wallet aria-hidden="true" /></span>
-            <small>Вчера</small>
-          </div>
-          <div class="stat-card__value">
-            <strong>{{ rub(totals.spend_yesterday) }}</strong>
-            <span v-if="yesterdayChange != null" class="delta" :class="deltaTone(yesterdayChange, true)">
-              {{ delta(yesterdayChange) }}
-            </span>
-          </div>
-          <span v-if="weekAgo.yesterday" class="cell-note">
-            {{ WEEKDAY_TO_LAST[weekdayOf(weekAgo.yesterday.day)] }} — {{ rub(weekAgo.yesterday.cost_kopecks) }}
-          </span>
-        </div>
-        <div class="stat-card">
-          <div class="stat-card__head">
-            <span class="stat-card__icon"><Target aria-hidden="true" /></span>
-            <small>Конверсии вчера</small>
-          </div>
-          <strong>{{ num(totals.conversions_yesterday || 0) }}</strong>
-          <span class="cell-note">по дням за неделю</span>
-          <Sparkline :points="lastWeek" :prev-points="prevWeek" value-key="conversions" />
-        </div>
-        <div class="stat-card">
-          <div class="stat-card__head">
-            <span class="stat-card__icon is-blue"><Coins aria-hidden="true" /></span>
-            <small>7 дней</small>
-          </div>
-          <div class="stat-card__value">
-            <strong>{{ rub(totals.spend_7d) }}</strong>
-            <span v-if="weekChange.cost != null" class="delta" :class="deltaTone(weekChange.cost, true)">
-              {{ delta(weekChange.cost) }}
-            </span>
-          </div>
-          <span class="cell-note">к прошлой неделе</span>
-          <Sparkline :points="lastWeek" :prev-points="prevWeek" value-key="cost_kopecks" color="var(--c-blue)" />
-        </div>
-        <div class="stat-card">
-          <div class="stat-card__head">
-            <span class="stat-card__icon is-amber"><Crosshair aria-hidden="true" /></span>
-            <small>CPA 7 дней</small>
-          </div>
-          <div class="stat-card__value">
-            <strong>{{ totals.conversions_7d ? rub(totals.spend_7d / totals.conversions_7d) : '—' }}</strong>
-            <span v-if="weekChange.cpa != null" class="delta" :class="deltaTone(weekChange.cpa, true)">
-              {{ delta(weekChange.cpa) }}
-            </span>
-          </div>
-          <span class="cell-note">к прошлой неделе</span>
-          <Sparkline :points="lastWeek" :prev-points="prevWeek" value-key="cpa_kopecks" color="var(--c-amber)" />
-        </div>
-        <button
-          class="stat-card stat-card--action"
-          type="button"
-          :disabled="!fireCount"
-          :aria-pressed="onlyProblems"
-          @click="toggleOnlyProblems"
-        >
-          <span class="stat-card__head">
-            <span class="stat-card__icon" :class="fireCount ? 'is-danger' : ''"><TriangleAlert aria-hidden="true" /></span>
-            <small>Горит</small>
-          </span>
-          <strong :class="fireCount ? 'tone-bad' : 'tone-ok'">{{ fireCount }}</strong>
-          <span class="cell-note">
-            {{ fireCount ? `${plural(fireCount, 'проблема требует', 'проблемы требуют', 'проблем требуют')} внимания` : 'всё спокойно' }}
-          </span>
-          <span v-if="fireCount" class="stat-card__action">
-            {{ onlyProblems ? 'Показать все проекты' : 'Показать только их' }}
-          </span>
-        </button>
+      <div class="ktiles">
+        <KpiTile label="Сегодня" :value="rub(totals.spend_today)" :note="todayNote" />
+        <KpiTile
+          label="Вчера"
+          :value="rub(totals.spend_yesterday)"
+          :change="yesterdayChange"
+          :versus="yesterdayVersus"
+          :note="yesterdayVersus"
+        />
+        <KpiTile
+          label="Расход 7 дней"
+          :value="rub(totals.spend_7d)"
+          :change="weekChange.cost"
+          versus="к прошлым 7 дням"
+          note="к прошлым 7 дням"
+          :points="lastWeek"
+          :prev-points="prevWeek"
+          value-key="cost_kopecks"
+        />
+        <KpiTile
+          label="Конверсии 7 дней"
+          :value="num(totals.conversions_7d || 0)"
+          :change="weekChange.conv"
+          good="up"
+          versus="к прошлым 7 дням"
+          note="к прошлым 7 дням"
+          :points="lastWeek"
+          :prev-points="prevWeek"
+          value-key="conversions"
+        />
+        <KpiTile
+          label="CPA 7 дней"
+          :value="totals.conversions_7d ? rub(totals.spend_7d / totals.conversions_7d) : '—'"
+          :change="weekChange.cpa"
+          good="down"
+          versus="к прошлым 7 дням"
+          note="к прошлым 7 дням"
+          :points="lastWeek"
+          :prev-points="prevWeek"
+          value-key="cpa_kopecks"
+        />
       </div>
 
-      <section ref="spacesPanel" class="panel overview-spaces">
+      <section class="panel overview-spaces">
         <div class="panel__head">
-          <h2>Проекты</h2>
-          <div class="filters filters--inline">
-            <input v-model="search" type="search" placeholder="Сайт или клиент" aria-label="Поиск по проектам" />
-            <label class="check-row">
-              <input v-model="onlyProblems" type="checkbox" />
-              Только с проблемами
-            </label>
-          </div>
+          <h2>Проекты <span class="cgroup__n">{{ projectCount }}</span></h2>
         </div>
-        <p class="hint">
-          KPI — за 7 дней против цели, темп — прогноз расхода месяца против бюджета, баланс — на сколько дней
-          хватит при расходе последней недели. Клик по строке открывает проект.
-        </p>
-        <p v-if="!visibleFolders.length" class="empty">Нет проектов под фильтр.</p>
+        <div class="ltools" role="search">
+          <label class="ltools__search">
+            <Search aria-hidden="true" />
+            <input v-model.trim="search" type="search" placeholder="Сайт или клиент" aria-label="Поиск по проектам" />
+          </label>
+          <label class="switch ltools__switch">
+            <input v-model="onlyProblems" type="checkbox" :disabled="!problemProjects && !onlyProblems" />
+            <span>С проблемами</span>
+            <span class="seg__n">{{ problemProjects }}</span>
+          </label>
+        </div>
+        <p v-if="!tableItems.length" class="empty">Нет проектов под фильтр.</p>
         <div v-else class="table-scroll">
           <table class="table overview-table">
             <thead>
               <tr>
-                <th>Сайт</th>
-                <th class="num">Сегодня</th>
-                <th class="num">Вчера</th>
-                <th class="num">7 дней</th>
-                <th class="num">KPI 7 дн.</th>
-                <th class="num">Темп бюджета</th>
-                <th class="num">Баланс</th>
-                <th class="num">Проблемы</th>
+                <th v-for="col in COLUMNS" :key="col.key" :class="{ num: col.num }" :aria-sort="ariaSort(col.key)">
+                  <button class="th-sort" type="button" :title="sortTitle(col)" @click="sortBy(col.key)">
+                    {{ col.label }}{{ sortMark(col.key) }}
+                  </button>
+                  <TermHint v-if="col.term" :term="col.term" />
+                </th>
               </tr>
             </thead>
-            <tbody v-for="folder in visibleFolders" :key="folder.key">
-              <tr class="folder-row">
-                <td>
-                  <strong>{{ folder.name }}</strong>
-                  <small class="cell-note">{{ folder.rows.length }} {{ plural(folder.rows.length, 'сайт', 'сайта', 'сайтов') }}</small>
-                </td>
-                <td class="num">{{ rub(folder.spend_today) }}</td>
-                <td class="num">{{ rub(folder.spend_yesterday) }}</td>
-                <td class="num">{{ rub(folder.spend_7d) }}</td>
-                <td class="num"></td>
-                <td class="num">
-                  <template v-if="folder.budget">
-                    <span :class="BUDGET_TONES[folder.budget.status]">
-                      {{ pct(folder.budget.pace_pct, 0) }}
-                    </span>
-                    <small class="cell-note">общий бюджет {{ rub(folder.budget.budget_kopecks) }}</small>
-                  </template>
-                </td>
-                <td class="num"></td>
-                <td class="num"></td>
-              </tr>
-              <tr
-                v-for="w in folder.rows"
-                :key="w.id ?? 'none'"
-                class="ws-row"
-                :class="[w.severity && `is-${w.severity}`, { 'is-link': w.id }]"
-                @click="w.id && openWs(w.id)"
-              >
-                <td>
-                  <RouterLink v-if="w.id" :to="`/w/${w.id}/summary`" @click.stop>
-                    <strong>{{ w.name }}</strong>
-                  </RouterLink>
-                  <strong v-else>{{ w.name }}</strong>
-                  <small class="cell-note">
-                    <template v-if="w.id">
-                      № {{ w.counter_id }} · {{ w.campaigns }} {{ plural(w.campaigns, 'кампания', 'кампании', 'кампаний') }}
-                      <template v-if="lockedIds.has(w.id)">
-                        · <span class="tone-warn"><Lock class="inline-icon" aria-hidden="true" /> на тарифе выше</span>
-                      </template>
-                      <template v-else-if="!w.counter_ok"> · <span class="tone-warn">счётчик недоступен</span></template>
-                      <template v-if="w.accounts && !w.stats_synced_at"> · статистика не загружена</template>
+            <tbody>
+              <template v-for="item in tableItems" :key="item.key">
+                <tr v-if="item.folder" class="folder-row">
+                  <td>
+                    <strong>{{ item.folder.name }}</strong>
+                    <small class="cell-note">
+                      {{ item.folder.workspace_ids.length }}
+                      {{ plural(item.folder.workspace_ids.length, 'сайт', 'сайта', 'сайтов') }}
+                    </small>
+                  </td>
+                  <td class="num">{{ rub(item.folder.spend_today) }}</td>
+                  <td class="num">{{ rub(item.folder.spend_yesterday) }}</td>
+                  <td class="num">{{ rub(item.folder.spend_7d) }}</td>
+                  <td class="num"></td>
+                  <td class="num">
+                    <template v-if="item.folder.budget">
+                      <span :class="BUDGET_TONES[item.folder.budget.status]">
+                        {{ pct(item.folder.budget.pace_pct, 0) }}
+                      </span>
+                      <small class="cell-note">общий бюджет {{ rub(item.folder.budget.budget_kopecks) }}</small>
                     </template>
-                    <template v-else>Кампании, которые не входят ни в один проект</template>
-                  </small>
-                </td>
-                <td class="num">{{ rub(w.spend_today) }}</td>
-                <td class="num">
-                  {{ rub(w.spend_yesterday) }}
-                  <small class="cell-note">{{ num(w.conversions_yesterday) }} конв.</small>
-                </td>
-                <td class="num">
-                  {{ rub(w.spend_7d) }}
-                  <small class="cell-note">{{ num(w.conversions_7d) }} конв. · {{ num(w.clicks_7d) }} кл.</small>
-                </td>
-                <td class="num">
-                  <template v-if="w.kpi?.type">
-                    <span :class="KPI_TONES[w.kpi.status]">{{ kpiValue(w.kpi) }}</span>
-                    <small class="cell-note">{{ kpiTarget(w.kpi) }}</small>
-                  </template>
-                  <template v-else>
-                    {{ w.cpa_7d != null ? rub(w.cpa_7d) : '—' }}
-                    <small class="cell-note">{{ w.cpa_7d != null ? 'CPA, KPI не задан' : 'KPI не задан' }}</small>
-                  </template>
-                </td>
-                <td class="num">
-                  <template v-if="w.budget">
-                    <span :class="BUDGET_TONES[w.budget.status]">
-                      {{ pct(w.budget.pace_pct, 0) }}
-                    </span>
-                    <small class="cell-note">{{ rub(w.budget.spent_kopecks) }} из {{ rub(w.budget.budget_kopecks) }}</small>
-                  </template>
-                  <template v-else>—</template>
-                </td>
-                <td class="num">
-                  {{ w.balance_kopecks != null ? rub(w.balance_kopecks) : '—' }}
-                  <small v-if="w.days_on_balance != null" class="cell-note" :class="balanceTone(w.days_on_balance)">
-                    ≈ {{ daysShort(w.days_on_balance) }}
-                  </small>
-                </td>
-                <td class="num">
-                  <button
-                    v-if="w.severity"
-                    class="th-sort problem-counts"
-                    type="button"
-                    title="Показать проблемы"
-                    @click.stop="focusWorkspace(w.id)"
-                  >
-                    <span v-if="w.problems.critical" class="tone-bad">
-                      {{ w.problems.critical }} {{ plural(w.problems.critical, 'критичная', 'критичные', 'критичных') }}
-                    </span>
-                    <span v-if="w.problems.warning" class="tone-warn">
-                      {{ w.problems.warning }}
-                      {{ plural(w.problems.warning, 'предупреждение', 'предупреждения', 'предупреждений') }}
-                    </span>
-                    <span v-if="w.problems.info" class="cell-note">{{ w.problems.info }} к сведению</span>
-                  </button>
-                  <span v-else class="tone-ok">✓</span>
-                </td>
-              </tr>
+                  </td>
+                  <td class="num"></td>
+                  <td class="num"></td>
+                </tr>
+                <tr
+                  v-else
+                  class="ws-row"
+                  :class="{ 'is-link': item.w.id, 'is-child': item.child }"
+                  @click="item.w.id && openWs(item.w.id)"
+                >
+                  <td>
+                    <div class="ovt-name">
+                      <span class="sevdot" :class="`is-${item.w.severity || 'ok'}`" :title="severityTitle(item.w)"></span>
+                      <div>
+                        <RouterLink v-if="item.w.id" :to="`/w/${item.w.id}/summary`" @click.stop>
+                          <strong>{{ item.w.name }}</strong>
+                        </RouterLink>
+                        <strong v-else>{{ item.w.name }}</strong>
+                        <small class="cell-note">
+                          <template v-if="item.w.id">
+                            <template v-if="!item.child && item.w.client_name && item.w.client_name !== item.w.name">
+                              {{ item.w.client_name }} ·
+                            </template>
+                            № {{ item.w.counter_id }} · {{ item.w.campaigns }}
+                            {{ plural(item.w.campaigns, 'кампания', 'кампании', 'кампаний') }}
+                            <template v-if="lockedIds.has(item.w.id)">
+                              · <span class="tone-warn"><Lock class="inline-icon" aria-hidden="true" /> на тарифе выше</span>
+                            </template>
+                            <template v-else-if="!item.w.counter_ok"> · <span class="tone-warn">счётчик недоступен</span></template>
+                            <template v-if="item.w.accounts && !item.w.stats_synced_at"> · статистика не загружена</template>
+                          </template>
+                          <template v-else>Кампании, которые не входят ни в один проект</template>
+                        </small>
+                      </div>
+                    </div>
+                  </td>
+                  <td class="num">{{ rub(item.w.spend_today) }}</td>
+                  <td class="num">
+                    {{ rub(item.w.spend_yesterday) }}
+                    <small class="cell-note">{{ num(item.w.conversions_yesterday) }} конв.</small>
+                  </td>
+                  <td class="num">
+                    {{ rub(item.w.spend_7d) }}
+                    <small class="cell-note">{{ num(item.w.conversions_7d) }} конв.</small>
+                  </td>
+                  <td class="num">
+                    <template v-if="item.w.kpi?.type">
+                      <span :class="KPI_TONES[item.w.kpi.status]">{{ kpiValue(item.w.kpi) }}</span>
+                      <small class="cell-note">{{ kpiTarget(item.w.kpi) }}</small>
+                    </template>
+                    <template v-else>
+                      {{ item.w.cpa_7d != null ? rub(item.w.cpa_7d) : '—' }}
+                      <small class="cell-note">цель не задана</small>
+                    </template>
+                  </td>
+                  <td class="num">
+                    <template v-if="item.w.budget">
+                      <span :class="BUDGET_TONES[item.w.budget.status]">
+                        {{ pct(item.w.budget.pace_pct, 0) }}
+                      </span>
+                      <small class="cell-note">
+                        {{ rub(item.w.budget.spent_kopecks) }} из {{ rub(item.w.budget.budget_kopecks) }}
+                      </small>
+                    </template>
+                    <template v-else>—</template>
+                  </td>
+                  <td class="num">
+                    {{ item.w.balance_kopecks != null ? rub(item.w.balance_kopecks) : '—' }}
+                    <small v-if="item.w.days_on_balance != null" class="cell-note" :class="balanceTone(item.w.days_on_balance)">
+                      ≈ {{ daysShort(item.w.days_on_balance) }}
+                    </small>
+                  </td>
+                  <td class="num">
+                    <button
+                      v-if="item.w.severity"
+                      class="th-sort problem-counts"
+                      type="button"
+                      title="Показать проблемы проекта"
+                      @click.stop="focusWorkspace(item.w.id)"
+                    >
+                      <span v-if="item.w.problems.critical" class="tone-bad">
+                        {{ item.w.problems.critical }}
+                        {{ plural(item.w.problems.critical, 'критичная', 'критичные', 'критичных') }}
+                      </span>
+                      <span v-if="item.w.problems.warning" class="tone-warn">
+                        {{ item.w.problems.warning }}
+                        {{ plural(item.w.problems.warning, 'предупреждение', 'предупреждения', 'предупреждений') }}
+                      </span>
+                      <span v-if="item.w.problems.info" class="cell-note">{{ item.w.problems.info }} к сведению</span>
+                    </button>
+                    <span v-else class="cell-note">нет</span>
+                  </td>
+                </tr>
+              </template>
             </tbody>
           </table>
         </div>
@@ -288,45 +257,34 @@
 
       <section ref="problemsPanel" class="panel overview-problems">
         <div class="panel__head">
-          <h2>Где горит</h2>
+          <h2>Где горит <span class="cgroup__n">{{ fireCount }}</span></h2>
           <div class="filters filters--inline">
-            <select v-model="severityFilter" aria-label="Серьёзность проблем">
-              <option value="all">Все</option>
-              <option value="fire">Критично и внимание</option>
-              <option value="critical">Только критично</option>
-            </select>
-            <select v-model="wsFilter" aria-label="Проект">
-              <option value="">Все проекты</option>
-              <option v-for="w in rows" :key="w.id ?? 'none'" :value="wsKey(w.id)">{{ w.name }}</option>
-            </select>
+            <UiSelect
+              v-model="severityFilter"
+              size="sm"
+              aria-label="Серьёзность проблем"
+              :options="[
+                { value: 'all', label: 'Все' },
+                { value: 'fire', label: 'Критично и внимание' },
+                { value: 'critical', label: 'Только критично' },
+              ]"
+            />
+            <UiSelect
+              v-model="wsFilter"
+              size="sm"
+              aria-label="Проект"
+              :options="[{ value: '', label: 'Все проекты' }, ...rows.map((w) => ({ value: wsKey(w.id), label: w.name }))]"
+            />
           </div>
         </div>
-        <p class="hint">
-          Токены и синки, баланс и бюджет, KPI, модерация, остановленные кампании и резкие изменения вчерашнего дня.
-        </p>
         <p v-if="!filteredProblems.length" class="empty">
-          {{ data.problems.length ? 'По выбранным фильтрам ничего.' : 'Ничего не горит.' }}
+          {{
+            data.problems.length
+              ? 'По выбранным фильтрам ничего.'
+              : 'Ничего не горит: токены живы, балансы, бюджеты и KPI в норме.'
+          }}
         </p>
-        <div v-else class="list">
-          <div
-            v-for="(p, i) in visibleProblems"
-            :key="`${p.kind}-${p.workspace_id}-${p.account_id}-${p.campaign_row_id}-${i}`"
-            class="list-row problem"
-            :class="`is-${p.severity}`"
-          >
-            <div>
-              <span class="chip" :class="`chip--${p.severity}`">{{ SEVERITY_LABELS[p.severity] }}</span>
-              <strong>{{ p.title }}</strong>
-              <small>
-                {{ [p.workspace_name, p.object_name].filter(Boolean).join(' · ') }}
-                <template v-if="p.detail"> · {{ errorDetail(p.detail) }}</template>
-              </small>
-            </div>
-            <RouterLink v-if="problemLink(p)" class="btn btn--ghost" :to="problemLink(p).to">
-              {{ problemLink(p).label }}
-            </RouterLink>
-          </div>
-        </div>
+        <ProblemList v-else :problems="visibleProblems" show-project />
         <div v-if="filteredProblems.length > visibleProblems.length" class="pager">
           <span class="sync-status">Показано {{ visibleProblems.length }} из {{ filteredProblems.length }}</span>
           <button class="btn btn--ghost" type="button" @click="showAllProblems = true">Показать все</button>
@@ -337,53 +295,44 @@
 </template>
 
 <script setup>
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { RouterLink, useRouter } from 'vue-router'
-import { CalendarClock, CircleCheck, Coins, Crosshair, Lock, Target, TriangleAlert, Wallet } from '@lucide/vue'
+import { CircleCheck, Lock, RefreshCw, Search, TriangleAlert } from '@lucide/vue'
 import ExpertHint from '../components/ExpertHint.vue'
 import HomeAsk from '../components/HomeAsk.vue'
+import KpiTile from '../components/KpiTile.vue'
 import OnboardingChecklist from '../components/OnboardingChecklist.vue'
 import PendingDecisions from '../components/PendingDecisions.vue'
+import ProblemList from '../components/ProblemList.vue'
 import SignalCards from '../components/SignalCards.vue'
-import Sparkline from '../components/Sparkline.vue'
-import { errorDetail, errorText, jobProgressText, webApi } from '../api/web'
+import TermHint from '../components/TermHint.vue'
+import PageHeader from '../components/ui/PageHeader.vue'
+import UiSelect from '../components/ui/UiSelect.vue'
+import { errorText, jobProgressText, webApi } from '../api/web'
 import { useExpert } from '../composables/useExpert'
 import { pushToast } from '../composables/useToasts'
 import { useWorkspaces } from '../composables/useWorkspaces'
 import { useHead } from '../utils/useHead'
 import {
+  asOfNote,
   balanceTone,
   BUDGET_TONES,
   daysShort,
-  delta,
-  deltaTone,
-  formatDateTime,
   KPI_TONES,
   kpiTarget,
   kpiValue,
-  problemLink,
   num,
   pct,
   plural,
   rub,
   rubles,
-  SEVERITY_LABELS,
 } from '../utils/format'
 
 useHead('Главная — Толк', true)
 
 const PROBLEMS_LIMIT = 30
 const SEVERITY_RANK = { critical: 0, warning: 1, info: 2, '': 3 }
-// Сравнение дня с тем же днём недели неделю назад; индекс — getUTCDay().
-const WEEKDAY_LAST = [
-  'в прошлое воскресенье',
-  'в прошлый понедельник',
-  'в прошлый вторник',
-  'в прошлую среду',
-  'в прошлый четверг',
-  'в прошлую пятницу',
-  'в прошлую субботу',
-]
+// «Вчера» сравниваем с тем же днём недели неделю назад — полный день с полным; индекс — getUTCDay().
 const WEEKDAY_TO_LAST = [
   'к прошлому воскресенью',
   'к прошлому понедельнику',
@@ -409,7 +358,6 @@ const severityFilter = ref('all')
 const wsFilter = ref('')
 const showAllProblems = ref(false)
 const problemsPanel = ref(null)
-const spacesPanel = ref(null)
 
 watch([severityFilter, wsFilter], () => {
   showAllProblems.value = false
@@ -418,6 +366,8 @@ watch([severityFilter, wsFilter], () => {
 const rows = computed(() => data.value.workspaces || [])
 const totals = computed(() => data.value.totals || {})
 const fireCount = computed(() => data.value.problems.filter((p) => p.severity !== 'info').length)
+const projectCount = computed(() => rows.value.filter((w) => w.id != null).length)
+const problemProjects = computed(() => rows.value.filter((w) => w.id != null && w.severity).length)
 
 // by_day — две недели до вчера: последние 7 дней — эта неделя, первые 7 — прошлая (пунктир и изменение).
 const byDay = computed(() =>
@@ -502,15 +452,19 @@ function weekdayOf(iso) {
   return new Date(`${iso}T00:00:00Z`).getUTCDay()
 }
 
-// Тот же день недели неделю назад — для карточек «Сегодня» и «Вчера».
-const weekAgo = computed(() => {
-  const find = (iso) => (iso ? byDay.value.find((r) => r.day === shiftDay(iso, -7)) || null : null)
-  return { today: find(data.value.today), yesterday: find(data.value.yesterday) }
+// «Сегодня» — неполный день: почасовых данных нет, поэтому ни с чем не сравниваем, только говорим, на какое время цифра.
+const todayNote = computed(() => asOfNote(data.value.today_updated_at))
+const weekAgoYesterday = computed(() => {
+  const iso = data.value.yesterday
+  return iso ? byDay.value.find((r) => r.day === shiftDay(iso, -7)) || null : null
 })
 const yesterdayChange = computed(() => {
-  const prev = weekAgo.value.yesterday?.cost_kopecks
+  const prev = weekAgoYesterday.value?.cost_kopecks
   return prev ? ((totals.value.spend_yesterday - prev) / prev) * 100 : null
 })
+const yesterdayVersus = computed(() =>
+  weekAgoYesterday.value ? WEEKDAY_TO_LAST[weekdayOf(weekAgoYesterday.value.day)] : '',
+)
 
 function wsKey(id) {
   return id == null ? 'none' : String(id)
@@ -533,27 +487,111 @@ function bySeverity(a, b) {
   return a.name.localeCompare(b.name, 'ru')
 }
 
-const visibleFolders = computed(() => {
-  const byId = new Map(rows.value.map((r) => [r.id, r]))
-  const folders = (data.value.folders || []).map((f) => ({
-    ...f,
-    key: `f${f.id ?? 'none'}`,
-    rows: f.workspace_ids.map((id) => byId.get(id)).filter(Boolean).filter(matches).sort(bySeverity),
-  }))
-  const unassigned = byId.get(null)
-  if (unassigned && matches(unassigned) && (unassigned.spend_7d || unassigned.accounts)) {
-    folders.push({
-      key: 'none',
-      id: null,
-      name: 'Вне проектов',
-      rows: [unassigned],
-      spend_today: unassigned.spend_today,
-      spend_yesterday: unassigned.spend_yesterday,
-      spend_7d: unassigned.spend_7d,
-      budget: null,
-    })
+// --- Таблица проектов: по умолчанию по клиентам; клик по колонке — плоский список с сортировкой ---
+
+const COLUMNS = [
+  { key: 'name', label: 'Проект' },
+  { key: 'spend_today', label: 'Сегодня', num: true, term: 'spend_today' },
+  { key: 'spend_yesterday', label: 'Вчера', num: true },
+  { key: 'spend_7d', label: '7 дней', num: true },
+  { key: 'kpi', label: 'KPI 7 дн.', num: true, term: 'kpi7' },
+  { key: 'pace', label: 'Бюджет', num: true, term: 'pace' },
+  { key: 'balance', label: 'Баланс', num: true, term: 'balance' },
+  { key: 'problems', label: 'Проблемы', num: true },
+]
+const SORT_VALUE = {
+  name: (w) => w.name,
+  spend_today: (w) => w.spend_today,
+  spend_yesterday: (w) => w.spend_yesterday,
+  spend_7d: (w) => w.spend_7d,
+  kpi: (w) => w.kpi?.ratio ?? null,
+  pace: (w) => w.budget?.pace_pct ?? null,
+  balance: (w) => w.days_on_balance ?? null,
+  problems: (w) => (w.problems ? w.problems.critical * 10000 + w.problems.warning * 100 + w.problems.info : 0),
+}
+// Первый клик ставит важное сверху: имя — по алфавиту, дни на балансе — меньше сверху, остальное — больше сверху.
+const ASC_FIRST = new Set(['name', 'balance'])
+const sort = reactive({ key: '', desc: false })
+
+function sortBy(key) {
+  if (sort.key !== key) {
+    sort.key = key
+    sort.desc = !ASC_FIRST.has(key)
+  } else if (sort.desc === !ASC_FIRST.has(key)) {
+    sort.desc = !sort.desc
+  } else {
+    // Третий клик — обратно к группировке по клиентам.
+    sort.key = ''
   }
-  return folders.filter((f) => f.rows.length)
+}
+
+function sortMark(key) {
+  return sort.key === key ? (sort.desc ? ' ↓' : ' ↑') : ''
+}
+
+function ariaSort(key) {
+  if (sort.key !== key) return undefined
+  return sort.desc ? 'descending' : 'ascending'
+}
+
+function sortTitle(col) {
+  if (sort.key !== col.key) return `Сортировать по колонке «${col.label}»`
+  return sort.desc === !ASC_FIRST.has(col.key) ? 'Обратный порядок' : 'Вернуть группировку по клиентам'
+}
+
+function compareBy(key, desc) {
+  const value = SORT_VALUE[key]
+  return (a, b) => {
+    const x = value(a)
+    const y = value(b)
+    // Пустые значения — всегда внизу, в какую сторону ни сортируй.
+    if (x == null || y == null) return x == null && y == null ? 0 : x == null ? 1 : -1
+    const c = typeof x === 'string' ? x.localeCompare(y, 'ru') : x - y
+    return desc ? -c : c
+  }
+}
+
+function severityTitle(w) {
+  if (w.severity === 'critical') return 'Есть критичные проблемы'
+  if (w.severity === 'warning') return 'Есть предупреждения'
+  if (w.severity === 'info') return 'Есть замечания к сведению'
+  return 'Всё в порядке'
+}
+
+const unassignedRow = computed(() => {
+  const u = rows.value.find((r) => r.id == null)
+  return u && (u.spend_7d || u.accounts) ? u : null
+})
+
+/**
+ * Строки таблицы. Подзаголовок клиента — только когда у клиента больше одного сайта: иначе он повторял бы строку
+ * проекта. Одиночные проекты идут первыми, клиенты с несколькими сайтами — после, чтобы строка без клиента не
+ * читалась как часть группы над ней. «Вне проектов» — всегда последней.
+ */
+const tableItems = computed(() => {
+  const visible = rows.value.filter((w) => w.id != null && matches(w))
+  const extra = unassignedRow.value && matches(unassignedRow.value) ? [{ key: 'wnone', w: unassignedRow.value }] : []
+  if (sort.key) {
+    return [...visible.sort(compareBy(sort.key, sort.desc)).map((w) => ({ key: `w${w.id}`, w })), ...extra]
+  }
+  const byId = new Map(visible.map((w) => [w.id, w]))
+  const single = []
+  const groups = []
+  for (const f of data.value.folders || []) {
+    const items = f.workspace_ids.map((id) => byId.get(id)).filter(Boolean).sort(bySeverity)
+    if (!items.length) continue
+    if (f.id != null && f.workspace_ids.length > 1) {
+      groups.push({ key: `f${f.id}`, folder: f })
+      groups.push(...items.map((w) => ({ key: `w${w.id}`, w, child: true })))
+    } else {
+      single.push(...items)
+    }
+  }
+  // Проекты, которых нет ни в одной папке (на всякий случай), — к одиночным.
+  const grouped = new Set((data.value.folders || []).flatMap((f) => f.workspace_ids))
+  single.push(...visible.filter((w) => !grouped.has(w.id)))
+  single.sort(bySeverity)
+  return [...single.map((w) => ({ key: `w${w.id}`, w })), ...groups, ...extra]
 })
 
 const filteredProblems = computed(() =>
@@ -568,15 +606,8 @@ const visibleProblems = computed(() =>
   showAllProblems.value ? filteredProblems.value : filteredProblems.value.slice(0, PROBLEMS_LIMIT),
 )
 
-
 function openWs(id) {
   router.push(`/w/${id}/summary`)
-}
-
-// Карточка «Горит» включает фильтр таблицы и прокручивает к ней — на телефоне таблица ниже экрана.
-function toggleOnlyProblems() {
-  onlyProblems.value = !onlyProblems.value
-  if (onlyProblems.value) spacesPanel.value?.scrollIntoView({ behavior: 'smooth', block: 'start' })
 }
 
 function focusWorkspace(id) {

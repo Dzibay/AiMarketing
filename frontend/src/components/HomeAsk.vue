@@ -1,13 +1,7 @@
 <template>
-  <section class="hask">
-    <h2 class="hask__title">{{ greeting }}</h2>
-    <p class="hask__lead">
-      {{
-        wsId
-          ? 'Спросите про этот проект — ИИ посмотрит кампании, запросы и статистику и предложит правки на согласование.'
-          : 'Спросите про любой проект — ИИ посмотрит кампании, запросы и статистику и предложит правки на согласование.'
-      }}
-    </p>
+  <!-- Приветствие — заголовок страницы (h1 в шапке), пояснение — строка под ним. -->
+  <PageHeader :title="greeting" :description="lead" />
+  <section class="hask" aria-label="Вопрос ИИ">
     <form class="hask__box" @submit.prevent="submit()">
       <textarea
         v-model="text"
@@ -34,6 +28,7 @@
 import { computed, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ArrowUp, FlaskConical, Link2, ListChecks, SearchCheck, Sparkles, Target, TrendingUp } from '@lucide/vue'
+import PageHeader from './ui/PageHeader.vue'
 import { putHomeQuestion } from '../composables/useHomeAsk'
 import { useProfile } from '../composables/useProfile'
 
@@ -52,6 +47,12 @@ const greeting = computed(() => {
   const name = (user.value?.name || '').trim().split(/\s+/)[0]
   return name ? `${part}, ${name}` : part
 })
+
+const lead = computed(() =>
+  props.wsId
+    ? 'Спросите про этот проект — ИИ посмотрит кампании, запросы и статистику и предложит правки на согласование.'
+    : 'Спросите про любой проект — ИИ посмотрит кампании, запросы и статистику и предложит правки на согласование.',
+)
 
 const presets = computed(() =>
   props.wsId

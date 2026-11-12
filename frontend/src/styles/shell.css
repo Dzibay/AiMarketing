@@ -728,21 +728,7 @@
 /* ---- главная: вопрос ИИ ---- */
 
 .hask {
-  margin: 4px 0 28px;
-}
-
-.hask__title {
-  margin: 0;
-  font-size: 26px;
-  font-weight: 800;
-  letter-spacing: -0.03em;
-}
-
-.hask__lead {
-  max-width: 640px;
-  margin: 6px 0 16px;
-  color: var(--muted);
-  font-size: 14px;
+  margin: 0 0 28px;
 }
 
 .hask__box {

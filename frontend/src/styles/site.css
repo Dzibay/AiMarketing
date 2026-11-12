@@ -1501,6 +1501,19 @@ input[type='radio'] {
   stroke-linejoin: round;
 }
 
+.sparkline path.is-dot {
+  fill: none;
+  stroke-width: 7;
+  stroke-linecap: round;
+}
+
+.sparkline path.is-dot-ring {
+  fill: none;
+  stroke: var(--surface);
+  stroke-width: 11;
+  stroke-linecap: round;
+}
+
 .sparkline path.is-prev {
   fill: none;
   stroke: var(--faint);
@@ -1679,16 +1692,14 @@ input[type='radio'] {
   white-space: nowrap;
 }
 
-.overview-table tr.is-critical td:first-child {
-  box-shadow: inset 3px 0 var(--danger);
-}
-
-.overview-table tr.is-warning td:first-child {
-  box-shadow: inset 3px 0 var(--c-amber);
-}
-
 .overview-table td:first-child {
+  min-width: 200px;
   padding-left: 0.8rem;
+}
+
+/* Название проекта не сжимается в столбик: цифры уступают ему место, их пояснения переносятся. */
+.overview-table td.num .cell-note {
+  white-space: normal;
 }
 
 .cell-note {
@@ -2924,28 +2935,77 @@ textarea {
   color: var(--danger);
 }
 
-.ws-loading__head {
+.ws-loading {
+  margin: 0 0 1.1rem;
+  padding: 0.55rem 0.9rem;
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm, 10px);
+  background: var(--surface);
+  font-size: 0.88rem;
+}
+
+.ws-loading.is-stalled {
+  border-color: var(--warn);
+}
+
+.ws-loading__line {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 0.5rem;
+  gap: 0.35rem 0.6rem;
+}
+
+.ws-loading__line .spinner {
+  width: 0.8rem;
+  height: 0.8rem;
 }
 
 .ws-loading__pct {
-  color: var(--accent);
-  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
 }
 
-.ws-loading p {
-  margin: 0.35rem 0;
+.ws-loading__bar {
+  flex: 0 1 140px;
+  min-width: 60px;
+  height: 4px;
+  margin: 0;
+}
+
+.ws-loading__note {
+  color: var(--muted);
+}
+
+.ws-loading__more {
+  margin-left: auto;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--ink);
+  font: inherit;
+  font-weight: 650;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+.ws-loading__details {
+  margin-top: 0.5rem;
+  padding-top: 0.5rem;
+  border-top: 1px solid var(--line);
+}
+
+.ws-loading__details p {
+  margin: 0.45rem 0 0;
+  color: var(--muted);
 }
 
 .ws-loading__list {
   display: grid;
   gap: 0.2rem;
-  margin: 0.4rem 0 0;
+  margin: 0;
   padding: 0;
   list-style: none;
-  font-size: 0.88rem;
 }
 
 .ws-loading__list li {
@@ -2982,6 +3042,10 @@ textarea {
 
 .ws-meta a {
   color: var(--accent);
+}
+
+.ws-meta a:hover {
+  border-color: var(--ink);
 }
 
 .ws-meta .ws-meta__minor {
@@ -3104,6 +3168,18 @@ button.metric-grid__item:hover:not(:disabled) {
   color: var(--muted);
 }
 
+/* Изменение фишкой и «было» рядом — одной строкой, если влезает. */
+.metric-grid__item .metric-grid__cmp {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+}
+
+.metric-grid__item .delta {
+  font-size: 0.76rem;
+}
+
 /* --- Списки и таблицы --- */
 
 .list-row.is-link {
@@ -3183,6 +3259,23 @@ tr.is-link:hover td {
 
 .overview-table tr.ws-row td:first-child {
   padding-left: 0.85rem;
+}
+
+/* Сайты клиента под его подзаголовком — со сдвигом, чтобы группа читалась без рамок. */
+.overview-table tr.ws-row.is-child td:first-child {
+  padding-left: 1.6rem;
+}
+
+.ovt-name {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  min-width: 0;
+}
+
+/* Точка статуса — по центру первой строки названия. */
+.ovt-name .sevdot {
+  margin-top: 0.5em;
 }
 
 .folder .panel__head {

@@ -167,7 +167,7 @@
           <!-- Описание и действия страницы приходят сюда из PageHeader (Teleport). -->
           <div class="dhead__row">
             <div class="dhead__title">
-              <h1>{{ title }}</h1>
+              <h1>{{ pageTitleOverride || title }}</h1>
               <p id="dhead-desc" class="dhead__desc"></p>
             </div>
             <div id="dhead-acts" class="dhead__acts"></div>
@@ -246,6 +246,7 @@ import ProfileMenu from './ProfileMenu.vue'
 import Modal from './ui/Modal.vue'
 import { SECTIONS, pageMatches, sectionTabs, sectionTo } from './shellNav'
 import { useExpert } from '../composables/useExpert'
+import { pageTitleOverride } from '../composables/usePageTitle'
 import { resetLoads } from '../composables/useLoads'
 import { loadPending, resetPending, usePending } from '../composables/usePending'
 import { loadPlan, resetPlan, usePlan } from '../composables/usePlan'

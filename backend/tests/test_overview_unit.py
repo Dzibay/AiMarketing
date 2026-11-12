@@ -5,7 +5,7 @@ from datetime import date, timedelta
 import pytest
 
 from app.digest import format_digest
-from app.overview import budget_pace, campaign_anomalies, days_on_balance, kpi_state, rub
+from app.overview import budget_pace, budget_texts, campaign_anomalies, days_on_balance, kpi_state, rub
 
 DAY = date(2026, 10, 25)
 
@@ -66,6 +66,26 @@ def test_budget_pace():
     assert budget_pace(10_000_000, 1_000_000, 1_000_000, date(2026, 10, 15))["status"] == "under"
     assert budget_pace(10_000_000, 10_000_000, 9_000_000, date(2026, 10, 20))["status"] == "exhausted"
     assert budget_pace(None, 1, 1, DAY) is None
+
+
+def test_budget_texts():
+    def plain(texts):
+        return tuple(t.replace(" ", " ") for t in texts)
+
+    # Прогноз — в рублях с округлением до тысяч, а не «прогноз 124% бюджета».
+    over = budget_pace(10_000_000, 4_100_000, 4_000_000, date(2026, 10, 11))
+    assert plain(budget_texts(over)) == (
+        "к концу месяца уйдёт ~124 000 ₽ при бюджете 100 000 ₽",
+        "С начала месяца потрачено 41 000 ₽; чтобы уложиться, тратьте до 2 810 ₽ в день",
+    )
+    under = budget_pace(10_000_000, 1_000_000, 1_000_000, date(2026, 10, 15))
+    assert plain(budget_texts(under))[0] == "к концу месяца уйдёт лишь ~22 000 ₽ из бюджета 100 000 ₽"
+    exhausted = budget_pace(10_000_000, 10_000_000, 9_000_000, date(2026, 10, 20))
+    assert plain(budget_texts(exhausted)) == (
+        "месячный бюджет исчерпан",
+        "С начала месяца потрачено 100 000 ₽ при бюджете 100 000 ₽",
+    )
+    assert budget_texts(budget_pace(10_000_000, 0, 0, date(2026, 10, 1))) is None  # в темпе — проблемы нет
 
 
 def test_days_on_balance():

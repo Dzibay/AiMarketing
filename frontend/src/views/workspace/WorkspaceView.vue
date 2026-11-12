@@ -21,20 +21,33 @@
   <div v-else-if="!ws" class="panel"><p class="empty">Открываем проект…</p></div>
 
   <template v-else>
-    <!-- Название проекта — в шапке страницы; здесь на сводке — сайт, KPI и цель, номер счётчика на втором плане. -->
-    <p v-if="route.name === 'ws-summary'" class="ws-meta">
-      <span v-if="ws.client_name">{{ ws.client_name }}</span>
+    <!-- Название проекта — в переключателе; здесь на главной — сайт, KPI и цель. KPI и цель ведут в настройки. -->
+    <p v-if="isHome" class="ws-meta">
+      <component
+        :is="expert ? RouterLink : 'span'"
+        v-if="ws.client_name && ws.client_name !== ws.name"
+        :to="expert ? `${settingsPath}#client` : undefined"
+      >
+        {{ ws.client_name }}
+      </component>
       <a v-if="siteUrl" :href="siteUrl" target="_blank" rel="noopener noreferrer">{{ ws.site }}</a>
-      <span>{{ ws.accounts_count }} {{ plural(ws.accounts_count, 'кабинет', 'кабинета', 'кабинетов') }} Директа</span>
-      <span>{{ ws.campaigns_count }} {{ plural(ws.campaigns_count, 'кампания', 'кампании', 'кампаний') }}</span>
-      <span v-if="ws.kpi_type">
+      <!-- Раздел «Кабинеты и кампании» в настройках есть только в экспертном режиме — в простом фишка без ссылки. -->
+      <component :is="expert ? RouterLink : 'span'" :to="expert ? `${settingsPath}#cabs` : undefined">
+        {{ ws.accounts_count }} {{ plural(ws.accounts_count, 'кабинет', 'кабинета', 'кабинетов') }} Директа
+      </component>
+      <RouterLink :to="`/w/${ws.id}/campaigns`">
+        {{ ws.campaigns_count }} {{ plural(ws.campaigns_count, 'кампания', 'кампании', 'кампаний') }}
+      </RouterLink>
+      <RouterLink v-if="ws.kpi_type" :to="settingsPath" title="Изменить KPI в настройках проекта">
         KPI: {{ ws.kpi_type === 'cpa' ? 'CPA' : 'ДРР' }}
         <template v-if="ws.kpi_target != null">
           ≤ {{ ws.kpi_type === 'cpa' ? rubles(ws.kpi_target) : pct(ws.kpi_target) }}
         </template>
-      </span>
-      <span v-if="ws.goal_name">цель «{{ ws.goal_name }}»</span>
-      <span class="ws-meta__minor">счётчик № {{ ws.counter_id }}</span>
+      </RouterLink>
+      <RouterLink v-if="ws.goal_name" :to="settingsPath" title="Изменить цель в настройках проекта">
+        цель «{{ ws.goal_name }}»
+      </RouterLink>
+      <span v-if="expert" class="ws-meta__minor">счётчик № {{ ws.counter_id }}</span>
       <span v-if="refreshing" class="ws-meta__sync">
         <span class="spinner" aria-hidden="true"></span>
         обновляем данные
@@ -49,27 +62,45 @@
       Проект в архиве. Вернуть его можно в <RouterLink :to="`/w/${ws.id}/settings`">настройках проекта</RouterLink>.
     </p>
 
-    <div v-if="pendingItems.length" class="notice ws-loading" :class="{ 'notice--warn': loadStalled }" role="status">
-      <div class="ws-loading__head">
+    <!-- Первая загрузка — одна строка на главной проекта; на остальных страницах её видно в индикаторе шапки. -->
+    <div
+      v-if="isHome && pendingItems.length"
+      class="ws-loading"
+      :class="{ 'is-stalled': loadStalled }"
+      role="status"
+    >
+      <div class="ws-loading__line">
         <span v-if="pendingItems.some((i) => i.job)" class="spinner" aria-hidden="true"></span>
         <strong>{{ loadStalled ? 'Загрузка остановилась на ошибке' : 'Данные ещё загружаются' }}</strong>
-        <span v-if="loadPercent != null" class="ws-loading__pct">{{ pct(loadPercent, 0) }}</span>
+        <span v-if="loadPercent != null && !loadStalled" class="ws-loading__pct">{{ pct(loadPercent, 0) }}</span>
+        <span v-if="!loadStalled" class="load-bar ws-loading__bar" aria-hidden="true">
+          <span :style="{ width: `${loadPercent || 0}%` }"></span>
+        </span>
+        <span class="ws-loading__note">
+          {{ loadStalled ? 'повторим автоматически в течение часа' : 'пока цифры неполные, страница обновится сама' }}
+        </span>
+        <button
+          class="ws-loading__more"
+          type="button"
+          :aria-expanded="loadOpen"
+          @click="loadOpen = !loadOpen"
+        >
+          {{ loadOpen ? 'Скрыть' : 'Подробнее' }}
+        </button>
       </div>
-      <div class="load-bar"><span :style="{ width: `${loadPercent || 0}%` }"></span></div>
-      <p v-if="loadStalled">
-        Часть данных не загрузилась, поэтому кампании и цифры неполные. Загрузку повторим автоматически в течение часа,
-        запустить сразу можно кнопкой «Обновить» в <RouterLink to="/cabinet/connections">Подключениях</RouterLink>.
-      </p>
-      <p v-else>
-        Пока загрузка не закончится, кампании и цифры неполные — разделы обновятся сами. Подробнее — в
-        <RouterLink to="/cabinet/connections">Подключениях</RouterLink>.
-      </p>
-      <ul class="ws-loading__list">
-        <li v-for="item in pendingItems" :key="item.key">
-          <strong>{{ item.title }}</strong>
-          <span>{{ loadLine(item) }}</span>
-        </li>
-      </ul>
+      <div v-if="loadOpen" class="ws-loading__details">
+        <ul class="ws-loading__list">
+          <li v-for="item in pendingItems" :key="item.key">
+            <strong>{{ item.title }}</strong>
+            <span>{{ loadLine(item) }}</span>
+          </li>
+        </ul>
+        <p>
+          <template v-if="loadStalled">Запустить загрузку сразу можно кнопкой «Обновить» в </template>
+          <template v-else>Ход загрузки по каждому кабинету — в </template>
+          <RouterLink to="/cabinet/connections">Подключениях</RouterLink>.
+        </p>
+      </div>
     </div>
 
     <RouterView :key="`${ws.id}:${dataVersion}`" />
@@ -84,6 +115,7 @@ import { ApiError, errorText, wsApi } from '../../api/web'
 import { SECTIONS } from '../../components/shellNav'
 import { pushToast } from '../../composables/useToasts'
 import { jobPercent, jobText, stageErrorText, stageFailure, stageProblem } from '../../composables/useLoads'
+import { useExpert } from '../../composables/useExpert'
 import { loadWorkspaces, patchWorkspaceInList, rememberWorkspace } from '../../composables/useWorkspaces'
 import { useHead } from '../../utils/useHead'
 import { pct, plural, rubles } from '../../utils/format'
@@ -109,6 +141,11 @@ watch(
   },
   { immediate: true },
 )
+
+const { expert } = useExpert()
+const isHome = computed(() => route.name === 'ws-summary')
+const settingsPath = computed(() => `/w/${ws.value?.id}/settings`)
+const loadOpen = ref(false)
 
 const siteUrl = computed(() => {
   const site = (ws.value?.site || '').trim()

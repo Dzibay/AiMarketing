@@ -104,6 +104,19 @@ export function formatDateTime(iso) {
   return new Date(iso).toLocaleString('ru-RU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })
 }
 
+/**
+ * На какой момент цифра за неполный день: «на 14:05», если обновляли сегодня, иначе «на 11 нояб., 23:40».
+ * Почасовых данных нет, поэтому «сегодня» ни с чем не сравниваем — только говорим, когда его сняли.
+ */
+export function asOfNote(iso) {
+  if (!iso) return 'ещё не загружали'
+  const d = new Date(iso)
+  if (d.toDateString() === new Date().toDateString()) {
+    return `на ${d.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })}`
+  }
+  return `на ${formatDateTime(iso)}`
+}
+
 /** «только что», «12 мин назад», «3 ч назад», дальше — дата и время. */
 export function timeAgo(iso, now = Date.now()) {
   if (!iso) return ''
@@ -173,11 +186,15 @@ export function kpiValue(kpi) {
   return kpi.type === 'cpa' ? rub(kpi.value) : pct(kpi.value)
 }
 
+/** «цель 1 800 ₽» — когда название метрики уже стоит рядом (подпись плитки «CPA 7 дней»). */
+export function kpiGoal(kpi) {
+  if (kpi?.target == null) return 'цель не задана'
+  return `цель ${kpi.type === 'cpa' ? rubles(kpi.target) : pct(kpi.target)}`
+}
+
 export function kpiTarget(kpi) {
   if (!kpi?.type) return 'KPI не задан'
-  const name = kpi.type === 'cpa' ? 'CPA' : 'ДРР'
-  if (kpi.target == null) return `${name}, цель не задана`
-  return kpi.type === 'cpa' ? `${name}, цель ${rubles(kpi.target)}` : `${name}, цель ${pct(kpi.target)}`
+  return `${kpi.type === 'cpa' ? 'CPA' : 'ДРР'}, ${kpiGoal(kpi)}`
 }
 
 export function balanceTone(days) {

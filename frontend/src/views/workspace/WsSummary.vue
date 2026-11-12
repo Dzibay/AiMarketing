@@ -53,109 +53,71 @@
   </template>
 
   <template v-else>
-    <div class="ws-toolbar">
-      <p class="sync-status">
-        <template v-if="refreshing">{{ refreshText }}</template>
-        <template v-else-if="data.today_updated_at">
-          Расход за сегодня — на {{ formatDateTime(data.today_updated_at) }}. Неделя: {{ formatDate(week.date_from) }} —
-          {{ formatDate(week.date_to) }}
-        </template>
-        <template v-else>Расход за сегодня ещё не загружался.</template>
-      </p>
-      <button class="btn btn--ghost" type="button" :disabled="refreshing" @click="refresh">
-        {{ refreshing ? 'Обновляем…' : 'Обновить расход и балансы' }}
-      </button>
-    </div>
+    <PageHeader>
+      <template #actions>
+        <button class="btn btn--ghost" type="button" :disabled="refreshing" @click="refresh">
+          <RefreshCw aria-hidden="true" />
+          {{ refreshing ? 'Обновляем…' : 'Обновить расход и балансы' }}
+        </button>
+      </template>
+    </PageHeader>
+    <p v-if="refreshing" class="sync-status overview-updated">{{ refreshText }}</p>
 
-    <div class="stats-grid">
-      <div class="stat-card">
-        <div class="stat-card__head">
-          <span class="stat-card__icon"><CalendarClock aria-hidden="true" /></span>
-          <small>Сегодня</small>
-        </div>
-        <strong>{{ rub(row.spend_today) }}</strong>
-        <span class="cell-note">вчера {{ rub(row.spend_yesterday) }}</span>
-      </div>
-      <div class="stat-card">
-        <div class="stat-card__head">
-          <span class="stat-card__icon is-blue"><Wallet aria-hidden="true" /></span>
-          <small>Расход 7 дней</small>
-        </div>
-        <div class="stat-card__value">
-          <strong>{{ rub(week.totals.cost_kopecks) }}</strong>
-          <span v-if="week.compare.cost_kopecks != null" class="delta" :class="deltaTone(week.compare.cost_kopecks, true)">
-            {{ delta(week.compare.cost_kopecks) }}
-          </span>
-        </div>
-        <span class="cell-note">к прошлой неделе</span>
-        <Sparkline :points="week.by_day" :prev-points="week.prev_by_day" value-key="cost_kopecks" color="var(--c-blue)" />
-      </div>
-      <div class="stat-card">
-        <div class="stat-card__head">
-          <span class="stat-card__icon"><Target aria-hidden="true" /></span>
-          <small>Конверсии 7 дней</small>
-        </div>
-        <div class="stat-card__value">
-          <strong>{{ num(week.totals.conversions) }}</strong>
-          <span v-if="week.compare.conversions != null" class="delta" :class="deltaTone(week.compare.conversions)">
-            {{ delta(week.compare.conversions) }}
-          </span>
-        </div>
-        <span class="cell-note">{{ conversionsSource }}</span>
-        <Sparkline :points="week.by_day" :prev-points="week.prev_by_day" value-key="conversions" />
-      </div>
-      <div class="stat-card">
-        <div class="stat-card__head">
-          <span class="stat-card__icon is-amber">
-            <BadgePercent v-if="week.kpi?.type === 'drr'" aria-hidden="true" />
-            <Crosshair v-else aria-hidden="true" />
-          </span>
-          <small>{{ week.kpi?.type === 'drr' ? 'ДРР' : 'CPA' }} 7 дней</small>
-        </div>
-        <strong :class="KPI_TONES[week.kpi?.status]">
-          {{ week.kpi?.type ? kpiValue(week.kpi) : rub(week.totals.cpa_kopecks) }}
-        </strong>
-        <span class="cell-note">
-          <RouterLink v-if="!week.kpi?.type" :to="`/w/${ws.id}/settings`">задать KPI</RouterLink>
-          <template v-else>{{ kpiTarget(week.kpi) }}</template>
-        </span>
-        <Sparkline
-          v-if="week.kpi?.type !== 'drr'"
-          :points="week.by_day"
-          :prev-points="week.prev_by_day"
-          value-key="cpa_kopecks"
-          color="var(--c-amber)"
-        />
-      </div>
-      <div class="stat-card">
-        <div class="stat-card__head">
-          <span class="stat-card__icon is-teal"><PiggyBank aria-hidden="true" /></span>
-          <small>Бюджет месяца</small>
-        </div>
-        <template v-if="row.budget">
-          <strong :class="BUDGET_TONES[row.budget.status]">
-            {{ row.budget.pace_pct != null ? pct(row.budget.pace_pct, 0) : rub(row.budget.spent_kopecks) }}
-          </strong>
-          <span class="cell-note">
-            {{ rub(row.budget.spent_kopecks) }} из {{ rub(row.budget.budget_kopecks) }} · до
-            {{ rub(row.budget.daily_allowed_kopecks) }}/день
-          </span>
+    <div class="ktiles ktiles--six">
+      <KpiTile label="Сегодня" :value="rub(row.spend_today)" :note="asOfNote(data.today_updated_at)" />
+      <KpiTile
+        label="Расход 7 дней"
+        :value="rub(week.totals.cost_kopecks)"
+        :change="week.compare.cost_kopecks"
+        versus="к прошлым 7 дням"
+        note="к прошлым 7 дням"
+        :points="week.by_day"
+        :prev-points="week.prev_by_day"
+        value-key="cost_kopecks"
+      />
+      <KpiTile
+        label="Конверсии 7 дней"
+        :value="num(week.totals.conversions || 0)"
+        :change="week.compare.conversions"
+        good="up"
+        versus="к прошлым 7 дням"
+        :note="conversionsSource"
+        :points="week.by_day"
+        :prev-points="week.prev_by_day"
+        value-key="conversions"
+      />
+      <KpiTile
+        :label="`${isDrr ? 'ДРР' : 'CPA'} 7 дней`"
+        :value="week.kpi?.type ? kpiValue(week.kpi) : rub(week.totals.cpa_kopecks)"
+        :change="week.compare[isDrr ? 'drr' : 'cpa_kopecks']"
+        good="down"
+        versus="к прошлым 7 дням"
+        :note="week.kpi?.type ? kpiGoal(week.kpi) : ''"
+        :note-tone="KPI_TONES[week.kpi?.status] || ''"
+        :points="isDrr ? [] : week.by_day"
+        :prev-points="week.prev_by_day"
+        value-key="cpa_kopecks"
+      >
+        <template v-if="!week.kpi?.type" #note>
+          <RouterLink :to="`/w/${ws.id}/settings`">задать цель</RouterLink>
         </template>
-        <template v-else>
-          <strong>—</strong>
-          <span class="cell-note"><RouterLink :to="`/w/${ws.id}/settings`">задать бюджет</RouterLink></span>
+      </KpiTile>
+      <KpiTile
+        label="Бюджет месяца"
+        :value="row.budget ? rub(row.budget.spent_kopecks) : '—'"
+        :note="budgetNote"
+        :note-tone="row.budget ? BUDGET_TONES[row.budget.status] || '' : ''"
+      >
+        <template v-if="!row.budget" #note>
+          <RouterLink :to="`/w/${ws.id}/settings`">задать бюджет</RouterLink>
         </template>
-      </div>
-      <div class="stat-card">
-        <div class="stat-card__head">
-          <span class="stat-card__icon is-blue"><Landmark aria-hidden="true" /></span>
-          <small>Баланс кабинетов</small>
-        </div>
-        <strong>{{ row.balance_kopecks != null ? rub(row.balance_kopecks) : '—' }}</strong>
-        <span class="cell-note" :class="balanceTone(row.days_on_balance)">
-          {{ row.days_on_balance != null ? `хватит ≈ на ${daysShort(row.days_on_balance)}` : 'нет данных о расходе' }}
-        </span>
-      </div>
+      </KpiTile>
+      <KpiTile
+        label="Баланс кабинетов"
+        :value="row.balance_kopecks != null ? rub(row.balance_kopecks) : '—'"
+        :note="row.days_on_balance != null ? `хватит ≈ на ${daysShort(row.days_on_balance)}` : 'нет данных о расходе'"
+        :note-tone="balanceTone(row.days_on_balance)"
+      />
     </div>
 
     <section class="panel">
@@ -165,9 +127,12 @@
           <p class="hint">{{ formatDate(week.date_from) }} — {{ formatDate(week.date_to) }} против предыдущих 7 дней.</p>
         </div>
         <div class="filters filters--inline">
-          <select v-model="chartKey" aria-label="Метрика графика">
-            <option v-for="key in CHART_METRICS" :key="key" :value="key">{{ METRIC_BY_KEY[key].label }}</option>
-          </select>
+          <UiSelect
+            v-model="chartKey"
+            size="sm"
+            aria-label="Метрика графика"
+            :options="CHART_METRICS.map((key) => ({ value: key, label: METRIC_BY_KEY[key].label }))"
+          />
         </div>
       </div>
       <TrendChart
@@ -190,11 +155,14 @@
         >
           <small>{{ m.label }}</small>
           <strong>{{ m.fmt(week.totals[m.key]) }}</strong>
-          <span :class="deltaTone(week.compare[m.key], m.inverse)">
-            {{ delta(week.compare[m.key]) }}
-            <template v-if="week.previous && week.previous[m.key] != null">
-              <small>было {{ m.fmt(week.previous[m.key]) }}</small>
-            </template>
+          <span class="metric-grid__cmp">
+            <DeltaChip
+              v-if="week.compare[m.key] != null"
+              :value="week.compare[m.key]"
+              :good="m.good || ''"
+              versus="к прошлым 7 дням"
+            />
+            <small v-if="week.previous && week.previous[m.key] != null">было {{ m.fmt(week.previous[m.key]) }}</small>
           </span>
         </button>
       </div>
@@ -202,37 +170,18 @@
 
     <section class="panel">
       <div class="panel__head">
-        <h2>Что требует внимания</h2>
-        <span class="chip" :class="data.problems.length ? 'chip--warning' : 'chip--ok'">
-          {{ data.problems.length ? `${data.problems.length}` : 'всё спокойно' }}
-        </span>
-      </div>
-      <p v-if="!data.problems.length" class="empty">Ничего не горит: токены живы, бюджет и KPI в норме.</p>
-      <div v-else class="list">
-        <div
-          v-for="(p, i) in data.problems"
-          :key="`${p.kind}-${p.account_id}-${p.campaign_row_id}-${i}`"
-          class="list-row problem"
-          :class="`is-${p.severity}`"
+        <h2>Что требует внимания <span class="cgroup__n">{{ data.problems.length }}</span></h2>
+        <RouterLink
+          v-if="data.problems.length"
+          class="btn btn--ghost btn--sm"
+          :to="{ path: `/w/${ws.id}/chat`, query: { ask: 'problems' } }"
         >
-          <div>
-            <span class="chip" :class="`chip--${p.severity}`">{{ SEVERITY_LABELS[p.severity] }}</span>
-            <strong>{{ p.title }}</strong>
-            <small>
-              {{ p.object_name }}
-              <template v-if="p.detail">{{ p.object_name ? ' · ' : '' }}{{ errorDetail(p.detail) }}</template>
-            </small>
-          </div>
-          <RouterLink v-if="problemLink(p)" class="btn btn--ghost" :to="problemLink(p).to">
-            {{ problemLink(p).label }}
-          </RouterLink>
-        </div>
-      </div>
-      <div class="row-actions">
-        <RouterLink class="btn btn--ghost" :to="{ path: `/w/${ws.id}/chat`, query: { ask: 'problems' } }">
+          <Sparkles aria-hidden="true" />
           Разобрать с ИИ
         </RouterLink>
       </div>
+      <p v-if="!data.problems.length" class="empty">Ничего не горит: токены живы, бюджет и KPI в норме.</p>
+      <ProblemList v-else :problems="data.problems" />
     </section>
 
     <div class="split">
@@ -291,28 +240,27 @@
 import { computed, onMounted, ref } from 'vue'
 import { RouterLink } from 'vue-router'
 import {
-  BadgePercent,
-  CalendarClock,
   CircleCheck,
   CirclePause,
   CircleDashed,
-  Crosshair,
-  Landmark,
   OctagonAlert,
-  PiggyBank,
-  Target,
+  RefreshCw,
+  Sparkles,
   TriangleAlert,
-  Wallet,
 } from '@lucide/vue'
+import DeltaChip from '../../components/DeltaChip.vue'
 import ExpertHint from '../../components/ExpertHint.vue'
 import HomeAsk from '../../components/HomeAsk.vue'
+import KpiTile from '../../components/KpiTile.vue'
 import PendingDecisions from '../../components/PendingDecisions.vue'
+import ProblemList from '../../components/ProblemList.vue'
 import SignalCards from '../../components/SignalCards.vue'
+import TrendChart from '../../components/TrendChart.vue'
+import PageHeader from '../../components/ui/PageHeader.vue'
+import UiSelect from '../../components/ui/UiSelect.vue'
 import { useExpert } from '../../composables/useExpert'
 import { campaignHealth, convWord } from '../../utils/campaignHealth'
-import Sparkline from '../../components/Sparkline.vue'
-import TrendChart from '../../components/TrendChart.vue'
-import { errorDetail, errorText, jobProgressText, webApi, wsApi } from '../../api/web'
+import { errorText, jobProgressText, webApi, wsApi } from '../../api/web'
 import { pushToast } from '../../composables/useToasts'
 import {
   ACTION_SOURCES,
@@ -320,18 +268,16 @@ import {
   BUDGET_TONES,
   CAMPAIGN_STATES,
   KPI_TONES,
-  SEVERITY_LABELS,
+  asOfNote,
   balanceTone,
-  delta,
   daysLong,
   daysShort,
-  deltaTone,
   formatDate,
   formatDateTime,
+  kpiGoal,
   kpiTarget,
   kpiValue,
   num,
-  problemLink,
   pct,
   rub,
 } from '../../utils/format'
@@ -354,6 +300,24 @@ const week = computed(() => data.value?.week || {})
 const conversionsSource = computed(() =>
   week.value.conversions_source === 'goal' ? `цель «${week.value.goal_name}»` : 'конверсии Директа',
 )
+const isDrr = computed(() => week.value.kpi?.type === 'drr')
+
+/** Прогноз округляем: точность до рубля у прогноза ложная. */
+function approxRub(kopecks) {
+  const step = kopecks >= 1_000_000 ? 100_000 : 10_000
+  return `~${rub(Math.round(kopecks / step) * step)}`
+}
+
+const budgetNote = computed(() => {
+  const b = row.value.budget
+  if (!b) return ''
+  const of = `из ${rub(b.budget_kopecks)}`
+  if (b.status === 'exhausted') return `${of} · исчерпан`
+  if ((b.status === 'over' || b.status === 'under') && b.forecast_kopecks != null) {
+    return `${of} · к концу месяца ${approxRub(b.forecast_kopecks)}`
+  }
+  return `${of} · до ${rub(b.daily_allowed_kopecks)}/день`
+})
 
 const HEALTH_BADGE = {
   bad: { icon: OctagonAlert, text: 'Расход без заявок' },

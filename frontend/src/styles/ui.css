@@ -601,3 +601,219 @@
     margin-left: 0;
   }
 }
+
+/* ---------- Плитки KPI экспертной главной (KpiTile) ---------- */
+
+.ktiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 12px;
+  margin-bottom: 20px;
+}
+
+/* Шесть плиток проекта: три в ряд, чтобы шестая не висела одна; в одну строку — только на широком экране. */
+.ktiles--six {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+@media (min-width: 1440px) {
+  .ktiles--six {
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+  }
+}
+
+/* На телефоне — по две; при нечётном числе первая плитка во всю ширину, чтобы последняя не осталась одна. */
+@media (max-width: 560px) {
+  .ktiles,
+  .ktiles--six {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .ktiles > .ktile:first-child:nth-last-child(odd) {
+    grid-column: 1 / -1;
+  }
+}
+
+.ktile {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  padding: 14px 16px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-card);
+  background: var(--surface);
+}
+
+.ktile__label {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ktile__value {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  margin-top: 6px;
+}
+
+.ktile__value strong {
+  font-size: 22px;
+  font-weight: 800;
+  line-height: 1.15;
+  letter-spacing: -0.03em;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.ktile__note {
+  margin-top: 4px;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 12.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ktile__note a {
+  color: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.ktile .sparkline {
+  height: 50px;
+  margin-top: auto;
+  padding-top: 10px;
+}
+
+.delta svg {
+  width: 12px;
+  height: 12px;
+  stroke-width: 2.5;
+}
+
+/* ---------- Список проблем экспертного режима (ProblemList) ---------- */
+
+.plist {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.plist__row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 0;
+  border-top: 1px solid var(--line);
+}
+
+.plist__row:first-child {
+  border-top: 0;
+}
+
+.plist__sev {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: var(--r-sm);
+  background: var(--surface-2);
+  color: var(--muted);
+}
+
+.plist__row.is-critical .plist__sev {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.plist__row.is-warning .plist__sev {
+  background: var(--warn-soft);
+  color: var(--warn);
+}
+
+.plist__sev svg {
+  width: 16px;
+  height: 16px;
+}
+
+.plist__text {
+  display: grid;
+  flex: 1;
+  gap: 2px;
+  min-width: 0;
+}
+
+.plist__title,
+.plist__where {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.plist__title {
+  font-size: 14px;
+  font-weight: 650;
+}
+
+.plist__where {
+  color: var(--muted);
+  font-size: 12.5px;
+}
+
+.plist__act {
+  flex: none;
+}
+
+/* Телефон: причина — на всю ширину и до двух строк, действие — под ней, вровень с текстом. */
+@media (max-width: 640px) {
+  .plist__row {
+    flex-wrap: wrap;
+    align-items: flex-start;
+    row-gap: 8px;
+  }
+
+  .plist__text {
+    flex-basis: calc(100% - 42px);
+  }
+
+  .plist__act {
+    margin-left: 42px;
+  }
+
+  .plist__title {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    white-space: normal;
+  }
+}
+
+/* ---------- Таблица проектов на экспертной главной ---------- */
+
+.sevdot {
+  display: inline-block;
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--ok);
+}
+
+.sevdot.is-critical {
+  background: var(--danger);
+}
+
+.sevdot.is-warning {
+  background: var(--warn);
+}
+
+.sevdot.is-info {
+  background: var(--faint);
+}
