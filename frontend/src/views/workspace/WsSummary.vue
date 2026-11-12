@@ -142,30 +142,21 @@
         :label="METRIC_BY_KEY[chartKey].label"
         :format-value="METRIC_BY_KEY[chartKey].fmt"
       />
-      <div class="metric-grid">
-        <button
-          v-for="m in METRICS"
-          :key="m.key"
-          type="button"
-          class="metric-grid__item"
-          :class="{ active: chartKey === m.key, 'is-static': !CHART_METRICS.includes(m.key) }"
-          :disabled="!CHART_METRICS.includes(m.key)"
-          :aria-pressed="chartKey === m.key"
-          @click="chartKey = m.key"
-        >
-          <small>{{ m.label }}</small>
-          <strong>{{ m.fmt(week.totals[m.key]) }}</strong>
-          <span class="metric-grid__cmp">
-            <DeltaChip
-              v-if="week.compare[m.key] != null"
-              :value="week.compare[m.key]"
-              :good="m.good || ''"
-              versus="к прошлым 7 дням"
-            />
-            <small v-if="week.previous && week.previous[m.key] != null">было {{ m.fmt(week.previous[m.key]) }}</small>
+      <MetricGrid
+        v-model="chartKey"
+        :totals="week.totals"
+        :previous="week.previous"
+        :compare="week.compare"
+        versus="к прошлым 7 дням"
+        :metrika="!!(week.counter_ok && week.metrika_updated_at)"
+      >
+        <template #no-metrika>
+          <span v-if="!week.counter_ok">
+            <RouterLink to="/cabinet/connections">Подключите Метрику</RouterLink>, чтобы видеть визиты
           </span>
-        </button>
-      </div>
+          <span v-else>Визиты появятся после первой загрузки Метрики</span>
+        </template>
+      </MetricGrid>
     </section>
 
     <section class="panel">
@@ -248,10 +239,10 @@ import {
   Sparkles,
   TriangleAlert,
 } from '@lucide/vue'
-import DeltaChip from '../../components/DeltaChip.vue'
 import ExpertHint from '../../components/ExpertHint.vue'
 import HomeAsk from '../../components/HomeAsk.vue'
 import KpiTile from '../../components/KpiTile.vue'
+import MetricGrid from '../../components/MetricGrid.vue'
 import PendingDecisions from '../../components/PendingDecisions.vue'
 import ProblemList from '../../components/ProblemList.vue'
 import SignalCards from '../../components/SignalCards.vue'
@@ -281,7 +272,7 @@ import {
   pct,
   rub,
 } from '../../utils/format'
-import { CHART_METRICS, METRICS, METRIC_BY_KEY } from './metrics'
+import { CHART_METRICS, METRIC_BY_KEY } from './metrics'
 import { useWs } from './context'
 
 const STATUS_LABELS = { ok: 'выполнено', partial: 'частично', error: 'ошибка', failed: 'ошибка' }

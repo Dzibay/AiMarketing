@@ -18,32 +18,11 @@
   </template>
 
   <template v-else>
-  <section class="panel">
-    <div class="panel__head">
-      <div>
-        <h2>Период</h2>
-        <p class="hint">
-          Сумма всех проектов против предыдущего периода той же длины. Конверсии каждый проект считает по своей
-          цели (или по Директу) — в сумме они складываются как есть. Площадки и объявления — внутри проекта.
-        </p>
-      </div>
-    </div>
-    <div class="filters filters--inline">
-      <div class="seg" role="group" aria-label="Быстрый период">
-        <button v-for="n in [7, 14, 30]" :key="n" type="button" :class="{ active: preset === n }" @click="setPreset(n)">
-          {{ n }} дн.
-        </button>
-      </div>
-      <div v-field class="field">
-        <label>С</label>
-        <input v-model="range.date_from" type="date" :max="range.date_to" @change="customRange" />
-      </div>
-      <div v-field class="field">
-        <label>По</label>
-        <input v-model="range.date_to" type="date" :min="range.date_from" @change="customRange" />
-      </div>
-    </div>
-  </section>
+  <div class="ws-toolbar report-bar">
+    <UiDateRange :from="range.date_from" :to="range.date_to" :preset="preset" @change="setRange">
+      <TermHint title="Период" :text="PERIOD_HINT" />
+    </UiDateRange>
+  </div>
 
   <div v-if="loading && !data" class="panel"><p class="empty">Считаем…</p></div>
   <div v-else-if="loadError" class="panel"><p class="empty">{{ loadError }}</p></div>
@@ -63,25 +42,20 @@
           {{ formatDate(data.prev_to) }}
         </span>
       </div>
-      <div class="metric-grid">
-        <button
-          v-for="m in METRICS"
-          :key="m.key"
-          type="button"
-          class="metric-grid__item"
-          :class="{ active: chartKey === m.key, 'is-static': !CHART_METRICS.includes(m.key) }"
-          :disabled="!CHART_METRICS.includes(m.key)"
-          :aria-pressed="chartKey === m.key"
-          @click="chartKey = m.key"
-        >
-          <small>{{ m.label }}</small>
-          <strong>{{ m.fmt(data.totals[m.key]) }}</strong>
-          <span :class="deltaTone(data.compare[m.key], m.inverse)">
-            {{ delta(data.compare[m.key]) }}
-            <small v-if="data.previous && data.previous[m.key] != null">было {{ m.fmt(data.previous[m.key]) }}</small>
+      <MetricGrid
+        v-model="chartKey"
+        :totals="data.totals"
+        :previous="data.previous"
+        :compare="data.compare"
+        :metrika="!!(data.counter_ok && data.metrika_updated_at)"
+      >
+        <template #no-metrika>
+          <span v-if="!data.counter_ok">
+            <RouterLink to="/cabinet/connections">Подключите Метрику</RouterLink>, чтобы видеть визиты
           </span>
-        </button>
-      </div>
+          <span v-else>Визиты появятся после первой загрузки Метрики</span>
+        </template>
+      </MetricGrid>
       <TrendChart
         :points="data.by_day"
         :prev-points="data.prev_by_day"
@@ -205,10 +179,12 @@
 <script setup>
 import { computed, onMounted, reactive, ref } from 'vue'
 import { RouterLink } from 'vue-router'
+import MetricGrid from '../components/MetricGrid.vue'
 import Sparkline from '../components/Sparkline.vue'
 import TermHint from '../components/TermHint.vue'
 import TrendChart from '../components/TrendChart.vue'
 import SimpleReport from '../components/SimpleReport.vue'
+import UiDateRange from '../components/ui/UiDateRange.vue'
 import { useExpert } from '../composables/useExpert'
 import { errorText, webApi } from '../api/web'
 import {
@@ -227,9 +203,14 @@ import {
   rub,
 } from '../utils/format'
 import { useHead } from '../utils/useHead'
-import { CHART_METRICS, METRICS, METRIC_BY_KEY } from './workspace/metrics'
+import { METRIC_BY_KEY } from './workspace/metrics'
 
 useHead('Отчёты — Толк', true)
+
+const PERIOD_HINT =
+  'Сумма всех проектов против предыдущего периода той же длины. Конверсии каждый проект считает по своей цели ' +
+  '(или по Директу) — в сумме они складываются как есть. «Месяц» — с первого числа по вчера. Площадки и ' +
+  'объявления — в отчёте проекта.'
 
 const data = ref(null)
 const loading = ref(false)
@@ -270,9 +251,9 @@ function setPreset(n) {
   load()
 }
 
-function customRange() {
-  if (!range.date_from || !range.date_to) return
-  preset.value = null
+function setRange({ date_from, date_to, preset: p }) {
+  preset.value = p
+  Object.assign(range, { date_from, date_to })
   load()
 }
 
@@ -280,6 +261,7 @@ onMounted(load)
 </script>
 
 <style scoped>
+
 .spark-col {
   width: 130px;
   min-width: 110px;

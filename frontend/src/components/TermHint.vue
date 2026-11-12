@@ -28,8 +28,15 @@
 <script setup>
 import { computed, onBeforeUnmount, ref } from 'vue'
 
-/** Подсказка «?» к термину рекламы: наведение, фокус или нажатие (на телефоне) открывают пояснение. */
-const props = defineProps({ term: { type: String, required: true } })
+/**
+ * Подсказка «?» к термину рекламы: наведение, фокус или нажатие (на телефоне) открывают пояснение.
+ * term — из словаря ниже; title и text — своё пояснение к месту (например, как считается период).
+ */
+const props = defineProps({
+  term: { type: String, default: '' },
+  title: { type: String, default: '' },
+  text: { type: String, default: '' },
+})
 
 const TERMS = {
   // Колонки таблицы проектов на главной.
@@ -48,6 +55,10 @@ const TERMS = {
   balance: {
     title: 'Баланс',
     text: 'Деньги в кабинетах Директа проекта и на сколько дней их хватит при расходе последней недели.',
+  },
+  kpi: {
+    title: 'KPI',
+    text: 'Главная цифра проекта: сервис сравнивает её с целевым значением и предупреждает, если реклама идёт хуже плана. CPA — цена заявки или покупки, ДРР — доля выручки, ушедшая на рекламу. Для заявок обычно берут CPA, для магазина с доходом в Метрике — ДРР.',
   },
   cpa: {
     title: 'CPA',
@@ -74,7 +85,9 @@ const TERMS = {
 const POP_WIDTH = 280
 const GAP = 8
 
-const entry = computed(() => TERMS[props.term] || { title: props.term, text: '' })
+const entry = computed(() =>
+  props.text ? { title: props.title, text: props.text } : TERMS[props.term] || { title: props.title || props.term, text: '' },
+)
 const id = `term-hint-${Math.random().toString(36).slice(2, 9)}`
 const open = ref(false)
 const pinned = ref(false)

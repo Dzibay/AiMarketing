@@ -370,6 +370,8 @@ def portfolio_analytics(user_id: int, *, date_from: date, date_to: date) -> dict
                 "compare": data["compare"],
                 "campaigns": len(data["by_campaign"]),
                 "spark": [d["cost_kopecks"] for d in data["by_day"]],
+                "counter_ok": data["counter_ok"],
+                "metrika_updated_at": data["metrika_updated_at"],
             }
         )
         campaigns.extend({**c, "project": project} for c in data["by_campaign"])
@@ -386,7 +388,13 @@ def portfolio_analytics(user_id: int, *, date_from: date, date_to: date) -> dict
         return out
 
     totals = _combined([p["totals"] for p in projects])
+    # Отказы — среднее по визитам проектов, где Метрика их отдала.
+    bounce_visits = [(p["totals"]["bounce_rate"], p["totals"]["visits"]) for p in projects
+                     if p["totals"].get("bounce_rate") is not None and p["totals"]["visits"]]
+    weight = sum(v for _, v in bounce_visits)
+    totals["bounce_rate"] = round(sum(b * v for b, v in bounce_visits) / weight, 1) if weight else None
     previous = _combined([r for rows in prev_days.values() for r in rows])
+    metrika_at = [p["metrika_updated_at"] for p in projects if p["metrika_updated_at"]]
     projects.sort(key=lambda p: (-p["totals"]["cost_kopecks"], p["name"].lower()))
     campaigns.sort(key=lambda c: (-c["cost_kopecks"], c["name"]))
     return {
@@ -399,6 +407,9 @@ def portfolio_analytics(user_id: int, *, date_from: date, date_to: date) -> dict
         "compare": {key: _delta(totals[key], previous[key]) for key in _COMPARE_KEYS},
         "by_day": series(date_from, cur_days),
         "prev_by_day": series(prev_from, prev_days),
+        # Метрика есть хотя бы у одного проекта — иначе визиты в сумме всегда 0 и плитку не показываем.
+        "counter_ok": any(p["counter_ok"] for p in projects),
+        "metrika_updated_at": max(metrika_at) if metrika_at else None,
         "projects": projects,
         "campaigns": campaigns,
     }
@@ -435,6 +446,8 @@ def workspace_summary(user_id: int, workspace_id: int) -> dict:
             "prev_by_day": week["prev_by_day"],
             "conversions_source": week["conversions_source"],
             "goal_name": week["goal_name"],
+            "counter_ok": week["counter_ok"],
+            "metrika_updated_at": week["metrika_updated_at"],
         },
         "top_campaigns": week["by_campaign"][:5],
         "recent_actions": list_action_logs(user_id, 10, workspace_id=workspace_id),

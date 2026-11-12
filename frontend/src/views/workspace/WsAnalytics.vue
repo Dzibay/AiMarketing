@@ -12,52 +12,22 @@
   />
 
   <template v-else>
-  <section class="panel">
-    <div class="panel__head">
-      <div>
-        <h2>Период</h2>
-        <p class="hint">
-          Сравнение с предыдущим периодом той же длины. Конверсии —
-          {{ data?.conversions_source === 'goal' ? `по цели Метрики «${data.goal_name}»` : 'конверсии Директа' }}<template
-            v-if="data?.conversions_source !== 'goal'"
-          >
-            (цель Метрики можно выбрать в <RouterLink :to="`/w/${ws.id}/settings`">настройках</RouterLink>)</template
-          >.
-        </p>
-      </div>
-      <button class="btn btn--ghost" type="button" :disabled="syncing" @click="syncStats">
-        {{ syncing ? 'Загружаем…' : `Загрузить статистику за ${syncDays} дн.` }}
-      </button>
-    </div>
-    <div class="filters filters--inline">
-      <div class="seg" role="group" aria-label="Быстрый период">
-        <button
-          v-for="n in [7, 14, 30]"
-          :key="n"
-          type="button"
-          :class="{ active: preset === n }"
-          @click="setPreset(n)"
-        >
-          {{ n }} дн.
-        </button>
-      </div>
-      <div v-field class="field">
-        <label>С</label>
-        <input v-model="range.date_from" type="date" :max="range.date_to" @change="customRange" />
-      </div>
-      <div v-field class="field">
-        <label>По</label>
-        <input v-model="range.date_to" type="date" :min="range.date_from" @change="customRange" />
-      </div>
-    </div>
-    <p class="sync-status">
-      <template v-if="syncing">{{ syncText }}</template>
-      <template v-else-if="data">
-        Директ обновлён {{ data.direct_updated_at ? formatDateTime(data.direct_updated_at) : 'ещё не загружался' }},
-        Метрика — {{ data.metrika_updated_at ? formatDateTime(data.metrika_updated_at) : 'ещё не загружалась' }}.
-      </template>
-    </p>
-  </section>
+  <div class="ws-toolbar report-bar">
+    <UiDateRange :from="range.date_from" :to="range.date_to" :preset="preset" @change="setRange">
+      <TermHint title="Период" :text="periodHint" />
+    </UiDateRange>
+    <button class="btn btn--ghost btn--sm" type="button" :disabled="syncing" @click="syncStats">
+      <RefreshCw aria-hidden="true" />
+      {{ syncing ? 'Загружаем…' : `Загрузить статистику за ${syncDays} дн.` }}
+    </button>
+  </div>
+  <p class="sync-status report-sync">
+    <template v-if="syncing">{{ syncText }}</template>
+    <template v-else-if="data">
+      Директ обновлён {{ data.direct_updated_at ? formatDateTime(data.direct_updated_at) : 'ещё не загружался' }},
+      Метрика — {{ data.metrika_updated_at ? formatDateTime(data.metrika_updated_at) : 'ещё не загружалась' }}.
+    </template>
+  </p>
 
   <div v-if="loading && !data" class="panel"><p class="empty">Считаем…</p></div>
   <div v-else-if="loadError" class="panel"><p class="empty">{{ loadError }}</p></div>
@@ -71,28 +41,22 @@
           {{ formatDate(data.prev_to) }}
         </span>
       </div>
-      <div class="metric-grid">
-        <button
-          v-for="m in METRICS"
-          :key="m.key"
-          type="button"
-          class="metric-grid__item"
-          :class="{ active: chartKey === m.key, 'is-static': !CHART_METRICS.includes(m.key) }"
-          :disabled="!CHART_METRICS.includes(m.key)"
-          :aria-pressed="chartKey === m.key"
-          @click="chartKey = m.key"
-        >
-          <small>{{ m.label }}</small>
-          <strong>{{ m.fmt(data.totals[m.key]) }}</strong>
-          <span :class="deltaTone(data.compare[m.key], m.inverse)">
-            {{ delta(data.compare[m.key]) }}
-            <small v-if="data.previous && data.previous[m.key] != null">было {{ m.fmt(data.previous[m.key]) }}</small>
+      <MetricGrid
+        v-model="chartKey"
+        :totals="data.totals"
+        :previous="data.previous"
+        :compare="data.compare"
+        :metrika="!!(data.counter_ok && data.metrika_updated_at)"
+      >
+        <template #no-metrika>
+          <span v-if="!data.counter_ok">
+            <RouterLink to="/cabinet/connections">Подключите Метрику</RouterLink>, чтобы видеть визиты
           </span>
-        </button>
-      </div>
+          <span v-else>Визиты появятся после первой загрузки Метрики</span>
+        </template>
+      </MetricGrid>
       <p v-if="data.kpi?.type" class="hint">
         KPI: <strong :class="KPI_TONES[data.kpi.status]">{{ kpiValue(data.kpi) }}</strong> · {{ kpiTarget(data.kpi) }}
-        <template v-if="data.totals.bounce_rate != null"> · отказы {{ pct(data.totals.bounce_rate) }}</template>
       </p>
       <TrendChart
         :points="data.by_day"
@@ -238,17 +202,18 @@
 <script setup>
 import { computed, onMounted, reactive, ref } from 'vue'
 import { RouterLink } from 'vue-router'
+import { RefreshCw } from '@lucide/vue'
+import MetricGrid from '../../components/MetricGrid.vue'
 import TrendChart from '../../components/TrendChart.vue'
 import TermHint from '../../components/TermHint.vue'
 import SimpleReport from '../../components/SimpleReport.vue'
+import UiDateRange from '../../components/ui/UiDateRange.vue'
 import { useExpert } from '../../composables/useExpert'
 import { errorText, jobProgressText, wsApi } from '../../api/web'
 import { pushToast } from '../../composables/useToasts'
 import {
   CAMPAIGN_STATES,
   KPI_TONES,
-  delta,
-  deltaTone,
   formatDate,
   formatDateTime,
   kpiTarget,
@@ -256,11 +221,10 @@ import {
   lastDays,
   monthToDate,
   num,
-  pct,
   rub,
   rubles,
 } from '../../utils/format'
-import { CHART_METRICS, METRICS, METRIC_BY_KEY } from './metrics'
+import { METRIC_BY_KEY } from './metrics'
 import { useWs } from './context'
 
 const TOP_TABS = [
@@ -345,11 +309,19 @@ function setPreset(n) {
   load()
 }
 
-function customRange() {
-  if (!range.date_from || !range.date_to) return
-  preset.value = null
+function setRange({ date_from, date_to, preset: p }) {
+  preset.value = p
+  Object.assign(range, { date_from, date_to })
   load()
 }
+
+const periodHint = computed(() => {
+  const conv =
+    data.value?.conversions_source === 'goal'
+      ? `по цели Метрики «${data.value.goal_name}»`
+      : 'из Директа; цель Метрики можно выбрать в настройках проекта'
+  return `Цифры сравниваются с предыдущим периодом той же длины. Конверсии — ${conv}. «Месяц» — с первого числа по вчера.`
+})
 
 async function syncStats() {
   syncing.value = true
@@ -369,3 +341,14 @@ async function syncStats() {
 
 onMounted(load)
 </script>
+
+<style scoped>
+.report-bar {
+  margin-bottom: 0.35rem;
+}
+
+
+.report-sync {
+  margin: 0 0 1rem;
+}
+</style>

@@ -4,18 +4,17 @@
       Предложения ИИ {{ project ? `по сайту «${project.name}»` : 'по всем сайтам' }}, которые ждут вашего решения. В
       Директе ничего не меняется, пока вы не нажмёте «Выполнить».
     </p>
-    <button class="btn btn--ghost" type="button" :disabled="loading" @click="load">
-      <RefreshCw :size="15" aria-hidden="true" />Обновить
-    </button>
   </div>
 
   <div v-if="loading && !items.length" class="ccard ccard--note">Загружаем…</div>
   <div v-else-if="loadError" class="ccard ccard--note tone-bad">{{ loadError }}</div>
-  <div v-else-if="!items.length" class="ccard ccard--note pend-empty">
-    <Check :size="18" aria-hidden="true" />
-    <span>Решений ничего не ждёт. Новые предложения ИИ появятся здесь, на главной и в чатах.</span>
-    <RouterLink class="btn btn--accent" :to="chatHome">Спросить ИИ</RouterLink>
-  </div>
+  <EmptyState
+    v-else-if="!items.length"
+    :icon="Check"
+    text="Решений ничего не ждёт. Новые предложения ИИ появятся здесь, на главной и в чатах."
+  >
+    <template #action><RouterLink class="btn btn--accent" :to="chatHome">Спросить ИИ</RouterLink></template>
+  </EmptyState>
   <template v-else>
     <section v-for="g in groups" :key="g.key">
       <h2 class="section-h pend-h">
@@ -64,9 +63,10 @@
 <script setup>
 import { computed, reactive, ref, watch } from 'vue'
 import { RouterLink } from 'vue-router'
-import { Check, RefreshCw } from '@lucide/vue'
+import { Check } from '@lucide/vue'
+import EmptyState from '../components/ui/EmptyState.vue'
 import { aiApi, errorText } from '../api/web'
-import { refreshPending } from '../composables/usePending'
+import { refreshPending, usePending } from '../composables/usePending'
 import { useProjectFilter } from '../composables/useProjectFilter'
 import { pushToast } from '../composables/useToasts'
 import { formatDateTime } from '../utils/format'
@@ -89,6 +89,8 @@ const total = ref(0)
 const loading = ref(false)
 const loadError = ref('')
 const busy = reactive({})
+// Решённые здесь: запрос списка, ушедший до решения, не должен вернуть карточку обратно.
+const decided = new Set()
 
 const chatHome = computed(() => (projectId.value ? `/w/${projectId.value}/chat` : '/cabinet/chat'))
 
@@ -116,8 +118,8 @@ async function load() {
   try {
     const res = await aiApi.pending(projectId.value)
     if (n !== seq) return
-    items.value = res.items || []
-    total.value = res.total || items.value.length
+    items.value = (res.items || []).filter((a) => !decided.has(a.id))
+    total.value = Math.max(items.value.length, (res.total || 0) - (res.items || []).length + items.value.length)
   } catch (err) {
     if (n === seq) loadError.value = errorText(err)
   } finally {
@@ -130,6 +132,7 @@ async function decide(a, approve) {
   busy[a.id] = true
   try {
     const res = await aiApi.decide(a.id, approve, false, [])
+    decided.add(a.id)
     items.value = items.value.filter((x) => x.id !== a.id)
     total.value = Math.max(0, total.value - 1)
     if (!approve) pushToast('Отклонено')
@@ -146,21 +149,16 @@ async function decide(a, approve) {
 }
 
 watch(projectId, load, { immediate: true })
+
+// Кнопки «Обновить» нет: шапка раз в минуту и при возврате на вкладку пересчитывает «Ждёт решения» —
+// изменилось число (новое предложение или решение в чате) — подтягиваем список.
+const { pendingCount } = usePending()
+watch(pendingCount, () => {
+  if (!loading.value) load()
+})
 </script>
 
 <style scoped>
-.ws-toolbar .btn {
-  gap: 6px;
-}
-.pend-empty {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 10px 12px;
-}
-.pend-empty span {
-  flex: 1 1 260px;
-}
 .pend-h {
   display: flex;
   align-items: center;

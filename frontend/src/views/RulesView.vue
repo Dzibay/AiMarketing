@@ -1,8 +1,5 @@
 <template>
   <RulesManager />
-  <p class="hint autopilot-note">
-    Правила одного сайта и эксперименты — выберите проект в меню, в списке «Проекты».
-  </p>
 </template>
 
 <script setup>

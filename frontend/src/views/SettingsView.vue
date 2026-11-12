@@ -5,37 +5,51 @@
     <template v-if="tab === 'profile'">
       <section class="panel">
         <h2>Профиль</h2>
-        <ul class="plan-facts">
-          <li>
-            <span>Почта</span>
-            <strong>
-              {{ user?.email || '—' }}
-              <span v-if="user?.email" class="chip" :class="user.email_verified ? 'chip--ok' : 'chip--warning'">
-                {{ user.email_verified ? 'подтверждена' : 'не подтверждена' }}
-              </span>
-            </strong>
-          </li>
-          <li>
-            <span>Вход через Яндекс</span>
-            <strong>{{ user?.has_yandex ? 'привязан' : 'нет' }}</strong>
-          </li>
-          <li v-if="user?.created_at">
-            <span>С нами с</span>
-            <strong>{{ formatDate(user.created_at) }}</strong>
-          </li>
-        </ul>
-        <form class="filters" @submit.prevent="saveName">
-          <div v-field class="field field--wide">
-            <label>Имя</label>
-            <input v-model.trim="name" type="text" maxlength="120" placeholder="Как к вам обращаться" autocomplete="name" />
+        <dl class="profile-grid">
+          <div class="profile-grid__row">
+            <dt><label for="profile-name">Имя</label></dt>
+            <dd>
+              <form class="profile-name" @submit.prevent="saveName">
+                <div class="field">
+                  <input
+                    id="profile-name"
+                    v-model.trim="name"
+                    type="text"
+                    maxlength="120"
+                    placeholder="Как к вам обращаться"
+                    autocomplete="name"
+                  />
+                </div>
+                <button class="btn btn--accent btn--sm" type="submit" :disabled="nameBusy || name === (user?.name || '')">
+                  Сохранить
+                </button>
+              </form>
+            </dd>
           </div>
-          <button class="btn btn--accent" type="submit" :disabled="nameBusy || name === (user?.name || '')">Сохранить</button>
-        </form>
-        <div v-if="user?.email && !user.email_verified" class="row-actions">
-          <button class="btn btn--ghost" type="button" :disabled="verifyBusy" @click="resendVerify">
-            Отправить письмо ещё раз
-          </button>
-        </div>
+          <div class="profile-grid__row">
+            <dt>Почта</dt>
+            <dd>
+              <span class="profile-email">{{ user?.email || '—' }}</span>
+              <template v-if="user?.email">
+                <UiStatus v-if="user.email_verified" tone="ok" label="подтверждена" />
+                <template v-else>
+                  <UiStatus tone="warn" label="не подтверждена" />
+                  <button class="link-btn" type="button" :disabled="verifyBusy" @click="resendVerify">
+                    Отправить письмо ещё раз
+                  </button>
+                </template>
+              </template>
+            </dd>
+          </div>
+          <div class="profile-grid__row">
+            <dt>Вход через Яндекс</dt>
+            <dd>{{ user?.has_yandex ? 'привязан' : 'нет' }}</dd>
+          </div>
+          <div v-if="user?.created_at" class="profile-grid__row">
+            <dt>С нами с</dt>
+            <dd>{{ formatDate(user.created_at) }}</dd>
+          </div>
+        </dl>
         <p class="hint">
           Тариф и лимит — в разделе <RouterLink to="/cabinet/plan">«Тариф»</RouterLink>, Яндекс-аккаунты — в
           <RouterLink to="/cabinet/connections">«Подключениях»</RouterLink>.
@@ -133,16 +147,19 @@
 
     <section v-if="tab === 'profile'" class="panel">
       <h2>Смена пароля</h2>
-      <form class="filters" @submit.prevent="changePassword">
+      <form class="pwd-form" @submit.prevent="changePassword">
         <div v-field class="field">
-          <label>Текущий</label>
+          <label>Текущий пароль</label>
           <input v-model="pwd.current" type="password" autocomplete="current-password" required />
         </div>
         <div v-field class="field">
-          <label>Новый</label>
+          <label>Новый пароль</label>
           <input v-model="pwd.next" type="password" autocomplete="new-password" required minlength="8" />
+          <small class="field-hint">Не короче 8 символов.</small>
         </div>
-        <button class="btn btn--accent" type="submit" :disabled="pwdBusy">Сохранить</button>
+        <div class="pwd-form__acts">
+          <button class="btn btn--accent" type="submit" :disabled="pwdBusy">Сменить пароль</button>
+        </div>
       </form>
       <p class="hint">Если входили через Яндекс и пароля не было — восстановите его через «Забыли пароль» на входе.</p>
     </section>
@@ -153,6 +170,7 @@
 import { onMounted, reactive, ref, watch, watchEffect } from 'vue'
 import { RouterLink } from 'vue-router'
 import FeatureLockNotice from '../components/FeatureLockNotice.vue'
+import UiStatus from '../components/ui/UiStatus.vue'
 import { errorText, webApi } from '../api/web'
 import { useExpert } from '../composables/useExpert'
 import { loadProfile, setUser, useProfile } from '../composables/useProfile'
@@ -330,3 +348,106 @@ onMounted(async () => {
   }
 })
 </script>
+
+<style scoped>
+/* Профиль: подпись слева, значение справа — одна сетка для всех строк, включая имя. */
+.profile-grid {
+  margin: 0.25rem 0 1rem;
+}
+
+.profile-grid__row {
+  display: grid;
+  grid-template-columns: 170px minmax(0, 1fr);
+  gap: 0.3rem 1rem;
+  align-items: center;
+  min-height: 52px;
+  padding: 0.55rem 0;
+  border-top: 1px solid var(--line);
+}
+
+.profile-grid__row:first-child {
+  border-top: 0;
+}
+
+.profile-grid dt {
+  color: var(--muted);
+  font-size: 0.88rem;
+  font-weight: 600;
+}
+
+.profile-grid dt label {
+  cursor: pointer;
+}
+
+.profile-grid dd {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem 0.75rem;
+  min-width: 0;
+  margin: 0;
+  font-weight: 560;
+}
+
+.profile-email {
+  overflow-wrap: anywhere;
+}
+
+/* В кабинете акцент — цвет текста, поэтому ссылку-кнопку отличает подчёркивание. */
+.profile-grid .link-btn {
+  font-size: 0.88rem;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.profile-grid .link-btn:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.profile-name {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+  max-width: 440px;
+}
+
+.profile-name .field {
+  flex: 1 1 220px;
+  margin: 0;
+}
+
+.profile-name .field input {
+  width: 100%;
+  padding-block: 0.55rem;
+}
+
+/* Смена пароля: два поля одной ширины, подписи сверху, кнопка под ними. */
+.pwd-form {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: start;
+  gap: 0 1rem;
+  max-width: 560px;
+}
+
+.pwd-form .field input {
+  width: 100%;
+}
+
+.pwd-form__acts {
+  grid-column: 1 / -1;
+}
+
+@media (max-width: 560px) {
+  .profile-grid__row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .pwd-form {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+</style>

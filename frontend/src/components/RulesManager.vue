@@ -7,9 +7,7 @@
 
     <div class="ws-toolbar">
       <p class="sync-status">
-        <template v-if="workspace">Правила этого сайта следят за цифрами сами.</template>
-        <template v-else>Общие правила — для всех сайтов сразу или для выбранного.</template>
-        Сервис проверяет их каждый час, каждое срабатывает не чаще раза в сутки.
+        Проверяются каждый час, срабатывают не чаще раза в сутки. Работают без ИИ — лимит не тратится.
       </p>
       <button v-if="!adding" class="btn btn--accent" type="button" @click="adding = true">
         <Plus :size="15" aria-hidden="true" />Новое правило
@@ -139,8 +137,9 @@
     </section>
 
     <h2 class="section-h rules-h">
-      Правила <span class="rules-h__n">{{ rules.length }}</span>
-      <small>работают без ИИ — лимит не тратится</small>
+      Правила <span class="cgroup__n">{{ rules.length }}</span>
+      <small v-if="workspace"><RouterLink to="/cabinet/autopilot">Общие правила для всех сайтов</RouterLink></small>
+      <small v-else>Эксперименты с объявлениями — в автопилоте проекта</small>
     </h2>
     <div v-if="rules.length" class="ccard rules-list">
       <div v-for="rule in rules" :key="rule.id" class="prow rule" :class="{ 'is-off': !rule.enabled }">
@@ -156,14 +155,20 @@
         <div class="prow__main">
           <b>
             {{ rule.name }}
-            <span v-if="rule.dry_run" class="chip">Только проверка</span>
+            <UiStatus
+              v-if="rule.dry_run"
+              tone="info"
+              :icon="Eye"
+              label="Только проверка"
+              hint="Пишет, что сделало бы, но в Директе ничего не меняет"
+            />
           </b>
           <p>{{ ruleText(rule) }}</p>
           <small>{{ ruleMeta(rule) }}</small>
         </div>
         <div class="prow__acts">
           <button
-            class="btn btn--ghost"
+            class="btn btn--ghost btn--sm"
             type="button"
             :disabled="busy"
             title="Посчитать по текущей статистике, ничего не меняя"
@@ -171,35 +176,25 @@
           >
             Проверить
           </button>
-          <details class="bulk-more rule-more" @toggle="onMenuToggle">
-            <summary class="btn btn--ghost" aria-label="Действия с правилом"><Ellipsis :size="16" /></summary>
-            <div class="bulk-more__menu" role="menu" @click="closeMenu">
-              <button class="menu-item" type="button" role="menuitem" :disabled="busy" @click="run(rule, false)">
-                <Play aria-hidden="true" />Применить сейчас
-              </button>
-              <button
-                class="menu-item"
-                type="button"
-                role="menuitem"
-                :disabled="busy"
-                @click="patch(rule, { dry_run: !rule.dry_run })"
-              >
-                <component :is="rule.dry_run ? Zap : Eye" aria-hidden="true" />
-                {{ rule.dry_run ? 'Разрешить менять рекламу' : 'Перевести в «только проверку»' }}
-              </button>
-              <button class="menu-item is-danger" type="button" role="menuitem" :disabled="busy" @click="remove(rule)">
-                <Trash2 aria-hidden="true" />Удалить правило
-              </button>
-            </div>
-          </details>
+          <UiMenu size="sm" :label="`Действия с правилом «${rule.name}»`">
+            <UiMenuItem :icon="Play" :disabled="busy" @click="run(rule, false)">Применить сейчас</UiMenuItem>
+            <UiMenuItem :icon="rule.dry_run ? Zap : Eye" :disabled="busy" @click="patch(rule, { dry_run: !rule.dry_run })">
+              {{ rule.dry_run ? 'Разрешить менять рекламу' : 'Перевести в «только проверку»' }}
+            </UiMenuItem>
+            <UiMenuItem :icon="Trash2" danger :disabled="busy" @click="remove(rule)">Удалить правило</UiMenuItem>
+          </UiMenu>
         </div>
       </div>
     </div>
-    <div v-else class="ccard rules-empty">
-      <Zap :size="22" aria-hidden="true" />
-      <p>{{ workspace ? 'Для этого сайта правил пока нет.' : 'Правил пока нет.' }}</p>
-      <button v-if="!adding" class="btn" type="button" @click="adding = true">Создать правило</button>
-    </div>
+    <EmptyState
+      v-else
+      :icon="Zap"
+      :text="workspace ? 'Для этого сайта правил пока нет.' : 'Правил пока нет.'"
+    >
+      <template v-if="!adding" #action>
+        <button class="btn" type="button" @click="adding = true">Создать правило</button>
+      </template>
+    </EmptyState>
 
     <section v-if="lastRun" class="ccard run-result">
       <header>
@@ -227,7 +222,7 @@
 
     <h2 class="section-h rules-h">
       Последние запуски
-      <small><RouterLink :to="historyTo">Что правила изменили</RouterLink></small>
+      <small><RouterLink :to="historyTo">Что изменили и как вернуть — в «Истории»</RouterLink></small>
     </h2>
     <div v-if="runs.length" class="ccard table-scroll">
       <table class="table">
@@ -251,19 +246,19 @@
       </table>
     </div>
     <p v-else class="ccard ccard--note">Запусков ещё не было.</p>
-    <p class="hint rules-meta">
-      Правило с пометкой «Только проверка» ничего не меняет в Директе — только пишет, что нашло. Всё, что правила
-      изменили, можно вернуть в «Истории».
-    </p>
   </div>
 </template>
 
 <script setup>
 import { askConfirm } from '../composables/useConfirm'
-import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { RouterLink } from 'vue-router'
-import { Ellipsis, Eye, Play, Plus, Trash2, Zap } from '@lucide/vue'
+import { Eye, Play, Plus, Trash2, Zap } from '@lucide/vue'
 import FeatureLockNotice from './FeatureLockNotice.vue'
+import EmptyState from './ui/EmptyState.vue'
+import UiMenu from './ui/UiMenu.vue'
+import UiMenuItem from './ui/UiMenuItem.vue'
+import UiStatus from './ui/UiStatus.vue'
 import { errorText, webApi, wsApi } from '../api/web'
 import { pushToast } from '../composables/useToasts'
 import { useWorkspaces } from '../composables/useWorkspaces'
@@ -347,29 +342,6 @@ function runSummary(run) {
   if (run.dry_run) return `${found}, ничего не меняло`
   return `${found}, изменено ${run.applied || 0}`
 }
-
-function closeMenu(event) {
-  const menu = event.currentTarget.closest('details')
-  if (menu) menu.open = false
-}
-
-// Одно открытое меню «⋯» за раз; клик мимо меню закрывает его.
-function closeOtherMenus(keep) {
-  document.querySelectorAll('details.rule-more[open]').forEach((menu) => {
-    if (menu !== keep) menu.open = false
-  })
-}
-
-function onMenuToggle(event) {
-  if (event.currentTarget.open) closeOtherMenus(event.currentTarget)
-}
-
-function onDocClick(event) {
-  if (!event.target.closest?.('details.rule-more')) closeOtherMenus(null)
-}
-
-onMounted(() => document.addEventListener('click', onDocClick))
-onBeforeUnmount(() => document.removeEventListener('click', onDocClick))
 
 const CAMPAIGN_TYPES = ['daily_budget_pct', 'weekly_budget_pct']
 const CAMPAIGN_ACTIONS = ['set_budget', 'set_weekly_budget', 'change_budget_pct']
@@ -671,10 +643,6 @@ onMounted(load)
   align-items: baseline;
   gap: 8px;
 }
-.rules-h__n {
-  color: var(--faint);
-  font-weight: 600;
-}
 .rules-h small {
   margin-left: auto;
   color: var(--muted);
@@ -683,10 +651,6 @@ onMounted(load)
 }
 .rules-h small a {
   color: var(--muted);
-}
-/* Меню «⋯» у последнего правила не должно обрезаться краем карточки. */
-.rules-list {
-  overflow: visible;
 }
 .rule {
   align-items: flex-start;
@@ -699,12 +663,10 @@ onMounted(load)
   flex: 1;
 }
 .rule .prow__main b {
-  margin-right: 8px;
-}
-.rule .chip {
-  margin-left: 6px;
-  font-size: 12px;
-  vertical-align: 1px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
 }
 .rule.is-off .prow__main b,
 .rule.is-off .prow__main p {
@@ -712,26 +674,6 @@ onMounted(load)
 }
 .rule .prow__acts {
   gap: 6px;
-}
-.rule-more > summary {
-  padding-inline: 10px;
-}
-.rule-more .bulk-more__menu {
-  right: 0;
-  left: auto;
-  min-width: 260px;
-}
-.rules-empty {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 10px;
-  padding: 24px 18px;
-  color: var(--muted);
-  text-align: center;
-}
-.rules-empty p {
-  margin: 0;
 }
 .run-result {
   margin-top: 12px;
@@ -759,9 +701,6 @@ onMounted(load)
 }
 .table small.form-error {
   display: block;
-}
-.rules-meta {
-  margin: 12px 2px 0;
 }
 @media (max-width: 640px) {
   .rule {

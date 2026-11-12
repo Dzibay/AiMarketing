@@ -46,7 +46,7 @@
               <small class="field-hint">Сервис предупредит, если деньги уходят быстрее плана.</small>
             </div>
             <div v-field class="field">
-              <label>KPI<TermHint term="cpa" /><TermHint term="drr" /></label>
+              <label>KPI<TermHint term="kpi" /></label>
               <UiSelect v-model="general.kpi_type" :options="KPI_OPTIONS" />
             </div>
             <div v-field class="field">
