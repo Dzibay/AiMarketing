@@ -88,7 +88,7 @@
           <div class="neg-foot">
             <button
               v-if="selectedId"
-              class="btn btn--danger neg-del"
+              class="btn btn--ghost btn--danger neg-del"
               type="button"
               :disabled="busy || detail?.linked > 0"
               :title="detail?.linked ? 'Сначала снимите список со всех кампаний' : ''"

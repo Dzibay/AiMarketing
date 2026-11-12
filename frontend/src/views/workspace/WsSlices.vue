@@ -125,7 +125,7 @@
             {{ f.label }}
           </button>
         </div>
-        <input v-model.trim="search" type="search" placeholder="поиск площадки" />
+        <input v-model.trim="search" type="search" placeholder="поиск площадки" aria-label="Поиск площадки" />
         <div class="row-actions">
           <button class="btn btn--ghost" type="button" :disabled="!flagged.length" @click="selectFlagged">
             Отметить подсказки
@@ -177,6 +177,7 @@
                   :disabled="excluded.has(r.key) || !r.excludable"
                   :title="r.excludable ? '' : 'Эту площадку Директ запретить не даёт'"
                   :checked="selected.has(r.key)"
+                  :aria-label="`Выбрать площадку «${r.label}»`"
                   @change="toggle(r.key, $event.target.checked)"
                 />
               </td>
@@ -276,6 +277,7 @@
                   v-model="edits[r.key]"
                   class="slice-pct"
                   type="number"
+                  :aria-label="`Корректировка ставки для «${r.label}», %`"
                   :step="report.dimension === 'hour' ? 10 : 5"
                   :min="-100"
                   :max="report.dimension === 'hour' ? 100 : 1200"

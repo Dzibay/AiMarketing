@@ -126,7 +126,7 @@
       <div class="panel__head">
         <h2>Ключевые фразы{{ selectedGroupRow ? ` · ${selectedGroupRow.name}` : '' }}</h2>
         <div class="row-actions">
-          <input v-model.trim="kwSearch" type="search" class="search-input" placeholder="Найти фразу" />
+          <input v-model.trim="kwSearch" type="search" class="search-input" placeholder="Найти фразу" aria-label="Поиск фразы" />
           <button class="btn btn--ghost" type="button" :disabled="!filteredKeywords.length" @click="exportKeywordsCsv">
             CSV
           </button>
@@ -188,6 +188,7 @@
                 <input
                   type="checkbox"
                   :checked="selectedKeywords.has(kw.id)"
+                  :aria-label="`Выбрать фразу «${kw.keyword}»`"
                   @change="toggle(selectedKeywords, kw.id, $event.target.checked)"
                 />
               </td>
@@ -297,6 +298,7 @@
                 <input
                   type="checkbox"
                   :checked="selectedQueries.has(q.id)"
+                  :aria-label="`Выбрать запрос «${q.query}»`"
                   @change="toggle(selectedQueries, q.id, $event.target.checked)"
                 />
               </td>

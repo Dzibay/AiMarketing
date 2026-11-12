@@ -9,10 +9,10 @@
         {{ SITELINK_DESC_LEN }}.
       </p>
       <div v-for="(link, i) in extras.sitelinks" :key="i" class="ad-extras__link">
-        <input v-model="link.title" type="text" :maxlength="SITELINK_TITLE_LEN" placeholder="Заголовок" :disabled="disabled" />
-        <input v-model="link.href" type="text" inputmode="url" placeholder="site.ru/razdel" :disabled="disabled" />
-        <input v-model="link.description" type="text" :maxlength="SITELINK_DESC_LEN" placeholder="Описание (необязательно)" :disabled="disabled" />
-        <button class="btn btn--ghost" type="button" :disabled="disabled" title="Убрать ссылку" @click="extras.sitelinks.splice(i, 1)">✕</button>
+        <input v-model="link.title" type="text" :maxlength="SITELINK_TITLE_LEN" placeholder="Заголовок" :aria-label="`Быстрая ссылка ${i + 1}: заголовок`" :disabled="disabled" />
+        <input v-model="link.href" type="text" inputmode="url" placeholder="site.ru/razdel" :aria-label="`Быстрая ссылка ${i + 1}: адрес`" :disabled="disabled" />
+        <input v-model="link.description" type="text" :maxlength="SITELINK_DESC_LEN" placeholder="Описание (необязательно)" :aria-label="`Быстрая ссылка ${i + 1}: описание`" :disabled="disabled" />
+        <button class="btn btn--ghost" type="button" :disabled="disabled" title="Убрать ссылку" aria-label="Убрать ссылку" @click="extras.sitelinks.splice(i, 1)">✕</button>
       </div>
       <button
         v-if="extras.sitelinks.length < MAX_SITELINKS"
@@ -28,7 +28,7 @@
     <details class="ad-extras__part" :open="!!extras.callouts">
       <summary>Уточнения <span class="field-hint">{{ calloutCount }}/{{ MAX_CALLOUTS }}</span></summary>
       <p class="field-hint">По одному на строку, до {{ CALLOUT_LEN }} символов: «Доставка за 1 день», «Гарантия 2 года».</p>
-      <textarea v-model="extras.callouts" rows="3" :disabled="disabled" placeholder="Доставка за 1 день&#10;Гарантия 2 года"></textarea>
+      <textarea v-model="extras.callouts" rows="3" aria-label="Уточнения, по одному на строку" :disabled="disabled" placeholder="Доставка за 1 день&#10;Гарантия 2 года"></textarea>
     </details>
 
     <details class="ad-extras__part" :open="extras.images.length > 0">

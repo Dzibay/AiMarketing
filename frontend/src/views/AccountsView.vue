@@ -195,7 +195,7 @@
       <div class="panel__head">
         <h2>Счётчики Метрики</h2>
         <div v-if="counters.length > 5" class="filters filters--inline">
-          <input v-model="counterSearch" type="search" placeholder="Сайт или номер" />
+          <input v-model="counterSearch" type="search" placeholder="Сайт или номер" aria-label="Поиск счётчика" />
         </div>
       </div>
       <p class="hint">
@@ -278,7 +278,7 @@
       <div class="panel__head">
         <h2>Кабинеты Директа</h2>
         <div v-if="accounts.length > 5" class="filters filters--inline">
-          <input v-model="accountSearch" type="search" placeholder="Логин или название" />
+          <input v-model="accountSearch" type="search" placeholder="Логин или название" aria-label="Поиск кабинета" />
         </div>
       </div>
       <p class="hint">

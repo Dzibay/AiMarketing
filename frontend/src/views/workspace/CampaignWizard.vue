@@ -93,11 +93,11 @@
             <div v-field class="field field--wide">
               <label>Ключевые цели (для оптимизации и отчётов)</label>
               <div v-for="(g, i) in form.priority_goals" :key="i" class="filters filters--inline">
-                <select v-model.number="g.goal_id">
+                <select v-model.number="g.goal_id" :aria-label="`Ключевая цель ${i + 1}`">
                   <option :value="null">Цель</option>
                   <option v-for="goal in options.goals" :key="goal.goal_id" :value="goal.goal_id">{{ goal.name }}</option>
                 </select>
-                <input v-model.number="g.value_rub" type="number" min="0.3" step="any" placeholder="ценность от 0,3 ₽" />
+                <input v-model.number="g.value_rub" type="number" min="0.3" step="any" placeholder="ценность от 0,3 ₽" :aria-label="`Ценность цели ${i + 1}, ₽`" />
                 <button class="btn btn--ghost" type="button" @click="form.priority_goals.splice(i, 1)">Убрать</button>
               </div>
               <button

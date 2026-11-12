@@ -107,7 +107,7 @@
             {{ f.label }}
           </button>
         </div>
-        <input v-model.trim="search" type="search" placeholder="поиск по тексту или группе" />
+        <input v-model.trim="search" type="search" placeholder="поиск по тексту или группе" aria-label="Поиск объявления" />
         <div class="row-actions">
           <button class="btn btn--ghost" type="button" :disabled="!weak.length" @click="selectWeak">Отметить слабые</button>
           <button
@@ -216,6 +216,7 @@
                   :disabled="!r.rewritable"
                   :title="r.rewritable ? '' : 'Переписать можно только текстовые и комбинаторные объявления'"
                   :checked="selected.has(r.ad_row_id)"
+                  :aria-label="`Выбрать объявление «${r.title || r.ad_row_id}»`"
                   @change="toggle(r.ad_row_id, $event.target.checked)"
                 />
               </td>

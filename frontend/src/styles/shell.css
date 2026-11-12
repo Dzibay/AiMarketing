@@ -210,8 +210,10 @@
   background: var(--ok);
 }
 
+/* Кольцо, а не точка: «что-то не так» видно и без различения цветов. */
 .sdot--warn {
-  background: var(--warn);
+  border: 2px solid var(--warn);
+  background: transparent;
 }
 
 .sdot--lime {
@@ -1033,17 +1035,6 @@
   letter-spacing: -0.01em;
 }
 
-.stat-card__icon {
-  border-radius: 9px;
-  background: var(--side);
-  color: var(--ink);
-}
-
-.stat-card__icon[class*='is-'] {
-  background: var(--side);
-  color: var(--ink);
-}
-
 .chip {
   font-weight: 700;
 }
@@ -1435,20 +1426,6 @@
   font-size: 16px;
   font-weight: 800;
   letter-spacing: -0.02em;
-}
-.brand__dot {
-  display: grid;
-  flex-shrink: 0;
-  place-items: center;
-  width: 28px;
-  height: 28px;
-  border-radius: 8px;
-  background: var(--lime);
-  color: var(--on-lime);
-}
-.brand__dot svg {
-  width: 16px;
-  height: 16px;
 }
 .site-header .nav {
   gap: 8px;

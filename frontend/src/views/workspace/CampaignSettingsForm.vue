@@ -78,14 +78,14 @@
         <div v-field class="field field--wide">
           <label>Ключевые цели</label>
           <div v-for="(g, i) in form.priority_goals" :key="i" class="filters filters--inline">
-            <select v-model.number="g.goal_id">
+            <select v-model.number="g.goal_id" :aria-label="`Ключевая цель ${i + 1}`">
               <option :value="null">Цель</option>
               <option v-for="goal in options?.goals || []" :key="goal.goal_id" :value="goal.goal_id">
                 {{ goal.name }}
               </option>
               <option v-if="g.goal_id && !goalKnown(g.goal_id)" :value="g.goal_id">Цель {{ g.goal_id }}</option>
             </select>
-            <input v-model.number="g.value_rub" type="number" min="0.3" step="any" placeholder="ценность от 0,3 ₽" />
+            <input v-model.number="g.value_rub" type="number" min="0.3" step="any" placeholder="ценность от 0,3 ₽" :aria-label="`Ценность цели ${i + 1}, ₽`" />
             <button class="btn btn--ghost" type="button" @click="form.priority_goals.splice(i, 1)">Убрать</button>
           </div>
           <button class="btn btn--ghost" type="button" @click="form.priority_goals.push({ goal_id: null, value_rub: null })">

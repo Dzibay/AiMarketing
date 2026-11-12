@@ -1,6 +1,6 @@
 <template>
   <div class="dshell" :class="{ 'is-drawer': drawer, 'is-expert': expert }">
-    <aside class="dside" aria-label="Меню" @click="closeDrawerOnLink">
+    <aside ref="sideEl" class="dside" aria-label="Меню" :inert="narrow && !drawer" @click="closeDrawerOnLink">
       <div class="dside__scroll">
         <RouterLink class="dside__brand" to="/cabinet" aria-label="Толк — главная">
           <TolkMark :size="28" />
@@ -60,7 +60,7 @@
                 :title="projectHint(ws)"
                 @click="selectProject(ws.id)"
               >
-                <span class="sdot" :class="`sdot--${projectTone(ws)}`" aria-hidden="true"></span>
+                <span class="sdot" :class="`sdot--${projectTone(ws)}`" v-bind="dotA11y(ws)"></span>
                 <span class="srow__t">{{ ws.name }}</span>
                 <Lock v-if="ws.locked" class="srow__lock" aria-label="не входит в тариф" />
               </button>
@@ -120,11 +120,11 @@
       </RouterLink>
     </aside>
 
-    <button class="dscrim" type="button" aria-label="Закрыть меню" @click="drawer = false"></button>
+    <button class="dscrim" type="button" aria-label="Закрыть меню" @click="closeDrawer"></button>
 
-    <div class="dmain">
+    <div class="dmain" :inert="narrow && drawer">
       <header class="dbar">
-        <button class="dicon dbar__burger" type="button" aria-label="Меню" @click="drawer = true">
+        <button ref="burgerEl" class="dicon dbar__burger" type="button" aria-label="Меню" @click="drawer = true">
           <Menu aria-hidden="true" />
         </button>
         <div class="dbar__scope">
@@ -135,7 +135,7 @@
               :to="`/w/${project.id}/settings`"
               title="Открыть настройки проекта"
             >
-              <span class="sdot" :class="`sdot--${projectTone(project)}`" aria-hidden="true"></span>
+              <span class="sdot" :class="`sdot--${projectTone(project)}`" v-bind="dotA11y(project)"></span>
               <span class="dchip__t">{{ project.name }}</span>
               <Settings aria-hidden="true" />
             </RouterLink>
@@ -236,7 +236,7 @@
 </template>
 
 <script setup>
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { RouterLink, RouterView, useRoute, useRouter } from 'vue-router'
 import { ChevronDown, Layers, Lock, Menu, MessageSquare, Moon, Plus, Settings, SlidersHorizontal, Sun, X } from '@lucide/vue'
 import TolkMark from './TolkMark.vue'
@@ -287,6 +287,29 @@ watch(
     drawer.value = false
   },
 )
+
+// До 900 px меню — выезжающая шторка. Закрытая не должна ловить Tab (иначе фокус уходит за край экрана),
+// открытая — модальна: фокус внутри, страница под ней недоступна.
+const NARROW = '(max-width: 900px)'
+const narrowQuery = window.matchMedia(NARROW)
+const narrow = ref(narrowQuery.matches)
+const onNarrow = (event) => (narrow.value = event.matches)
+const sideEl = ref(null)
+const burgerEl = ref(null)
+
+watch(drawer, async (open) => {
+  if (!open || !narrow.value) return
+  await nextTick()
+  sideEl.value?.querySelector('a[href], button')?.focus()
+})
+
+async function closeDrawer() {
+  if (!drawer.value) return
+  drawer.value = false
+  if (!narrow.value) return
+  await nextTick() // кнопка «Меню» в .dmain — фокус возможен, только когда с неё снят inert
+  burgerEl.value?.focus()
+}
 // --- Чаты в меню: общие для «Все проекты», чаты проекта — внутри проекта ---
 
 const RECENT_LIMIT = 5
@@ -382,6 +405,11 @@ const projectGroups = computed(() => {
 function projectTone(ws) {
   if (ws.locked) return 'off'
   return ws.counter_ok === false ? 'warn' : 'ok'
+}
+
+// Статус не только цветом: «проблемная» точка — кольцо (см. .sdot--warn) и с текстом для экранного диктора.
+function dotA11y(ws) {
+  return projectTone(ws) === 'warn' ? { role: 'img', 'aria-label': 'счётчик Метрики недоступен' } : { 'aria-hidden': 'true' }
 }
 
 function projectHint(ws) {
@@ -577,13 +605,14 @@ watch(accessOk, (ok, was) => {
 })
 
 function onKey(event) {
-  if (event.key === 'Escape') drawer.value = false
+  if (event.key === 'Escape') closeDrawer()
 }
 
 onMounted(() => {
   window.addEventListener(ACCESS_EVENT, onAccess)
   document.addEventListener('visibilitychange', pollPending)
   document.addEventListener('keydown', onKey)
+  narrowQuery.addEventListener('change', onNarrow)
   pendingTimer = setInterval(pollPending, PENDING_MS)
   boot()
 })
@@ -592,6 +621,7 @@ onBeforeUnmount(() => {
   window.removeEventListener(ACCESS_EVENT, onAccess)
   document.removeEventListener('visibilitychange', pollPending)
   document.removeEventListener('keydown', onKey)
+  narrowQuery.removeEventListener('change', onNarrow)
   clearInterval(pendingTimer)
 })
 </script>
