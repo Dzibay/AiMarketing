@@ -1,6 +1,8 @@
 let seq = 0
 
-const CONTROL = 'input:not([type="hidden"]):not([type="checkbox"]):not([type="radio"]), select, textarea'
+// [data-field-control] — кнопка собственного выпадающего списка (UiSelect).
+const CONTROL =
+  'input:not([type="hidden"]):not([type="checkbox"]):not([type="radio"]), select, textarea, [data-field-control]'
 
 /** Связывает подпись блока с первым полем внутри (for/id): клик по подписи ставит фокус, скринридер читает название поля. */
 function link(el) {

@@ -88,7 +88,7 @@ function change(value, more, less, inverse = false) {
   if (!v) return { note: 'как в прошлом периоде', tone: '' }
   const bad = inverse ? v > 0 : v < 0
   return {
-    note: `на ${Math.abs(v)}% ${v > 0 ? more : less}, чем в прошлом периоде`,
+    note: `на ${pct(Math.abs(v), 0)} ${v > 0 ? more : less}, чем в прошлом периоде`,
     tone: Math.abs(v) < 5 ? '' : bad ? 'is-warn' : 'is-ok',
   }
 }

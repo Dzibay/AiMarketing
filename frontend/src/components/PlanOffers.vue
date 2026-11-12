@@ -4,7 +4,7 @@
       <header class="offer__head">
         <h3>{{ o.name }}</h3>
         <span v-if="o.current" class="chip chip--ok">ваш тариф</span>
-        <span v-else-if="o.discount_pct" class="chip chip--info">−{{ num(o.discount_pct, 2) }}%</span>
+        <span v-else-if="o.discount_pct" class="chip chip--info">−{{ pct(o.discount_pct, 2) }}</span>
       </header>
       <p class="offer__price">
         <strong>{{ o.price_with_discount ? rubles(o.price_with_discount) : 'бесплатно' }}</strong>
@@ -41,7 +41,7 @@
 <script setup>
 import { computed } from 'vue'
 import { Check, Lock } from '@lucide/vue'
-import { num, plural, rubles } from '../utils/format'
+import { num, pct, plural, rubles } from '../utils/format'
 
 const props = defineProps({
   offers: { type: Array, default: () => [] },

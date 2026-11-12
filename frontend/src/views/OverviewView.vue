@@ -195,7 +195,7 @@
                 <td class="num">
                   <template v-if="folder.budget">
                     <span :class="BUDGET_TONES[folder.budget.status]">
-                      {{ folder.budget.pace_pct != null ? `${folder.budget.pace_pct}%` : '—' }}
+                      {{ pct(folder.budget.pace_pct, 0) }}
                     </span>
                     <small class="cell-note">общий бюджет {{ rub(folder.budget.budget_kopecks) }}</small>
                   </template>
@@ -249,7 +249,7 @@
                 <td class="num">
                   <template v-if="w.budget">
                     <span :class="BUDGET_TONES[w.budget.status]">
-                      {{ w.budget.pace_pct != null ? `${w.budget.pace_pct}%` : '—' }}
+                      {{ pct(w.budget.pace_pct, 0) }}
                     </span>
                     <small class="cell-note">{{ rub(w.budget.spent_kopecks) }} из {{ rub(w.budget.budget_kopecks) }}</small>
                   </template>
@@ -258,7 +258,7 @@
                 <td class="num">
                   {{ w.balance_kopecks != null ? rub(w.balance_kopecks) : '—' }}
                   <small v-if="w.days_on_balance != null" class="cell-note" :class="balanceTone(w.days_on_balance)">
-                    ≈ {{ w.days_on_balance }} дн.
+                    ≈ {{ daysShort(w.days_on_balance) }}
                   </small>
                 </td>
                 <td class="num">
@@ -354,6 +354,7 @@ import { useHead } from '../utils/useHead'
 import {
   balanceTone,
   BUDGET_TONES,
+  daysShort,
   delta,
   deltaTone,
   formatDateTime,
@@ -362,6 +363,7 @@ import {
   kpiValue,
   problemLink,
   num,
+  pct,
   plural,
   rub,
   rubles,
@@ -443,7 +445,7 @@ function versus(value, more, less, inverse = false) {
   const v = Math.round(value)
   if (!v) return { note: 'как неделей раньше', tone: '' }
   const bad = inverse ? v > 0 : v < 0
-  return { note: `на ${Math.abs(v)}% ${v > 0 ? more : less}, чем неделей раньше`, tone: Math.abs(v) < 5 ? '' : bad ? 'is-warn' : 'is-ok' }
+  return { note: `на ${pct(Math.abs(v), 0)} ${v > 0 ? more : less}, чем неделей раньше`, tone: Math.abs(v) < 5 ? '' : bad ? 'is-warn' : 'is-ok' }
 }
 
 const weekTiles = computed(() => {
@@ -477,7 +479,7 @@ const projectCards = computed(() =>
       if (lockedIds.value.has(w.id)) verdict = 'Доступен на тарифе выше'
       else if (w.kpi?.type && w.kpi.value != null) {
         const k = w.kpi
-        const target = k.target == null ? '' : `, цель ${k.type === 'cpa' ? rubles(k.target) : `${k.target}%`}`
+        const target = k.target == null ? '' : `, цель ${k.type === 'cpa' ? rubles(k.target) : pct(k.target)}`
         verdict = `${k.type === 'cpa' ? 'CPA' : 'ДРР'} за неделю ${kpiValue(k)}${target}`
       }
       else if (w.spend_7d) verdict = `${rub(w.spend_7d)} за неделю, ${num(w.conversions_7d || 0)} конв.`

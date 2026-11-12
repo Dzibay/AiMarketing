@@ -429,7 +429,7 @@ import { takeHomeQuestion } from '../../composables/useHomeAsk'
 import { refreshPending } from '../../composables/usePending'
 import { pushToast } from '../../composables/useToasts'
 import { loadWorkspaces, useWorkspaces } from '../../composables/useWorkspaces'
-import { formatDateTime } from '../../utils/format'
+import { formatDateTime, pct } from '../../utils/format'
 import { renderMarkdown } from '../../utils/markdown'
 import AiChanges from './AiChanges.vue'
 import AiCheckTable from './AiCheckTable.vue'
@@ -591,7 +591,7 @@ const accessText = computed(() => {
   if (a.full_access) return 'Полный доступ: ИИ выполняет действия без согласования.'
   const allowed = (ws.value.ai_categories || []).filter((c) => a.categories?.[c.key]).map((c) => c.label.toLowerCase())
   if (!allowed.length) return 'Каждое изменение в Директе — только после вашего подтверждения.'
-  return `Без согласования (до ${a.max_change_pct}%): ${allowed.join('; ')}. Остальное — после подтверждения.`
+  return `Без согласования (до ${pct(a.max_change_pct, 0)}): ${allowed.join('; ')}. Остальное — после подтверждения.`
 })
 
 // Класс модели: у открытого чата — сохранённый, у нового — выбранный здесь до первого сообщения.

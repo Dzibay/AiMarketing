@@ -134,7 +134,7 @@
         </div>
         <template v-if="row.budget">
           <strong :class="BUDGET_TONES[row.budget.status]">
-            {{ row.budget.pace_pct != null ? `${row.budget.pace_pct}%` : rub(row.budget.spent_kopecks) }}
+            {{ row.budget.pace_pct != null ? pct(row.budget.pace_pct, 0) : rub(row.budget.spent_kopecks) }}
           </strong>
           <span class="cell-note">
             {{ rub(row.budget.spent_kopecks) }} из {{ rub(row.budget.budget_kopecks) }} · до
@@ -153,7 +153,7 @@
         </div>
         <strong>{{ row.balance_kopecks != null ? rub(row.balance_kopecks) : '—' }}</strong>
         <span class="cell-note" :class="balanceTone(row.days_on_balance)">
-          {{ row.days_on_balance != null ? `хватит ≈ на ${row.days_on_balance} дн.` : 'нет данных о расходе' }}
+          {{ row.days_on_balance != null ? `хватит ≈ на ${daysShort(row.days_on_balance)}` : 'нет данных о расходе' }}
         </span>
       </div>
     </div>
@@ -323,13 +323,14 @@ import {
   SEVERITY_LABELS,
   balanceTone,
   delta,
+  daysLong,
+  daysShort,
   deltaTone,
   formatDate,
   formatDateTime,
   kpiTarget,
   kpiValue,
   num,
-  plural,
   problemLink,
   pct,
   rub,
@@ -368,7 +369,7 @@ function versus(value, more, less, inverse = false) {
   const v = Math.round(value)
   if (!v) return { note: 'как неделей раньше', tone: '' }
   const bad = inverse ? v > 0 : v < 0
-  return { note: `на ${Math.abs(v)}% ${v > 0 ? more : less}, чем неделей раньше`, tone: Math.abs(v) < 5 ? '' : bad ? 'is-warn' : 'is-ok' }
+  return { note: `на ${pct(Math.abs(v), 0)} ${v > 0 ? more : less}, чем неделей раньше`, tone: Math.abs(v) < 5 ? '' : bad ? 'is-warn' : 'is-ok' }
 }
 
 const weekTiles = computed(() => {
@@ -396,7 +397,7 @@ const weekTiles = computed(() => {
     {
       label: 'Деньги в Директе',
       value: r.balance_kopecks != null ? rub(r.balance_kopecks) : '—',
-      note: days != null ? `хватит примерно на ${days} ${plural(days, 'день', 'дня', 'дней')}` : 'нет данных о расходе',
+      note: days != null ? `хватит примерно на ${daysLong(days)}` : 'нет данных о расходе',
       tone: days != null && days < 5 ? 'is-warn' : '',
     },
   ]

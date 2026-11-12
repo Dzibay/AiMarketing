@@ -30,7 +30,7 @@
       <span v-if="ws.kpi_type">
         KPI: {{ ws.kpi_type === 'cpa' ? 'CPA' : 'ДРР' }}
         <template v-if="ws.kpi_target != null">
-          ≤ {{ ws.kpi_type === 'cpa' ? rubles(ws.kpi_target) : `${ws.kpi_target}%` }}
+          ≤ {{ ws.kpi_type === 'cpa' ? rubles(ws.kpi_target) : pct(ws.kpi_target) }}
         </template>
       </span>
       <span v-if="ws.goal_name">цель «{{ ws.goal_name }}»</span>
@@ -53,7 +53,7 @@
       <div class="ws-loading__head">
         <span v-if="pendingItems.some((i) => i.job)" class="spinner" aria-hidden="true"></span>
         <strong>{{ loadStalled ? 'Загрузка остановилась на ошибке' : 'Данные ещё загружаются' }}</strong>
-        <span v-if="loadPercent != null" class="ws-loading__pct">{{ loadPercent }}%</span>
+        <span v-if="loadPercent != null" class="ws-loading__pct">{{ pct(loadPercent, 0) }}</span>
       </div>
       <div class="load-bar"><span :style="{ width: `${loadPercent || 0}%` }"></span></div>
       <p v-if="loadStalled">
@@ -85,7 +85,7 @@ import { pushToast } from '../../composables/useToasts'
 import { jobPercent, jobText, stageErrorText, stageFailure, stageProblem } from '../../composables/useLoads'
 import { loadWorkspaces, patchWorkspaceInList, rememberWorkspace } from '../../composables/useWorkspaces'
 import { useHead } from '../../utils/useHead'
-import { plural, rubles } from '../../utils/format'
+import { pct, plural, rubles } from '../../utils/format'
 import { WS_KEY } from './context'
 
 const route = useRoute()

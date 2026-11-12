@@ -49,7 +49,7 @@ export function campaignHealth(c, kpi) {
     const over = Math.round((ratio - 1) * 100)
     return {
       id: ratio <= WARN_RATIO ? 'warn' : 'bad',
-      text: `Конверсия ${rub(cpa)} — на ${over}% дороже цели ${rubles(target)}`,
+      text: `Конверсия ${rub(cpa)} — на ${pct(over, 0)} дороже цели ${rubles(target)}`,
     }
   }
   return { id: 'ok', text: `${conv} ${convWord(conv)} по ${rub(cpa)}` }

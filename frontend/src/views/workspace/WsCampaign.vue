@@ -51,7 +51,7 @@
           <div class="bigstat">
             <span>Потрачено за 7 дней</span>
             <b>{{ rub(row.cost_kopecks || 0) }}</b>
-            <small v-if="weekBudget">{{ budgetShare }}% недельного бюджета</small>
+            <small v-if="weekBudget">{{ pct(budgetShare, 0) }} недельного бюджета</small>
             <small v-else>{{ num(row.clicks || 0) }} {{ plural(row.clicks || 0, 'клик', 'клика', 'кликов') }}</small>
           </div>
           <div class="bigstat">
@@ -72,7 +72,7 @@
               <b>{{ dailyBudget ? `Бюджет ${rubles(dailyBudget)} в день` : 'Бюджет задан стратегией' }}</b>
               <span class="meta-note">
                 <template v-if="weekBudget">
-                  За 7 дней потрачено {{ rub(row.cost_kopecks || 0) }} — {{ budgetShare }}% от {{ rubles(weekBudget) }}
+                  За 7 дней потрачено {{ rub(row.cost_kopecks || 0) }} — {{ pct(budgetShare, 0) }} от {{ rubles(weekBudget) }}
                 </template>
                 <template v-else>Сколько тратить в неделю, Директ решает по настройкам стратегии</template>
               </span>
@@ -128,10 +128,7 @@
         <div>
           <h2>{{ row?.name || campaign?.name || 'Кампания' }}</h2>
           <p class="ws-meta ws-meta--inline">
-            <span v-if="state" class="chip" :class="state === 'ON' ? 'chip--ok' : state === 'SUSPENDED' ? 'chip--warning' : ''">
-              {{ CAMPAIGN_STATES[state] || state }}
-            </span>
-            <span v-if="status" class="chip">{{ CAMPAIGN_STATUSES[status] || status }}</span>
+            <UiStatus v-if="state || status" v-bind="campaignStatus({ state, status })" />
             <span v-if="type">{{ CAMPAIGN_TYPES[type] || type }}</span>
             <span v-if="login">кабинет {{ login }}</span>
             <span v-if="directId">№ {{ directId }}</span>
@@ -221,14 +218,14 @@ import { RouterLink, useRoute, useRouter } from 'vue-router'
 import { CircleCheck, CircleDashed, CirclePause, OctagonAlert, TriangleAlert } from '@lucide/vue'
 import CampaignStructure from '../../components/CampaignStructure.vue'
 import ExpertHint from '../../components/ExpertHint.vue'
+import UiStatus from '../../components/ui/UiStatus.vue'
 import { useExpert } from '../../composables/useExpert'
 import { campaignHealth } from '../../utils/campaignHealth'
 import { errorText, wsApi } from '../../api/web'
 import { pushToast } from '../../composables/useToasts'
 import {
   ACTION_SOURCES,
-  CAMPAIGN_STATES,
-  CAMPAIGN_STATUSES,
+  campaignStatus,
   CAMPAIGN_TYPES,
   formatDateTime,
   lastDays,
@@ -301,7 +298,7 @@ const kpiNow = computed(() => {
 const kpiGoal = computed(() => {
   const k = kpi.value
   if (!k?.type || k.target == null) return 'цель не задана'
-  return k.type === 'cpa' ? `цель — до ${rubles(k.target)}` : `цель — до ${k.target}%`
+  return k.type === 'cpa' ? `цель — до ${rubles(k.target)}` : `цель — до ${pct(k.target)}`
 })
 const kpiTone = computed(() => {
   const id = health.value.id

@@ -1,27 +1,36 @@
-/** Форматирование чисел, денег и дат для кабинета. Деньги в базе — копейки, в настройках — рубли. */
+/**
+ * Форматирование чисел, денег и дат для кабинета — одна точка на всё приложение, вручную `toFixed` и `+ '%'`
+ * не собираем. Деньги в базе — копейки, в настройках — рубли.
+ *
+ * Правила: разряды через пробел («32 942 ₽»), дробная часть через запятую, перед «%» и «₽» — неразрывный
+ * пробел («4,1 %»), минус — настоящий «−», а не дефис.
+ */
+
+// Неразрывный пробел: «4,1 %» и «150 ₽» не разъезжаются по строкам.
+const NBSP = '\u00a0'
 
 export function rub(kopecks) {
   if (kopecks === null || kopecks === undefined || kopecks === '') return '—'
-  return `${Math.round(Number(kopecks) / 100).toLocaleString('ru-RU')} ₽`
+  return `${Math.round(Number(kopecks) / 100).toLocaleString('ru-RU')}${NBSP}₽`
 }
 
 export function rubExact(kopecks) {
   if (kopecks === null || kopecks === undefined || kopecks === '') return '—'
-  return `${(Number(kopecks) / 100).toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₽`
+  return `${(Number(kopecks) / 100).toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}${NBSP}₽`
 }
 
 /** Сумма уже в рублях (бюджеты кампаний, ставки стратегий). */
 export function rubles(value, digits = 0) {
   if (value === null || value === undefined || value === '') return '—'
-  return `${Number(value).toLocaleString('ru-RU', { minimumFractionDigits: digits, maximumFractionDigits: digits })} ₽`
+  return `${Number(value).toLocaleString('ru-RU', { minimumFractionDigits: digits, maximumFractionDigits: digits })}${NBSP}₽`
 }
 
 /** Расход на ИИ: вызов стоит копейки, поэтому дробную часть не теряем. */
 export function rubAi(value) {
   if (value === null || value === undefined || value === '') return '—'
   const v = Number(value)
-  if (v > 0 && v < 0.01) return '< 0,01 ₽'
-  return `${v.toLocaleString('ru-RU', { minimumFractionDigits: v < 1000 ? 2 : 0, maximumFractionDigits: 2 })} ₽`
+  if (v > 0 && v < 0.01) return `< 0,01${NBSP}₽`
+  return `${v.toLocaleString('ru-RU', { minimumFractionDigits: v < 1000 ? 2 : 0, maximumFractionDigits: 2 })}${NBSP}₽`
 }
 
 export function num(value, digits = 0) {
@@ -29,16 +38,41 @@ export function num(value, digits = 0) {
   return Number(value).toLocaleString('ru-RU', { maximumFractionDigits: digits })
 }
 
+/** Проценты: «4,1 %», целые — «12 %». digits — сколько знаков после запятой максимум. */
 export function pct(value, digits = 1) {
   if (value === null || value === undefined || value === '') return '—'
-  return `${Number(value).toLocaleString('ru-RU', { maximumFractionDigits: digits })}%`
+  return `${Number(value).toLocaleString('ru-RU', { maximumFractionDigits: digits })}${NBSP}%`
+}
+
+/** Число со знаком: «+18», «−4», «0». */
+export function signed(value, digits = 0) {
+  if (value === null || value === undefined || value === '') return ''
+  const v = Number(value)
+  const text = Math.abs(v).toLocaleString('ru-RU', { maximumFractionDigits: digits })
+  if (text === '0') return '0'
+  return `${v > 0 ? '+' : '−'}${text}`
+}
+
+/** Дни коротко: «1,7 дн.», «12 дн.» — запас баланса, длина эксперимента. */
+export function daysShort(value, digits = 1) {
+  if (value === null || value === undefined || value === '') return '—'
+  return `${Number(value).toLocaleString('ru-RU', { maximumFractionDigits: digits })}${NBSP}дн.`
+}
+
+/** Дни словом: «1 день», «12 дней», дробное — «1,7 дня». */
+export function daysLong(value) {
+  if (value === null || value === undefined || value === '') return '—'
+  const v = Number(value)
+  const text = v.toLocaleString('ru-RU', { maximumFractionDigits: 1 })
+  if (text.includes(',')) return `${text}${NBSP}дня`
+  return `${text}${NBSP}${plural(Math.round(v), 'день', 'дня', 'дней')}`
 }
 
 /** Доля месячного лимита ИИ: «0,4%», совсем мало — «< 0,1%». */
 export function limitPct(value) {
   if (value === null || value === undefined || value === '') return '—'
   const v = Number(value)
-  if (v > 0 && v < 0.1) return '< 0,1%'
+  if (v > 0 && v < 0.1) return `< 0,1${NBSP}%`
   return pct(v, 1)
 }
 
@@ -49,12 +83,10 @@ export function aiUsageText(usage) {
   return `${calls}, ${usage.estimated ? '≈ ' : ''}${limitPct(usage.percent)} месячного лимита`
 }
 
-/** Изменение к прошлому периоду: «+12%», «−4%». */
+/** Изменение к прошлому периоду: «+12 %», «−4 %», «0 %». */
 export function delta(value) {
   if (value === null || value === undefined) return ''
-  const v = Math.round(Number(value))
-  if (v === 0) return '0%'
-  return `${v > 0 ? '+' : '−'}${Math.abs(v)}%`
+  return `${signed(Math.round(Number(value)))}${NBSP}%`
 }
 
 /**
@@ -138,14 +170,14 @@ export const SEVERITY_LABELS = { critical: 'Критично', warning: 'Вни�
 
 export function kpiValue(kpi) {
   if (!kpi || kpi.value == null) return '—'
-  return kpi.type === 'cpa' ? rub(kpi.value) : `${kpi.value}%`
+  return kpi.type === 'cpa' ? rub(kpi.value) : pct(kpi.value)
 }
 
 export function kpiTarget(kpi) {
   if (!kpi?.type) return 'KPI не задан'
   const name = kpi.type === 'cpa' ? 'CPA' : 'ДРР'
   if (kpi.target == null) return `${name}, цель не задана`
-  return kpi.type === 'cpa' ? `${name}, цель ${rubles(kpi.target)}` : `${name}, цель ${kpi.target}%`
+  return kpi.type === 'cpa' ? `${name}, цель ${rubles(kpi.target)}` : `${name}, цель ${pct(kpi.target)}`
 }
 
 export function balanceTone(days) {
@@ -171,6 +203,33 @@ export const CAMPAIGN_STATUSES = {
   MODERATION: 'На модерации',
   REJECTED: 'Отклонена',
   UNKNOWN: '—',
+}
+
+/**
+ * Один статус кампании для плашки UiStatus: {tone, label, hint}. В Директе их два — состояние показов (state)
+ * и статус модерации (status); человеку нужен один, самый важный. Порядок: отклонена → архив и завершена →
+ * остановлена вручную → черновик → модерация → не показывается → идут показы.
+ */
+export function campaignStatus(c) {
+  const state = c?.state || ''
+  const status = c?.status || ''
+  if (status === 'REJECTED') {
+    return { tone: 'bad', label: 'Отклонена', hint: 'Модерация Директа не пропустила объявления — их нужно исправить' }
+  }
+  if (state === 'ARCHIVED') return { tone: 'off', label: 'В архиве', hint: '' }
+  if (state === 'ENDED') return { tone: 'off', label: 'Завершена', hint: 'Прошла дата окончания кампании' }
+  if (state === 'SUSPENDED') return { tone: 'off', label: 'Остановлена', hint: 'Кампанию остановили вручную' }
+  if (status === 'DRAFT') return { tone: 'off', label: 'Черновик', hint: 'Кампания ещё не отправлена на модерацию' }
+  if (status === 'MODERATION') return { tone: 'wait', label: 'На модерации', hint: 'Директ проверяет объявления' }
+  if (state === 'OFF') {
+    return {
+      tone: 'warn',
+      label: 'Не показывается',
+      hint: 'Директ не показывает кампанию: например, нет денег на счёте или не наступила дата начала',
+    }
+  }
+  if (state === 'ON') return { tone: 'ok', label: 'Идут показы', hint: '' }
+  return { tone: 'off', label: CAMPAIGN_STATES[state] || state || '—', hint: '' }
 }
 
 export const CAMPAIGN_TYPES = {

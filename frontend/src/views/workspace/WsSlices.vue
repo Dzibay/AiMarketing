@@ -296,7 +296,7 @@ import { RouterLink } from 'vue-router'
 import { errorText, jobProgressText, wsApi } from '../../api/web'
 import { askConfirm } from '../../composables/useConfirm'
 import { pushToast } from '../../composables/useToasts'
-import { aiUsageText, formatDate, num, pct, plural, rub } from '../../utils/format'
+import { aiUsageText, delta, formatDate, num, pct, plural, rub } from '../../utils/format'
 import { useWs } from './context'
 import TermHint from '../../components/TermHint.vue'
 
@@ -377,7 +377,7 @@ function currentOf(key) {
 function changeText(value) {
   if (value === 0) return 'не показывать'
   const d = value - 100
-  return d === 0 ? '0' : `${d > 0 ? '+' : '−'}${Math.abs(d)} %`
+  return d === 0 ? '0' : delta(d)
 }
 
 function crTone(r) {

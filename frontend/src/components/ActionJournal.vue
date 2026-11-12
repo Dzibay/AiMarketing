@@ -1,21 +1,47 @@
 <template>
-  <section v-if="!expert" class="hist">
-    <p class="hist__lead">
-      Всё, что меняли в Директе: вы, ИИ с вашего согласия и правила. Почти любое изменение можно вернуть одной кнопкой.
-    </p>
-    <div v-if="!workspaceId && projects.length > 1" class="hist__filter">
-      <select v-model="project" aria-label="Проект" @change="reload">
-        <option :value="0">Все проекты</option>
-        <option v-for="p in projects" :key="p.id" :value="p.id">{{ p.name }}</option>
-      </select>
-    </div>
+  <PageHeader :description="description">
+    <template v-if="showProjectFilter || expert" #actions>
+      <UiSelect
+        v-if="showProjectFilter"
+        v-model="project"
+        :options="projectOptions"
+        aria-label="Проект"
+        @change="reload"
+      />
+      <div v-if="expert" class="seg" role="group" aria-label="Кто менял">
+        <button
+          v-for="s in SOURCES"
+          :key="s.id"
+          type="button"
+          :class="{ active: source === s.id }"
+          :aria-pressed="source === s.id"
+          @click="setSource(s.id)"
+        >
+          {{ s.label }}
+        </button>
+      </div>
+    </template>
+  </PageHeader>
 
-    <p v-if="loading && !items.length" class="ccard ccard--note">Загружаем историю…</p>
-    <p v-else-if="loadError" class="ccard ccard--note">{{ loadError }}</p>
-    <div v-else-if="!items.length" class="ccard ccard--note hist__empty">
-      <History :size="22" aria-hidden="true" />
-      <span>{{ workspaceId ? 'В этом проекте ещё ничего не меняли.' : 'Ещё ничего не меняли.' }}</span>
+  <UiNotice v-if="loadError" tone="error">
+    Не удалось загрузить историю. {{ loadError }}
+    <template #action>
+      <button class="btn btn--ghost btn--sm" type="button" :disabled="loading" @click="reload">Повторить</button>
+    </template>
+  </UiNotice>
+
+  <div v-if="loading && !items.length" class="ccard" aria-busy="true" aria-label="Загружаем историю">
+    <div v-for="n in 4" :key="n" class="hrow">
+      <span class="ui-skel hskel__who" />
+      <div class="hrow__main">
+        <span class="ui-skel" :style="{ width: `${62 - n * 7}%` }" />
+        <span class="ui-skel hskel__sub" />
+      </div>
     </div>
+  </div>
+  <EmptyState v-else-if="!items.length && !loadError" :icon="History" :text="emptyText" />
+
+  <section v-else-if="items.length && !expert" class="hist">
     <template v-for="d in days" :key="d.label">
       <h3 class="section-h">{{ d.label }}</h3>
       <div class="ccard">
@@ -31,60 +57,37 @@
                 ·
                 <RouterLink :to="`/w/${a.workspace_id}/history`">{{ a.workspace_name || `Проект ${a.workspace_id}` }}</RouterLink>
               </template>
-              <template v-if="a.status === 'error' || a.status === 'failed'"> · <span class="tone-bad">Директ не принял</span></template>
-              <template v-else-if="a.status === 'partial'"> · <span class="tone-warn">применено частично</span></template>
             </small>
           </div>
           <div class="hrow__acts">
-            <span v-if="a.undone_at" class="st st--off"><Undo2 :size="13" aria-hidden="true" />Возвращено</span>
-            <button v-else-if="a.undo" class="btn btn--ghost" type="button" :title="a.undo.label" @click="undoId = a.id">
-              <Undo2 :size="14" aria-hidden="true" />
+            <UiStatus
+              v-if="a.undone_at"
+              tone="off"
+              :icon="Undo2"
+              label="Возвращено"
+              :hint="`Вернули ${formatDateTime(a.undone_at)}`"
+            />
+            <UiStatus v-else-if="isFailed(a)" tone="bad" label="Директ не принял" :hint="summaryLine(a)" />
+            <UiStatus v-else-if="a.status === 'partial'" tone="warn" label="Частично" :hint="summaryLine(a)" />
+            <button
+              v-if="!a.undone_at && a.undo"
+              class="btn btn--ghost btn--sm"
+              type="button"
+              :title="a.undo.label"
+              @click="undoId = a.id"
+            >
+              <Undo2 aria-hidden="true" />
               Вернуть как было
             </button>
           </div>
         </div>
       </div>
     </template>
-    <div v-if="hasMore" class="pager">
-      <button class="btn btn--ghost" type="button" :disabled="loading" @click="loadMore">
-        {{ loading ? 'Загружаем…' : 'Показать ещё' }}
-      </button>
-    </div>
     <ExpertHint>Фильтр по источнику, параметры каждого изменения и ответ Директа</ExpertHint>
-    <UndoDialog :log-id="undoId" @close="undoId = null" @done="reload" />
   </section>
 
-  <section v-else class="panel">
-    <div class="panel__head">
-      <div>
-        <h2>Журнал изменений</h2>
-        <p class="hint">
-          Что меняли в Директе вы, ИИ и правила — с параметрами и результатом. Большинство действий можно откатить.
-        </p>
-      </div>
-      <div class="row-actions">
-        <select v-if="!workspaceId && projects.length > 1" v-model="project" aria-label="Проект" @change="reload">
-          <option :value="0">Все проекты</option>
-          <option v-for="p in projects" :key="p.id" :value="p.id">{{ p.name }}</option>
-        </select>
-        <div class="seg" role="group" aria-label="Источник">
-          <button
-            v-for="s in SOURCES"
-            :key="s.id"
-            type="button"
-            :class="{ active: source === s.id }"
-            @click="setSource(s.id)"
-          >
-            {{ s.label }}
-          </button>
-        </div>
-      </div>
-    </div>
-
-    <p v-if="loading && !items.length" class="empty">Загружаем журнал…</p>
-    <p v-else-if="loadError" class="empty">{{ loadError }}</p>
-    <p v-else-if="!items.length" class="empty">Записей нет.</p>
-    <div v-else class="list">
+  <section v-else-if="items.length" class="panel">
+    <div class="list">
       <details v-for="a in items" :key="a.id" class="log-row" :class="{ 'is-undone': a.undone_at }">
         <summary class="list-row">
           <div>
@@ -104,11 +107,11 @@
             </small>
           </div>
           <div class="log-row__side">
-            <span v-if="a.undone_at" class="chip">откачено {{ formatDateTime(a.undone_at) }}</span>
-            <span v-else :class="ACTION_STATUS_TONES[a.status]">{{ STATUS_LABELS[a.status] || a.status }}</span>
+            <UiStatus v-if="a.undone_at" tone="off" :icon="Undo2" label="Откачено" :hint="formatDateTime(a.undone_at)" />
+            <UiStatus v-else v-bind="STATUS[a.status] || { tone: 'info', label: a.status || '—' }" />
             <button
-              v-if="a.undo"
-              class="btn btn--ghost"
+              v-if="!a.undone_at && a.undo"
+              class="btn btn--ghost btn--sm"
               :class="{ 'btn--danger': a.undo.danger }"
               type="button"
               :title="a.undo.label"
@@ -130,13 +133,14 @@
         </div>
       </details>
     </div>
-    <UndoDialog :log-id="undoId" @close="undoId = null" @done="reload" />
-    <div v-if="hasMore" class="pager">
-      <button class="btn btn--ghost" type="button" :disabled="loading" @click="loadMore">
-        {{ loading ? 'Загружаем…' : 'Показать ещё' }}
-      </button>
-    </div>
   </section>
+
+  <div v-if="hasMore && items.length" class="pager">
+    <button class="btn btn--ghost" type="button" :disabled="loading" @click="loadMore">
+      {{ loading ? 'Загружаем…' : 'Показать ещё' }}
+    </button>
+  </div>
+  <UndoDialog :log-id="undoId" @close="undoId = null" @done="reload" />
 </template>
 
 <script setup>
@@ -144,11 +148,16 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { RouterLink, useRoute } from 'vue-router'
 import { History, Sparkles, Undo2, User, Zap } from '@lucide/vue'
 import ExpertHint from './ExpertHint.vue'
+import EmptyState from './ui/EmptyState.vue'
+import PageHeader from './ui/PageHeader.vue'
+import UiNotice from './ui/UiNotice.vue'
+import UiSelect from './ui/UiSelect.vue'
+import UiStatus from './ui/UiStatus.vue'
 import { useExpert } from '../composables/useExpert'
 import UndoDialog from './UndoDialog.vue'
 import { errorText, webApi, wsApi } from '../api/web'
 import { useWorkspaces } from '../composables/useWorkspaces'
-import { ACTION_SOURCES, ACTION_STATUS_TONES, formatDateTime } from '../utils/format'
+import { ACTION_SOURCES, formatDateTime } from '../utils/format'
 
 /** Журнал изменений с откатом: по одному проекту (workspaceId) или по всем — с фильтром проекта и источника. */
 const props = defineProps({ workspaceId: { type: Number, default: null } })
@@ -160,13 +169,29 @@ const SOURCES = [
   { id: 'ai', label: 'ИИ' },
   { id: 'rule', label: 'Правила' },
 ]
-const STATUS_LABELS = { ok: 'выполнено', partial: 'частично', error: 'ошибка', failed: 'ошибка' }
+const STATUS = {
+  ok: { tone: 'ok', label: 'Выполнено' },
+  partial: { tone: 'warn', label: 'Частично' },
+  error: { tone: 'bad', label: 'Ошибка' },
+  failed: { tone: 'bad', label: 'Ошибка' },
+}
 
 const WHO_ICONS = { ai: Sparkles, user: User, rule: Zap }
 
 const { expert } = useExpert()
 const { workspaces } = useWorkspaces()
 const projects = computed(() => workspaces.value.filter((w) => !w.locked))
+const showProjectFilter = computed(() => !props.workspaceId && projects.value.length > 1)
+const projectOptions = computed(() => [
+  { value: 0, label: 'Все проекты' },
+  ...projects.value.map((p) => ({ value: p.id, label: p.name })),
+])
+
+const description = computed(() =>
+  expert.value
+    ? 'Что меняли в Директе вы, ИИ и правила — с параметрами и ответом Директа. Большинство действий можно откатить.'
+    : 'Всё, что меняли в Директе: вы, ИИ с вашего согласия и правила. Почти любое изменение можно вернуть одной кнопкой.',
+)
 
 const items = ref([])
 const loading = ref(false)
@@ -208,6 +233,13 @@ const days = computed(() => {
   }
   return [...byDay.values()]
 })
+
+const emptyText = computed(() => {
+  if (source.value) return 'Таких изменений пока нет.'
+  return props.workspaceId || project.value ? 'В этом проекте ещё ничего не меняли.' : 'Ещё ничего не меняли.'
+})
+
+const isFailed = (a) => a.status === 'error' || a.status === 'failed'
 
 function pretty(value) {
   if (value == null || (typeof value === 'object' && !Object.keys(value).length)) return '—'
@@ -275,19 +307,19 @@ watch(expert, (on) => {
 </script>
 
 <style scoped>
-.hist__lead {
-  margin: 0 0 6px;
-  color: var(--muted);
-  font-size: 15px;
+.hist > .section-h:first-child {
+  margin-top: 0;
 }
-.hist__filter {
-  margin: 12px 0 0;
+.hskel__who {
+  flex: none;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
 }
-.hist__empty {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin-top: 16px;
+.hskel__sub {
+  width: 24%;
+  height: 10px;
+  margin-top: 9px;
 }
 .hrow {
   display: flex;
@@ -331,17 +363,25 @@ watch(expert, (on) => {
   align-items: center;
   gap: 6px;
 }
-.hrow__acts .btn {
-  gap: 6px;
-}
 .hrow.is-undone b {
   color: var(--faint);
   font-weight: 500;
   text-decoration: line-through;
 }
+/* На узком экране статус и «Вернуть» уходят под текст, чтобы заголовок не сжимался в столбик. */
 @media (max-width: 640px) {
   .hrow {
+    display: grid;
+    grid-template-columns: 32px minmax(0, 1fr);
+    column-gap: 14px;
+    row-gap: 10px;
+  }
+  .hrow__acts {
+    grid-column: 2;
     flex-wrap: wrap;
+  }
+  .hrow__acts:empty {
+    display: none;
   }
 }
 </style>

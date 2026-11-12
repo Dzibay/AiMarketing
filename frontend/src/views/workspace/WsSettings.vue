@@ -41,36 +41,28 @@
               <input v-model.trim="general.site" type="text" maxlength="300" placeholder="example.ru" />
             </div>
             <div v-field class="field">
-              <label>Бюджет на месяц, ₽</label>
-              <input v-model="general.monthly_budget_rub" type="number" min="0" step="100" placeholder="не задан" />
+              <label>Бюджет на месяц</label>
+              <UiNumber v-model="general.monthly_budget_rub" suffix="₽" placeholder="не задан" />
               <small class="field-hint">Сервис предупредит, если деньги уходят быстрее плана.</small>
             </div>
             <div v-field class="field">
               <label>KPI<TermHint term="cpa" /><TermHint term="drr" /></label>
-              <select v-model="general.kpi_type">
-                <option value="">Не задан</option>
-                <option value="cpa">CPA — цена конверсии, ₽</option>
-                <option value="drr">ДРР — доля рекламных расходов, %</option>
-              </select>
+              <UiSelect v-model="general.kpi_type" :options="KPI_OPTIONS" />
             </div>
             <div v-field class="field">
-              <label>Целевое значение{{ general.kpi_type === 'drr' ? ', %' : general.kpi_type === 'cpa' ? ', ₽' : '' }}</label>
-              <input
+              <label>Целевое значение</label>
+              <UiNumber
                 v-model="general.kpi_target"
-                type="number"
-                min="0"
-                step="any"
+                :digits="2"
+                :suffix="general.kpi_type === 'drr' ? '%' : general.kpi_type === 'cpa' ? '₽' : ''"
                 :disabled="!general.kpi_type"
                 :placeholder="general.kpi_type ? '' : 'сначала выберите KPI'"
               />
             </div>
             <div v-field class="field field--wide">
               <label>Основная цель Метрики</label>
-              <div class="filters--inline">
-                <select v-model="general.goal_id">
-                  <option :value="null">Все цели (сумма конверсий)</option>
-                  <option v-for="g in ws.goals" :key="g.goal_id" :value="g.goal_id">{{ g.name }} · № {{ g.goal_id }}</option>
-                </select>
+              <div class="filters filters--inline">
+                <UiSelect v-model="general.goal_id" :options="goalOptions" />
                 <button class="btn btn--ghost" type="button" :disabled="goalsBusy || !ws.counter_row_id" @click="syncGoals">
                   {{ goalsBusy ? 'Обновляем…' : 'Обновить цели' }}
                 </button>
@@ -474,8 +466,8 @@
               <input v-model.trim="clientEdit.name" type="text" required maxlength="200" />
             </div>
             <div v-field class="field">
-              <label>Общий бюджет в месяц, ₽</label>
-              <input v-model="clientEdit.monthly_budget_rub" type="number" min="0" step="1000" placeholder="не задан" />
+              <label>Общий бюджет в месяц</label>
+              <UiNumber v-model="clientEdit.monthly_budget_rub" suffix="₽" placeholder="не задан" />
             </div>
             <div v-field class="field field--wide">
               <label>Заметки</label>
@@ -510,8 +502,8 @@
               <input v-model.trim="clientDraft.name" type="text" required maxlength="200" placeholder="ООО «Ромашка»" />
             </div>
             <div v-field class="field">
-              <label>Общий бюджет в месяц, ₽</label>
-              <input v-model="clientDraft.monthly_budget_rub" type="number" min="0" step="1000" placeholder="не задан" />
+              <label>Общий бюджет в месяц</label>
+              <UiNumber v-model="clientDraft.monthly_budget_rub" suffix="₽" placeholder="не задан" />
             </div>
             <button class="btn btn--accent" type="submit" :disabled="clientBusy">Создать и привязать</button>
           </form>
@@ -555,6 +547,8 @@ import ContextFilesPanel from './ContextFilesPanel.vue'
 import LinkTemplatePanel from './LinkTemplatePanel.vue'
 import { useWs } from './context'
 import TermHint from '../../components/TermHint.vue'
+import UiNumber from '../../components/ui/UiNumber.vue'
+import UiSelect from '../../components/ui/UiSelect.vue'
 import ExpertHint from '../../components/ExpertHint.vue'
 import { useExpert } from '../../composables/useExpert'
 
@@ -612,6 +606,16 @@ function generalFromWs(w) {
 }
 
 const general = reactive(generalFromWs(ws.value))
+
+const KPI_OPTIONS = [
+  { value: '', label: 'Не задан' },
+  { value: 'cpa', label: 'CPA — цена конверсии', hint: 'Сколько стоит одна заявка или покупка, ₽' },
+  { value: 'drr', label: 'ДРР — доля рекламных расходов', hint: 'Какая часть выручки уходит на рекламу, %' },
+]
+const goalOptions = computed(() => [
+  { value: null, label: 'Все цели (сумма конверсий)' },
+  ...(ws.value.goals || []).map((g) => ({ value: g.goal_id, label: g.name, hint: `№ ${g.goal_id}` })),
+])
 const generalBusy = ref(false)
 const generalError = ref('')
 const goalsBusy = ref(false)

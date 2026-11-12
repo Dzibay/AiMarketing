@@ -186,10 +186,7 @@
               </small>
             </td>
             <td>
-              <span class="chip" :class="STATE_CHIPS[c.state] || ''">{{ CAMPAIGN_STATES[c.state] || c.state }}</span>
-              <small v-if="c.status && c.status !== 'ACCEPTED'" class="cell-note">
-                {{ CAMPAIGN_STATUSES[c.status] || c.status }}
-              </small>
+              <UiStatus v-bind="campaignStatus(c)" />
             </td>
             <td class="num">
               <template v-if="c.weekly_budget_rub">{{ rubles(c.weekly_budget_rub) }}/нед.</template>
@@ -303,11 +300,11 @@ import { askConfirm } from '../../composables/useConfirm'
 import { computed, onMounted, reactive, ref } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
 import Modal from '../../components/ui/Modal.vue'
+import UiStatus from '../../components/ui/UiStatus.vue'
 import { ERRORS, errorText, jobProgressText, wsApi } from '../../api/web'
 import { pushToast } from '../../composables/useToasts'
 import {
-  CAMPAIGN_STATES,
-  CAMPAIGN_STATUSES,
+  campaignStatus,
   CAMPAIGN_TYPES,
   formatDate,
   lastDays,
@@ -337,7 +334,6 @@ const COLUMNS = [
   { key: 'conversions', label: 'Конв.', num: true },
   { key: 'cpa_kopecks', label: 'CPA', num: true },
 ]
-const STATE_CHIPS = { ON: 'chip--ok', SUSPENDED: 'chip--warning', OFF: '', ARCHIVED: '', ENDED: '' }
 const ACTION_TEXT = {
   pause: 'Остановлено',
   resume: 'Запущено',

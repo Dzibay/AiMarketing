@@ -168,10 +168,7 @@
               <RouterLink class="link-quiet" :to="`/w/${c.project.id}/campaigns`">{{ c.project.name }}</RouterLink>
             </td>
             <td>
-              <span class="chip" :class="STATE_CHIPS[c.state] || ''">{{ CAMPAIGN_STATES[c.state] || c.state }}</span>
-              <small v-if="c.status && c.status !== 'ACCEPTED'" class="cell-note">
-                {{ CAMPAIGN_STATUSES[c.status] || c.status }}
-              </small>
+              <UiStatus v-bind="campaignStatus(c)" />
             </td>
             <td class="num">
               <template v-if="c.weekly_budget_rub">{{ rubles(c.weekly_budget_rub) }}/нед.</template>
@@ -223,9 +220,10 @@ import { computed, onMounted, reactive, ref } from 'vue'
 import { RouterLink } from 'vue-router'
 import { ERRORS, errorText, webApi, wsApi } from '../api/web'
 import { pushToast } from '../composables/useToasts'
-import { CAMPAIGN_STATES, CAMPAIGN_STATUSES, CAMPAIGN_TYPES, formatDate, lastDays, num, pct, rub, rubles } from '../utils/format'
+import { CAMPAIGN_TYPES, campaignStatus, formatDate, lastDays, num, pct, rub, rubles } from '../utils/format'
 import { useHead } from '../utils/useHead'
 import TermHint from '../components/TermHint.vue'
+import UiStatus from '../components/ui/UiStatus.vue'
 import CampaignGroups from '../components/CampaignGroups.vue'
 import CampaignAsk from '../components/CampaignAsk.vue'
 import ExpertHint from '../components/ExpertHint.vue'
@@ -246,7 +244,6 @@ const COLUMNS = [
   { key: 'conversions', label: 'Конв.', num: true },
   { key: 'cpa_kopecks', label: 'CPA', num: true, term: 'cpa' },
 ]
-const STATE_CHIPS = { ON: 'chip--ok', SUSPENDED: 'chip--warning' }
 const ACTION_TEXT = { pause: 'Остановлено', resume: 'Запущено' }
 
 const data = ref(null)

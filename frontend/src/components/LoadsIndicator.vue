@@ -43,7 +43,7 @@ import { RouterLink } from 'vue-router'
 import { CloudDownload } from '@lucide/vue'
 import { errorDetail } from '../api/web'
 import { jobPercent, jobText, stageErrorText, stageProblem, useLoads } from '../composables/useLoads'
-import { plural, timeAgo } from '../utils/format'
+import { pct, plural, timeAgo } from '../utils/format'
 
 const MAX_ITEMS = 8
 
@@ -67,7 +67,7 @@ const tone = computed(() => {
 })
 
 const label = computed(() => {
-  if (busy.value) return percent.value == null ? 'Синхронизация' : `Загрузка ${percent.value}%`
+  if (busy.value) return percent.value == null ? 'Синхронизация' : `Загрузка ${pct(percent.value, 0)}`
   if (tone.value === 'error') return 'Ошибка загрузки'
   if (tone.value === 'warn') return unitsWait.value ? 'Ждём баллы' : 'Ждёт загрузки'
   return 'Данные загружены'

@@ -145,7 +145,7 @@
               @click="setMonths(m)"
             >
               {{ monthsText(m) }}
-              <small v-if="termPct(m)" class="pay-term__off">−{{ num(termPct(m), 2) }}%</small>
+              <small v-if="termPct(m)" class="pay-term__off">−{{ pct(termPct(m), 2) }}</small>
             </button>
           </div>
         </div>
@@ -163,11 +163,11 @@
             </div>
             <div v-if="quote.change_discount_pct">
               <dt>Скидка за переход</dt>
-              <dd>{{ num(quote.change_discount_pct, 2) }}%</dd>
+              <dd>{{ pct(quote.change_discount_pct, 2) }}</dd>
             </div>
             <div v-if="quote.term_discount_pct">
               <dt>Скидка за срок</dt>
-              <dd>{{ num(quote.term_discount_pct, 2) }}% · −{{ rubles(quote.full_rub - quote.amount_rub, 2) }}</dd>
+              <dd>{{ pct(quote.term_discount_pct, 2) }} · −{{ rubles(quote.full_rub - quote.amount_rub, 2) }}</dd>
             </div>
             <div class="pay-sum__total">
               <dt>К оплате</dt>

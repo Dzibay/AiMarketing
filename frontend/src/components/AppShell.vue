@@ -146,7 +146,14 @@
 
       <div class="dpage">
         <div class="dhead">
-          <h1>{{ title }}</h1>
+          <!-- Описание и действия страницы приходят сюда из PageHeader (Teleport). -->
+          <div class="dhead__row">
+            <div class="dhead__title">
+              <h1>{{ title }}</h1>
+              <p id="dhead-desc" class="dhead__desc"></p>
+            </div>
+            <div id="dhead-acts" class="dhead__acts"></div>
+          </div>
           <nav v-if="tabs.length > 1" class="dtabs" :aria-label="title">
             <RouterLink
               v-for="tab in tabs"

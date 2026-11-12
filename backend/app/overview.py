@@ -633,7 +633,7 @@ def build_overview(user_id: int, today: date | None = None, now: datetime | None
                     _problem(
                         severity,
                         "balance",
-                        f"Баланса хватит на {balance_days:g} дн.",
+                        "Баланса хватит на " + f"{balance_days:g}".replace(".", ",") + " дн.",
                         f"{rub(balance)} при расходе ≈{rub(cost_7d / 7)} в день",
                         **where,
                     )

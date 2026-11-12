@@ -602,9 +602,8 @@
 }
 
 .hask__send:disabled {
-  background: var(--side);
-  color: var(--faint);
-  cursor: default;
+  opacity: 0.4;
+  cursor: not-allowed;
 }
 
 .hask__send svg {
@@ -711,9 +710,11 @@
 /* Общий слой поверх site.css: та же разметка страниц, форма и вес — как в docs/mockups/dialog.html.
    Кнопки скруглены, а не «таблетки», плоские; карточки без тени; заголовки и цифры жирнее. */
 
+/* Кнопки — два размера: обычная 40 px и малая 32 px (.btn--sm, старое имя .btn--xs). Главная — чёрная
+   (в тёмной теме лайм), вторичная — белая с рамкой (.btn--ghost), опасная — только в меню и диалогах. */
 .btn {
-  height: 38px;
-  padding: 0 15px;
+  height: 40px;
+  padding: 0 16px;
   border-radius: var(--radius);
   font-size: 14px;
   font-weight: 700;
@@ -738,11 +739,38 @@
   background: var(--surface);
 }
 
+.btn--sm,
 .btn--xs {
-  height: 30px;
-  padding: 0 10px;
+  height: 32px;
+  padding: 0 11px;
+  gap: 6px;
   border-radius: var(--r-sm);
   font-size: 13px;
+}
+
+.btn--sm svg,
+.btn--xs svg {
+  width: 15px;
+  height: 15px;
+}
+
+/* Неактивная — та же кнопка, только прозрачнее: без серой заливки и без отклика на наведение. */
+.btn:disabled,
+.btn[aria-disabled='true'] {
+  opacity: 0.4;
+  cursor: not-allowed;
+  filter: none;
+  transform: none;
+}
+
+.btn--ghost:disabled:hover,
+.btn--danger:disabled:hover {
+  border-color: var(--line);
+  background: var(--surface);
+}
+
+.btn--danger-solid:disabled:hover {
+  background: var(--danger);
 }
 
 .btn:focus-visible {
