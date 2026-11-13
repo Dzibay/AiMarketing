@@ -573,7 +573,7 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  height: 56px;
+  height: var(--bar-h);
   padding: 0 20px;
   background: var(--glass);
   backdrop-filter: blur(12px);
@@ -1861,6 +1861,11 @@
 }
 
 /* Админка: та же плоская шапка и знак, что в кабинете. */
+/* Шапки таблиц липнут под панель админки: 10 + кнопка 44 + 10 + линия 1px. */
+.admin-shell {
+  --bar-h: 65px;
+}
+
 .admin-top {
   top: 0;
   margin: 0 -1.25rem 24px;

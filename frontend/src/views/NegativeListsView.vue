@@ -199,7 +199,7 @@
           </div>
         </div>
 
-        <div v-if="previewRows.length" class="ccard table-scroll neg-preview">
+        <div v-if="previewRows.length" v-scroll-x class="ccard table-scroll neg-preview">
           <table class="table">
             <thead>
               <tr>
@@ -428,12 +428,17 @@ function resultSummary(r) {
   return `${head}: ${parts.join(', ')}.`
 }
 
-// Поле растёт вместе со списком до 60 % экрана, дальше — прокрутка внутри.
+// Поле растёт вместе со списком до 16 строк, дальше — прокрутка внутри (уголка для ручной высоты нет).
+const MAX_LINES = 16
+
 function grow() {
   const el = phrasesEl.value
   if (!el) return
+  const cs = getComputedStyle(el)
+  const line = parseFloat(cs.lineHeight) || parseFloat(cs.fontSize) * 1.5
+  const box = ['paddingTop', 'paddingBottom', 'borderTopWidth', 'borderBottomWidth'].reduce((s, k) => s + parseFloat(cs[k]), 0)
   el.style.height = 'auto'
-  el.style.height = `${Math.min(el.scrollHeight + 2, Math.round(window.innerHeight * 0.6))}px`
+  el.style.height = `${Math.min(el.scrollHeight + 2, Math.ceil(line * MAX_LINES + box))}px`
 }
 
 watch([() => form.text, editing], () => nextTick(grow))
@@ -680,7 +685,7 @@ onMounted(async () => {
 }
 .neg-edit textarea {
   min-height: 140px;
-  resize: vertical;
+  resize: none;
   overflow-y: auto;
 }
 .neg-edit form > .field {

@@ -226,25 +226,24 @@
     </div>
   </div>
 
-  <div class="queries-tabs">
-    <nav class="seg seg--tabs" aria-label="Очередь запросов">
-      <button v-for="t in MAIN_TABS" :key="t.key" type="button" :class="{ active: tab === t.key }" @click="setTab(t.key)">
-        {{ t.label }}<template v-if="data"> · {{ num(counts[t.key]) }}</template>
-      </button>
-    </nav>
-    <nav class="queries-tabs__extra" aria-label="Разобранные запросы">
-      <button
-        v-for="t in EXTRA_TABS"
-        :key="t.key"
-        type="button"
-        :class="{ active: tab === t.key }"
-        :aria-current="tab === t.key ? 'page' : undefined"
-        @click="setTab(t.key)"
-      >
-        {{ t.label }}
-      </button>
-    </nav>
-  </div>
+  <nav class="seg seg--tabs" aria-label="Разделы запросов">
+    <button
+      type="button"
+      :class="{ active: tab !== 'memory' }"
+      :aria-current="tab !== 'memory' ? 'page' : undefined"
+      @click="setTab(lastQueue)"
+    >
+      Разбор запросов
+    </button>
+    <button
+      type="button"
+      :class="{ active: tab === 'memory' }"
+      :aria-current="tab === 'memory' ? 'page' : undefined"
+      @click="setTab('memory')"
+    >
+      Память решений
+    </button>
+  </nav>
 
   <div v-if="result" class="notice queries-result" :class="{ 'notice--warn': result.status !== 'ok' }">
     <div class="queries-result__head">
@@ -271,20 +270,36 @@
   </div>
 
   <section v-if="tab !== 'memory'" class="panel">
-    <div class="filters">
-      <div v-field class="field field--wide">
-        <label>Поиск</label>
-        <input v-model.trim="filters.search" type="search" placeholder="слово из запроса" />
+    <div class="ltools" role="search">
+      <label class="ltools__search">
+        <Search aria-hidden="true" />
+        <input v-model.trim="filters.search" type="search" placeholder="Слово из запроса" aria-label="Поиск по запросам" />
+      </label>
+      <div class="seg" role="group" aria-label="Очередь запросов">
+        <button
+          v-for="t in QUEUE_TABS"
+          :key="t.key"
+          type="button"
+          :class="{ active: tab === t.key }"
+          :aria-pressed="tab === t.key"
+          @click="setTab(t.key)"
+        >
+          {{ t.label }}<span v-if="data" class="seg__n">{{ num(counts[t.key]) }}</span>
+        </button>
       </div>
-      <div v-if="campaigns.length > 1" v-field class="field">
-        <label>Кампания</label>
-        <UiSelect v-model="filters.campaign" :options="campaignOptions" />
-      </div>
-      <div v-field class="field">
-        <label>Расход от, ₽</label>
-        <input v-model="filters.minCost" type="number" min="0" step="10" placeholder="0" />
-      </div>
-      <UiSwitch v-model="filters.noConv" class="check-row">Без конверсий</UiSwitch>
+      <UiSelect
+        v-if="campaigns.length > 1"
+        v-model="filters.campaign"
+        size="sm"
+        :options="campaignOptions"
+        aria-label="Кампания"
+      />
+      <label class="ltools__field">
+        Расход от
+        <input v-model="filters.minCost" type="number" min="0" step="10" placeholder="0" aria-label="Расход от, ₽" />
+        ₽
+      </label>
+      <UiSwitch v-model="filters.noConv" class="ltools__switch">Без конверсий</UiSwitch>
     </div>
 
     <p v-if="loading && !data" class="empty">Загружаем запросы…</p>
@@ -301,7 +316,7 @@
     </div>
     <p v-else-if="!items.length" class="empty">{{ emptyText }}</p>
     <template v-else>
-      <div class="table-scroll" :class="{ 'is-loading': loading }">
+      <div v-scroll-x class="table-scroll" :class="{ 'is-loading': loading }">
         <table class="table queries-table">
           <thead>
             <tr>
@@ -464,15 +479,12 @@
         </p>
       </div>
     </div>
-    <div class="filters">
-      <div v-field class="field field--wide">
-        <label>Поиск</label>
-        <input v-model.trim="mem.search" type="search" placeholder="запрос или минус-фраза" />
-      </div>
-      <div v-field class="field">
-        <label>Решение</label>
-        <UiSelect v-model="mem.verdict" :options="VERDICTS" />
-      </div>
+    <div class="ltools" role="search">
+      <label class="ltools__search">
+        <Search aria-hidden="true" />
+        <input v-model.trim="mem.search" type="search" placeholder="Запрос или минус-фраза" aria-label="Поиск по памяти" />
+      </label>
+      <UiSelect v-model="mem.verdict" size="sm" :options="VERDICTS" aria-label="Решение" />
     </div>
     <div v-if="mem.selected.size" class="bulk-bar">
       <span>Выбрано: {{ mem.selected.size }}</span>
@@ -484,7 +496,7 @@
     <p v-else-if="!mem.items.length" class="empty">
       {{ mem.search || mem.verdict ? 'Ничего не нашлось.' : 'Пока пусто: решения появятся после «Применить».' }}
     </p>
-    <div v-else class="table-scroll" :class="{ 'is-loading': mem.loading }">
+    <div v-else v-scroll-x class="table-scroll" :class="{ 'is-loading': mem.loading }">
       <table class="table">
         <thead>
           <tr>
@@ -646,7 +658,7 @@ import UiCheckbox from '../../components/ui/UiCheckbox.vue'
 import UiSelect from '../../components/ui/UiSelect.vue'
 import UiSwitch from '../../components/ui/UiSwitch.vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
-import { CircleCheck } from '@lucide/vue'
+import { CircleCheck, Search } from '@lucide/vue'
 import ExpertHint from '../../components/ExpertHint.vue'
 import Modal from '../../components/ui/Modal.vue'
 import { useExpert } from '../../composables/useExpert'
@@ -668,9 +680,8 @@ const TABS = [
   { key: 'all', label: 'Все' },
   { key: 'memory', label: 'Память' },
 ]
-// Каждый день нужны первые три; разобранное и память — второстепенные ссылки справа.
-const MAIN_TABS = TABS.slice(0, 3)
-const EXTRA_TABS = TABS.slice(3)
+// Очередь — сегменты в строке фильтров; «Память решений» — отдельная вкладка рядом с разбором.
+const QUEUE_TABS = TABS.filter((t) => t.key !== 'memory')
 const SOURCES = { ai: 'ИИ', memory: 'по памяти', brief: 'по брифу', direct: 'уже в Директе', user: 'вы' }
 const SOURCE_CHIPS = { ai: 'chip--src-ai', memory: 'chip--src-rule', brief: 'chip--src-rule', direct: 'chip--src-rule' }
 const LEVELS = { adgroup: 'на группу', campaign: 'на кампанию' }
@@ -723,7 +734,7 @@ const BULK_LEVELS = [
   { value: 'campaign', label: 'Все на кампанию' },
 ]
 const VERDICTS = [
-  { value: '', label: 'Все' },
+  { value: '', label: 'Все решения' },
   { value: 'negative', label: 'В минус' },
   { value: 'target', label: 'Целевые' },
 ]
@@ -1141,6 +1152,12 @@ async function refreshCounts() {
     // Счётчики обновятся при следующем заходе во вкладку.
   }
 }
+
+// Из памяти «Разбор запросов» возвращает в ту очередь, где были (с первого захода — «К минусу»).
+const lastQueue = ref(tab.value && tab.value !== 'memory' ? tab.value : 'negative')
+watch(tab, (key) => {
+  if (key && key !== 'memory') lastQueue.value = key
+})
 
 function setTab(key) {
   if (tab.value === key) return

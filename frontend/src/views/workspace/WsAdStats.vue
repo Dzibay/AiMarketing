@@ -179,7 +179,7 @@
         </article>
       </div>
 
-      <div class="table-scroll" :class="{ 'is-loading': busy === 'report' }">
+      <div v-scroll-x class="table-scroll" :class="{ 'is-loading': busy === 'report' }">
         <table class="table">
           <thead>
             <tr>

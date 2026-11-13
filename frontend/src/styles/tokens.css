@@ -51,11 +51,15 @@
   --shadow-sm: 0 1px 2px rgba(20, 20, 19, 0.05);
   --shadow: 0 1px 2px rgba(20, 20, 19, 0.04), 0 8px 24px rgba(20, 20, 19, 0.06);
   --shadow-pop: 0 4px 10px rgba(20, 20, 19, 0.06), 0 24px 60px rgba(20, 20, 19, 0.16);
+  --edge-shade: rgba(20, 20, 19, 0.09); /* тень у края закреплённой колонки */
 
   --r-card: 16px;
   --radius: 11px;
   --r-sm: 9px;
   --pill: 999px;
+
+  /* Высота верхней панели кабинета: под ней липнут шапки таблиц. */
+  --bar-h: 56px;
 
   /* Старые имена — на случай инлайновых стилей в разметке. */
   --paper: var(--bg);
@@ -115,5 +119,6 @@
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
   --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 24px rgba(0, 0, 0, 0.3);
   --shadow-pop: 0 4px 10px rgba(0, 0, 0, 0.3), 0 24px 60px rgba(0, 0, 0, 0.5);
+  --edge-shade: rgba(0, 0, 0, 0.45);
   color-scheme: dark;
 }

@@ -70,7 +70,7 @@
         <h2>Проекты</h2>
         <span class="hint">Линия — расход по дням. Откройте проект — там площадки, объявления и запросы.</span>
       </div>
-      <div class="table-scroll">
+      <div v-scroll-x class="table-scroll">
         <table class="table">
           <thead>
             <tr>
@@ -139,7 +139,7 @@
         <RouterLink class="btn btn--ghost" to="/cabinet/campaigns">Все кампании</RouterLink>
       </div>
       <p class="hint">Десять кампаний с самым большим расходом за период по всем проектам.</p>
-      <div class="table-scroll">
+      <div v-scroll-x class="table-scroll">
         <table class="table">
           <thead>
             <tr>

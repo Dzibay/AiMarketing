@@ -76,7 +76,7 @@
         В проекте нет кампаний —
         <RouterLink :to="`/w/${ws.id}/settings`">добавьте их в настройках</RouterLink>.
       </p>
-      <div v-else class="table-scroll">
+      <div v-else v-scroll-x class="table-scroll">
         <table class="table">
           <thead>
             <tr>
@@ -114,7 +114,7 @@
 
     <section v-if="data.by_account.length > 1" class="panel">
       <h2>По кабинетам Директа</h2>
-      <div class="table-scroll">
+      <div v-scroll-x class="table-scroll">
         <table class="table">
           <thead>
             <tr>
@@ -161,7 +161,7 @@
         Нет данных. Статистика по {{ topTab === 'queries' ? 'запросам' : 'структуре' }} подгружается при синке кампании —
         откройте кампанию и обновите её.
       </p>
-      <div v-else class="table-scroll">
+      <div v-else v-scroll-x class="table-scroll">
         <table class="table">
           <thead>
             <tr>

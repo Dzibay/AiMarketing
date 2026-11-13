@@ -34,7 +34,7 @@
       <p v-if="!data.total.calls" class="empty">В этом месяце платных вызовов не было.</p>
       <template v-else>
         <h3 class="subhead">По видам</h3>
-        <div class="table-scroll">
+        <div v-scroll-x class="table-scroll">
           <table class="table usage-table">
             <thead>
               <tr>
@@ -57,7 +57,7 @@
           </table>
         </div>
         <h3 class="subhead">Больше всего расходуют</h3>
-        <div class="table-scroll">
+        <div v-scroll-x class="table-scroll">
           <table class="table usage-table">
             <thead>
               <tr>

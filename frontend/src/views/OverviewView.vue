@@ -121,7 +121,7 @@
           </UiSwitch>
         </div>
         <p v-if="!tableItems.length" class="empty">Нет проектов под фильтр.</p>
-        <div v-else class="table-scroll">
+        <div v-else v-scroll-x class="table-scroll">
           <table class="table overview-table">
             <thead>
               <tr>

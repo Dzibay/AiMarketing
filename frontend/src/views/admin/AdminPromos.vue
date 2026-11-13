@@ -12,7 +12,7 @@
     </p>
     <p v-if="loading" class="empty">Загружаем…</p>
     <p v-else-if="!items.length" class="empty">Промокодов пока нет.</p>
-    <div v-else class="table-scroll">
+    <div v-else v-scroll-x class="table-scroll">
       <table class="table admin-promos">
         <thead>
           <tr>

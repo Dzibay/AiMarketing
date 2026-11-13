@@ -11,7 +11,7 @@
     </p>
     <p v-if="loading" class="empty">Загружаем…</p>
     <p v-else-if="!items.length" class="empty">Тарифов пока нет — все пользователи работают без ограничений.</p>
-    <div v-else class="table-scroll">
+    <div v-else v-scroll-x class="table-scroll">
       <table class="table admin-plans">
         <thead>
           <tr>
@@ -55,7 +55,7 @@
       Процент от цены нового тарифа, когда пользователь переходит на него со своего. Пусто или 0 — без скидки.
       Пользователь видит цену со скидкой в окне «Лимит исчерпан» и на странице тарифа.
     </p>
-    <div class="table-scroll">
+    <div v-scroll-x class="table-scroll">
       <table class="table admin-upgrades">
         <thead>
           <tr>

@@ -63,7 +63,7 @@
     </div>
     <p v-if="loading && !items.length" class="empty">Загружаем…</p>
     <p v-else-if="!items.length" class="empty">Ссылок пока нет.</p>
-    <div v-else class="table-scroll">
+    <div v-else v-scroll-x class="table-scroll">
       <table class="table admin-refs">
         <thead>
           <tr>

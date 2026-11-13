@@ -110,7 +110,7 @@
     </nav>
     <p v-if="listLoading && !items.length" class="empty">Загружаем…</p>
     <p v-else-if="!items.length" class="empty">Платежей нет.</p>
-    <div v-else class="table-scroll">
+    <div v-else v-scroll-x class="table-scroll">
       <table class="table admin-payments">
         <thead>
           <tr>

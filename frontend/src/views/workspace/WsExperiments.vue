@@ -56,7 +56,7 @@
       </div>
       <p class="exp__reason" :class="REASON_TONES[e.progress.status]">{{ capitalize(e.progress.reason) }}</p>
 
-      <div class="table-scroll">
+      <div v-scroll-x class="table-scroll">
         <table class="table exp__table">
           <thead>
             <tr>
@@ -102,7 +102,7 @@
 
       <details class="exp__more">
         <summary>Подробные цифры</summary>
-        <div class="table-scroll">
+        <div v-scroll-x class="table-scroll">
           <table class="table">
             <thead>
               <tr>

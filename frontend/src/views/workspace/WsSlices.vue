@@ -146,7 +146,7 @@
       </div>
       <p v-if="aiNote" class="cell-note">{{ aiNote }}</p>
 
-      <div class="table-scroll" :class="{ 'is-loading': busy === 'report' }">
+      <div v-scroll-x class="table-scroll" :class="{ 'is-loading': busy === 'report' }">
         <table class="table">
           <thead>
             <tr>
@@ -230,7 +230,7 @@
         </div>
       </div>
 
-      <div class="table-scroll" :class="{ 'is-loading': busy === 'report' }">
+      <div v-scroll-x class="table-scroll" :class="{ 'is-loading': busy === 'report' }">
         <table class="table">
           <thead>
             <tr>

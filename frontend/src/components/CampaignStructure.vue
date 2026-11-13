@@ -19,13 +19,14 @@
         </div>
         <form v-if="!groupBlock" class="filters filters--inline" @submit.prevent="createGroup">
           <input
+            ref="groupInput"
             v-model.trim="groupForm.name"
             type="text"
             placeholder="Название новой группы"
             aria-label="Название новой группы"
             maxlength="255"
           />
-          <button class="btn btn--ghost" type="submit" :disabled="busy || !groupForm.name">
+          <button class="btn btn--ghost" type="submit" :disabled="busy">
             <Plus aria-hidden="true" />Создать группу
           </button>
         </form>
@@ -159,7 +160,7 @@
           Удалить
         </button>
       </div>
-      <div v-if="filteredKeywords.length" class="table-scroll">
+      <div v-if="filteredKeywords.length" v-scroll-x class="table-scroll">
         <table class="table">
           <thead>
             <tr>
@@ -267,7 +268,7 @@
         <button class="btn btn--ghost" type="button" @click="selectedQueries = new Set()">Снять выбор</button>
       </div>
 
-      <div v-if="searchQueries.length" class="table-scroll">
+      <div v-if="searchQueries.length" v-scroll-x class="table-scroll">
         <table class="table">
           <thead>
             <tr>
@@ -423,6 +424,7 @@ const selectedKeywords = ref(new Set())
 const selectedQueries = ref(new Set())
 const kwSearch = ref('')
 const groupForm = reactive({ name: '' })
+const groupInput = ref(null)
 const adModal = reactive({ open: false, item: null })
 const adForm = reactive({
   adgroup_row_id: '',
@@ -667,8 +669,12 @@ function reloadWithQueries() {
   return Promise.all([load(), loadSearchQueries()])
 }
 
+// Кнопка не гаснет без названия (серая выглядит сломанной): пустая форма просто ставит курсор в поле.
 function createGroup() {
-  if (!groupForm.name) return
+  if (!groupForm.name) {
+    groupInput.value?.focus()
+    return
+  }
   return run(async () => {
     const hadGroups = adgroups.value.length > 0
     const res = await webApi.createAdGroup(props.campaignId, { name: groupForm.name })

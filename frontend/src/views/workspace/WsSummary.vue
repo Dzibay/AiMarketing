@@ -185,21 +185,25 @@
           Нет расхода за неделю. Загрузите статистику в разделе
           <RouterLink :to="`/w/${ws.id}/analytics`">«Отчёты»</RouterLink>.
         </p>
-        <div v-else class="list">
+        <div v-else class="tops">
           <RouterLink
             v-for="c in data.top_campaigns"
             :key="c.campaign_row_id"
-            class="list-row is-link"
+            class="tops__row"
             :to="`/w/${ws.id}/campaigns/${c.campaign_row_id}`"
           >
-            <div>
-              <strong>{{ c.name }}</strong>
+            <span class="tops__name">
+              <strong v-tip.truncate="c.name">{{ c.name }}</strong>
               <small>{{ c.account_login }} · {{ CAMPAIGN_STATES[c.state] || c.state }}</small>
-            </div>
-            <div class="list-row__nums">
+            </span>
+            <span class="tops__num tops__cost">
               <strong>{{ rub(c.cost_kopecks) }}</strong>
-              <small>{{ num(c.conversions) }} конв. · CPA {{ rub(c.cpa_kopecks) }}</small>
-            </div>
+            </span>
+            <span class="tops__num tops__conv">
+              <strong>{{ num(c.conversions) }} конв.</strong>
+              <small>CPA {{ c.cpa_kopecks != null ? rub(c.cpa_kopecks) : '—' }}</small>
+            </span>
+            <ChevronRight class="tops__chev" aria-hidden="true" />
           </RouterLink>
         </div>
       </section>
@@ -232,6 +236,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { RouterLink } from 'vue-router'
 import {
+  ChevronRight,
   CircleCheck,
   CirclePause,
   CircleDashed,
@@ -407,6 +412,96 @@ onMounted(load)
 </script>
 
 <style scoped>
+/* Топ кампаний: строка — сетка «название · расход · конверсии и CPA · стрелка», цифры по правому краю. */
+.tops {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto 16px;
+  column-gap: 24px;
+  margin: 0 -12px;
+  container-type: inline-size;
+}
+
+/* Колонки общие на все строки (subgrid): ширина цифр — по самой длинной, название получает остальное. */
+.tops__row {
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: subgrid;
+  grid-template-areas: 'name cost conv chev';
+  align-items: center;
+  row-gap: 2px;
+  padding: 10px 12px;
+  border-radius: var(--radius);
+  color: inherit;
+  text-decoration: none;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.tops__row:hover {
+  background: var(--surface-2);
+}
+
+.tops__name {
+  grid-area: name;
+  min-width: 0;
+}
+
+.tops__name strong,
+.tops__name small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tops__name strong,
+.tops__num strong {
+  font-weight: 700;
+}
+
+.tops__row small {
+  display: block;
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.tops__num {
+  text-align: right;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.tops__cost {
+  grid-area: cost;
+}
+
+.tops__conv {
+  grid-area: conv;
+}
+
+.tops__chev {
+  grid-area: chev;
+  width: 16px;
+  height: 16px;
+  color: var(--faint);
+}
+
+.tops__row:hover .tops__chev {
+  color: var(--ink);
+}
+
+/* Узкая колонка (телефон, две панели рядом на маленьком экране): цифры столбиком справа. */
+@container (max-width: 440px) {
+  .tops__row {
+    grid-template-columns: minmax(0, 1fr) auto 16px;
+    column-gap: 12px;
+    grid-template-areas:
+      'name cost chev'
+      'name conv chev';
+  }
+}
+
 /* Строка журнала: текст сжимается, статус всегда справа в первой строке — не переносится вниз. */
 .act-row {
   display: grid;

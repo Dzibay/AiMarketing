@@ -91,8 +91,12 @@
                 <b>{{ g.name }}</b>
                 <small>{{ g.keywords }} {{ plural(g.keywords, 'фраза', 'фразы', 'фраз') }} · {{ g.ads }} {{ plural(g.ads, 'объявление', 'объявления', 'объявлений') }}</small>
               </div>
-              <span class="hbar__track"><span class="hbar__fill" :style="{ width: `${g.share}%` }"></span></span>
-              <span class="hbar__val">{{ rub(g.cost) }}</span>
+              <template v-if="g.cost">
+                <span class="hbar__track"><span class="hbar__fill" :style="{ width: `${g.share}%` }"></span></span>
+                <span class="hbar__val">{{ rub(g.cost) }}</span>
+              </template>
+              <!-- Пустая полоска с засечкой читается как «чуть-чуть потратили» — пишем словами. -->
+              <span v-else class="camp-group__none">нет расхода за период</span>
             </div>
           </div>
         </div>
@@ -553,6 +557,18 @@ watch(expert, (on) => {
 .camp-group small {
   color: var(--faint);
   font-size: 12px;
+}
+.camp-group__none {
+  grid-column: 2 / -1;
+  color: var(--faint);
+  font-size: 13px;
+}
+/* Как у полоски на телефоне (shell.css): вторая строка под названием. */
+@media (max-width: 720px) {
+  .camp-group__none {
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
 }
 .camp-act-meta {
   display: inline-flex;

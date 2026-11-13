@@ -29,7 +29,7 @@
 
     <slot name="notices" />
 
-    <div v-if="loading && !items.length" class="table-scroll" aria-busy="true">
+    <div v-if="loading && !items.length" v-scroll-x class="table-scroll" aria-busy="true">
       <table class="table ctab__t">
         <tbody>
           <tr v-for="i in 5" :key="i">
@@ -45,7 +45,7 @@
         <button class="btn btn--ghost btn--sm" type="button" @click="resetFilters">Сбросить фильтры</button>
       </template>
     </EmptyState>
-    <div v-else class="table-scroll" :class="{ 'is-loading': loading }">
+    <div v-else v-scroll-x class="table-scroll" :class="{ 'is-loading': loading }">
       <table class="table ctab__t">
         <thead>
           <tr>
@@ -57,7 +57,12 @@
                 @change="toggleAll($event.target.checked)"
               />
             </th>
-            <th v-for="col in columns" :key="col.key" :class="{ num: col.num }" :aria-sort="ariaSort(col.key)">
+            <th
+              v-for="col in columns"
+              :key="col.key"
+              :class="[col.cls, { num: col.num }]"
+              :aria-sort="ariaSort(col.key)"
+            >
               <button class="th-sort" type="button" @click="sortBy(col.key)">{{ col.label }}{{ sortMark(col.key) }}</button>
               <TermHint v-if="col.term" :term="col.term" />
             </th>
@@ -83,7 +88,7 @@
               <RouterLink :to="linkOf(c)" v-tip.truncate="c.name">{{ c.name }}</RouterLink>
               <small class="ctab__meta">{{ metaOf(c) }}</small>
             </td>
-            <td v-if="showProject" class="ctab__project">
+            <td v-if="projectCol" class="ctab__project ctab__c-project">
               <RouterLink :to="`/w/${c.project.id}/campaigns`" v-tip.truncate="c.project.name">
                 {{ c.project.name }}
               </RouterLink>
@@ -99,7 +104,7 @@
             </td>
             <td class="num">{{ rub(c.cost_kopecks) }}</td>
             <td class="num">{{ num(c.clicks) }}</td>
-            <td class="num">{{ c.ctr != null ? pct(c.ctr, 2) : '—' }}</td>
+            <td class="num ctab__c-ctr">{{ c.ctr != null ? pct(c.ctr, 2) : '—' }}</td>
             <td class="num" :class="{ 'tone-bad': !c.conversions && c.cost_kopecks > 0 }">{{ num(c.conversions) }}</td>
             <td class="num">{{ c.cpa_kopecks != null ? rub(c.cpa_kopecks) : '—' }}</td>
             <td class="ctab__acts">
@@ -141,9 +146,9 @@
         </tbody>
         <tfoot v-if="rows.length > 1">
           <tr>
-            <td></td>
+            <td class="check-col"></td>
             <td>Итого: {{ rows.length }}</td>
-            <td v-if="showProject"></td>
+            <td v-if="projectCol" class="ctab__c-project"></td>
             <td></td>
             <td class="num">
               <template v-if="budgetTotal?.mixed">—<small class="ctab__meta">разные типы бюджета</small></template>
@@ -154,7 +159,9 @@
             </td>
             <td class="num">{{ rub(totals.cost) }}</td>
             <td class="num">{{ num(totals.clicks) }}</td>
-            <td class="num">{{ totals.impressions ? pct((totals.clicks / totals.impressions) * 100, 2) : '—' }}</td>
+            <td class="num ctab__c-ctr">
+              {{ totals.impressions ? pct((totals.clicks / totals.impressions) * 100, 2) : '—' }}
+            </td>
             <td class="num">{{ num(totals.conversions) }}</td>
             <td class="num">{{ totals.conversions ? rub(totals.cost / totals.conversions) : '—' }}</td>
             <td></td>
@@ -229,15 +236,18 @@ const wasteOnly = ref(false)
 const scopeValue = ref('')
 const sort = reactive({ key: 'cost_kopecks', desc: true })
 
+// Проект выбран в фильтре — колонка с его названием ничего не говорит.
+const projectCol = computed(() => props.showProject && !scopeValue.value)
+
 const columns = computed(() =>
   [
     { key: 'name', label: 'Кампания' },
-    props.showProject && { key: 'project_name', label: 'Проект' },
+    projectCol.value && { key: 'project_name', label: 'Проект', cls: 'ctab__c-project' },
     { key: 'state', label: 'Состояние' },
     { key: 'budget_week_rub', label: 'Бюджет', num: true },
     { key: 'cost_kopecks', label: 'Расход', num: true },
     { key: 'clicks', label: 'Клики', num: true },
-    { key: 'ctr', label: 'CTR', num: true },
+    { key: 'ctr', label: 'CTR', num: true, cls: 'ctab__c-ctr' },
     { key: 'conversions', label: 'Конв.', num: true },
     { key: 'cpa_kopecks', label: 'CPA', num: true, term: 'cpa' },
   ].filter(Boolean),
@@ -372,6 +382,10 @@ function resetFilters() {
 </script>
 
 <style scoped>
+.ctab {
+  container: ctab / inline-size;
+}
+
 .ctab__t .num {
   font-variant-numeric: tabular-nums;
 }
@@ -388,19 +402,20 @@ function resetFilters() {
   background: color-mix(in srgb, var(--ink) 5%, var(--surface));
 }
 
-/* Название и строка под ним — по одной строке, длинное обрезается, целиком — в подсказке. */
+/* Название — до двух строк, длиннее обрезается, целиком — в подсказке. Колонка забирает свободную ширину,
+   но уже 220 px не сжимается: дальше таблица прокручивается вбок. */
 .ctab__name {
-  max-width: 340px;
+  min-width: 220px;
 }
 
-.ctab__name a,
-.ctab__project a {
-  display: block;
+.ctab__name a {
+  display: -webkit-box;
   overflow: hidden;
   color: var(--ink);
   font-weight: 700;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
 }
 
 .ctab__project {
@@ -408,9 +423,15 @@ function resetFilters() {
 }
 
 .ctab__project a {
+  display: block;
+  overflow: hidden;
+  color: var(--ink);
   font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
+/* Строка под названием не расширяет колонку (ширина 0 в расчёте таблицы) — обрезается по ширине названия. */
 .ctab__meta {
   display: block;
   overflow: hidden;
@@ -422,9 +443,19 @@ function resetFilters() {
   white-space: nowrap;
 }
 
+.ctab__name .ctab__meta {
+  width: 0;
+  min-width: 100%;
+}
+
+/* Стратегия под бюджетом — до двух строк по 200 px, а не обрезка на первом слове. */
 .num .ctab__meta {
+  display: -webkit-box;
   max-width: 200px;
   margin-left: auto;
+  white-space: normal;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
 }
 
 .ctab__acts {
@@ -432,9 +463,23 @@ function resetFilters() {
   text-align: right;
 }
 
+/* Узкое место — колонки уходят раньше, чем таблице понадобится прокрутка вбок (без «Проекта» и CTR ей нужно
+   ~860 px, с CTR ~930 px): сначала «Проект» (он же есть в фильтре), потом CTR. */
+@container ctab (max-width: 1100px) {
+  .ctab__c-project {
+    display: none;
+  }
+}
+
+@container ctab (max-width: 940px) {
+  .ctab__c-ctr {
+    display: none;
+  }
+}
+
 @media (max-width: 640px) {
   .ctab__name {
-    max-width: 190px;
+    min-width: 170px;
   }
 }
 </style>

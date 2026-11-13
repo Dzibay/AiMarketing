@@ -74,7 +74,7 @@
     </div>
     <p class="hint">Почты со страниц интеграций «скоро». Напишите им, когда раздел запустится.</p>
     <p v-if="!waitlist.items.length" class="empty">Заявок пока нет.</p>
-    <div v-else class="table-scroll">
+    <div v-else v-scroll-x class="table-scroll">
       <table class="table">
         <thead>
           <tr>

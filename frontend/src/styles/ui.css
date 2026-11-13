@@ -1250,11 +1250,57 @@
   border-color: var(--ink);
 }
 
+/* Список в строке инструментов — одной высоты с поиском и сегментами (36px). */
+.ltools .ui-select--sm .ui-select__btn {
+  height: 36px;
+}
+
 .seg__n {
   margin-left: 6px;
   color: var(--faint);
   font-weight: 600;
   font-variant-numeric: tabular-nums;
+}
+
+/* Число с подписью в одной рамке: «Расход от [ 100 ] ₽». */
+.ltools__field {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 36px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: text;
+}
+
+.ltools__field:focus-within {
+  border-color: var(--ink);
+}
+
+.ltools__field input {
+  width: 64px;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  outline: none;
+  appearance: textfield;
+}
+
+.ltools__field input::-webkit-inner-spin-button,
+.ltools__field input::-webkit-outer-spin-button {
+  margin: 0;
+  -webkit-appearance: none;
 }
 
 .ltools__switch {

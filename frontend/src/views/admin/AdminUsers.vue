@@ -10,7 +10,7 @@
     </p>
     <p v-if="loading" class="empty">Загружаем…</p>
     <p v-else-if="!users.length" class="empty">Пользователей пока нет.</p>
-    <div v-else class="table-scroll">
+    <div v-else v-scroll-x class="table-scroll">
       <table class="table admin-users">
         <thead>
           <tr>
@@ -169,7 +169,7 @@
   <Modal :open="!!log" :title="log ? `События ${log.user.email || `#${log.user.id}`}` : ''" wide @close="log = null">
     <p v-if="log?.loading" class="empty">Загружаем…</p>
     <p v-else-if="!log?.items.length" class="empty">Событий пока нет.</p>
-    <div v-else class="table-scroll">
+    <div v-else v-scroll-x class="table-scroll">
       <table class="table">
         <thead>
           <tr>

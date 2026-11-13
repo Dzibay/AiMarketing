@@ -769,42 +769,6 @@ button.stat-card[aria-pressed='true'] {
   position: relative;
 }
 
-.queries-tabs {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.5rem 1rem;
-  margin-bottom: 1rem;
-}
-
-.queries-tabs .seg--tabs {
-  margin-bottom: 0;
-}
-
-.queries-tabs__extra {
-  display: flex;
-  gap: 0.25rem;
-}
-
-.queries-tabs__extra button {
-  appearance: none;
-  border: 0;
-  border-radius: 999px;
-  padding: 0.3rem 0.7rem;
-  background: transparent;
-  color: var(--muted);
-  font: inherit;
-  font-size: 0.88rem;
-  cursor: pointer;
-}
-
-.queries-tabs__extra button:hover,
-.queries-tabs__extra button.active {
-  background: var(--surface-2);
-  color: var(--ink);
-}
-
 .bulk-more > summary {
   list-style: none;
 }
@@ -1567,40 +1531,68 @@ input[type='radio'] {
   box-shadow: inset 3px 0 var(--c-amber);
 }
 
-/* Длинная таблица прокручивается внутри блока высотой с экран: только так строка заголовков остаётся на месте
-   (блок с overflow-x не даёт ей липнуть к окну). Короткие таблицы ограничение не задевает. */
+/* Обёртка таблицы (v-scroll-x). Пока таблица помещается (.is-fit), своей прокрутки у неё нет: страница
+   скроллится целиком, строка заголовков липнет под верхнюю панель. Не помещается (.is-scroll) — прокрутка
+   вбок, галочка и название стоят на месте. Без директивы обёртка просто прокручивается вбок. */
 .table-scroll {
   overflow-x: auto;
-  max-height: calc(100vh - 7rem);
-  max-height: calc(100dvh - 7rem);
+}
+
+.table-scroll.is-fit {
+  overflow: visible;
+}
+
+/* Карточка-обёртка обрезает углы. clip, в отличие от hidden, не делает её прокручиваемой — шапка липнет к странице. */
+.ccard.table-scroll.is-fit {
+  overflow: clip;
 }
 
 /* В border-collapse рамка не едет вместе с липкой ячейкой, поэтому линию под шапкой рисует тень. */
-.table-scroll .table thead th {
+.table-scroll.is-fit .table thead th {
   position: sticky;
-  top: 0;
+  top: var(--bar-h);
   z-index: 2;
   background: var(--surface);
   box-shadow: inset 0 -1px var(--line);
 }
 
-/* Телефон: первая колонка (после флажка выбора, если он есть) остаётся слева при прокрутке вбок.
-   Фон и линию задаёт :where() — без веса, чтобы фон строк-папок, наведения и цветные метки строк перебивали его. */
-@media (max-width: 640px) {
-  .table-scroll .table :is(th, td):is(:first-child:not(.check-col), .check-col + *) {
-    position: sticky;
-    left: 0;
-    z-index: 1;
-  }
+/* В окне своя прокрутка и нет верхней панели. */
+.modal .table-scroll {
+  --bar-h: 0px;
+}
 
-  .table-scroll .table thead th:is(:first-child:not(.check-col), .check-col + *) {
-    z-index: 3;
-  }
+/* Прокрутка вбок: галочка выбора и первая колонка после неё стоят слева (--check-w — ширину галочки
+   меряет директива). Фон и линию задаёт :where() — без веса, чтобы фон строк-папок, наведения и цветные
+   метки строк перебивали его. */
+.table-scroll.is-scroll .table :is(th, td):not([colspan]):is(.check-col, :first-child:not(.check-col), .check-col + *) {
+  position: sticky;
+  left: var(--stick-left, 0px);
+  z-index: 1;
+}
 
-  :where(.table-scroll .table td):where(:first-child:not(.check-col), .check-col + *) {
-    background: var(--surface);
-    box-shadow: inset -1px 0 var(--line);
-  }
+/* Сдвиг — переменной: правило выше тяжелее по весу (:is берёт вес самого тяжёлого варианта). */
+.table-scroll.is-scroll .table .check-col + * {
+  --stick-left: var(--check-w, 0px);
+}
+
+:where(.table-scroll.is-scroll .table) :where(th, td):where(:not([colspan])):where(.check-col, :first-child:not(.check-col), .check-col + *) {
+  background: var(--surface);
+}
+
+:where(.table-scroll.is-scroll .table) :where(th, td):where(:not([colspan])):where(:first-child:not(.check-col), .check-col + *) {
+  box-shadow: inset -1px 0 var(--line);
+}
+
+/* Таблицу сдвинули — у края закреплённой колонки тень: видно, что слева есть ещё. */
+.table-scroll.is-scrolled .table :is(th, td):not([colspan]):is(:first-child:not(.check-col), .check-col + *)::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  right: -12px;
+  bottom: 0;
+  width: 12px;
+  background: linear-gradient(to right, var(--edge-shade), transparent);
+  pointer-events: none;
 }
 
 .overview-table td {

@@ -235,7 +235,7 @@
 
     <section v-if="data.payments?.length" class="plan-sec">
       <h2 class="plan-h">Оплаты</h2>
-      <div class="ccard table-scroll">
+      <div v-scroll-x class="ccard table-scroll">
         <table class="table">
           <thead>
             <tr>
@@ -276,7 +276,7 @@
       <div class="panel__head">
         <h2>История тарифа</h2>
       </div>
-      <div class="table-scroll">
+      <div v-scroll-x class="table-scroll">
         <table class="table">
           <thead>
             <tr>

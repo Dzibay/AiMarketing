@@ -182,7 +182,7 @@
       Последние запуски
       <small><RouterLink :to="historyTo">Что изменили и как вернуть — в «Истории»</RouterLink></small>
     </h2>
-    <div v-if="runs.length" class="ccard table-scroll">
+    <div v-if="runs.length" v-scroll-x class="ccard table-scroll">
       <table class="table">
         <thead>
           <tr>

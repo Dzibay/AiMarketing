@@ -48,7 +48,7 @@
       description="Запросы из Директа по всем проектам. Загрузить новые и разметить их ИИ — в проекте: у каждого свой бриф и память."
     />
 
-    <div v-if="tiles.length" class="stats-grid">
+    <div v-if="tiles.length" class="stats-grid qstats">
       <div v-for="t in tiles" :key="t.key" class="stat-card">
         <small>{{ t.label }}<TermHint v-if="t.term" :term="t.term" /></small>
         <strong :class="t.tone">{{ num(t.value) }}</strong>
@@ -81,10 +81,10 @@
           :options="[{ value: '', label: 'Все проекты' }, ...projectOptions]"
           aria-label="Проект"
         />
-        <label class="qtools__cost">
-          <span>Расход от</span>
+        <label class="ltools__field">
+          Расход от
           <input v-model="filters.minCost" type="number" min="0" step="10" placeholder="0" aria-label="Расход от, ₽" />
-          <span>₽</span>
+          ₽
         </label>
         <UiSwitch v-model="filters.noConv" class="ltools__switch">Без конверсий</UiSwitch>
       </div>
@@ -121,7 +121,7 @@
       </EmptyState>
       <EmptyState v-else-if="!data.items.length" :icon="SearchX" :text="EMPTY[tab]" plain />
       <template v-else>
-        <div class="table-scroll" :class="{ 'is-loading': loading }">
+        <div v-scroll-x class="table-scroll" :class="{ 'is-loading': loading }">
           <table class="table queries-table">
             <thead>
               <tr>
@@ -487,30 +487,9 @@ onMounted(load)
 </script>
 
 <style scoped>
-.qtools__cost {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  color: var(--muted);
-  font-size: 13px;
-  font-weight: 600;
-}
-
-.qtools__cost input {
-  width: 84px;
-  height: 32px;
-  padding: 0 10px;
-  border: 1px solid var(--line);
-  border-radius: var(--r-sm);
-  background: var(--surface);
-  color: var(--ink);
-  font: inherit;
-  font-variant-numeric: tabular-nums;
-}
-
-.qtools__cost input:focus {
-  outline: none;
-  border-color: var(--ink);
+/* Плиток бывает от одной до четырёх (пустые не показываем): колонка не шире четверти, одна плитка не тянется во всю ширину. */
+.qstats {
+  grid-template-columns: repeat(auto-fill, minmax(max(190px, (100% - 3 * 0.9rem) / 4), 1fr));
 }
 
 .notice-list {
