@@ -222,7 +222,7 @@ import UiSwitch from './ui/UiSwitch.vue'
 import { errorText, webApi, wsApi } from '../api/web'
 import { pushToast } from '../composables/useToasts'
 import { useWorkspaces } from '../composables/useWorkspaces'
-import { formatDateTime, num, plural, rubles } from '../utils/format'
+import { formatDateTime, niceQuotes, num, plural, rubles } from '../utils/format'
 import { campaignLabel, repeatedNames } from '../utils/campaignNames'
 
 /**
@@ -296,7 +296,7 @@ function ruleText(r) {
 /** Где работает правило и когда запускалось — строка под условием. */
 function ruleMeta(r) {
   const parts = []
-  if (!props.workspace) parts.push(r.workspace_name || 'Все сайты')
+  if (!props.workspace) parts.push(niceQuotes(r.workspace_name) || 'Все сайты')
   if (r.account_name) parts.push(r.account_name)
   if (r.campaign_name) parts.push(`кампания «${r.campaign_name}»`)
   if (r.goal_name) parts.push(`цель «${r.goal_name}»`)
@@ -370,7 +370,7 @@ const condOptions = computed(() => CONDS_FOR[form.target].map((value) => ({ valu
 const actionOptions = computed(() => ACTIONS_FOR[form.target].map((value) => ({ value, label: DO[value] })))
 const workspaceChoices = computed(() => [
   { value: '', label: 'Все сайты' },
-  ...workspaces.value.map((w) => ({ value: String(w.id), label: w.name })),
+  ...workspaces.value.map((w) => ({ value: String(w.id), label: niceQuotes(w.name) })),
 ])
 const accountChoices = computed(() => [
   { value: '', label: 'Все' },

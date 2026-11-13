@@ -10,7 +10,7 @@
           <TriangleAlert :size="14" aria-hidden="true" />
           {{ s.severity === 'critical' ? 'Срочно' : 'Стоит посмотреть' }}
         </span>
-        <span v-if="showProject" class="sig__ws">{{ s.workspace_name || 'Все проекты' }}</span>
+        <span v-if="showProject" class="sig__ws">{{ niceQuotes(s.workspace_name) || 'Все проекты' }}</span>
         <button class="sig__hide" type="button" v-tip="'Скрыть до завтра'" aria-label="Скрыть до завтра" @click="hide(s)">
           <X :size="15" aria-hidden="true" />
         </button>
@@ -40,7 +40,7 @@ import { RouterLink, useRouter } from 'vue-router'
 import { Sparkles, TriangleAlert, X } from '@lucide/vue'
 import { errorDetail } from '../api/web'
 import { putHomeQuestion } from '../composables/useHomeAsk'
-import { isoDay, problemLink } from '../utils/format'
+import { isoDay, niceQuotes, problemLink } from '../utils/format'
 
 /**
  * «Сервис заметил» простого режима: проблемы из сводки (без «к сведению») карточками.

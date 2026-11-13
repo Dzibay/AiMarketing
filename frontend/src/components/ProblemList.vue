@@ -24,7 +24,7 @@
 import { RouterLink } from 'vue-router'
 import { Info, OctagonAlert, TriangleAlert } from '@lucide/vue'
 import { errorDetail } from '../api/web'
-import { problemLink, SEVERITY_LABELS } from '../utils/format'
+import { niceQuotes, problemLink, SEVERITY_LABELS } from '../utils/format'
 
 /**
  * Список «где горит» экспертного режима: иконка серьёзности, причина одной строкой, под ней — проект,
@@ -42,6 +42,6 @@ function whereOf(p) {
   const project = props.showProject ? p.workspace_name || p.client_name : ''
   // Кабинет часто назван как проект — второй раз то же имя не пишем.
   const object = p.object_name !== project ? p.object_name : ''
-  return [project, object, p.detail ? errorDetail(p.detail) : ''].filter(Boolean).join(' · ')
+  return [niceQuotes(project), object, p.detail ? errorDetail(p.detail) : ''].filter(Boolean).join(' · ')
 }
 </script>

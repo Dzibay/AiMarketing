@@ -1,5 +1,16 @@
 <template>
   <template v-if="!expert">
+    <PageHeader>
+      <template #description>
+        <UiMore page="queries" lead="Где есть что разобрать: ИИ делит новые запросы на «наши» и мусор.">
+          <p>
+            Решаете вы — группами внутри сайта. Новые запросы сервис забирает из Директа сам, а размечает их ИИ только
+            когда вы нажмёте кнопку в проекте.
+          </p>
+        </UiMore>
+      </template>
+    </PageHeader>
+
     <p v-if="loading && !data" class="empty">Загружаем запросы…</p>
     <div v-else-if="!data" class="empty">
       {{ loadError || 'Не удалось загрузить запросы.' }}
@@ -10,14 +21,11 @@
       <RouterLink to="/cabinet/connections">подключениях</RouterLink>.
     </p>
     <template v-else>
-      <p class="page-lead">
-        Где есть что разобрать. ИИ раскладывает новые запросы на «наши» и мусор — вы решаете группами внутри сайта.
-      </p>
       <div class="ccard">
         <div v-for="p in queue" :key="p.id" class="prow">
           <div class="prow__main">
-            <small v-if="showClient(p)">{{ p.client_name }}</small>
-            <b>{{ p.name }}</b>
+            <small v-if="showClient(p)">{{ niceQuotes(p.client_name) }}</small>
+            <b>{{ niceQuotes(p.name) }}</b>
             <p>{{ p.line.text }}</p>
           </div>
           <div class="prow__acts">
@@ -36,17 +44,22 @@
           </div>
         </div>
       </div>
-      <p class="meta-note">
-        Новые запросы сервис забирает из Директа сам. Размечает их ИИ — только когда вы нажмёте кнопку в проекте.
-      </p>
       <ExpertHint>Общая таблица запросов по всем сайтам, фильтры и пакетное применение</ExpertHint>
     </template>
   </template>
 
   <template v-else>
-    <PageHeader
-      description="Запросы из Директа по всем проектам. Загрузить новые и разметить их ИИ — в проекте: у каждого свой бриф и память."
-    />
+    <PageHeader>
+      <template #description>
+        <UiMore page="queries" lead="Запросы из Директа по всем проектам.">
+          <p>Загрузить новые и разметить их ИИ — в проекте: у каждого свой бриф и память.</p>
+          <p>
+            Разметка раскладывает запросы во вкладки «В минус» и «Целевые» — принять предложения можно здесь сразу по
+            всем проектам.
+          </p>
+        </UiMore>
+      </template>
+    </PageHeader>
 
     <div v-if="tiles.length" class="stats-grid qstats">
       <div v-for="t in tiles" :key="t.key" class="stat-card">
@@ -107,8 +120,7 @@
       </UiNotice>
 
       <p v-if="tab === 'new' && data?.counts.new" class="hint">
-        Новые запросы ещё никто не разметил. Откройте проект и нажмите «Разметить с ИИ» — предложения появятся в
-        «В минус» и «Целевые», принять их можно здесь сразу по всем проектам.
+        Эти запросы ещё не размечены — откройте проект и нажмите «Разметить с ИИ».
       </p>
 
       <p v-if="loading && !data" class="empty">Загружаем запросы…</p>
@@ -153,7 +165,7 @@
                 <td class="query-cell">
                   <strong>{{ q.query }}</strong>
                   <small class="cell-note">
-                    <RouterLink :to="`/w/${q.project.id}/queries`">{{ q.project.name }}</RouterLink> ·
+                    <RouterLink :to="`/w/${q.project.id}/queries`">{{ niceQuotes(q.project.name) }}</RouterLink> ·
                     {{ campaignsText(q) || 'кампания' }}
                   </small>
                   <small v-if="q.blocked_by" class="cell-note tone-ok">Уже отсекается: {{ q.blocked_by }}</small>
@@ -246,13 +258,14 @@ import { RouterLink } from 'vue-router'
 import { errorText, jobProgressText, webApi, wsApi } from '../api/web'
 import { pushToast } from '../composables/useToasts'
 import { undoAction } from '../composables/useUndo'
-import { formatDateTime, num, plural, rubles } from '../utils/format'
+import { formatDateTime, niceQuotes, num, plural, rubles } from '../utils/format'
 import { useHead } from '../utils/useHead'
 import TermHint from '../components/TermHint.vue'
 import ExpertHint from '../components/ExpertHint.vue'
 import EmptyState from '../components/ui/EmptyState.vue'
 import Modal from '../components/ui/Modal.vue'
 import PageHeader from '../components/ui/PageHeader.vue'
+import UiMore from '../components/ui/UiMore.vue'
 import UiNotice from '../components/ui/UiNotice.vue'
 import UiCheckbox from '../components/ui/UiCheckbox.vue'
 import UiSelect from '../components/ui/UiSelect.vue'
@@ -328,7 +341,7 @@ const canApply = computed(() => tab.value === 'negative' || tab.value === 'targe
 const selectable = computed(() => (data.value?.items || []).filter(isSelectable))
 const allPicked = computed(() => selectable.value.length > 0 && selectable.value.every((q) => selected.value.has(key(q))))
 // Список проектов для фильтра не сужается, когда фильтр по проекту уже выбран.
-const projectOptions = computed(() => allProjects.value.map((p) => ({ value: String(p.id), label: p.name })))
+const projectOptions = computed(() => allProjects.value.map((p) => ({ value: String(p.id), label: niceQuotes(p.name) })))
 // Выбран один проект — показываем, когда загружали его запросы и куда идти за новыми.
 const projectInfo = computed(() =>
   filters.project ? (data.value?.projects || []).find((p) => String(p.id) === filters.project) || null : null,
@@ -424,7 +437,9 @@ function chosenByProject() {
   const byProject = new Map()
   for (const q of data.value?.items || []) {
     if (!selected.value.has(key(q)) || !isSelectable(q)) continue
-    if (!byProject.has(q.project.id)) byProject.set(q.project.id, { id: q.project.id, name: q.project.name, items: [] })
+    if (!byProject.has(q.project.id)) {
+      byProject.set(q.project.id, { id: q.project.id, name: niceQuotes(q.project.name), items: [] })
+    }
     byProject.get(q.project.id).items.push(q)
   }
   return byProject

@@ -22,7 +22,7 @@
         </RouterLink>
         <UiMenu v-else primary label="Новая кампания: в какой проект?">
           <template #trigger><Plus aria-hidden="true" />Новая кампания<ChevronDown aria-hidden="true" /></template>
-          <UiMenuItem v-for="p in projects" :key="p.id" :to="newCampaignLink(p.id)">{{ p.name }}</UiMenuItem>
+          <UiMenuItem v-for="p in projects" :key="p.id" :to="newCampaignLink(p.id)">{{ niceQuotes(p.name) }}</UiMenuItem>
         </UiMenu>
       </template>
     </template>
@@ -133,7 +133,7 @@ import { undoAction } from '../composables/useUndo'
 import { useWorkspaces } from '../composables/useWorkspaces'
 import { useExpert } from '../composables/useExpert'
 import { confirmCampaignArchive, confirmCampaignsBulk, confirmCampaignToggle } from '../utils/campaignConfirm'
-import { campaignTypeShort, formatDate, lastDays } from '../utils/format'
+import { campaignTypeShort, formatDate, lastDays, niceQuotes } from '../utils/format'
 import { useHead } from '../utils/useHead'
 import EmptyState from '../components/ui/EmptyState.vue'
 import PageHeader from '../components/ui/PageHeader.vue'
@@ -169,7 +169,7 @@ const kpiByProject = computed(() => new Map(projects.value.map((p) => [p.id, p.k
 const projectScope = computed(() => ({
   label: 'Проект',
   all: 'Все проекты',
-  options: projects.value.map((p) => ({ value: String(p.id), label: p.name })),
+  options: projects.value.map((p) => ({ value: String(p.id), label: niceQuotes(p.name) })),
   of: (c) => c.project.id,
 }))
 
@@ -180,7 +180,7 @@ const simpleRows = computed(() =>
     .map((c) => ({
       ...c,
       link: `/w/${c.project.id}/campaigns/${c.campaign_row_id}`,
-      where: [campaignTypeShort(c), c.project.name].filter(Boolean).join(' · '),
+      where: [campaignTypeShort(c), niceQuotes(c.project.name)].filter(Boolean).join(' · '),
     })),
 )
 

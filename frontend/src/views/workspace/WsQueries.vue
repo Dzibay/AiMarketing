@@ -1,9 +1,11 @@
 <template>
   <template v-if="!expert">
-    <p v-if="!briefFilled" class="notice notice--warn">
+    <UiNotice v-if="!briefFilled" tone="warn">
       Бриф клиента не заполнен — ИИ хуже понимает, что вы продаёте, и чаще ошибается.
-      <RouterLink :to="`/w/${ws.id}/settings#brief`">Заполнить бриф</RouterLink>
-    </p>
+      <template #action>
+        <RouterLink class="btn btn--ghost btn--sm" :to="`/w/${ws.id}/settings#brief`">Заполнить бриф</RouterLink>
+      </template>
+    </UiNotice>
 
     <p v-if="loading && !data" class="ccard ccard--note">Загружаем запросы…</p>
     <div v-else-if="!data" class="ccard ccard--note">
@@ -198,10 +200,12 @@
     </div>
   </div>
 
-  <p v-if="!briefFilled" class="notice notice--warn">
-    Бриф клиента не заполнен — ИИ хуже понимает, что вы продаёте, и чаще ошибается.
-    <RouterLink :to="`/w/${ws.id}/settings#brief`">Заполнить бриф</RouterLink> — черновик можно собрать по сайту.
-  </p>
+  <UiNotice v-if="!briefFilled" tone="warn">
+    Бриф клиента не заполнен — ИИ хуже понимает, что вы продаёте, и чаще ошибается. Черновик можно собрать по сайту.
+    <template #action>
+      <RouterLink class="btn btn--ghost btn--sm" :to="`/w/${ws.id}/settings#brief`">Заполнить бриф</RouterLink>
+    </template>
+  </UiNotice>
 
   <div v-if="data" class="stats-grid">
     <div class="stat-card">
@@ -656,6 +660,7 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import UiCheckbox from '../../components/ui/UiCheckbox.vue'
 import UiSelect from '../../components/ui/UiSelect.vue'
+import UiNotice from '../../components/ui/UiNotice.vue'
 import UiSwitch from '../../components/ui/UiSwitch.vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
 import { CircleCheck, Search } from '@lucide/vue'

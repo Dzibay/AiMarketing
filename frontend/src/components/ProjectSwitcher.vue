@@ -14,7 +14,7 @@
     >
       <template v-if="project">
         <span class="sdot" :class="`sdot--${projectTone(project)}`" aria-hidden="true"></span>
-        <span class="dchip__t">{{ project.name }}</span>
+        <span class="dchip__t">{{ niceQuotes(project.name) }}</span>
       </template>
       <template v-else>
         <Layers aria-hidden="true" />
@@ -63,7 +63,7 @@
             <Check v-if="!projectId" class="pswitch__check" aria-hidden="true" />
           </button>
           <template v-for="group in groups" :key="group.id">
-            <p v-if="group.name" class="pswitch__group">{{ group.name }}</p>
+            <p v-if="group.name" class="pswitch__group">{{ niceQuotes(group.name) }}</p>
             <button
               v-for="ws in group.items"
               :key="ws.id"
@@ -72,11 +72,11 @@
               type="button"
               tabindex="-1"
               :aria-current="ws.id === projectId ? 'true' : undefined"
-              v-tip="[ws.name, projectHint(ws)].filter(Boolean).join(' — ')"
+              v-tip="[niceQuotes(ws.name), projectHint(ws)].filter(Boolean).join(' — ')"
               @click="pick(ws.id)"
             >
               <span class="sdot" :class="`sdot--${projectTone(ws)}`" v-bind="projectDotA11y(ws)"></span>
-              <span class="menu-item__text">{{ ws.name }}</span>
+              <span class="menu-item__text">{{ niceQuotes(ws.name) }}</span>
               <Lock v-if="ws.locked" class="pswitch__lock" aria-label="не входит в тариф" />
               <Check v-if="ws.id === projectId" class="pswitch__check" aria-hidden="true" />
             </button>
@@ -112,6 +112,7 @@ import { Check, ChevronDown, Layers, Lock, Plus, Search, Settings } from '@lucid
 import { useExpert } from '../composables/useExpert'
 import { usePopover } from '../composables/usePopover'
 import { useProjectFilter } from '../composables/useProjectFilter'
+import { niceQuotes } from '../utils/format'
 import {
   projectDotA11y,
   projectFolders,
@@ -156,7 +157,7 @@ const groups = computed(() => {
 const triggerLabel = computed(() => {
   if (!project.value) return 'Все проекты — сменить проект'
   const status = projectTone(project.value) === 'warn' ? ' (счётчик Метрики недоступен)' : ''
-  return `${project.value.name}${status} — сменить проект`
+  return `${niceQuotes(project.value.name)}${status} — сменить проект`
 })
 
 function items() {

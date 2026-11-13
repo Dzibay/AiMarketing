@@ -1,4 +1,19 @@
 <template>
+  <PageHeader>
+    <template #description>
+      <UiMore page="ad-stats" lead="Объявления с низким CTR — ИИ пишет им замену, старые не трогает.">
+        <p>
+          Слабое объявление — CTR ниже 70 % от соседей по группе в той же сети (нет соседей — от кампании) или на поиске
+          ниже 1 % на 500+ показах. Судим от 200 показов на поиске и 1000 в сетях.
+        </p>
+        <p>
+          Новый вариант добавляется в ту же группу отдельным объявлением, старое не меняется — через пару недель сравните
+          CTR и остановите слабое.
+        </p>
+      </UiMore>
+    </template>
+  </PageHeader>
+
   <div class="ws-toolbar">
     <div class="seg" role="group" aria-label="Период">
       <button
@@ -42,29 +57,25 @@
           {{ c.name }}
         </UiCheckbox>
       </details>
-      <p class="sync-status">
+      <p v-if="busyText || report" class="sync-status">
         <template v-if="busyText">{{ busyText }}</template>
-        <template v-else-if="report">
+        <template v-else>
           {{ formatDate(report.period.from) }} — {{ formatDate(report.period.to) }}
           <template v-if="report.missing"> · {{ report.missing }} объявл. нет в кабинете (удалены)</template>
         </template>
-        <template v-else>Статистика объявлений по поиску и сетям, слабые по CTR — на переписывание.</template>
       </p>
     </div>
 
-    <p class="notice">
-      Слабое объявление — CTR ниже 70 % от соседей по группе в той же сети (нет соседей — от кампании) или на поиске
-      ниже 1 % на 500+ показах. Судим от 200 показов на поиске и 1000 в сетях. ИИ пишет новый вариант, он добавляется в
-      ту же группу отдельным объявлением, старое не меняется — через пару недель сравните CTR и остановите слабое.
-    </p>
-    <p v-if="loadError" class="notice notice--warn">{{ loadError }}</p>
-    <p v-for="e in report?.errors || []" :key="e.client_login" class="notice notice--warn">
+    <UiNotice v-if="loadError" tone="warn">{{ loadError }}</UiNotice>
+    <UiNotice v-for="e in report?.errors || []" :key="e.client_login" tone="warn">
       {{ e.client_login }}: {{ e.message || e.error }}
-    </p>
-    <div v-if="done" class="notice">
+    </UiNotice>
+    <UiNotice v-if="done">
       {{ done }}
-      <RouterLink :to="`/w/${ws.id}/history`">История и откат</RouterLink>
-    </div>
+      <template #action>
+        <RouterLink class="btn btn--ghost btn--sm" :to="`/w/${ws.id}/history`">История и откат</RouterLink>
+      </template>
+    </UiNotice>
     <ul v-if="doneErrors.length" class="notice notice--warn">
       <li v-for="e in doneErrors" :key="e.ad_row_id">Объявление {{ e.ad_row_id }}: {{ e.message }}</li>
     </ul>
@@ -255,7 +266,10 @@
 
 <script setup>
 import { computed, onMounted, reactive, ref } from 'vue'
+import PageHeader from '../../components/ui/PageHeader.vue'
 import UiCheckbox from '../../components/ui/UiCheckbox.vue'
+import UiMore from '../../components/ui/UiMore.vue'
+import UiNotice from '../../components/ui/UiNotice.vue'
 import { RouterLink } from 'vue-router'
 import { errorText, jobProgressText, wsApi } from '../../api/web'
 import { askConfirm } from '../../composables/useConfirm'

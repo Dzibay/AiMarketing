@@ -55,6 +55,46 @@
   display: none;
 }
 
+/* ---------- «Подробнее»: строка сути и раскрываемые абзацы (UiMore) ---------- */
+
+.ui-more__lead {
+  margin: 0;
+}
+
+.ui-more__body p {
+  margin: 6px 0 0;
+}
+
+.ui-more__toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  margin: 4px 0 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--ink);
+  font: inherit;
+  font-size: 13.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.ui-more__toggle:hover {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.ui-more__toggle svg {
+  width: 15px;
+  height: 15px;
+  transition: transform 0.15s ease;
+}
+
+.ui-more.is-open .ui-more__toggle svg {
+  transform: rotate(180deg);
+}
+
 /* ---------- Всплывающая панель (меню «⋯», выпадающий список) ---------- */
 
 .ui-pop {

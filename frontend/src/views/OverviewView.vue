@@ -41,7 +41,7 @@
       <h2 class="section-h">Проекты <span class="cgroup__n">{{ projectCards.length }}</span></h2>
       <div class="pstrip">
         <RouterLink v-for="w in projectCards" :key="w.id" class="pcard" :to="`/w/${w.id}/summary`">
-          <b>{{ w.name }}</b>
+          <b>{{ niceQuotes(w.name) }}</b>
           <span class="st" :class="`st--${w.status.tone}`">
             <component :is="w.status.icon" :size="14" aria-hidden="true" />
             {{ w.status.text }}
@@ -137,7 +137,7 @@
               <template v-for="item in tableItems" :key="item.key">
                 <tr v-if="item.folder" class="folder-row">
                   <td>
-                    <strong>{{ item.folder.name }}</strong>
+                    <strong>{{ niceQuotes(item.folder.name) }}</strong>
                     <small class="cell-note">
                       {{ item.folder.workspace_ids.length }}
                       {{ plural(item.folder.workspace_ids.length, 'сайт', 'сайта', 'сайтов') }}
@@ -169,13 +169,13 @@
                       <span class="sevdot" :class="`is-${item.w.severity || 'ok'}`" v-tip="severityTitle(item.w)"></span>
                       <div>
                         <RouterLink v-if="item.w.id" :to="`/w/${item.w.id}/summary`" @click.stop>
-                          <strong>{{ item.w.name }}</strong>
+                          <strong>{{ niceQuotes(item.w.name) }}</strong>
                         </RouterLink>
-                        <strong v-else>{{ item.w.name }}</strong>
+                        <strong v-else>{{ niceQuotes(item.w.name) }}</strong>
                         <small class="cell-note">
                           <template v-if="item.w.id">
                             <template v-if="!item.child && item.w.client_name && item.w.client_name !== item.w.name">
-                              {{ item.w.client_name }} ·
+                              {{ niceQuotes(item.w.client_name) }} ·
                             </template>
                             № {{ item.w.counter_id }} · {{ item.w.campaigns }}
                             {{ plural(item.w.campaigns, 'кампания', 'кампании', 'кампаний') }}
@@ -271,7 +271,7 @@
               v-model="wsFilter"
               size="sm"
               aria-label="Проект"
-              :options="[{ value: '', label: 'Все проекты' }, ...rows.map((w) => ({ value: wsKey(w.id), label: w.name }))]"
+              :options="[{ value: '', label: 'Все проекты' }, ...rows.map((w) => ({ value: wsKey(w.id), label: niceQuotes(w.name) }))]"
             />
           </div>
         </div>
@@ -322,6 +322,7 @@ import {
   KPI_PLAIN,
   kpiTarget,
   kpiValue,
+  niceQuotes,
   num,
   pct,
   plural,

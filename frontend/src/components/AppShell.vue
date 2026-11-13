@@ -58,13 +58,13 @@
               :class="{ 'is-current': ws.id === projectId }"
               type="button"
               :aria-current="ws.id === projectId ? 'true' : undefined"
-              v-tip.right="[ws.name, projectHint(ws)].filter(Boolean).join(' — ')"
+              v-tip.right="[niceQuotes(ws.name), projectHint(ws)].filter(Boolean).join(' — ')"
               @click="selectProject(ws.id)"
             >
               <span class="pava" :class="`pava--${projectTone(ws)}`" :style="avaStyle(ws)" aria-hidden="true">
                 {{ initial(ws.name) }}
               </span>
-              <span class="srow__t">{{ ws.name }}</span>
+              <span class="srow__t">{{ niceQuotes(ws.name) }}</span>
               <span v-if="projectTone(ws) === 'warn'" class="srow__t">— счётчик Метрики недоступен</span>
               <span v-else-if="ws.locked" class="srow__t">— не входит в тариф</span>
             </button>
@@ -79,7 +79,7 @@
               @click="toggleGroup(group.id)"
             >
               <ChevronDown aria-hidden="true" />
-              <span class="dside__group-t">{{ group.name }}</span>
+              <span class="dside__group-t">{{ niceQuotes(group.name) }}</span>
               <small>{{ group.items.length }}</small>
             </button>
             <div v-for="ws in group.shown" :key="ws.id" class="srow-wrap" :class="{ 'is-nested': group.name }">
@@ -92,7 +92,7 @@
                 @click="selectProject(ws.id)"
               >
                 <span class="sdot" :class="`sdot--${projectTone(ws)}`" v-bind="dotA11y(ws)"></span>
-                <span class="srow__t">{{ ws.name }}</span>
+                <span class="srow__t">{{ niceQuotes(ws.name) }}</span>
                 <Lock v-if="ws.locked" class="srow__lock" aria-label="не входит в тариф" />
               </button>
               <RouterLink
@@ -203,7 +203,7 @@
             <div class="dhead__title">
               <p id="dhead-back" class="dhead__back"></p>
               <h1>{{ pageTitleOverride || title }}</h1>
-              <p id="dhead-desc" class="dhead__desc"></p>
+              <div id="dhead-desc" class="dhead__desc"></div>
             </div>
             <div id="dhead-acts" class="dhead__acts"></div>
           </div>
@@ -317,7 +317,7 @@ import {
 } from '../composables/useWorkspaces'
 import { ACCESS_EVENT, ApiError, aiApi, errorText } from '../api/web'
 import { pushToast } from '../composables/useToasts'
-import { formatDay, pct } from '../utils/format'
+import { formatDay, niceQuotes, pct } from '../utils/format'
 
 /**
  * Оболочка кабинета «Диалог» — родительский маршрут всех его страниц. Слева — меню: «Новый чат», разделы,

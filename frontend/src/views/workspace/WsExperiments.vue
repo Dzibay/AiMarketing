@@ -1,20 +1,26 @@
 <template>
-  <div class="ws-toolbar">
-    <p class="sync-status">
-      Гипотезы, которые проверяются на тестовых копиях кампаний. Прогресс считает код по загруженной статистике — ИИ
-      подключается только по вашей кнопке.
-    </p>
-    <RouterLink class="btn btn--accent exp-ask" :to="{ path: `/w/${ws.id}/chat`, query: { ask: 'experiment' } }">
-      <Sparkles :size="15" aria-hidden="true" />Предложить эксперимент
-    </RouterLink>
-  </div>
+  <PageHeader>
+    <template #description>
+      <UiMore page="experiments" lead="Гипотезы проверяются на тестовых копиях кампаний, образец не меняется.">
+        <p>Прогресс считает сервис по загруженной статистике — ИИ подключается только по вашей кнопке.</p>
+        <p>
+          Деньги ограничивает только недельный бюджет тестовых кампаний в Директе — сервис сам ничего не останавливает.
+          Срок считается с первого дня показов: копии сначала проходят модерацию.
+        </p>
+      </UiMore>
+    </template>
+    <template #actions>
+      <RouterLink class="btn btn--accent exp-ask" :to="{ path: `/w/${ws.id}/chat`, query: { ask: 'experiment' } }">
+        <Sparkles :size="15" aria-hidden="true" />Предложить эксперимент
+      </RouterLink>
+    </template>
+  </PageHeader>
   <FeatureLockNotice feature="experiments">
     Эксперименты не входят в ваш тариф: ИИ может предложить гипотезу, но запустить её не получится.
   </FeatureLockNotice>
 
   <h2 class="section-h exp-h">
     Эксперименты <span class="exp-h__n">{{ running.length }}</span>
-    <small>тест идёт на копии кампании, образец не меняется</small>
   </h2>
   <p v-if="loading && !items.length" class="ccard ccard--note">Загружаем эксперименты…</p>
   <p v-else-if="loadError" class="ccard ccard--note">{{ loadError }}</p>
@@ -238,11 +244,6 @@
       </p>
     </article>
   </template>
-
-  <p class="hint exp-note">
-    Деньги ограничивает только недельный бюджет тестовых кампаний в Директе — сервис сам ничего не останавливает. Срок
-    считается с первого дня показов: копии сначала проходят модерацию.
-  </p>
 </template>
 
 <script setup>
@@ -251,8 +252,10 @@ import { RouterLink, useRouter } from 'vue-router'
 import { Check, CircleX, Sparkles } from '@lucide/vue'
 import { aiApi, errorText } from '../../api/web'
 import FeatureLockNotice from '../../components/FeatureLockNotice.vue'
+import PageHeader from '../../components/ui/PageHeader.vue'
 import UiMenu from '../../components/ui/UiMenu.vue'
 import UiMenuItem from '../../components/ui/UiMenuItem.vue'
+import UiMore from '../../components/ui/UiMore.vue'
 import { askConfirm } from '../../composables/useConfirm'
 import { pushToast } from '../../composables/useToasts'
 import { CAMPAIGN_STATES, CAMPAIGN_STATUSES, formatDate, num, pct, plural, rub, rubExact, rubles } from '../../utils/format'
@@ -572,9 +575,6 @@ onMounted(load)
   margin: 0;
   color: var(--muted);
   font-size: 13px;
-}
-.exp-note {
-  margin: 12px 2px 0;
 }
 @media (max-width: 640px) {
   .exp__head {

@@ -11,7 +11,7 @@
       <div v-for="w in sites" :key="w.id" class="prow" :class="{ 'prow--wrap': w.locked }">
         <div class="prow__main">
           <b class="site-name">
-            <span class="sdot" :class="`sdot--${tone(w)}`" aria-hidden="true"></span>{{ w.name }}
+            <span class="sdot" :class="`sdot--${tone(w)}`" aria-hidden="true"></span>{{ niceQuotes(w.name) }}
           </b>
           <p>{{ siteLine(w) }}</p>
         </div>
@@ -27,7 +27,7 @@
             <RouterLink class="btn btn--ghost" :to="`/w/${w.id}/summary`">Открыть</RouterLink>
           </template>
           <details class="bulk-more site-more" @toggle="onMenuToggle">
-            <summary class="btn btn--ghost sq" :aria-label="`Действия с сайтом ${w.name}`">
+            <summary class="btn btn--ghost sq" :aria-label="`Действия с сайтом ${niceQuotes(w.name)}`">
               <Ellipsis :size="16" aria-hidden="true" />
             </summary>
             <div class="bulk-more__menu" role="menu" @click="closeMenu">
@@ -151,7 +151,7 @@ import { useProfile } from '../composables/useProfile'
 import { dismissCounter, removeSite, restoreSite, sitesVersion } from '../composables/useSiteRemoval'
 import { pushToast } from '../composables/useToasts'
 import { loadWorkspaces, useWorkspaces } from '../composables/useWorkspaces'
-import { plural } from '../utils/format'
+import { niceQuotes, plural } from '../utils/format'
 
 /**
  * Сайты на «Подключениях»: проекты (счётчики Метрики) — «Открыть» и меню с настройками и удалением,
@@ -188,7 +188,7 @@ function siteLine(w) {
   const parts = []
   if (expert.value && w.counter_id) parts.push(`счётчик ${w.counter_id}`)
   parts.push(n ? `${n} ${plural(n, 'кампания', 'кампании', 'кампаний')}` : 'кампаний пока нет')
-  if (w.client_name) parts.push(w.client_name)
+  if (w.client_name) parts.push(niceQuotes(w.client_name))
   return parts.join(' · ')
 }
 
@@ -217,7 +217,7 @@ async function add(c) {
   busy.value = `c${c.counter_id}`
   try {
     const ws = await wsApi.fromCounter(c.counter_id)
-    pushToast(`${ws.name || c.site || c.counter_id} добавлен. Загружаем кампании и статистику — обычно это занимает около минуты`)
+    pushToast(`${niceQuotes(ws.name) || c.site || c.counter_id} добавлен. Загружаем кампании и статистику — обычно это занимает около минуты`)
     adding.value = false
     await Promise.all([load(), loadWorkspaces(true).catch(() => null)])
     emit('changed')
@@ -230,7 +230,7 @@ async function add(c) {
 }
 
 async function archive(w) {
-  const ok = await askConfirm(`Отправить «${w.name}» в архив? Данные сохранятся, вернуть сайт можно через «Добавить сайт».`)
+  const ok = await askConfirm(`Отправить «${niceQuotes(w.name)}» в архив? Данные сохранятся, вернуть сайт можно через «Добавить сайт».`)
   if (!ok) return
   busy.value = `w${w.id}`
   try {

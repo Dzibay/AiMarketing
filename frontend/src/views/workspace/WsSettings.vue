@@ -412,7 +412,7 @@
                     <template v-if="!c.matches_counter">
                       · <span class="tone-warn">{{ c.counter_ids.length ? `счётчик ${c.counter_ids.join(', ')}` : 'без счётчика' }}</span>
                     </template>
-                    <template v-if="c.workspace_id && !c.in_this"> · сейчас в «{{ c.workspace_name }}»</template>
+                    <template v-if="c.workspace_id && !c.in_this"> · сейчас в «{{ niceQuotes(c.workspace_name) }}»</template>
                   </small>
               </UiCheckbox>
             </div>
@@ -473,7 +473,7 @@
             </div>
             <div class="form-actions">
               <button class="btn btn--accent" type="submit" :disabled="clientBusy || !clientChanged">Сохранить клиента</button>
-              <UiMenu :label="`Ещё действия с клиентом «${currentClient.name}»`" :disabled="clientBusy">
+              <UiMenu :label="`Ещё действия с клиентом «${niceQuotes(currentClient.name)}»`" :disabled="clientBusy">
                 <UiMenuItem :icon="Unlink" @click="detachClient">Убрать проект от клиента</UiMenuItem>
                 <UiMenuItem
                   :icon="currentClient.archived ? ArchiveRestore : Archive"
@@ -489,8 +489,8 @@
             Проекты клиента:
             <template v-for="(w, i) in clientProjects" :key="w.id">
               <template v-if="i">, </template>
-              <strong v-if="w.id === ws.id">{{ w.name }}</strong>
-              <RouterLink v-else :to="`/w/${w.id}/settings`">{{ w.name }}</RouterLink>
+              <strong v-if="w.id === ws.id">{{ niceQuotes(w.name) }}</strong>
+              <RouterLink v-else :to="`/w/${w.id}/settings`">{{ niceQuotes(w.name) }}</RouterLink>
             </template>
           </p>
         </template>
@@ -515,11 +515,11 @@
           <div class="list">
             <div v-for="c in archivedClients" :key="c.id" class="list-row is-off">
               <div>
-                <strong>{{ c.name }}</strong>
+                <strong>{{ niceQuotes(c.name) }}</strong>
               </div>
               <div class="row-actions">
                 <button class="btn btn--ghost" type="button" :disabled="clientBusy" @click="archiveClient(c, false)">Вернуть</button>
-                <UiMenu size="sm" :label="`Действия с клиентом «${c.name}»`" :disabled="clientBusy">
+                <UiMenu size="sm" :label="`Действия с клиентом «${niceQuotes(c.name)}»`" :disabled="clientBusy">
                   <UiMenuItem :icon="Trash2" danger @click="removeClient(c)">Удалить клиента</UiMenuItem>
                 </UiMenu>
               </div>
@@ -555,7 +555,7 @@ import { aiApi, errorText, jobProgressText, webApi, wsApi } from '../../api/web'
 import { removeSite } from '../../composables/useSiteRemoval'
 import { pushToast } from '../../composables/useToasts'
 import { loadWorkspaces, useWorkspaces } from '../../composables/useWorkspaces'
-import { CAMPAIGN_STATES, CAMPAIGN_TYPES, formatDateTime, plural, rub } from '../../utils/format'
+import { CAMPAIGN_STATES, CAMPAIGN_TYPES, formatDateTime, niceQuotes, plural, rub } from '../../utils/format'
 import BriefPanel from './BriefPanel.vue'
 import ContextFilesPanel from './ContextFilesPanel.vue'
 import LinkTemplatePanel from './LinkTemplatePanel.vue'
@@ -691,7 +691,7 @@ async function saveGeneral() {
 const clientOptions = computed(() => clients.value.filter((c) => !c.archived || c.id === ws.value.client_id))
 const clientChoices = computed(() => [
   { value: null, label: 'Без клиента' },
-  ...clientOptions.value.map((c) => ({ value: c.id, label: `${c.name}${c.archived ? ' (в архиве)' : ''}` })),
+  ...clientOptions.value.map((c) => ({ value: c.id, label: `${niceQuotes(c.name)}${c.archived ? ' (в архиве)' : ''}` })),
 ])
 const archivedClients = computed(() => clients.value.filter((c) => c.archived && c.id !== ws.value.client_id))
 const currentClient = computed(() => clients.value.find((c) => c.id === ws.value.client_id) || null)
@@ -782,7 +782,7 @@ function archiveClient(client, archived) {
 async function removeClient(client) {
   const left = workspaces.value.filter((w) => w.client_id === client.id).length
   const tail = left ? ` Его проекты (${left}) останутся, просто без клиента.` : ''
-  if (!(await askConfirm(`Удалить клиента «${client.name}»?${tail}`))) return
+  if (!(await askConfirm(`Удалить клиента «${niceQuotes(client.name)}»?${tail}`))) return
   return clientRun(async () => {
     await webApi.deleteClient(client.id)
     if (ws.value.client_id === client.id) await reload()
@@ -1128,7 +1128,7 @@ const archiveBusy = ref(false)
 
 async function toggleArchive() {
   const archived = !ws.value.archived
-  if (archived && !await askConfirm(`Отправить «${ws.value.name}» в архив?`)) return
+  if (archived && !await askConfirm(`Отправить «${niceQuotes(ws.value.name)}» в архив?`)) return
   archiveBusy.value = true
   try {
     const updated = await wsApi.update(ws.value.id, { archived })

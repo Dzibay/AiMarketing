@@ -28,7 +28,7 @@
         v-if="ws.client_name && ws.client_name !== ws.name"
         :to="expert ? `${settingsPath}#client` : undefined"
       >
-        {{ ws.client_name }}
+        {{ niceQuotes(ws.client_name) }}
       </component>
       <a v-if="siteUrl" :href="siteUrl" target="_blank" rel="noopener noreferrer">{{ ws.site }}</a>
       <!-- Раздел «Кабинеты и кампании» в настройках есть только в экспертном режиме — в простом фишка без ссылки. -->
@@ -118,7 +118,7 @@ import { jobPercent, jobText, stageErrorText, stageFailure, stageProblem } from 
 import { useExpert } from '../../composables/useExpert'
 import { loadWorkspaces, patchWorkspaceInList, rememberWorkspace } from '../../composables/useWorkspaces'
 import { useHead } from '../../utils/useHead'
-import { KPI_PLAIN, pct, plural, rubles } from '../../utils/format'
+import { KPI_PLAIN, niceQuotes, pct, plural, rubles } from '../../utils/format'
 import { WS_KEY } from './context'
 
 const route = useRoute()
@@ -132,7 +132,7 @@ const archiving = ref(false)
 useHead('Проект — Толк', true)
 // Во вкладке браузера — раздел и проект, как в меню: «Отчёты · Цветы Ромашка — Толк».
 watch(
-  () => [ws.value?.name, route.meta.section, route.meta.title],
+  () => [niceQuotes(ws.value?.name), route.meta.section, route.meta.title],
   ([name, key, title]) => {
     if (!name) return
     const section = SECTIONS.find((s) => s.key === key)

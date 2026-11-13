@@ -46,6 +46,7 @@ import Modal from '../../components/ui/Modal.vue'
 import UiSelect from '../../components/ui/UiSelect.vue'
 import { errorText, jobProgressText, wsApi } from '../../api/web'
 import { loadWorkspaces, useWorkspaces } from '../../composables/useWorkspaces'
+import { niceQuotes } from '../../utils/format'
 
 const props = defineProps({
   open: { type: Boolean, default: false },
@@ -71,8 +72,8 @@ const workspaceChoices = computed(() => {
 const workspaceOptions = computed(() =>
   workspaceChoices.value.map((w) => ({
     value: w.id,
-    label: w.name,
-    hint: [`счётчик ${w.counter_id}`, w.client_name].filter(Boolean).join(' · '),
+    label: niceQuotes(w.name),
+    hint: [`счётчик ${w.counter_id}`, niceQuotes(w.client_name)].filter(Boolean).join(' · '),
   })),
 )
 const accountOptions = computed(() => [

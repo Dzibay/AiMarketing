@@ -87,9 +87,9 @@
           <tbody>
             <tr v-for="p in data.projects" :key="p.id">
               <td>
-                <RouterLink :to="`/w/${p.id}/analytics`">{{ p.name }}</RouterLink>
+                <RouterLink :to="`/w/${p.id}/analytics`">{{ niceQuotes(p.name) }}</RouterLink>
                 <small class="cell-note">
-                  {{ [p.client_name, p.site].filter(Boolean).join(' · ') }}<template v-if="p.client_name || p.site"> · </template
+                  {{ [niceQuotes(p.client_name), p.site].filter(Boolean).join(' · ') }}<template v-if="p.client_name || p.site"> · </template
                   >{{ p.campaigns }} {{ plural(p.campaigns, 'кампания', 'кампании', 'кампаний') }} ·
                   {{ p.conversions_source === 'goal' ? `цель «${p.goal_name}»` : 'конверсии Директа' }}
                 </small>
@@ -157,7 +157,7 @@
                 <RouterLink :to="`/w/${c.project.id}/campaigns/${c.campaign_row_id}`">{{ c.name }}</RouterLink>
                 <small class="cell-note">{{ c.account_login }} · {{ CAMPAIGN_STATES[c.state] || c.state }}</small>
               </td>
-              <td>{{ c.project.name }}</td>
+              <td>{{ niceQuotes(c.project.name) }}</td>
               <td class="num">{{ rub(c.cost_kopecks) }}</td>
               <td class="num">{{ num(c.clicks) }}</td>
               <td class="num" :class="{ 'tone-bad': !c.conversions && c.cost_kopecks > 0 }">{{ num(c.conversions) }}</td>
@@ -197,6 +197,7 @@ import {
   kpiValue,
   lastDays,
   monthToDate,
+  niceQuotes,
   num,
   pct,
   plural,
@@ -225,7 +226,7 @@ const simpleCampaigns = computed(() =>
   (data.value?.campaigns || []).map((c) => ({
     ...c,
     link: `/w/${c.project.id}/campaigns/${c.campaign_row_id}`,
-    where: c.project.name,
+    where: niceQuotes(c.project.name),
   })),
 )
 

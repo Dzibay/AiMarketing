@@ -217,7 +217,7 @@ import { errorText, webApi, wsApi } from '../api/web'
 import { loadProfile, useProfile } from '../composables/useProfile'
 import { pushToast } from '../composables/useToasts'
 import { loadWorkspaces, useWorkspaces } from '../composables/useWorkspaces'
-import { plural } from '../utils/format'
+import { niceQuotes, plural } from '../utils/format'
 import { useHead } from '../utils/useHead'
 
 useHead('Начало работы — Толк', true)
@@ -316,7 +316,7 @@ async function addSite(c) {
   adding.value = c.counter_id
   try {
     const ws = await wsApi.fromCounter(c.counter_id)
-    pushToast(`${ws.name || c.site || c.counter_id} добавлен`)
+    pushToast(`${niceQuotes(ws.name) || c.site || c.counter_id} добавлен`)
     await Promise.all([loadCounters(), loadWorkspaces(true).catch(() => null), load()])
   } catch (err) {
     pushToast(errorText(err), 'error')

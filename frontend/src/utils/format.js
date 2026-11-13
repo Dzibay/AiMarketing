@@ -17,6 +17,15 @@ export function keepNumbers(text) {
     .replace(/(\d) (?=[₽%])/g, `$1${NBSP}`)
 }
 
+/**
+ * Прямые кавычки из данных — ёлочками: ООО "Ромашка" → ООО «Ромашка». Только для показа, сами данные не меняем.
+ * Открывающая — в начале строки или после пробела и открывающих знаков, иначе закрывающая.
+ */
+export function niceQuotes(text) {
+  if (!text || !String(text).includes('"')) return text
+  return String(text).replace(/"/g, (_, i, s) => (i === 0 || /[\s([{«„—–-]/.test(s[i - 1]) ? '«' : '»'))
+}
+
 export function rub(kopecks) {
   if (kopecks === null || kopecks === undefined || kopecks === '') return '—'
   return `${Math.round(Number(kopecks) / 100).toLocaleString('ru-RU')}${NBSP}₽`

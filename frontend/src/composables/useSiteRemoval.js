@@ -3,6 +3,7 @@ import { errorText, wsApi } from '../api/web'
 import { askConfirm } from './useConfirm'
 import { pushToast } from './useToasts'
 import { loadWorkspaces } from './useWorkspaces'
+import { niceQuotes } from '../utils/format'
 
 /**
  * Удаление сайта из Толка и возврат — одно поведение для списка сайтов, настроек проекта и «Подключений».
@@ -20,7 +21,7 @@ function changed(onChange) {
 }
 
 function siteLabel(name, counterId) {
-  return name || `Счётчик ${counterId}`
+  return niceQuotes(name) || `Счётчик ${counterId}`
 }
 
 /** Спросить и удалить сайт с проектом. onChange — перечитать свой список. → ответ API или null. */
@@ -85,7 +86,7 @@ export async function restoreSite({ counterId, name, onChange, quiet = false } =
     const out = await wsApi.restoreSite(counterId)
     await loadWorkspaces(true).catch(() => null)
     changed(onChange)
-    if (out.workspace) pushToast(`«${out.workspace.name || siteLabel(name, counterId)}» снова в Толке`, 'ok')
+    if (out.workspace) pushToast(`«${niceQuotes(out.workspace.name) || siteLabel(name, counterId)}» снова в Толке`, 'ok')
     else if (out.note) pushToast(`${out.note}. Сайт вернулся в «Добавить сайт»`, 'warn', { timeout: 8000 })
     else if (!quiet) pushToast('Сайт вернулся в «Добавить сайт»', 'ok')
     return out

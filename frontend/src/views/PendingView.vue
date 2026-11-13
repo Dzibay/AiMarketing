@@ -1,7 +1,7 @@
 <template>
   <div class="ws-toolbar">
     <p class="sync-status">
-      Предложения ИИ {{ project ? `по сайту «${project.name}»` : 'по всем сайтам' }}, которые ждут вашего решения. В
+      Предложения ИИ {{ project ? `по сайту «${niceQuotes(project.name)}»` : 'по всем сайтам' }}, которые ждут вашего решения. В
       Директе ничего не меняется, пока вы не нажмёте «Выполнить».
     </p>
   </div>
@@ -18,7 +18,7 @@
   <template v-else>
     <section v-for="g in groups" :key="g.key">
       <h2 class="section-h pend-h">
-        <RouterLink v-if="g.project" :to="`/w/${g.project.id}/summary`">{{ g.project.name }}</RouterLink>
+        <RouterLink v-if="g.project" :to="`/w/${g.project.id}/summary`">{{ niceQuotes(g.project.name) }}</RouterLink>
         <span v-else>Все сайты</span>
         <span class="cgroup__n">{{ g.items.length }}</span>
       </h2>
@@ -69,7 +69,7 @@ import { aiApi, errorText } from '../api/web'
 import { refreshPending, usePending } from '../composables/usePending'
 import { useProjectFilter } from '../composables/useProjectFilter'
 import { pushToast } from '../composables/useToasts'
-import { formatDateTime } from '../utils/format'
+import { formatDateTime, niceQuotes } from '../utils/format'
 import { useHead } from '../utils/useHead'
 import AiChanges from './workspace/AiChanges.vue'
 

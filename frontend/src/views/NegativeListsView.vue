@@ -131,7 +131,7 @@
               :disabled="!g.selectable.length"
               @change="toggleGroup(g, $event.target.checked)"
             >
-              <b>{{ g.name }}</b>
+              <b>{{ niceQuotes(g.name) }}</b>
               <span class="cgroup__n">{{ g.checkedCount }} из {{ g.items.length }}</span>
             </UiCheckbox>
             <UiCheckbox
@@ -214,7 +214,7 @@
               <tr v-for="row in previewRows" :key="row.campaign_row_id" :class="{ 'is-off': row.blocked }">
                 <td>
                   {{ row.campaign_name }}
-                  <span class="cell-note">{{ row.client_name || row.client_login }}</span>
+                  <span class="cell-note">{{ niceQuotes(row.client_name) || row.client_login }}</span>
                 </td>
                 <td>
                   <span v-if="row.blocked" class="st st--off">{{ blockedLabel(row.blocked) }}</span>
@@ -268,6 +268,7 @@ import UiMenuItem from '../components/ui/UiMenuItem.vue'
 import { ERRORS, errorText, jobProgressText, webApi } from '../api/web'
 import { pushToast } from '../composables/useToasts'
 import { undoAction } from '../composables/useUndo'
+import { niceQuotes } from '../utils/format'
 import { useHead } from '../utils/useHead'
 
 useHead('Минус-фразы — Толк', true)

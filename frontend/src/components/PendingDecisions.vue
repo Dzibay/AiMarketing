@@ -9,7 +9,7 @@
     <div class="ccard">
       <div v-for="a in items" :key="a.id" class="prow">
         <div class="prow__main">
-          <small>{{ a.project?.name || 'Все проекты' }}</small>
+          <small>{{ niceQuotes(a.project?.name) || 'Все проекты' }}</small>
           <b>{{ a.label }}</b>
           <p v-if="a.summary">{{ a.summary }}</p>
           <p v-else-if="a.kind === 'ask'">ИИ ждёт вашего ответа в чате, чтобы продолжить.</p>
@@ -38,6 +38,7 @@ import { RouterLink } from 'vue-router'
 import { aiApi, errorText } from '../api/web'
 import { refreshPending } from '../composables/usePending'
 import { pushToast } from '../composables/useToasts'
+import { niceQuotes } from '../utils/format'
 
 /** Главная простого режима: предложения ИИ без решения. Нет предложений — блока нет. */
 const props = defineProps({

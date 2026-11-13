@@ -60,7 +60,7 @@
               <span>{{ timeOf(a.created_at) }}</span>
               <ActionWho :source="a.source" />
               <RouterLink v-if="!workspaceId && a.workspace_id" :to="`/w/${a.workspace_id}/history`">
-                {{ a.workspace_name || `Проект ${a.workspace_id}` }}
+                {{ niceQuotes(a.workspace_name) || `Проект ${a.workspace_id}` }}
               </RouterLink>
               <span v-if="expert && summaryLine(a)">{{ summaryLine(a) }}</span>
             </small>
@@ -198,7 +198,7 @@ import { useExpert } from '../composables/useExpert'
 import UndoDialog from './UndoDialog.vue'
 import { errorText, webApi, wsApi } from '../api/web'
 import { useWorkspaces } from '../composables/useWorkspaces'
-import { formatDateTime, keepNumbers } from '../utils/format'
+import { formatDateTime, keepNumbers, niceQuotes } from '../utils/format'
 
 /** Журнал изменений с откатом: по одному проекту (workspaceId) или по всем — с фильтрами проекта, типа и источника. */
 const props = defineProps({ workspaceId: { type: Number, default: null } })
@@ -255,7 +255,7 @@ const projects = computed(() => workspaces.value.filter((w) => !w.locked))
 const showProjectFilter = computed(() => !props.workspaceId && projects.value.length > 1)
 const projectOptions = computed(() => [
   { value: 0, label: 'Все проекты' },
-  ...projects.value.map((p) => ({ value: p.id, label: p.name })),
+  ...projects.value.map((p) => ({ value: p.id, label: niceQuotes(p.name) })),
 ])
 
 const description = computed(() =>

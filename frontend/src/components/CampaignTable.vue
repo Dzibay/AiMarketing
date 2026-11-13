@@ -89,8 +89,8 @@
               <small class="ctab__meta">{{ metaOf(c) }}</small>
             </td>
             <td v-if="projectCol" class="ctab__project ctab__c-project">
-              <RouterLink :to="`/w/${c.project.id}/campaigns`" v-tip.truncate="c.project.name">
-                {{ c.project.name }}
+              <RouterLink :to="`/w/${c.project.id}/campaigns`" v-tip.truncate="niceQuotes(c.project.name)">
+                {{ niceQuotes(c.project.name) }}
               </RouterLink>
             </td>
             <td>
@@ -192,7 +192,7 @@ import UiSelect from './ui/UiSelect.vue'
 import UiStatus from './ui/UiStatus.vue'
 import UiSwitch from './ui/UiSwitch.vue'
 import TermHint from './TermHint.vue'
-import { campaignStatus, campaignTypeShort, num, pct, rub, rubles } from '../utils/format'
+import { campaignStatus, campaignTypeShort, niceQuotes, num, pct, rub, rubles } from '../utils/format'
 
 /**
  * Таблица кампаний экспертного режима — одна для списка проекта и для списка по всем проектам.

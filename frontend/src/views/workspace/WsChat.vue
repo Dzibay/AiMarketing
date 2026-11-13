@@ -324,7 +324,7 @@
               @mousedown.prevent="pickProject(w)"
               @mousemove="picker.index = i"
             >
-              <strong>{{ w.name }}</strong>
+              <strong>{{ niceQuotes(w.name) }}</strong>
               <small v-if="w.site">{{ w.site }}</small>
             </button>
           </div>
@@ -493,7 +493,7 @@ import { takeHomeQuestion } from '../../composables/useHomeAsk'
 import { refreshPending } from '../../composables/usePending'
 import { pushToast } from '../../composables/useToasts'
 import { loadWorkspaces, useWorkspaces } from '../../composables/useWorkspaces'
-import { formatDateTime, pct } from '../../utils/format'
+import { formatDateTime, niceQuotes, pct } from '../../utils/format'
 import { renderMarkdown } from '../../utils/markdown'
 import AiChanges from './AiChanges.vue'
 import AiCheckTable from './AiCheckTable.vue'
@@ -780,7 +780,7 @@ const starters = computed(() => {
   if (props.general) return GENERAL_SUGGESTIONS
   return isFirst.value ? FIRST_SUGGESTIONS : SUGGESTIONS
 })
-const helloTitle = computed(() => (props.general ? 'Чем помочь по всем проектам?' : `Чем помочь с «${ws.value.name}»?`))
+const helloTitle = computed(() => (props.general ? 'Чем помочь по всем проектам?' : `Чем помочь с «${niceQuotes(ws.value.name)}»?`))
 const helloText = computed(() => {
   if (props.general) {
     return 'Сравню проекты, найду, где сливается бюджет, и предложу правки. Новую кампанию удобнее собирать в чате проекта.'
