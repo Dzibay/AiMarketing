@@ -113,10 +113,18 @@ function ask(s) {
   font-size: 12px;
   font-weight: 600;
 }
+/* Не уже 280 px и не больше четырёх в ряд (на 1600 px — четыре); все строки одной высоты, кнопки — внизу карточки. */
 .sigs {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(max(280px, calc((100% - 36px) / 4)), 1fr));
+  grid-auto-rows: 1fr;
   gap: 12px;
+}
+/* В одну колонку выравнивать высоту незачем — короткие карточки не растягиваем. */
+@media (max-width: 640px) {
+  .sigs {
+    grid-auto-rows: auto;
+  }
 }
 .sig {
   display: flex;

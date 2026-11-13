@@ -67,7 +67,7 @@
       <EmptyState
         v-if="!editing"
         :icon="ListX"
-        text="Выберите список слева или создайте новый — пустой или из шаблона."
+        text="Выберите список или создайте новый — пустой или из шаблона."
       />
 
       <section v-else class="ccard neg-edit">
