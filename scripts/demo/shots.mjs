@@ -59,8 +59,11 @@ const PAGES = [
   ['settings-notifications', '/cabinet/settings/notifications'],
   ['settings-interface', '/cabinet/settings/interface'],
   ['plan', '/cabinet/plan'],
+  ['welcome', '/cabinet/welcome'],
   ['ws-summary', `/w/${ws}/summary`],
   ['ws-chat', `/w/${ws}/chat/${stand.chats.flowers}`],
+  // Чат с этапом «Картинки»: галерея на согласование (на старых стендах этого чата нет).
+  ...(stand.chats.images ? [['ws-chat-images', `/w/${ws}/chat/${stand.chats.images}`]] : []),
   ['ws-campaigns', `/w/${ws}/campaigns`],
   ['ws-campaign', `/w/${ws}/campaigns/${stand.campaign_row}`],
   ['ws-queries', `/w/${ws}/queries`],
@@ -168,16 +171,56 @@ for (const width of widths) {
         let line = ''
         if (audit) {
           const res = await auditPage()
+          // Пороги размеров из плана: на 1920 px страница не уже 1500 px, таблица кампаний от 1280 px — без
+          // горизонтальной прокрутки. На других страницах прокрутка таблиц только записывается.
+          res.wide = width === 1920 && res.dpage !== null && res.dpage < 1500 ? [`.dpage ${res.dpage}px < 1500`] : []
+          res.campaignScroll = width >= 1280 && /(^|-)campaigns$/.test(name) ? res.tableScroll : []
           report[`${theme}-${mode}-${width}/${name}`] = res
           line = ` overflow ${res.overflow.length}, без подписи ${res.unlabeled.length}, контраст ${res.contrast.length}, фокус ${res.focus.length}`
+          line += `, прокрутка ${res.nestedScroll.length}, системные ${res.native.length}, title ${res.titles.length}`
+          line += `, курсор ${res.cursor.length}, лайм ${res.limeDisabled.length}`
+          if (res.wide.length) line += `, ${res.wide[0]}`
+          if (res.campaignScroll.length) line += `, таблица кампаний листается вбок`
         }
         console.log(`${theme}-${mode}-${width} ${name}${line}`)
       }
     }
   }
 }
-if (audit) writeFileSync(join(outDir, `audit-${themes.join('+')}-${modes.join('+')}.json`), JSON.stringify(report, null, 1))
+if (audit) {
+  writeFileSync(join(outDir, `audit-${themes.join('+')}-${modes.join('+')}.json`), JSON.stringify(report, null, 1))
+  summarize(report)
+}
 await shutdown(0)
+
+// Сводка прогона: по каждой проверке — что нашлось и на скольких снимках (страница × ширина × тема × режим).
+function summarize(rep) {
+  const checks = {
+    overflow: 'горизонтальная прокрутка страницы', unlabeled: 'без подписи', contrast: 'контраст ниже AA',
+    focus: 'фокус не виден',
+    nestedScroll: 'вложенная вертикальная прокрутка', native: 'системные поля', titles: 'атрибут title',
+    cursor: 'кликабельное без руки', limeDisabled: 'лайм у неактивной кнопки', wide: 'узкая страница на 1920',
+    campaignScroll: 'таблица кампаний листается вбок',
+  }
+  const all = Object.entries(rep)
+  console.log(`\nИтог: ${all.length} снимков`)
+  for (const [key, title] of Object.entries(checks)) {
+    const found = new Map()
+    for (const [shot, res] of all) {
+      // Числа в пикселях у разных ширин разные — для группировки их убираем.
+      for (const item of res[key] || []) {
+        const text = typeof item === 'object' ? `${item.el} «${item.text}» ${item.color} ${item.ratio}` : String(item)
+        const k = text.replace(/\s*[\d.]+(\/[\d.]+)?px/g, '').trim()
+        found.set(k, [...(found.get(k) || []), shot])
+      }
+    }
+    console.log(`${title}: ${found.size ? '' : 'нет'}`)
+    for (const [item, shots] of [...found].sort((a, b) => b[1].length - a[1].length).slice(0, 12)) {
+      const pages = [...new Set(shots.map((s) => s.split('/')[1]))]
+      console.log(`  ${item} — ${shots.length} сн.: ${pages.slice(0, 6).join(', ')}${pages.length > 6 ? '…' : ''}`)
+    }
+  }
+}
 
 // Chrome закрываем штатно и ждём выхода: пока он (и его дочерние процессы) держит файлы профиля, папку не удалить.
 async function shutdown(code) {
@@ -354,10 +397,59 @@ function inspect() {
     item.n++
     contrast.set(key, item)
   }
+  const page = document.querySelector('.dpage')
+  const inPage = page ? [...page.querySelectorAll('*')].filter(shown) : []
+  // 4. Вложенная вертикальная прокрутка: страница листается целиком. Исключения — чат (лента и доска рядом),
+  //    попапы и окна, поля ввода.
+  const OWN_SCROLL = '.chat, .ui-pop, .modal, [role="dialog"], [role="listbox"], [role="menu"], textarea'
+  const nestedScroll = inPage
+    .filter((el) => !el.closest(OWN_SCROLL) && /auto|scroll/.test(cs(el).overflowY) && el.scrollHeight > el.clientHeight + 1)
+    .map((el) => `${label(el)} ${el.clientHeight}/${el.scrollHeight}px`)
+  // 5. Системные поля вместо своих: выпадающий список, дата, флажок (флажок — только внутри UiCheckbox / UiSwitch).
+  const native = [...document.querySelectorAll('select, input[type="date"], input[type="datetime-local"], input[type="checkbox"]')]
+    .filter((el) => !el.closest('.ui-check, .ui-switch'))
+    .map((el) => `${label(el)}[${el.type}]${shown(el) ? '' : ' (скрыт)'}`)
+  // 6. Атрибут title — системная подсказка вместо v-tip. <title> внутри SVG не атрибут, его не считаем.
+  const titles = [...document.querySelectorAll('body [title]')]
+    .filter((el) => !el.closest('svg'))
+    .map((el) => `${label(el)} «${el.getAttribute('title').slice(0, 30)}»`)
+  // 7. Кликабельное без курсора-руки.
+  const cursor = [...document.querySelectorAll('a[href], button:not(:disabled), .is-link')]
+    .filter((el) => shown(el) && !el.closest('[inert]') && cs(el).cursor !== 'pointer')
+    .map((el) => `${label(el)} (${cs(el).cursor})`)
+  // 8. Лайм в фоне неактивной кнопки: оттенок 55–110°, насыщенный, не серый (#c6f04a — 75°, --lime-soft тоже).
+  const isLime = ({ r, g, b }) => {
+    const max = Math.max(r, g, b)
+    const min = Math.min(r, g, b)
+    if (max - min < 20 || max !== g) return false
+    const l = (max + min) / 510
+    const s = (max - min) / 255 / (1 - Math.abs(2 * l - 1))
+    const hue = 60 * ((b - r) / (max - min)) + 120
+    return s > 0.4 && hue >= 55 && hue <= 110
+  }
+  const limeDisabled = [...document.querySelectorAll('button:disabled, .btn[aria-disabled="true"]')]
+    .filter((el) => {
+      if (!shown(el)) return false
+      const s = cs(el)
+      const colors = [s.backgroundColor, ...(s.backgroundImage.match(/rgba?\([^)]+\)/g) || [])]
+      return colors.map(parse).some((c) => c && c.a > 0.2 && isLime(c))
+    })
+    .map((el) => `${label(el)} «${el.textContent.trim().slice(0, 30)}»`)
+  // 9. Размеры: ширина страницы и таблицы, которые листаются вбок (пороги — в основном цикле по ширине окна).
+  const tableScroll = inPage
+    .filter((el) => el.querySelector('table') && /auto|scroll/.test(cs(el).overflowX) && el.scrollWidth > el.clientWidth + 1)
+    .map((el) => `${label(el)} ${el.clientWidth}/${el.scrollWidth}px`)
   return {
     overflow: overflow.slice(0, 8).map((o) => `${label(o.el)} → ${o.right}px`),
     unlabeled: [...new Set(unlabeled)],
     contrast: [...contrast.values()],
+    nestedScroll,
+    native,
+    titles: [...new Set(titles)],
+    cursor: [...new Set(cursor)],
+    limeDisabled,
+    dpage: page ? Math.round(page.getBoundingClientRect().width) : null,
+    tableScroll,
   }
 }
 

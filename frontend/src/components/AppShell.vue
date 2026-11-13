@@ -683,8 +683,9 @@ watch(accessOk, (ok, was) => {
 
 function onKey(event) {
   if (event.key === 'Escape') closeDrawer()
-  else if ((event.ctrlKey || event.metaKey) && !event.altKey && event.code === 'Backslash') {
-    // По физической клавише: в русской раскладке на ней «\» или «/» — всё равно сворачиваем меню.
+  else if ((event.ctrlKey || event.metaKey) && !event.altKey && (event.code === 'Backslash' || event.key === '\\')) {
+    // По физической клавише: в русской раскладке на ней «\» или «/» — всё равно сворачиваем меню. По символу —
+    // для экранных клавиатур и удалённого доступа, которые не сообщают клавишу (пустой event.code).
     event.preventDefault()
     toggleSide()
   } else onHotkey(event)

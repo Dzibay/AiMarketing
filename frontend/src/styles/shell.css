@@ -581,10 +581,12 @@
 
 .dbar__scope {
   display: flex;
+  flex: 1 1 0;
   align-items: center;
   gap: 8px;
   min-width: 0;
-  margin-right: auto;
+  /* Вся свободная ширина шапки — контейнер: по нему переключатель проекта решает, влезает ли название. */
+  container: dbar-scope / inline-size;
 }
 
 .dchip {
@@ -664,6 +666,14 @@
 
 .pswitch__btn.is-open .pswitch__caret {
   transform: rotate(180deg);
+}
+
+/* Название, обрезанное до буквы-двух, хуже никакого: на тесной шапке (телефон) остаются точка статуса и стрелка,
+   имя проекта — в aria-label кнопки и в открытом списке. */
+@container dbar-scope (max-width: 100px) {
+  .pswitch__btn .dchip__t {
+    display: none;
+  }
 }
 
 .pswitch__pop {
