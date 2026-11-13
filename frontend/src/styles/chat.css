@@ -2,6 +2,18 @@
    Без доски — одна колонка по центру: страница прокручивается окном, поле ввода прилипает к низу.
    С доской сборки на широком экране — две колонки во всю высоту окна, лента прокручивается сама. */
 
+.dpage,
+.cabinet {
+  /* Ширина колонки сообщений; по ней же выравнивается шапка страницы над чатом без доски. */
+  --chat-col: 760px;
+}
+
+.dpage:has(.chat--solo) > .dhead {
+  width: 100%;
+  max-width: var(--chat-col);
+  margin-inline: auto;
+}
+
 .chat {
   --chat-bg: var(--bg);
   position: relative;
@@ -27,13 +39,13 @@
 .chat__foot,
 .chat__intro {
   width: 100%;
-  max-width: 760px;
+  max-width: var(--chat-col);
   margin-inline: auto;
 }
 
 .ui-notice.chat__wide {
   width: 100%;
-  max-width: 760px;
+  max-width: var(--chat-col);
   margin: 0 auto 16px;
 }
 

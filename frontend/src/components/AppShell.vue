@@ -1,9 +1,9 @@
 <template>
-  <div class="dshell" :class="{ 'is-drawer': drawer, 'is-expert': expert }">
-    <aside ref="sideEl" class="dside" aria-label="Меню" :inert="narrow && !drawer" @click="closeDrawerOnLink">
+  <div class="dshell" :class="{ 'is-drawer': drawer, 'is-expert': expert, 'is-collapsed': sideCollapsed }">
+    <aside id="dside" ref="sideEl" class="dside" aria-label="Меню" :inert="narrow && !drawer" @click="closeDrawerOnLink">
       <div class="dside__scroll">
         <div class="dside__head">
-          <RouterLink class="dside__brand" to="/cabinet" aria-label="Толк — главная">
+          <RouterLink class="dside__brand" to="/cabinet" aria-label="Толк — главная" :title="tip('Главная')">
             <TolkMark :size="28" />
             <span>толк</span>
           </RouterLink>
@@ -17,9 +17,9 @@
           </RouterLink>
         </div>
 
-        <RouterLink v-if="accessOk" class="dside__newchat" :to="chatTo">
+        <RouterLink v-if="accessOk" class="dside__newchat" :to="chatTo" :title="tip('Новый чат')">
           <Plus aria-hidden="true" />
-          Новый чат
+          <span class="srow__t">Новый чат</span>
         </RouterLink>
 
         <nav class="dside__nav" aria-label="Разделы">
@@ -29,6 +29,7 @@
             class="srow"
             :class="{ active: item.active }"
             :to="item.to"
+            :title="tip(item.label)"
           >
             <component :is="item.icon" aria-hidden="true" />
             <span class="srow__t">{{ item.label }}</span>
@@ -38,16 +39,37 @@
         <template v-if="accessOk">
           <h4 class="dside__h">Проекты</h4>
           <button
-            class="srow"
+            class="srow srow--all"
             :class="{ 'is-current': !projectId }"
             type="button"
             :aria-current="projectId ? undefined : 'true'"
+            :title="tip('Все проекты')"
             @click="selectProject(null)"
           >
             <Layers aria-hidden="true" />
             <span class="srow__t">Все проекты</span>
           </button>
-          <template v-for="group in projectGroups" :key="group.id">
+          <!-- Свёрнутое меню: проекты — кружки с первой буквой, без папок клиентов. -->
+          <template v-if="sideCollapsed">
+            <button
+              v-for="ws in workspaces"
+              :key="ws.id"
+              class="srow srow--ava"
+              :class="{ 'is-current': ws.id === projectId }"
+              type="button"
+              :aria-current="ws.id === projectId ? 'true' : undefined"
+              :title="[ws.name, projectHint(ws)].filter(Boolean).join(' — ')"
+              @click="selectProject(ws.id)"
+            >
+              <span class="pava" :class="`pava--${projectTone(ws)}`" :style="avaStyle(ws)" aria-hidden="true">
+                {{ initial(ws.name) }}
+              </span>
+              <span class="srow__t">{{ ws.name }}</span>
+              <span v-if="projectTone(ws) === 'warn'" class="srow__t">— счётчик Метрики недоступен</span>
+              <span v-else-if="ws.locked" class="srow__t">— не входит в тариф</span>
+            </button>
+          </template>
+          <template v-for="group in sideCollapsed ? [] : projectGroups" :key="group.id">
             <button
               v-if="group.name"
               class="dside__group"
@@ -84,12 +106,12 @@
               </RouterLink>
             </div>
           </template>
-          <RouterLink class="srow srow--quiet" to="/cabinet/connections">
+          <RouterLink class="srow srow--quiet" to="/cabinet/connections" :title="tip('Добавить сайт')">
             <Plus aria-hidden="true" />
             <span class="srow__t">Добавить сайт</span>
           </RouterLink>
 
-          <template v-for="block in chatBlocks" :key="block.title">
+          <template v-for="block in sideCollapsed ? [] : chatBlocks" :key="block.title">
             <h4 class="dside__h">{{ block.title }}</h4>
             <RouterLink
               v-for="c in block.items"
@@ -108,18 +130,27 @@
               </span>
             </RouterLink>
           </template>
-          <RouterLink v-if="chats.length > shownChats" class="srow srow--quiet" :to="{ path: chatTo, query: { chats: '1' } }">
+          <RouterLink
+            v-if="!sideCollapsed && chats.length > shownChats"
+            class="srow srow--quiet"
+            :to="{ path: chatTo, query: { chats: '1' } }"
+          >
             <span class="srow__t">Все чаты</span>
           </RouterLink>
         </template>
       </div>
 
+      <!-- В свёрнутом меню остаётся только шкала с процентом; тариф без лимита там не показываем. -->
       <RouterLink
-        v-if="limitChip"
+        v-if="limitChip && !(sideCollapsed && limitChip.percent === null)"
         class="dside__foot"
         :class="`is-${limitLevel || 'ok'}`"
         to="/cabinet/plan"
-        title="Сколько помощника осталось в этом периоде. Нажмите, чтобы открыть тариф"
+        :title="
+          sideCollapsed
+            ? `Лимит ИИ: ${limitChip.percentText}. ${limitChip.text}`
+            : 'Сколько помощника осталось в этом периоде. Нажмите, чтобы открыть тариф'
+        "
       >
         <template v-if="limitChip.percent !== null">
           <span class="dside__limit"><span>Лимит ИИ</span><b>{{ limitChip.percentText }}</b></span>
@@ -133,26 +164,20 @@
 
     <div class="dmain" :inert="narrow && drawer">
       <header class="dbar">
-        <button ref="burgerEl" class="dicon dbar__burger" type="button" aria-label="Меню" @click="drawer = true">
+        <button
+          ref="burgerEl"
+          class="dicon dbar__burger"
+          type="button"
+          :aria-label="burgerLabel"
+          :title="burgerLabel"
+          aria-controls="dside"
+          :aria-expanded="narrow ? drawer : !sideCollapsed"
+          @click="toggleSide"
+        >
           <Menu aria-hidden="true" />
         </button>
         <div class="dbar__scope">
-          <template v-if="currentSection">
-            <RouterLink
-              v-if="project"
-              class="dchip dchip--btn"
-              :to="`/w/${project.id}/settings`"
-              title="Открыть настройки проекта"
-            >
-              <span class="sdot" :class="`sdot--${projectTone(project)}`" v-bind="dotA11y(project)"></span>
-              <span class="dchip__t">{{ project.name }}</span>
-              <Settings aria-hidden="true" />
-            </RouterLink>
-            <span v-else-if="currentSection.all" class="dchip">
-              <Layers aria-hidden="true" />
-              Все проекты
-            </span>
-          </template>
+          <ProjectSwitcher v-if="accessOk && currentSection && (project || currentSection.all)" />
         </div>
         <RouterLink
           v-if="accessOk && pendingCount > 0"
@@ -247,14 +272,14 @@
         <template v-for="h in HOTKEYS" :key="h.text">
           <dt>
             <template v-for="(k, i) in h.keys" :key="k">
-              <span v-if="i">затем</span>
+              <span v-if="i">{{ h.combo ? '+' : 'затем' }}</span>
               <kbd>{{ k }}</kbd>
             </template>
           </dt>
           <dd>{{ h.text }}</dd>
         </template>
       </dl>
-      <p class="hint">Работают в экспертном режиме, когда курсор не в поле ввода.</p>
+      <p class="hint">Ctrl + \ работает всегда, остальные — в экспертном режиме, когда курсор не в поле ввода.</p>
     </Modal>
     <UndoHost />
   </div>
@@ -269,6 +294,7 @@ import UndoHost from './UndoHost.vue'
 import LoadsIndicator from './LoadsIndicator.vue'
 import PlanOffers from './PlanOffers.vue'
 import ProfileMenu from './ProfileMenu.vue'
+import ProjectSwitcher from './ProjectSwitcher.vue'
 import Modal from './ui/Modal.vue'
 import { SECTIONS, pageMatches, sectionTabs, sectionTo } from './shellNav'
 import { useExpert } from '../composables/useExpert'
@@ -280,7 +306,15 @@ import { featureLocked, loadProfile, resetProfile, useProfile } from '../composa
 import { resetProjectFilter, useProjectFilter } from '../composables/useProjectFilter'
 import { clearSession, getSession } from '../composables/useSession'
 import { useTheme } from '../composables/useTheme'
-import { loadWorkspaces, resetWorkspaces, useWorkspaces } from '../composables/useWorkspaces'
+import {
+  loadWorkspaces,
+  projectDotA11y as dotA11y,
+  projectFolders,
+  projectHint,
+  projectTone,
+  resetWorkspaces,
+  useWorkspaces,
+} from '../composables/useWorkspaces'
 import { ACCESS_EVENT, ApiError, aiApi, errorText } from '../api/web'
 import { pushToast } from '../composables/useToasts'
 import { formatDay, pct } from '../utils/format'
@@ -336,6 +370,46 @@ async function closeDrawer() {
   await nextTick() // кнопка «Меню» в .dmain — фокус возможен, только когда с неё снят inert
   burgerEl.value?.focus()
 }
+
+// Шире 900 px меню сворачивается в иконки — кнопкой «Меню» или Ctrl+\. Выбор запоминается; пока его нет,
+// на 901–1279 px меню свёрнуто, шире — развёрнуто.
+const SIDE_KEY = 'aimarketing-side'
+const sidePref = ref(['collapsed', 'open'].includes(localStorage.getItem(SIDE_KEY)) ? localStorage.getItem(SIDE_KEY) : '')
+const midQuery = window.matchMedia('(max-width: 1279px)')
+const mid = ref(midQuery.matches)
+const onMid = (event) => (mid.value = event.matches)
+const sideCollapsed = computed(() => !narrow.value && (sidePref.value ? sidePref.value === 'collapsed' : mid.value))
+const burgerLabel = computed(() => {
+  if (narrow.value) return 'Открыть меню'
+  return sideCollapsed.value ? 'Развернуть меню (Ctrl+\\)' : 'Свернуть меню (Ctrl+\\)'
+})
+
+function toggleSide() {
+  if (narrow.value) {
+    if (drawer.value) closeDrawer()
+    else drawer.value = true
+    return
+  }
+  sidePref.value = sideCollapsed.value ? 'open' : 'collapsed'
+  localStorage.setItem(SIDE_KEY, sidePref.value)
+}
+
+/** Подпись пункта в свёрнутом меню, где текста не видно; в развёрнутом подсказка не нужна. */
+function tip(text) {
+  return sideCollapsed.value ? text : undefined
+}
+
+// Кружок проекта: цвет постоянный для проекта (по id), буква — первая буква названия.
+const AVA_COLORS = ['#5b8def', '#e08a4f', '#3fa36b', '#a66fd6', '#d4a72c', '#2fa7a7', '#d9667a', '#7d8a3a']
+
+function avaStyle(ws) {
+  return { '--ava': AVA_COLORS[Math.abs(Number(ws.id) || 0) % AVA_COLORS.length] }
+}
+
+function initial(name) {
+  const letter = String(name || '').trim().match(/[\p{L}\p{N}]/u)
+  return letter ? letter[0].toUpperCase() : '•'
+}
 // --- Чаты в меню: общие для «Все проекты», чаты проекта — внутри проекта ---
 
 const RECENT_LIMIT = 5
@@ -388,12 +462,13 @@ const sections = computed(() =>
 
 const chatTo = computed(() => sectionTo(SECTIONS.find((s) => s.key === 'chat'), projectId.value))
 
-const COLLAPSED_KEY = 'aimarketing-side-collapsed'
-const collapsed = ref(new Set(readCollapsed()))
+// Свёрнутые папки клиентов (экспертный режим) — не путать со свёрнутым в иконки меню (SIDE_KEY).
+const GROUPS_KEY = 'aimarketing-side-collapsed'
+const shutGroups = ref(new Set(readShutGroups()))
 
-function readCollapsed() {
+function readShutGroups() {
   try {
-    const ids = JSON.parse(localStorage.getItem(COLLAPSED_KEY) || '[]')
+    const ids = JSON.parse(localStorage.getItem(GROUPS_KEY) || '[]')
     return Array.isArray(ids) ? ids : []
   } catch {
     return []
@@ -401,11 +476,11 @@ function readCollapsed() {
 }
 
 function toggleGroup(id) {
-  const next = new Set(collapsed.value)
+  const next = new Set(shutGroups.value)
   if (next.has(id)) next.delete(id)
   else next.add(id)
-  collapsed.value = next
-  localStorage.setItem(COLLAPSED_KEY, JSON.stringify([...next]))
+  shutGroups.value = next
+  localStorage.setItem(GROUPS_KEY, JSON.stringify([...next]))
 }
 
 /**
@@ -413,36 +488,12 @@ function toggleGroup(id) {
  * свернуть, выбранный проект виден и в свёрнутой. Клиент с одним проектом и проекты без клиента идут выше папок
  * без заголовка: заголовок «Мебель Вектор» над единственным «Мебель Вектор» ничего не добавляет.
  */
-const projectGroups = computed(() => {
-  const loose = (items) => ({ id: 'loose', name: '', items, shown: items, collapsed: false })
-  const folders = expert.value ? grouped.value.filter((g) => g.id && g.items.length > 1) : []
-  if (!folders.length) return [loose(workspaces.value)]
-  const inFolder = new Set(folders.flatMap((g) => g.items.map((w) => w.id)))
-  const rest = workspaces.value.filter((w) => !inFolder.has(w.id))
-  return [
-    ...(rest.length ? [loose(rest)] : []),
-    ...folders.map((g) => {
-      const shut = collapsed.value.has(g.id)
-      return { ...g, collapsed: shut, shown: shut ? g.items.filter((w) => w.id === projectId.value) : g.items }
-    }),
-  ]
-})
-
-function projectTone(ws) {
-  if (ws.locked) return 'off'
-  return ws.counter_ok === false ? 'warn' : 'ok'
-}
-
-// Статус не только цветом: «проблемная» точка — кольцо (см. .sdot--warn) и с текстом для экранного диктора.
-function dotA11y(ws) {
-  return projectTone(ws) === 'warn' ? { role: 'img', 'aria-label': 'счётчик Метрики недоступен' } : { 'aria-hidden': 'true' }
-}
-
-function projectHint(ws) {
-  if (ws.locked) return 'Проект не входит в тариф'
-  if (ws.counter_ok === false) return 'Счётчик Метрики недоступен или выключен'
-  return ws.site || ''
-}
+const projectGroups = computed(() =>
+  projectFolders(workspaces.value, grouped.value, expert.value).map((g) => {
+    const shut = !!g.name && shutGroups.value.has(g.id)
+    return { ...g, collapsed: shut, shown: shut ? g.items.filter((w) => w.id === projectId.value) : g.items }
+  }),
+)
 
 // --- Верхняя строка и заголовок ---
 
@@ -632,7 +683,11 @@ watch(accessOk, (ok, was) => {
 
 function onKey(event) {
   if (event.key === 'Escape') closeDrawer()
-  else onHotkey(event)
+  else if ((event.ctrlKey || event.metaKey) && !event.altKey && event.code === 'Backslash') {
+    // По физической клавише: в русской раскладке на ней «\» или «/» — всё равно сворачиваем меню.
+    event.preventDefault()
+    toggleSide()
+  } else onHotkey(event)
 }
 
 // Горячие клавиши экспертного режима. Буквы — по физической клавише (event.code), чтобы работали и в русской
@@ -646,6 +701,7 @@ const HOTKEYS = [
   { keys: ['G', 'Q'], text: 'Запросы' },
   { keys: ['?'], text: 'Этот список' },
   { keys: ['Esc'], text: 'Закрыть окно или меню' },
+  { keys: ['Ctrl', '\\'], combo: true, text: 'Свернуть или развернуть меню слева' },
 ]
 const GO_TO = { KeyH: 'summary', KeyC: 'campaigns', KeyQ: 'queries' }
 const GO_WINDOW_MS = 1500
@@ -692,6 +748,7 @@ onMounted(() => {
   document.addEventListener('visibilitychange', pollPending)
   document.addEventListener('keydown', onKey)
   narrowQuery.addEventListener('change', onNarrow)
+  midQuery.addEventListener('change', onMid)
   pendingTimer = setInterval(pollPending, PENDING_MS)
   boot()
 })
@@ -701,6 +758,7 @@ onBeforeUnmount(() => {
   document.removeEventListener('visibilitychange', pollPending)
   document.removeEventListener('keydown', onKey)
   narrowQuery.removeEventListener('change', onNarrow)
+  midQuery.removeEventListener('change', onMid)
   clearInterval(pendingTimer)
 })
 </script>

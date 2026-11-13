@@ -67,6 +67,37 @@ const grouped = computed(() => {
   return groups
 })
 
+/** Состояние проекта для точки в меню и переключателе: off — не входит в тариф, warn — счётчик Метрики недоступен. */
+export function projectTone(ws) {
+  if (ws.locked) return 'off'
+  return ws.counter_ok === false ? 'warn' : 'ok'
+}
+
+/** Статус не только цветом: «проблемная» точка — кольцо (.sdot--warn) и с текстом для экранного диктора. */
+export function projectDotA11y(ws) {
+  return projectTone(ws) === 'warn' ? { role: 'img', 'aria-label': 'счётчик Метрики недоступен' } : { 'aria-hidden': 'true' }
+}
+
+/** Подсказка к проекту: что не так, а если всё в порядке — адрес сайта. */
+export function projectHint(ws) {
+  if (ws.locked) return 'Проект не входит в тариф'
+  if (ws.counter_ok === false) return 'Счётчик Метрики недоступен или выключен'
+  return ws.site || ''
+}
+
+/**
+ * Проекты для меню и переключателя. Обычный режим — один плоский список. Экспертный — папки клиентов, в которых два
+ * проекта и больше; клиент с одним проектом и проекты без клиента идут выше папок без заголовка.
+ */
+export function projectFolders(list, groups, expert) {
+  const loose = (items) => ({ id: 'loose', name: '', items })
+  const folders = expert ? groups.filter((g) => g.id && g.items.length > 1) : []
+  if (!folders.length) return [loose(list)]
+  const inFolder = new Set(folders.flatMap((g) => g.items.map((w) => w.id)))
+  const rest = list.filter((w) => !inFolder.has(w.id))
+  return [...(rest.length ? [loose(rest)] : []), ...folders]
+}
+
 export function useWorkspaces() {
   return {
     workspaces,

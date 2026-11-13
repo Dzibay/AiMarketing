@@ -2285,28 +2285,9 @@ textarea {
   background: transparent;
 }
 
-/* Ноутбук: меню само сворачивается до иконок, в шапке — короче подписи. */
-
-@media (max-width: 1180px) and (min-width: 901px) {
-  .profile__text {
-    display: none;
-  }
-
-  .profile__toggle {
-    padding-right: 0.55rem;
-  }
-}
+/* Профиль в верхней строке — всегда один аватар (shell.css), отдельные правила для ноутбука не нужны. */
 
 @media (max-width: 900px) {
-  .profile__text,
-  .profile__toggle > svg {
-    display: none;
-  }
-
-  .profile__toggle {
-    padding: 0.2rem;
-  }
-
   .icon-btn {
     width: 42px;
     height: 42px;

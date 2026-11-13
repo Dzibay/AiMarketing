@@ -9,8 +9,11 @@ import { nextTick, onBeforeUnmount, ref } from 'vue'
  *
  * trigger и panel — ref на элементы. align: 'end' — правым краем к кнопке, 'start' — левым.
  * matchWidth — панель не уже кнопки (выпадающий список).
+ * follow — при прокрутке и смене размера окна панель переставляется, а не закрывается. Для кнопки в закреплённой
+ * верхней строке: на телефоне окно «сжимает» экранная клавиатура, и панель с полем поиска иначе закрылась бы
+ * от нажатия на это поле.
  */
-export function usePopover(trigger, panel, { align = 'end', gap = 6, matchWidth = false, onClose } = {}) {
+export function usePopover(trigger, panel, { align = 'end', gap = 6, matchWidth = false, follow = false, onClose } = {}) {
   const open = ref(false)
   const style = ref({})
 
@@ -44,14 +47,20 @@ export function usePopover(trigger, panel, { align = 'end', gap = 6, matchWidth 
   function onScroll(event) {
     // Прокрутка внутри самой панели (длинный список) её не закрывает.
     if (panel.value?.contains(event.target)) return
-    close()
+    if (follow) place()
+    else close()
+  }
+
+  function onResize() {
+    if (follow) place()
+    else close()
   }
 
   function listen(on) {
     const method = on ? 'addEventListener' : 'removeEventListener'
     document[method]('pointerdown', onPointerDown, true)
     window[method]('scroll', onScroll, true)
-    window[method]('resize', close)
+    window[method]('resize', onResize)
   }
 
   async function show() {

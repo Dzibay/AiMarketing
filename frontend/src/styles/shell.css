@@ -4,9 +4,18 @@
 
 .dshell {
   --side-w: 268px;
+  /* Страница резиновая до 1600 px, шире — по центру; поля по краям растут с окном. */
+  --page-max: 1600px;
+  --page-pad: clamp(20px, 2.5vw, 40px);
   display: grid;
   grid-template-columns: var(--side-w) minmax(0, 1fr);
   min-height: 100vh;
+  transition: grid-template-columns 0.18s ease;
+}
+
+/* Меню, свёрнутое в иконки (кнопка «Меню» или Ctrl+\ шире 900 px). */
+.dshell.is-collapsed {
+  --side-w: 64px;
 }
 
 /* ---- меню ---- */
@@ -27,7 +36,8 @@
   display: flex;
   flex-direction: column;
   gap: 2px;
-  overflow: auto;
+  overflow-x: hidden;
+  overflow-y: auto;
   padding: 14px 10px 12px;
   scrollbar-width: thin;
 }
@@ -418,8 +428,133 @@
   font-size: 12px;
 }
 
-.dscrim,
-.dbar__burger {
+/* ---- свёрнутое меню: иконки разделов, кружки проектов, шкала лимита ---- */
+/* Пункты шириной 44 px от левого края, а не по центру колонки: пока ширина меню анимируется, значки стоят на месте. */
+
+.is-collapsed .dside__brand > span,
+.is-collapsed .dside__mode,
+.is-collapsed .srow__lock,
+.is-collapsed .srow__n {
+  display: none;
+}
+
+/* Подпись остаётся для экранного диктора, на экране — подсказка при наведении. */
+.is-collapsed .srow__t {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+.is-collapsed .dside__newchat,
+.is-collapsed .srow {
+  justify-content: center;
+  width: 44px;
+  padding: 0;
+  gap: 0;
+}
+
+.is-collapsed .dside__h {
+  height: 1px;
+  margin: 12px 6px 10px;
+  overflow: hidden;
+  background: var(--line);
+  color: transparent;
+  font-size: 0;
+}
+
+.is-collapsed .srow--ava {
+  height: 40px;
+}
+
+/* Кружок проекта: постоянный цвет проекта (--ava из AppShell), первая буква. */
+.pava {
+  position: relative;
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--ava, var(--faint)) 22%, var(--surface));
+  color: color-mix(in srgb, var(--ava, var(--faint)) 62%, var(--ink));
+  font-size: 13px;
+  font-weight: 800;
+  line-height: 1;
+}
+
+/* «Все проекты» в свёрнутом меню — тоже кружок, со значком вместо буквы. */
+.is-collapsed .srow--all {
+  height: 40px;
+}
+
+.is-collapsed .srow--all > svg {
+  width: 30px;
+  height: 30px;
+  padding: 7px;
+  border-radius: 50%;
+  background: var(--surface);
+}
+
+.is-collapsed .srow--all:hover,
+.is-collapsed .srow--ava:hover {
+  background: none;
+}
+
+.is-collapsed .srow--all:hover > svg {
+  background: color-mix(in srgb, var(--ink) 8%, var(--surface));
+}
+
+.is-collapsed .srow--all.is-current > svg {
+  box-shadow:
+    0 0 0 2px var(--side),
+    0 0 0 4px var(--ink);
+}
+
+.srow--ava:hover .pava {
+  background: color-mix(in srgb, var(--ava, var(--faint)) 32%, var(--surface));
+}
+
+.srow--ava.is-current .pava {
+  box-shadow:
+    0 0 0 2px var(--side),
+    0 0 0 4px var(--ink);
+}
+
+/* Проект вне тарифа — бледный, проблема со счётчиком — кольцо-отметка в углу (как у точки в развёрнутом меню). */
+.pava--off {
+  opacity: 0.5;
+}
+
+.pava--warn::after {
+  content: '';
+  position: absolute;
+  right: -2px;
+  bottom: -2px;
+  width: 10px;
+  height: 10px;
+  border: 2px solid var(--warn);
+  border-radius: 50%;
+  background: var(--side);
+}
+
+.is-collapsed .dside__foot {
+  padding: 10px 10px 12px;
+}
+
+.is-collapsed .dside__limit {
+  justify-content: center;
+  font-size: 12px;
+}
+
+.is-collapsed .dside__limit > span,
+.is-collapsed .dside__foot small {
+  display: none;
+}
+
+.dscrim {
   display: none;
 }
 
@@ -497,6 +632,192 @@
 .dchip--lime.active {
   border-color: var(--on-lime);
   color: var(--on-lime);
+}
+
+/* ---- переключатель проекта (ProjectSwitcher) ---- */
+
+.pswitch {
+  display: inline-flex;
+  min-width: 0;
+}
+
+.pswitch__btn {
+  appearance: none;
+  max-width: min(320px, 46vw);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.pswitch__btn.is-open {
+  border-color: var(--faint);
+  color: var(--ink);
+}
+
+.pswitch__btn .pswitch__caret {
+  width: 14px;
+  height: 14px;
+  margin-right: -3px;
+  transition: transform 0.15s ease;
+}
+
+.pswitch__btn.is-open .pswitch__caret {
+  transform: rotate(180deg);
+}
+
+.pswitch__pop {
+  display: flex;
+  flex-direction: column;
+  width: 300px;
+  max-width: calc(100vw - 16px);
+}
+
+.pswitch__search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 38px;
+  margin: 0 0 6px;
+  padding: 0 10px;
+  border: 1px solid var(--line-2);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--faint);
+}
+
+.pswitch__search:focus-within {
+  border-color: var(--ink);
+}
+
+.pswitch__search svg {
+  flex: none;
+  width: 16px;
+  height: 16px;
+}
+
+.pswitch__search input {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  outline: 0;
+  background: none;
+  box-shadow: none;
+  color: var(--ink);
+  font: inherit;
+  font-size: 14px;
+}
+
+.pswitch__list {
+  max-height: min(400px, 56vh);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.pswitch__item {
+  min-height: 38px;
+  padding: 0 10px;
+  border-radius: 9px;
+  font-size: 14px;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.pswitch__item:focus-visible {
+  outline: none;
+  background: var(--surface-2);
+  box-shadow: inset 0 0 0 2px var(--ink);
+}
+
+.pswitch__item .menu-item__text {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.pswitch__item > .sdot {
+  margin: 0 4px;
+}
+
+.pswitch__item.is-current {
+  font-weight: 800;
+}
+
+.pswitch__item svg.pswitch__check {
+  flex: none;
+  color: var(--ink);
+}
+
+.pswitch__item svg.pswitch__lock {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  color: var(--faint);
+}
+
+.pswitch__group {
+  margin: 8px 10px 2px;
+  color: var(--faint);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.pswitch__empty {
+  margin: 8px 10px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.pswitch__foot {
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid var(--line);
+}
+
+.pswitch__foot .pswitch__item {
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.pswitch-scrim {
+  display: none;
+}
+
+/* Телефон: панель выезжает снизу во всю ширину, страница под ней затемнена. */
+@media (max-width: 640px) {
+  .pswitch-scrim {
+    position: fixed;
+    inset: 0;
+    z-index: 74;
+    display: block;
+    background: var(--overlay);
+  }
+
+  /* .ui-pop.pswitch__pop: ui.css подключается позже и иначе перебил бы рамку, скругление и отступы. */
+  .ui-pop.pswitch__pop {
+    top: auto !important;
+    right: 0;
+    bottom: 0;
+    left: 0 !important;
+    width: 100%;
+    max-width: none;
+    max-height: 80vh;
+    padding: 10px 10px calc(10px + env(safe-area-inset-bottom));
+    border-width: 1px 0 0;
+    border-radius: 18px 18px 0 0;
+  }
+
+  .pswitch__list {
+    max-height: none;
+    flex: 1;
+    min-height: 0;
+  }
+
+  .pswitch__item {
+    min-height: 44px;
+  }
 }
 
 .dicon {
@@ -677,13 +998,23 @@
 
 .dpage {
   width: 100%;
-  max-width: 1180px;
+  max-width: var(--page-max);
   margin: 0 auto;
-  padding: 8px 28px 48px;
+  padding: 8px var(--page-pad) 48px;
 }
 
 .dhead {
   margin-bottom: 20px;
+}
+
+/* Страница широкая, а поля и текст — нет: колонка формы до 720 px, абзац до 72 знаков; карточки — во всю ширину. */
+.cabinet .form-grid {
+  max-width: 720px;
+}
+
+.cabinet p:not([class]),
+.cabinet .hint {
+  max-width: 72ch;
 }
 
 .dhead h1 {
@@ -899,10 +1230,6 @@
     padding: 0 12px;
   }
 
-  .dbar__burger {
-    display: grid;
-  }
-
   .dpage {
     padding: 4px 16px 40px;
   }
@@ -937,6 +1264,7 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .dshell,
   .dside {
     transition: none;
   }
