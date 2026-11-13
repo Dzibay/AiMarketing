@@ -21,7 +21,9 @@
             <strong>{{ m.fmt(totals[m.key]) }}</strong>
             <span class="metric-grid__cmp">
               <DeltaChip v-if="compare?.[m.key] != null" :value="compare[m.key]" :good="m.good || ''" :versus="versus" />
-              <small v-if="previous?.[m.key] != null">было {{ m.fmt(previous[m.key]) }}</small>
+              <small v-if="previous?.[m.key] != null" v-tip.truncate="`было ${m.fmt(previous[m.key])}`">
+                было {{ m.fmt(previous[m.key]) }}
+              </small>
             </span>
             <small v-if="m.key === 'visits' && totals.bounce_rate != null" class="mgrid__extra">
               отказы {{ pct(totals.bounce_rate) }}
@@ -88,6 +90,23 @@ const ROWS = [
 
 .mgrid__tiles .metric-grid__item strong {
   font-size: clamp(1.05rem, 2.3cqi, 1.4rem);
+  white-space: nowrap;
+}
+
+/* Фишка изменения и «было» — одной строкой: «было» обрезается многоточием, плитки ряда не расходятся по высоте. */
+.mgrid__tiles .metric-grid__cmp {
+  flex-wrap: nowrap;
+  min-width: 0;
+}
+
+.mgrid__tiles .metric-grid__cmp .delta {
+  flex: none;
+}
+
+.mgrid__tiles .metric-grid__cmp small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
 

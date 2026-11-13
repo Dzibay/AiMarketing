@@ -17,7 +17,7 @@
       >
         <defs>
           <linearGradient :id="gradId" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" :style="{ stopColor: color, stopOpacity: 0.26 }" />
+            <stop offset="0%" class="trend-chart__fill" :style="{ stopColor: color }" />
             <stop offset="100%" :style="{ stopColor: color, stopOpacity: 0 }" />
           </linearGradient>
         </defs>

@@ -52,7 +52,7 @@
         <p>Подключите аккаунт с Директом и Метрикой — сервис загрузит кампании и статистику, обычно за пару минут.</p>
       </div>
       <div class="prow__acts">
-        <YandexConnectButton purpose="connect" label="Подключить Яндекс" :wide="false" return-to="/cabinet/connections" />
+        <YandexConnectButton purpose="connect" label="Подключить Яндекс" variant="accent" :wide="false" return-to="/cabinet/connections" />
       </div>
     </div>
   </div>
@@ -63,6 +63,8 @@
       На странице Яндекса можно выбрать любой логин — так подключаются кабинеты клиентов с отдельными логинами.
       Агентский логин Директа подтянет все клиентские кабинеты сразу.
     </p>
+    <!-- Три карточки во всю ширину ряда: роль Метрики, роль Директа и обе разом. Кнопки нейтральные —
+         красная кнопка Яндекса остаётся только на входе и в мастере первого подключения. -->
     <div class="connect-grid connect-grid--three">
       <article class="connect-card">
         <div class="connect-card__top">
@@ -71,7 +73,7 @@
         </div>
         <h3>Яндекс Метрика</h3>
         <p>Все счётчики логина и их цели. Для каждого счётчика появится проект.</p>
-        <YandexConnectButton purpose="connect" mode="metrika" label="Добавить логин Метрики" return-to="/cabinet/connections" />
+        <YandexConnectButton purpose="connect" mode="metrika" label="Добавить логин Метрики" variant="ghost" return-to="/cabinet/connections" />
       </article>
       <article class="connect-card">
         <div class="connect-card__top">
@@ -80,18 +82,16 @@
         </div>
         <h3>Яндекс Директ</h3>
         <p>Кабинеты и все их кампании. Источник каждой кампании сохраняется — с ней работаем через её кабинет.</p>
-        <YandexConnectButton purpose="connect" mode="direct" label="Добавить логин Директа" return-to="/cabinet/connections" />
+        <YandexConnectButton purpose="connect" mode="direct" label="Добавить логин Директа" variant="ghost" return-to="/cabinet/connections" />
       </article>
-    </div>
-    <div class="connect-offers__one">
-      <YandexConnectButton
-        purpose="connect"
-        label="Метрика и Директ одним логином"
-        variant="ghost"
-        :wide="false"
-        return-to="/cabinet/connections"
-      />
-      <p>Если счётчики и кабинеты на одном логине — подключите обе роли за раз.</p>
+      <article class="connect-card">
+        <div class="connect-card__top">
+          <span class="connect-card__badge connect-card__badge--direct">Метрика и Директ</span>
+        </div>
+        <h3>Одним логином</h3>
+        <p>Если счётчики и кабинеты на одном логине — подключите обе роли за раз.</p>
+        <YandexConnectButton purpose="connect" label="Подключить обе роли" variant="ghost" return-to="/cabinet/connections" />
+      </article>
     </div>
   </section>
 

@@ -1047,6 +1047,8 @@
   border: 1px solid var(--line);
   border-radius: var(--radius);
   background: var(--info-soft);
+  /* Тон плашки — полоса 2 px слева и иконка; фон в тёмной теме нейтральный (--info-soft / --warn-soft). */
+  box-shadow: inset 2px 0 0 var(--notice-tone, var(--info));
   color: var(--ink);
   font-size: 14px;
   line-height: 1.45;
@@ -1060,6 +1062,7 @@
 }
 
 .ui-notice--warn {
+  --notice-tone: var(--warn);
   background: var(--warn-soft);
 }
 
@@ -1068,6 +1071,7 @@
 }
 
 .ui-notice--error {
+  --notice-tone: var(--danger);
   background: var(--danger-soft);
 }
 
@@ -1351,20 +1355,17 @@
 
 .ktiles {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  grid-auto-rows: 1fr;
   gap: 12px;
   margin-bottom: 20px;
 }
 
-/* Шесть плиток проекта: три в ряд, чтобы шестая не висела одна; в одну строку — только на широком экране. */
+/* Шесть плиток проекта: шесть в ряд или по три, чтобы шестая не висела одна. Колонка не уже 180 px; пока шесть
+   по 180 не влезают (контейнер < 1140 px), минимум колонки — чуть больше четверти ширины, и в ряд встаёт не больше
+   трёх. Умножение на 1000 — переключатель: от 1140 px второй аргумент min() отрицательный. */
 .ktiles--six {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-}
-
-@media (min-width: 1440px) {
-  .ktiles--six {
-    grid-template-columns: repeat(6, minmax(0, 1fr));
-  }
+  grid-template-columns: repeat(auto-fit, minmax(max(180px, min(calc(25% + 1px), calc((1139px - 100%) * 1000))), 1fr));
 }
 
 /* На телефоне — по две; при нечётном числе первая плитка во всю ширину, чтобы последняя не осталась одна. */
@@ -1379,7 +1380,10 @@
   }
 }
 
+/* Одна структура на все плитки: подпись, цифра с фишкой, строка пояснения, место под спарклайн 40 px.
+   Плитка — контейнер размеров для своей цифры (cqi). */
 .ktile {
+  container-type: inline-size;
   display: flex;
   flex-direction: column;
   min-width: 0;
@@ -1398,21 +1402,29 @@
   white-space: nowrap;
 }
 
+/* Цифра уменьшается вместе с плиткой, и фишка изменения остаётся на той же строке; перенос — только запасной
+   выход для очень длинной суммы в узкой плитке (телефон), высоты ряда при этом всё равно равные. */
 .ktile__value {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 4px 8px;
+  min-width: 0;
+  min-height: 24px; /* с фишкой и без — одна высота строки */
   margin-top: 6px;
 }
 
 .ktile__value strong {
-  font-size: 22px;
+  font-size: clamp(17px, 11.5cqi, 22px);
   font-weight: 800;
   line-height: 1.15;
   letter-spacing: -0.03em;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
+}
+
+.ktile__value .delta {
+  flex: none;
 }
 
 .ktile__note {
@@ -1430,10 +1442,24 @@
   text-underline-offset: 2px;
 }
 
-.ktile .sparkline {
-  height: 50px;
+.ktile__spark {
+  flex: none;
+  height: 40px;
   margin-top: auto;
   padding-top: 10px;
+  box-sizing: content-box;
+}
+
+.ktile__spark .sparkline {
+  height: 100%;
+}
+
+/* Ряда по дням нет — тонкий пунктир на месте линии, чтобы плитки выглядели одинаково. */
+.ktile__spark:empty::after {
+  content: '';
+  display: block;
+  margin-top: 36px;
+  border-top: 1px dashed var(--line-2);
 }
 
 .delta svg {

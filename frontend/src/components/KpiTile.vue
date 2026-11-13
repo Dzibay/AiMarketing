@@ -5,10 +5,12 @@
       <strong>{{ value }}</strong>
       <DeltaChip v-if="change != null" :value="change" :good="good" :versus="versus" />
     </div>
-    <span v-if="note || $slots.note" class="ktile__note" :class="noteTone" v-tip.truncate="note || undefined">
-      <slot name="note">{{ note }}</slot>
+    <!-- Строка пояснения есть всегда (пустая — неразрывный пробел), чтобы плитки в ряду совпадали построчно. -->
+    <span class="ktile__note" :class="noteTone" v-tip.truncate="note || undefined">
+      <slot name="note">{{ note || NBSP }}</slot>
     </span>
-    <Sparkline v-if="points.length" :points="points" :prev-points="prevPoints" :value-key="valueKey" :height="40" />
+    <!-- Место под спарклайн — всегда; без данных в нём тонкий пунктир (:empty в ui.css). -->
+    <div class="ktile__spark"><Sparkline v-if="points.length" :points="points" :prev-points="prevPoints" :value-key="valueKey" :height="40" /></div>
   </div>
 </template>
 
@@ -16,9 +18,11 @@
 import DeltaChip from './DeltaChip.vue'
 import Sparkline from './Sparkline.vue'
 
+const NBSP = String.fromCharCode(160) // неразрывный пробел: держит высоту пустой строки
+
 /**
- * Плитка экспертной главной: подпись в одну строку, цифра одного размера, изменение фишкой со стрелкой,
- * под ней одна строка пояснения и спарклайн недели (пунктир — неделя до неё).
+ * Плитка экспертной главной. Структура одна на все плитки: подпись, цифра с фишкой изменения в одну строку,
+ * одна строка пояснения и место под спарклайн недели (пунктир — неделя до неё). Нет ряда по дням — пунктир-заглушка.
  */
 defineProps({
   label: { type: String, required: true },

@@ -59,7 +59,7 @@ textarea {
 }
 
 ::selection {
-  background: var(--accent-soft);
+  background: var(--line-2);
 }
 
 .site {
@@ -920,26 +920,6 @@ input[type='radio'] {
   margin-top: 0.35rem;
 }
 
-.connect-offers__one {
-  margin-top: 1rem;
-  padding: 1.1rem 1.25rem;
-  border-radius: var(--r-card);
-  background: var(--accent-soft);
-  border: 1px solid var(--accent-ring);
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.85rem 1.25rem;
-  align-items: center;
-}
-
-.connect-offers__one p {
-  margin: 0;
-  color: var(--muted);
-  font-size: 0.92rem;
-  max-width: 36rem;
-  line-height: 1.45;
-}
-
 /* ---------- Карточки-панели и списки ---------- */
 
 .panel {
@@ -1256,6 +1236,15 @@ input[type='radio'] {
   display: block;
   overflow: visible;
   touch-action: pan-y;
+}
+
+/* Заливка под линией: в тёмной теме лайм с прозрачностью даёт оливковое пятно — оставляем лишь намёк. */
+.trend-chart__fill {
+  stop-opacity: 0.22;
+}
+
+[data-theme='dark'] .trend-chart__fill {
+  stop-opacity: 0.08;
 }
 
 .trend-chart__grid {
@@ -1871,12 +1860,14 @@ a.btn {
   align-items: center;
 }
 
+/* Тон плашки — полоса 2 px слева (как у .ui-notice); рамка и фон нейтральные. */
 .notice {
   margin: 0 0 1rem;
   padding: 0.85rem 1.05rem;
   border-radius: var(--radius);
-  border: 1px solid var(--accent-ring);
+  border: 1px solid var(--line);
   background: var(--accent-soft);
+  box-shadow: inset 2px 0 0 var(--notice-tone, var(--accent));
   font-size: 0.92rem;
   line-height: 1.45;
 }
@@ -1889,7 +1880,7 @@ a.btn {
 }
 
 .notice--warn {
-  border-color: color-mix(in srgb, var(--c-amber) 40%, transparent);
+  --notice-tone: var(--warn);
   background: var(--warn-soft);
 }
 
@@ -2585,12 +2576,14 @@ a.btn {
   border: 1px solid var(--line);
 }
 
+/* Фишки шапки нейтральные: лаймовый текст на каждой превращал строку в четыре кнопки-акцента. */
 .ws-meta a {
-  color: var(--accent);
+  color: var(--ink);
 }
 
 .ws-meta a:hover {
-  border-color: var(--ink);
+  border-color: var(--line-2);
+  background: var(--surface-2);
 }
 
 .ws-meta .ws-meta__minor {
@@ -2675,6 +2668,11 @@ button.metric-grid__item:hover:not(:disabled) {
   border-color: var(--accent);
   background: var(--accent-soft);
   box-shadow: 0 0 0 1px var(--accent) inset;
+}
+
+/* В тёмной теме лайм только кольцом в 1 px на нейтральном фоне — двойное лаймовое кольцо слишком громкое. */
+[data-theme='dark'] .metric-grid__item.active {
+  box-shadow: none;
 }
 
 .metric-grid__item.is-static {

@@ -559,6 +559,7 @@ onMounted(load)
   padding: 12px 14px;
   border-radius: 12px;
   background: var(--lime-soft);
+  box-shadow: inset 0 0 0 1px var(--lime-line);
   font-size: 14px;
   line-height: 1.5;
   white-space: pre-wrap;
