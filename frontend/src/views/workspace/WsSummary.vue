@@ -211,15 +211,16 @@
         </div>
         <p v-if="!data.recent_actions.length" class="empty">Пока ничего не меняли.</p>
         <div v-else class="list">
-          <div v-for="a in data.recent_actions" :key="a.id" class="list-row">
-            <div>
-              <strong>{{ a.title || a.action }}</strong>
-              <small>
-                <span class="chip" :class="`chip--src-${a.source}`">{{ ACTION_SOURCES[a.source] || a.source }}</span>
-                {{ formatDateTime(a.created_at) }}
+          <div v-for="a in data.recent_actions" :key="a.id" class="list-row act-row">
+            <div class="act-row__main">
+              <strong class="act-row__title">{{ keepNumbers(a.title || a.action) }}</strong>
+              <small class="act-row__meta">
+                <span>{{ formatDateTime(a.created_at) }}</span>
+                <ActionWho :source="a.source" />
               </small>
             </div>
-            <span :class="ACTION_STATUS_TONES[a.status]">{{ STATUS_LABELS[a.status] || a.status }}</span>
+            <UiStatus v-if="a.undone_at" tone="off" :icon="Undo2" label="Возвращено" />
+            <UiStatus v-else-if="ACTION_RESULT[a.status]" v-bind="ACTION_RESULT[a.status]" />
           </div>
         </div>
       </section>
@@ -238,7 +239,9 @@ import {
   RefreshCw,
   Sparkles,
   TriangleAlert,
+  Undo2,
 } from '@lucide/vue'
+import ActionWho from '../../components/ActionWho.vue'
 import ExpertHint from '../../components/ExpertHint.vue'
 import HomeAsk from '../../components/HomeAsk.vue'
 import KpiTile from '../../components/KpiTile.vue'
@@ -250,13 +253,12 @@ import TermHint from '../../components/TermHint.vue'
 import TrendChart from '../../components/TrendChart.vue'
 import PageHeader from '../../components/ui/PageHeader.vue'
 import UiSelect from '../../components/ui/UiSelect.vue'
+import UiStatus from '../../components/ui/UiStatus.vue'
 import { useExpert } from '../../composables/useExpert'
 import { campaignHealth, leadWord } from '../../utils/campaignHealth'
 import { errorText, jobProgressText, webApi, wsApi } from '../../api/web'
 import { pushToast } from '../../composables/useToasts'
 import {
-  ACTION_SOURCES,
-  ACTION_STATUS_TONES,
   BUDGET_TONES,
   CAMPAIGN_STATES,
   KPI_TONES,
@@ -266,6 +268,7 @@ import {
   daysShort,
   formatDate,
   formatDateTime,
+  keepNumbers,
   kpiGoal,
   kpiValue,
   num,
@@ -275,7 +278,13 @@ import {
 import { CHART_METRICS, METRIC_BY_KEY } from './metrics'
 import { useWs } from './context'
 
-const STATUS_LABELS = { ok: 'выполнено', partial: 'частично', error: 'ошибка', failed: 'ошибка' }
+// Итог действия в Директе — те же слова, что в «Истории».
+const ACTION_RESULT = {
+  ok: { tone: 'ok', label: 'Выполнено' },
+  partial: { tone: 'warn', label: 'Частично' },
+  error: { tone: 'bad', label: 'Не принято' },
+  failed: { tone: 'bad', label: 'Не принято' },
+}
 
 const { ws } = useWs()
 const { expert } = useExpert()
@@ -396,3 +405,29 @@ async function refresh() {
 
 onMounted(load)
 </script>
+
+<style scoped>
+/* Строка журнала: текст сжимается, статус всегда справа в первой строке — не переносится вниз. */
+.act-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 4px 12px;
+}
+
+.act-row__title {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-height: 1.35;
+}
+
+.act-row__meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px 10px;
+  margin-top: 4px;
+}
+</style>

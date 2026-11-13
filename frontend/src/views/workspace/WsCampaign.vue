@@ -1,7 +1,25 @@
 <template>
-  <p class="page-crumbs">
-    <RouterLink :to="`/w/${ws.id}/campaigns`">← Все кампании</RouterLink>
-  </p>
+  <!-- Имя кампании — в общий заголовок страницы (h1 оболочки), своего h1 тут нет. -->
+  <PageHeader :title="name || 'Кампания'" :description="headDesc">
+    <template #back>
+      <RouterLink :to="`/w/${ws.id}/campaigns`">← Все кампании</RouterLink>
+    </template>
+    <template v-if="!expert && !loadError" #actions>
+      <label v-if="canToggle" class="camp-switch">
+        <span class="switch">
+          <input
+            type="checkbox"
+            :checked="state === 'ON'"
+            :disabled="busy || !state"
+            :aria-label="state === 'ON' ? 'Остановить показы' : 'Запустить показы'"
+            @click.prevent="toggleState"
+          />
+        </span>
+        {{ state === 'ON' ? 'Идут показы' : 'Остановлена' }}
+      </label>
+      <RouterLink class="btn btn--accent" :to="aiLink">Разобрать с ИИ</RouterLink>
+    </template>
+  </PageHeader>
 
   <div v-if="loadError" class="panel">
     <p class="empty">{{ loadError }}</p>
@@ -9,28 +27,6 @@
   </div>
 
   <template v-else-if="!expert">
-    <section class="camp-head">
-      <div class="camp-head__title">
-        <p class="camp-head__eyebrow">{{ [CAMPAIGN_TYPES[type] || type, ws.name].filter(Boolean).join(' · ') }}</p>
-        <h1>{{ name || 'Кампания' }}</h1>
-      </div>
-      <div class="row-actions">
-        <label v-if="canToggle" class="camp-switch">
-          <span class="switch">
-            <input
-              type="checkbox"
-              :checked="state === 'ON'"
-              :disabled="busy || !state"
-              :aria-label="state === 'ON' ? 'Остановить показы' : 'Запустить показы'"
-              @click.prevent="toggleState"
-            />
-          </span>
-          {{ state === 'ON' ? 'Идут показы' : 'Остановлена' }}
-        </label>
-        <RouterLink class="btn btn--accent" :to="aiLink">Разобрать с ИИ</RouterLink>
-      </div>
-    </section>
-
     <template v-if="tab === 'settings'">
       <p class="camp-back"><button class="btn btn--ghost" type="button" @click="setTab('structure')">← К кампании</button></p>
       <CampaignSettingsForm :key="`c${campaignId}`" :workspace="ws" :campaign-id="campaignId" :campaign="campaign" @saved="loadRow" />
@@ -111,8 +107,8 @@
           <p v-if="!recent.length" class="ccard--note">В этой кампании пока ничего не меняли.</p>
           <div v-for="a in recent" :key="a.id" class="prow">
             <div class="prow__main">
-              <b>{{ a.title || a.action }}</b>
-              <span class="meta-note">{{ ACTION_SOURCES[a.source] || a.source }} · {{ formatDateTime(a.created_at) }}</span>
+              <b>{{ keepNumbers(a.title || a.action) }}</b>
+              <span class="meta-note camp-act-meta">{{ formatDateTime(a.created_at) }}<ActionWho :source="a.source" /></span>
             </div>
           </div>
         </div>
@@ -126,10 +122,8 @@
     <section class="panel campaign-head">
       <div class="panel__head">
         <div>
-          <h2>{{ row?.name || campaign?.name || 'Кампания' }}</h2>
           <p class="ws-meta ws-meta--inline">
             <UiStatus v-if="state || status" v-bind="campaignStatus({ state, status })" />
-            <span v-if="type">{{ CAMPAIGN_TYPES[type] || type }}</span>
             <span v-if="login">кабинет {{ login }}</span>
             <span v-if="directId">№ {{ directId }}</span>
             <span v-if="dailyBudget != null">бюджет {{ rubles(dailyBudget) }}/день</span>
@@ -244,9 +238,11 @@ import {
   Trash2,
   TriangleAlert,
 } from '@lucide/vue'
+import ActionWho from '../../components/ActionWho.vue'
 import CampaignStructure from '../../components/CampaignStructure.vue'
 import ExpertHint from '../../components/ExpertHint.vue'
 import TermHint from '../../components/TermHint.vue'
+import PageHeader from '../../components/ui/PageHeader.vue'
 import UiMenu from '../../components/ui/UiMenu.vue'
 import UiMenuItem from '../../components/ui/UiMenuItem.vue'
 import UiStatus from '../../components/ui/UiStatus.vue'
@@ -257,11 +253,11 @@ import { errorText, wsApi } from '../../api/web'
 import { pushToast } from '../../composables/useToasts'
 import { undoAction } from '../../composables/useUndo'
 import {
-  ACTION_SOURCES,
   KPI_PLAIN,
   campaignStatus,
   CAMPAIGN_TYPES,
   formatDateTime,
+  keepNumbers,
   lastDays,
   num,
   pct,
@@ -310,6 +306,8 @@ const dailyBudget = computed(() => {
   return campaign.value?.daily_budget_kopecks ? campaign.value.daily_budget_kopecks / 100 : null
 })
 const name = computed(() => row.value?.name || campaign.value?.name || '')
+// Под заголовком: тип кампании и проект — обычным текстом.
+const headDesc = computed(() => [CAMPAIGN_TYPES[type.value] || type.value, ws.value?.name].filter(Boolean).join(' · '))
 const aiLink = computed(() => ({
   path: `/w/${ws.value.id}/chat`,
   query: { ask: 'campaign', cid: String(campaignId.value), name: name.value || undefined },
@@ -511,25 +509,6 @@ watch(expert, (on) => {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
-.camp-head {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: flex-end;
-  justify-content: space-between;
-  gap: 16px;
-  margin: 4px 0 14px;
-}
-.camp-head h1 {
-  margin: 2px 0 0;
-  font-size: 26px;
-  font-weight: 800;
-  letter-spacing: -0.02em;
-}
-.camp-head__eyebrow {
-  margin: 0;
-  color: var(--muted);
-  font-size: 13px;
-}
 .camp-switch {
   display: inline-flex;
   align-items: center;
@@ -575,6 +554,12 @@ watch(expert, (on) => {
 .camp-group small {
   color: var(--faint);
   font-size: 12px;
+}
+.camp-act-meta {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px 10px;
 }
 .ccard .prow .meta-note {
   margin: 0;

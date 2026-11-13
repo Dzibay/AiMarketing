@@ -9,6 +9,14 @@
 // Неразрывный пробел: «4,1 %» и «150 ₽» не разъезжаются по строкам.
 const NBSP = '\u00a0'
 
+/** Текст с сервера (заголовки действий): «4 000 → 5 000 ₽» не рвётся посреди числа и перед «₽»/«%». */
+export function keepNumbers(text) {
+  if (!text) return text
+  return String(text)
+    .replace(/(\d) (?=\d{3}(?!\d))/g, `$1${NBSP}`)
+    .replace(/(\d) (?=[₽%])/g, `$1${NBSP}`)
+}
+
 export function rub(kopecks) {
   if (kopecks === null || kopecks === undefined || kopecks === '') return '—'
   return `${Math.round(Number(kopecks) / 100).toLocaleString('ru-RU')}${NBSP}₽`
@@ -209,8 +217,9 @@ export function balanceTone(days) {
 
 export const CAMPAIGN_STATES = {
   ON: 'Идут показы',
-  OFF: 'Остановлена',
-  SUSPENDED: 'Приостановлена',
+  // Те же слова, что в плашке статуса (campaignStatus): OFF — Директ сам не показывает, SUSPENDED — остановили вручную.
+  OFF: 'Не показывается',
+  SUSPENDED: 'Остановлена',
   ENDED: 'Завершена',
   ARCHIVED: 'В архиве',
   CONVERTED: 'Конвертирована',
@@ -298,4 +307,3 @@ export function problemLink(p) {
 }
 
 export const ACTION_SOURCES = { user: 'Вы', ai: 'ИИ', rule: 'Правило' }
-export const ACTION_STATUS_TONES = { ok: 'tone-ok', partial: 'tone-warn', error: 'tone-bad', failed: 'tone-bad' }

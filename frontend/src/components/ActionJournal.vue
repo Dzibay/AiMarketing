@@ -55,13 +55,10 @@
             <component :is="ACTION_ICONS[a.action] || CircleDot" :size="16" aria-hidden="true" />
           </i>
           <div class="hrow__main">
-            <b>{{ a.title || a.action }}</b>
+            <b>{{ keepNumbers(a.title || a.action) }}</b>
             <small class="hrow__meta">
               <span>{{ timeOf(a.created_at) }}</span>
-              <!-- «Вы» не пишем: это почти каждая запись. Отмечаем только ИИ и правила. -->
-              <span v-if="WHO[a.source]" class="hwho" :class="`hwho--${a.source}`">
-                <component :is="WHO[a.source].icon" aria-hidden="true" />{{ WHO[a.source].label }}
-              </span>
+              <ActionWho :source="a.source" />
               <RouterLink v-if="!workspaceId && a.workspace_id" :to="`/w/${a.workspace_id}/history`">
                 {{ a.workspace_name || `Проект ${a.workspace_id}` }}
               </RouterLink>
@@ -185,14 +182,13 @@ import {
   Send,
   Settings2,
   SlidersHorizontal,
-  Sparkles,
   Trash2,
   TriangleAlert,
   Undo2,
   Wallet,
   X,
-  Zap,
 } from '@lucide/vue'
+import ActionWho from './ActionWho.vue'
 import ExpertHint from './ExpertHint.vue'
 import EmptyState from './ui/EmptyState.vue'
 import PageHeader from './ui/PageHeader.vue'
@@ -203,7 +199,7 @@ import { useExpert } from '../composables/useExpert'
 import UndoDialog from './UndoDialog.vue'
 import { errorText, webApi, wsApi } from '../api/web'
 import { useWorkspaces } from '../composables/useWorkspaces'
-import { formatDateTime } from '../utils/format'
+import { formatDateTime, keepNumbers } from '../utils/format'
 
 /** Журнал изменений с откатом: по одному проекту (workspaceId) или по всем — с фильтрами проекта, типа и источника. */
 const props = defineProps({ workspaceId: { type: Number, default: null } })
@@ -247,10 +243,6 @@ const ACTION_ICONS = {
   adgroups: FolderTree,
   links: Link2,
   undo: Undo2,
-}
-const WHO = {
-  ai: { label: 'ИИ', icon: Sparkles },
-  rule: { label: 'Правило', icon: Zap },
 }
 const RESULTS = {
   ok: { tone: 'ok', icon: Check, label: 'Выполнено' },
@@ -470,24 +462,6 @@ onMounted(() => fetchPage())
 }
 .hrow__meta a {
   color: var(--muted);
-}
-.hwho {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 1px 8px 1px 6px;
-  border-radius: 999px;
-  background: var(--surface-2);
-  color: var(--ink);
-  font-weight: 600;
-}
-.hwho svg {
-  width: 12px;
-  height: 12px;
-}
-.hwho--ai {
-  background: var(--solid);
-  color: var(--on-solid);
 }
 .hrow__acts {
   display: flex;

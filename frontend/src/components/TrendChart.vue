@@ -22,9 +22,10 @@
           </linearGradient>
         </defs>
 
+        <!-- Подписи значений — в своей колонке слева, линия графика начинается правее и их не перечёркивает. -->
         <g v-for="tick in ticks" :key="tick.value">
-          <line class="trend-chart__grid" x1="0" :x2="width" :y1="tick.y" :y2="tick.y" />
-          <text class="trend-chart__ylabel" x="0" :y="tick.y - 6">{{ formatValue(tick.value) }}</text>
+          <line class="trend-chart__grid" :x1="padLeft" :x2="width" :y1="tick.y" :y2="tick.y" />
+          <text class="trend-chart__ylabel" :x="padLeft - 8" :y="tick.y" text-anchor="end" dominant-baseline="middle">{{ tick.label }}</text>
         </g>
 
         <path v-if="prevLine" class="trend-chart__prev" :d="prevLine" />
@@ -59,7 +60,7 @@
       </div>
     </div>
 
-    <div class="trend-chart__axis">
+    <div class="trend-chart__axis" :style="{ paddingLeft: `${padLeft}px` }">
       <span v-for="(day, i) in axisDays" :key="i">{{ formatDate(day) }}</span>
     </div>
   </div>
@@ -100,7 +101,7 @@ watch(plotEl, (el) => {
 onBeforeUnmount(() => observer?.disconnect())
 
 const padX = 6
-const padTop = 22
+const padTop = 14
 const baseY = computed(() => props.height - 4)
 
 const values = computed(() => seriesValues(props.points, props.valueKey))
@@ -111,7 +112,24 @@ const ticks = computed(() => {
   const all = [...values.value, ...(hasPrev.value ? prevValues.value : [])].filter((v) => v !== null)
   const list = niceTicks(Math.max(0, ...all))
   const top = list[list.length - 1] || 1
-  return list.map((value) => ({ value, y: yFor(value, top) }))
+  return list.map((value) => ({ value, label: props.formatValue(value), y: yFor(value, top) }))
+})
+
+// Ширина колонки подписей — по самой длинной подписи в текущем шрифте (+ зазор до линии).
+// Пока веб-шрифт не загрузился, меряем запасным — после загрузки пересчитываем.
+const fontsReady = ref(0)
+document.fonts?.ready.then(() => fontsReady.value++)
+let measureCtx = null
+function textWidth(text) {
+  measureCtx ??= document.createElement('canvas').getContext('2d')
+  if (!measureCtx) return text.length * 7
+  const family = getComputedStyle(plotEl.value || document.body).fontFamily
+  measureCtx.font = `11px ${family}`
+  return measureCtx.measureText(text).width
+}
+const padLeft = computed(() => {
+  void fontsReady.value
+  return Math.ceil(Math.max(0, ...ticks.value.map((t) => textWidth(t.label)))) + 14
 })
 const scaleTop = computed(() => ticks.value[ticks.value.length - 1].value || 1)
 
@@ -119,10 +137,12 @@ function yFor(value, top = scaleTop.value) {
   return baseY.value - (value / top) * (baseY.value - padTop)
 }
 
+const plotWidth = computed(() => Math.max(width.value - padLeft.value - padX, 1))
+
 function xFor(i) {
   const n = props.points.length
-  if (n === 1) return width.value / 2
-  return padX + (i / (n - 1)) * (width.value - padX * 2)
+  if (n === 1) return padLeft.value + plotWidth.value / 2
+  return padLeft.value + (i / (n - 1)) * plotWidth.value
 }
 
 const plot = computed(() => values.value.map((v, i) => ({ i, x: xFor(i), y: v === null ? null : yFor(v) })))
@@ -144,7 +164,7 @@ function onPointer(event) {
   if (!n) return
   const rect = event.currentTarget.getBoundingClientRect()
   const x = ((event.clientX - rect.left) / rect.width) * width.value
-  const i = n === 1 ? 0 : Math.round(((x - padX) / (width.value - padX * 2)) * (n - 1))
+  const i = n === 1 ? 0 : Math.round(((x - padLeft.value) / plotWidth.value) * (n - 1))
   hover.value = Math.min(Math.max(i, 0), n - 1)
 }
 

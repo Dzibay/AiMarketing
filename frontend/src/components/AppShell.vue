@@ -176,6 +176,7 @@
           <!-- Описание и действия страницы приходят сюда из PageHeader (Teleport). -->
           <div class="dhead__row">
             <div class="dhead__title">
+              <p id="dhead-back" class="dhead__back"></p>
               <h1>{{ pageTitleOverride || title }}</h1>
               <p id="dhead-desc" class="dhead__desc"></p>
             </div>

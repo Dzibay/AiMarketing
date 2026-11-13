@@ -17,6 +17,22 @@
   min-width: 0;
 }
 
+/* «← Все кампании» над заголовком вложенной страницы (слот back в PageHeader). */
+.dhead__back {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.dhead__back a {
+  color: var(--muted);
+  text-decoration: none;
+}
+
+.dhead__back a:hover {
+  color: var(--ink);
+}
+
 .dhead__desc {
   max-width: 76ch;
   margin: 6px 0 0;
@@ -33,6 +49,7 @@
   margin-top: 2px;
 }
 
+.dhead__back:empty,
 .dhead__desc:empty,
 .dhead__acts:empty {
   display: none;

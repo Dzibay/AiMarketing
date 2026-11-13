@@ -149,8 +149,12 @@
             <td>Итого: {{ rows.length }}</td>
             <td v-if="showProject"></td>
             <td></td>
-            <td class="num" title="Сумма бюджетов запущенных кампаний; дневной × 7">
-              {{ totals.budget ? `${rubles(totals.budget)}/нед.` : '—' }}
+            <td class="num">
+              <template v-if="budgetTotal?.mixed">—<small class="ctab__meta">разные типы бюджета</small></template>
+              <span v-else-if="budgetTotal" title="Сумма бюджетов запущенных кампаний">
+                {{ rubles(budgetTotal.sum) }}{{ budgetTotal.unit === 'week' ? '/нед.' : '/день' }}
+              </span>
+              <template v-else>—</template>
             </td>
             <td class="num">{{ rub(totals.cost) }}</td>
             <td class="num">{{ num(totals.clicks) }}</td>
@@ -281,11 +285,22 @@ const totals = computed(() =>
       clicks: t.clicks + (c.clicks || 0),
       impressions: t.impressions + (c.impressions || 0),
       conversions: t.conversions + (c.conversions || 0),
-      budget: t.budget + (c.state === 'ON' ? c.budget_week_rub || 0 : 0),
     }),
-    { cost: 0, clicks: 0, impressions: 0, conversions: 0, budget: 0 },
+    { cost: 0, clicks: 0, impressions: 0, conversions: 0 },
   ),
 )
+
+// Итог бюджета — только по запущенным и только в одной мере: недельный с дневным не складываем,
+// иначе сумма выглядит как реальный бюджет, а это пересчёт «дневной × 7».
+const budgetTotal = computed(() => {
+  const on = rows.value.filter((c) => c.state === 'ON' && (c.weekly_budget_rub || c.daily_budget_rub))
+  if (!on.length) return null
+  const units = new Set(on.map((c) => (c.weekly_budget_rub ? 'week' : 'day')))
+  if (units.size > 1) return { mixed: true }
+  const unit = units.has('week') ? 'week' : 'day'
+  const sum = on.reduce((s, c) => s + (unit === 'week' ? c.weekly_budget_rub : c.daily_budget_rub), 0)
+  return { unit, sum }
+})
 
 // Бюджет к одной мере — за неделю: так его можно сортировать и складывать.
 function withExtras(c) {

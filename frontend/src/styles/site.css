@@ -1477,9 +1477,9 @@ input[type='radio'] {
   border-color: var(--line);
   background: var(--surface);
   box-shadow: var(--shadow-sm);
-  cursor: pointer;
 }
 
+/* Обычная строка — не ссылка: курсор-стрелка, а не текстовый. Строка-ссылка (.is-link) — рука, правило ниже. */
 .list-row {
   cursor: default;
 }
@@ -2714,19 +2714,6 @@ textarea {
   margin: 0.35rem 0 0;
 }
 
-.page-crumbs {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.45rem;
-  margin: 0 0 1rem;
-  font-size: 0.88rem;
-  color: var(--muted);
-}
-
-.page-crumbs a {
-  color: var(--accent);
-}
-
 .ws-meta__sync {
   color: var(--accent);
 }
@@ -2840,6 +2827,7 @@ button.metric-grid__item:hover:not(:disabled) {
 
 .list-row.is-link {
   color: inherit;
+  cursor: pointer;
   transition: border-color 0.15s ease, background 0.15s ease;
 }
 

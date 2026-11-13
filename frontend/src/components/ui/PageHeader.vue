@@ -1,4 +1,7 @@
 <template>
+  <Teleport v-if="$slots.back" defer to="#dhead-back">
+    <slot name="back" />
+  </Teleport>
   <Teleport v-if="description || $slots.description" defer to="#dhead-desc">
     <slot name="description">{{ description }}</slot>
   </Teleport>
@@ -14,7 +17,7 @@ import { clearPageTitle, setPageTitle } from '../../composables/usePageTitle'
 /**
  * Шапка страницы. Заголовок h1 — один, его пишет оболочка (AppShell) по пункту меню; страница добавляет к нему
  * строку описания и свои действия справа — период, «Обновить», главную кнопку. Вторых крупных заголовков
- * внутри страницы не делаем.
+ * внутри страницы не делаем. Слот back — ссылка «← назад» строкой над заголовком (карточка внутри раздела).
  */
 const props = defineProps({
   description: { type: String, default: '' },
