@@ -9,31 +9,21 @@
     </div>
     <p v-if="args.intro" class="ai-ask__lead">{{ args.intro }}</p>
 
-    <div v-if="images.length" class="ai-items__images">
-      <figure v-for="r in images" :key="r.id" class="ai-items__image" :class="{ 'is-off': isOff(r) }">
-        <button
-          type="button"
-          class="ai-items__image-pick"
-          :aria-pressed="!isOff(r)"
-          :aria-label="r.cells[0] || 'Картинка'"
-          :disabled="!pending || disabled"
-          v-tip="[r.cells[1], r.cells[2]].filter(Boolean).join(' · ')"
-          @click="flip(r)"
-        >
-          <img v-if="r.image?.preview_url" :src="r.image.preview_url" :alt="r.cells[0] || 'Картинка'" loading="lazy" />
-          <span v-else class="ai-items__image-none">нет превью</span>
-        </button>
-        <figcaption>
-          <small v-if="r.section">{{ r.section }}</small>
-          {{ r.cells[0] }}
-        </figcaption>
-      </figure>
-    </div>
+    <AiImageGallery
+      v-if="images.length"
+      :rows="images"
+      :off="pending ? off : decidedOff"
+      :readonly="!pending"
+      :disabled="disabled"
+      @update:off="off = $event"
+    />
 
+    <!-- Картинки уже в галерее — в таблице только строки без них. -->
     <AiCheckTable
+      v-if="tableRows.length"
       :off="pending ? off : decidedOff"
       :columns="columns"
-      :rows="rows"
+      :rows="tableRows"
       :readonly="!pending"
       :disabled="disabled"
       @update:off="off = $event"
@@ -57,9 +47,12 @@
         maxlength="2000"
         :disabled="disabled"
         placeholder="Что поправить или добавить — необязательно"
-        aria-label="Комментарий к таблице"
+        aria-label="Комментарий к этапу"
       />
-      <p class="hint">Снятые строки ИИ не возьмёт в работу. Следующий этап придёт новой таблицей.</p>
+      <p class="hint">
+        {{ images.length ? 'Снятые картинки' : 'Снятые строки' }} ИИ не возьмёт в работу. Следующий этап придёт новой
+        таблицей.
+      </p>
       <div class="action-card__buttons">
         <button class="btn btn--accent" type="button" :disabled="disabled || !chosen.length" @click="approve">
           Согласовать выбранные ({{ chosen.length }})
@@ -80,6 +73,7 @@
 import { computed, ref } from 'vue'
 import AdPreview from './AdPreview.vue'
 import AiCheckTable from './AiCheckTable.vue'
+import AiImageGallery from './AiImageGallery.vue'
 import UiStatus from '../../components/ui/UiStatus.vue'
 
 const props = defineProps({
@@ -112,8 +106,9 @@ const columns = computed(() => args.value.columns || [])
 const rows = computed(() =>
   (args.value.rows || []).map((r) => ({ id: r.n, section: r.section, kind: r.kind, cells: r.cells || [], image: r.image })),
 )
-// Этап картинок: превью над таблицей, щелчок — снять или вернуть галочку.
+// Этап картинок: строки с картинкой — галереей, остальные (если есть) — таблицей.
 const images = computed(() => (args.value.stage === 'images' ? rows.value.filter((r) => r.image) : []))
+const tableRows = computed(() => (images.value.length ? rows.value.filter((r) => !images.value.includes(r)) : rows.value))
 
 const off = ref((args.value.rows || []).filter((r) => r.checked === false).map((r) => r.n))
 const comment = ref('')
@@ -138,14 +133,6 @@ const decidedOff = computed(() => {
   const approved = result.value.approved_rows || []
   return rows.value.filter((r) => !approved.includes(r.id)).map((r) => r.id)
 })
-
-function isOff(row) {
-  return (pending.value ? off.value : decidedOff.value).includes(row.id)
-}
-
-function flip(row) {
-  off.value = off.value.includes(row.id) ? off.value.filter((n) => n !== row.id) : [...off.value, row.id]
-}
 
 function approve() {
   emit('submit', { approve: true, rows: chosen.value, comment: comment.value.trim() })

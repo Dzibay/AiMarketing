@@ -1,5 +1,6 @@
 """Демо-данные кабинета для проверки интерфейса: 3 проекта, 2 кабинета Директа, 9 кампаний, 7 счётчиков,
-60 дней статистики, визиты Метрики, запросы, ключевые фразы, журнал, правила, минус-фразы и чаты.
+60 дней статистики, визиты Метрики, запросы, ключевые фразы, журнал, правила, минус-фразы и чаты — в том числе
+с карточками на согласование: минус-фразы «было → станет» и этап «Картинки» (8 картинок из assets/, 2 группы).
 
 Запуск (БД — пустая временная, см. README):
   backend/.venv/Scripts/python scripts/demo/seed.py
@@ -9,6 +10,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import random
 import secrets
@@ -243,11 +245,90 @@ with pool.connection() as conn:
         for role, text in messages:
             ai_agent._insert_message(conn, chat, role, text)
 
+
+def ask_card(conn, chat, text, tool, args, payload, *, summary, category="", call="call_demo"):
+    """Ответ ИИ с карточкой: сообщение с вызовом инструмента и действие, которое ждёт решения."""
+    message = ai_agent._insert_message(
+        conn, chat, "assistant", text,
+        tool_calls=[{"id": call, "name": tool, "arguments": json.dumps(args, ensure_ascii=False)}],
+    )
+    conn.execute(
+        "INSERT INTO ai_actions (chat_id, message_id, user_id, tool_call_id, tool, args, summary, category, status, auto) "
+        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'pending', FALSE)",
+        (chat, message["id"], uid, call, tool, ai_agent.Jsonb(payload), summary, category),
+    )
+
+
+NEGATIVES = ["бесплатно", "скачать", "картинки", "как вырастить", "вакансии"]
+neg_args = {"campaign_row_id": r1, "phrases": NEGATIVES, "reason": "4 запроса за 14 дней — 2 140 ₽ без заказов"}
+
+# (группа, файл, название, откуда, почему, отмечена) — превью отдаёт api.py из scripts/demo/assets.
+IMAGES = [
+    ("Доставка цветов", "peonies-window.svg", "Пионы в вазе на подоконнике", "сгенерирована",
+     "Тёплая домашняя сцена — под оффер «доставим за 2 часа»", True),
+    ("Доставка цветов", "courier-box.svg", "Коробка с цветами у курьера", "сгенерирована",
+     "Показывает саму доставку; широкий формат — для РСЯ", True),
+    ("Доставка цветов", "daisies-kraft.svg", "Ромашки в крафтовой бумаге", "из «Поиск | Доставка цветов»",
+     "Самая кликабельная картинка кампании за 30 дней", True),
+    ("Доставка цветов", "tulips-table.svg", "Тюльпаны в стеклянной вазе", "из «РСЯ | Букеты на 8 марта»",
+     "Сезонная: хороша к марту, сейчас может не зайти", False),
+    ("Букеты роз", "rose-closeup.svg", "Красная роза крупным планом", "сгенерирована",
+     "Контрастная — заметна в ленте РСЯ", True),
+    ("Букеты роз", "roses-25.svg", "Букет из 25 красных роз", "из «Мастер кампаний | Розы»",
+     "Под частый запрос группы «25 роз»", True),
+    ("Букеты роз", "roses-hatbox.svg", "Розы в синей шляпной коробке", "сгенерирована",
+     "Подарочный формат — под оффер «букет в коробке»", True),
+    ("Букеты роз", "white-roses.svg", "Белые розы на сером фоне", "из «Поиск | Свадебные букеты (тест)»",
+     "Ближе к свадебной теме, чем к группе, — оставил на ваш выбор", False),
+]
+images = {
+    "stage": "images",
+    "title": "Картинки для объявлений",
+    "intro": "По 4 картинки на группу: часть сгенерировал по описанию, часть взял из ваших кампаний. "
+             "В группе до 5 картинок.",
+    "columns": ["Картинка", "Откуда", "Почему"],
+    "rows": [
+        {"n": n, "section": group, "kind": "image", "cells": [name, source, why], "checked": on,
+         "image": {"hash": f"demo{n:02d}", "account_id": acc_r, "preview_url": f"/api/_demo/assets/{file}"}}
+        for n, (group, file, name, source, why, on) in enumerate(IMAGES, 1)
+    ],
+    "account_id": acc_r,
+}
+with pool.connection() as conn:
+    ask_card(
+        conn, chats[1], "", "add_campaign_negatives", neg_args,
+        {
+            **neg_args,
+            "_diff": [
+                {"what": "Минус-фразы кампании", "before": "6 фраз", "after": "11 фраз"},
+                {"what": "Добавятся", "before": "—", "after": ", ".join(NEGATIVES)},
+            ],
+            "_items": [
+                {"id": f"phrases.{i}", "section": "", "kind": "negative", "text": p, "note": ""}
+                for i, p in enumerate(NEGATIVES)
+            ],
+        },
+        summary=f"Минус-фразы в «Поиск | Доставка цветов | Москва и МО»: +{len(NEGATIVES)}",
+        category="negatives", call="call_negatives",
+    )
+    chat = conn.execute(
+        "INSERT INTO ai_chats (user_id, workspace_id, title, status) VALUES (%s, %s, %s, 'idle') RETURNING id",
+        (uid, ws_r, "Картинки для объявлений о доставке"),
+    ).fetchone()["id"]
+    chats.append(chat)
+    ai_agent._insert_message(conn, chat, "user", "Подбери картинки для групп «Доставка цветов» и «Букеты роз»")
+    ask_card(
+        conn, chat, "Подобрал по 4 картинки в каждую группу. Тюльпаны и белые розы оставил неотмеченными: "
+        "первые сезонные, вторые ближе к свадебной теме — посмотрите сами.",
+        "propose_items", {k: v for k, v in images.items() if k != "columns"}, images,
+        summary=images["title"], call="call_images",
+    )
+
 env.TOKEN_FILE.write_text(make_session(uid), encoding="utf-8")
 env.save_stand({
     "user_id": uid,
     "workspaces": {"flowers": ws_r, "furniture": ws_v, "promo": ws_x},
     "campaign_row": r1,
-    "chats": {"general": chats[0], "flowers": chats[1]},
+    "chats": {"general": chats[0], "flowers": chats[1], "images": chats[2]},
 })
 print(f"Готово: пользователь {uid}, проекты {ws_r}, {ws_v}, {ws_x}. Токен и номера — в {env.DEMO_DIR}")

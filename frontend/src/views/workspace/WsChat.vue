@@ -4,7 +4,11 @@
     class="chat"
     :class="[build ? ['chat--board', `is-tab-${tab}`] : 'chat--solo', { 'chat--hello': showIntro }]"
   >
-    <PageHeader :description="chat?.title || ''">
+    <!-- h1 — название чата, раздел «ИИ-помощник» — строкой над ним; у нового чата h1 остаётся названием раздела. -->
+    <PageHeader :title="chat?.title || ''">
+      <template v-if="chat?.title" #back>
+        <span class="chat__crumb">ИИ-помощник</span>
+      </template>
       <template #actions>
         <UiSelect
           v-if="!general && expert"

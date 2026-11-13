@@ -1,17 +1,33 @@
 /* ===================== ИИ-чат (views/workspace/WsChat.vue и карточки Ai*Card) =====================
-   Без доски — одна колонка по центру: страница прокручивается окном, поле ввода прилипает к низу.
-   С доской сборки на широком экране — две колонки во всю высоту окна, лента прокручивается сама. */
+   Без доски — колонка текста по центру, карточки с таблицами и картинками шире неё: страница прокручивается
+   окном, поле ввода прилипает к низу. С доской сборки на широком экране — две колонки во всю высоту окна,
+   лента прокручивается сама. */
 
 .dpage,
 .cabinet {
-  /* Ширина колонки сообщений; по ней же выравнивается шапка страницы над чатом без доски. */
-  --chat-col: 760px;
+  /* Колонка текста: сообщения, приветствие, поле ввода; по ней же выравнивается шапка чата без доски. */
+  --chat-text: 900px;
+  /* Карточки на согласование с таблицами, картинками и объявлениями — во всю ширину ленты. */
+  --chat-wide: 100%;
 }
 
 .dpage:has(.chat--solo) > .dhead {
   width: 100%;
-  max-width: var(--chat-col);
+  max-width: var(--chat-text);
   margin-inline: auto;
+}
+
+/* h1 — название чата: длинное режем на второй строке (целиком оно в списке «Все чаты»). */
+.dpage:has(.chat) > .dhead h1 {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow-wrap: anywhere;
+}
+
+.dhead__back .chat__crumb {
+  color: var(--muted);
 }
 
 .chat {
@@ -34,18 +50,17 @@
   min-height: calc(100dvh - var(--chat-top, 160px));
 }
 
-.chat__thread,
 .chat__hello,
 .chat__foot,
 .chat__intro {
   width: 100%;
-  max-width: var(--chat-col);
+  max-width: var(--chat-text);
   margin-inline: auto;
 }
 
 .ui-notice.chat__wide {
   width: 100%;
-  max-width: var(--chat-col);
+  max-width: var(--chat-text);
   margin: 0 auto 16px;
 }
 
@@ -57,11 +72,39 @@
   display: flex;
   flex-direction: column;
   gap: 22px;
+  width: 100%;
+  max-width: var(--chat-wide);
+  margin-inline: auto;
   padding: 8px 0 20px;
 }
 
+/* Всё в ленте — в колонке текста по центру; шире неё только ответ ИИ, а в нём — карточки с таблицей,
+   картинками или объявлениями (этапы на согласование, «было → станет», выбор строк). */
+.chat__thread > *,
+.msg--ai:not(.msg--thinking) > * {
+  width: 100%;
+  max-width: var(--chat-text);
+  margin-inline: auto;
+}
+
+.chat__thread > .msg--ai:not(.msg--thinking),
+.msg--ai > .ai-items,
+.msg--ai > .action-card:has(.ai-changes, .ai-picks) {
+  max-width: var(--chat-wide);
+}
+
+/* Текст внутри широкой карточки — строками для чтения, а не во всю ширину. */
+.action-card .action-card__summary,
+.action-card .ai-ask__lead {
+  max-width: 80ch;
+}
+
+.action-card .ai-input {
+  max-width: var(--chat-text);
+}
+
 .chat__thread > .ui-notice {
-  margin: 0;
+  margin-block: 0;
 }
 
 .chat__loading {
@@ -114,27 +157,30 @@
   margin-top: 18px;
 }
 
+/* Подсказки — ровной сеткой во всю колонку текста: неполный последний ряд прижат влево, а не по центру. */
 .starters {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: center;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
   gap: 8px;
 }
 
 .starter {
   appearance: none;
-  display: inline-flex;
+  display: flex;
   align-items: center;
-  gap: 6px;
-  height: 34px;
-  padding: 0 14px;
+  gap: 8px;
+  min-width: 0;
+  min-height: 44px;
+  padding: 8px 14px;
   border: 1px solid var(--line);
-  border-radius: var(--pill);
+  border-radius: 12px;
   background: var(--surface);
   color: var(--ink-2);
   font: inherit;
   font-size: 14px;
   font-weight: 600;
+  line-height: 1.3;
+  text-align: left;
   cursor: pointer;
   transition: border-color 0.15s ease, color 0.15s ease, opacity 0.15s ease;
 }
@@ -185,6 +231,11 @@
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 10px;
+}
+
+/* Нечётная последняя карточка — во всю строку, без дыры справа. */
+.chat__signals > :last-child:nth-child(odd) {
+  grid-column: 1 / -1;
 }
 
 .quick-action {
@@ -314,7 +365,7 @@
 .msg__meta {
   display: flex;
   flex-wrap: wrap;
-  margin: -6px 0 0;
+  margin-top: -6px;
   color: var(--faint);
   font-size: 12px;
 }
@@ -416,12 +467,16 @@
   margin-top: 6px;
 }
 
+.chat__thread > .chat-note {
+  width: auto;
+}
+
 .chat-note {
   display: inline-flex;
   align-items: center;
   align-self: center;
   gap: 6px;
-  margin: 0;
+  margin-block: 0;
   padding: 5px 12px;
   border-radius: var(--pill);
   background: var(--surface-2);
@@ -721,6 +776,265 @@
 
 .board-plaque.is-error {
   background: var(--danger-soft);
+}
+
+/* ---------- Картинки на согласование (AiImageGallery): группы, галочка в углу, крупный просмотр ---------- */
+
+.ai-gallery {
+  display: grid;
+  gap: 18px;
+  margin: 2px 0 6px;
+}
+
+.ai-gallery__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 12px;
+  margin-bottom: 10px;
+}
+
+.ai-gallery__title {
+  font-size: 14.5px;
+  font-weight: 700;
+}
+
+.ai-gallery__count {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.ai-gallery__all {
+  display: inline-flex;
+  gap: 14px;
+  margin-left: auto;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+/* Не больше 5 колонок: в группе до 5 картинок (MAX_GROUP_IMAGES), на широком экране группа — одна строка,
+   а не 4 карточки и пустая половина справа. Уже 5 × 200px — колонок меньше. */
+.ai-gallery__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(max(200px, (100% - 4 * 12px) / 5), 1fr));
+  gap: 12px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* Рамка 1 px у всех, у выбранной — лаймовое кольцо 2 px. */
+.ai-gallery__card {
+  position: relative;
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--surface);
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.ai-gallery__card:not(.is-off) {
+  border-color: transparent;
+  box-shadow: 0 0 0 2px var(--lime);
+}
+
+.ai-gallery__card.is-off:hover:not(:has(input:disabled)) {
+  border-color: var(--faint);
+}
+
+.ui-check.ai-gallery__pick {
+  display: block;
+  padding: 8px 8px 10px;
+}
+
+.ai-gallery__pick .ui-check__text {
+  display: grid;
+  gap: 2px;
+  color: var(--ink);
+}
+
+/* Флажок — поверх левого верхнего угла картинки, на подложке: виден на любой картинке. */
+.ai-gallery__pick input.ui-check__box {
+  position: absolute;
+  top: 16px;
+  left: 16px;
+  z-index: 1;
+  width: 20px;
+  height: 20px;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--surface) 80%, transparent);
+}
+
+/* Решённый этап: флажков нет — выбранное видно по кольцу, снятое по бледной картинке. */
+.ai-gallery.is-readonly .ai-gallery__pick input.ui-check__box {
+  display: none;
+}
+
+.ai-gallery.is-readonly .ui-check.ai-gallery__pick {
+  cursor: default;
+}
+
+.ai-gallery__pic {
+  display: grid;
+  place-items: center;
+  aspect-ratio: 1;
+  margin-bottom: 6px;
+  overflow: hidden;
+  border-radius: 9px;
+  background: var(--surface-2);
+}
+
+/* Целиком, без обрезки: в объявлении картинка показывается вся. */
+.ai-gallery__pic img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  transition: opacity 0.15s ease;
+}
+
+.ai-gallery__none {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.ai-gallery__name {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  font-size: 13.5px;
+  font-weight: 600;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.ai-gallery__pick .ai-gallery__meta {
+  display: -webkit-box;
+  overflow: hidden;
+  margin: 0;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.ai-gallery__card.is-off .ai-gallery__pic img {
+  opacity: 0.4;
+}
+
+.ai-gallery__card.is-off .ai-gallery__name {
+  color: var(--muted);
+  text-decoration: line-through;
+}
+
+.ai-gallery__zoom {
+  appearance: none;
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--surface) 88%, transparent);
+  color: var(--ink);
+  cursor: pointer;
+}
+
+.ai-gallery__zoom:hover {
+  border-color: var(--faint);
+  background: var(--surface);
+}
+
+.ai-gallery__zoom svg {
+  width: 16px;
+  height: 16px;
+}
+
+/* Крупный просмотр: картинка целиком на подложке, стрелки по краям, ниже — откуда и почему. */
+.ai-viewer {
+  display: grid;
+  gap: 14px;
+  outline: none;
+}
+
+.ai-viewer__stage {
+  position: relative;
+  display: grid;
+  place-items: center;
+  height: min(62vh, 640px);
+  border-radius: 14px;
+  background: var(--surface-2);
+}
+
+/* Картинка во всю сцену, вписана целиком: max-height: 100% в сетке с auto-строкой не работает — 4:3 вылезала вниз. */
+.ai-viewer__stage img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.ai-viewer__nav {
+  appearance: none;
+  position: absolute;
+  top: 50%;
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  background: var(--surface);
+  color: var(--ink);
+  cursor: pointer;
+  transform: translateY(-50%);
+}
+
+.ai-viewer__nav:hover {
+  border-color: var(--faint);
+}
+
+.ai-viewer__nav--prev {
+  left: 12px;
+}
+
+.ai-viewer__nav--next {
+  right: 12px;
+}
+
+.ai-viewer__nav svg {
+  width: 20px;
+  height: 20px;
+}
+
+.ai-viewer__info {
+  display: grid;
+  justify-items: start;
+  gap: 8px;
+}
+
+.ai-viewer__meta {
+  display: flex;
+  flex-wrap: wrap;
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.ai-viewer__meta > span + span::before {
+  content: '·';
+  margin: 0 6px;
+}
+
+.ai-viewer__why {
+  margin: 0;
+  max-width: 80ch;
+  line-height: 1.5;
 }
 
 /* ---------- Низ: «Ждут решения», поле ввода, права ИИ ---------- */
@@ -1136,6 +1450,13 @@
   }
 }
 
+/* На широком экране доске (таблицы, объявления, картинки) места нужнее, чем ленте. */
+@media (min-width: 1400px) {
+  .chat--board {
+    grid-template-columns: minmax(420px, 2fr) minmax(0, 3fr);
+  }
+}
+
 @media (max-width: 1099.98px) {
   .chat--board .chat__tabs {
     display: inline-flex;
@@ -1161,6 +1482,30 @@
 @media (max-width: 640px) {
   .chat__signals {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  .starters {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .starter--main {
+    grid-column: 1 / -1;
+  }
+
+  .ai-gallery__grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+  }
+
+  .ai-gallery__all {
+    margin-left: 0;
+  }
+
+  /* Узкий экран: сцена квадратом по ширине, а не 62vh — подпись и галочка остаются на экране. */
+  .ai-viewer__stage {
+    height: auto;
+    aspect-ratio: 1;
+    max-height: 55vh;
   }
 
   .msg--user .msg__bubble {
