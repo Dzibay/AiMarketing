@@ -8,10 +8,9 @@
 
     <ol class="ai-plan__steps">
       <li v-for="s in steps" :key="s.n" class="ai-plan__step" :class="{ 'is-off': isDeclined(s) }">
-        <label v-if="action.status === 'pending'" class="ai-plan__title">
-          <input v-model="chosen" type="checkbox" :value="s.n" :disabled="disabled" />
+        <UiCheckbox v-if="action.status === 'pending'" v-model="chosen" class="check-row ai-plan__title" :value="s.n" :disabled="disabled">
           <strong>{{ s.n }}. {{ s.title }}</strong>
-        </label>
+        </UiCheckbox>
         <div v-else class="ai-plan__title">
           <strong>{{ s.n }}. {{ s.title }}</strong>
           <span v-if="action.status === 'done'" class="chip" :class="{ 'chip--ok': !isDeclined(s) }">
@@ -61,6 +60,7 @@
 <script setup>
 /** Карточка плана ИИ: шаги «было → станет → зачем»; маркетолог отмечает, какие делать. */
 import { computed, ref } from 'vue'
+import UiCheckbox from '../../components/ui/UiCheckbox.vue'
 import UiStatus from '../../components/ui/UiStatus.vue'
 
 const props = defineProps({

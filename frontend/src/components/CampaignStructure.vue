@@ -65,9 +65,12 @@
               </template>
             </small>
           </div>
-          <div class="row-actions">
-            <button class="btn btn--ghost" type="button" @click.stop="renameGroup(g)">Переименовать</button>
-            <button class="btn btn--ghost btn--danger" type="button" @click.stop="removeGroup(g)">Удалить</button>
+          <!-- Клик и Enter по меню не выбирают строку. -->
+          <div class="row-actions" @click.stop @keydown.stop>
+            <UiMenu size="sm" :label="`Действия с группой «${g.name}»`">
+              <UiMenuItem :icon="Pencil" @click="renameGroup(g)">Переименовать</UiMenuItem>
+              <UiMenuItem :icon="Trash2" danger @click="removeGroup(g)">Удалить</UiMenuItem>
+            </UiMenu>
           </div>
         </div>
       </div>
@@ -98,14 +101,13 @@
         <button class="btn btn--ghost" type="button" :disabled="busy" @click="adAction('resume')">Запустить</button>
         <button class="btn btn--ghost" type="button" :disabled="busy" @click="adAction('unarchive')">Из архива</button>
         <button class="btn btn--ghost" type="button" :disabled="busy" @click="adAction('archive')">В архив</button>
-        <button class="btn btn--ghost btn--danger" type="button" :disabled="busy" @click="adAction('delete')">
+        <button class="btn btn--ghost" type="button" :disabled="busy" @click="adAction('delete')">
           Удалить
         </button>
       </div>
       <div v-if="filteredAds.length" class="list">
         <div v-for="ad in filteredAds" :key="ad.id" class="list-row">
-          <label class="check-row">
-            <input type="checkbox" :checked="selectedAds.has(ad.id)" @change="toggle(selectedAds, ad.id, $event.target.checked)" />
+          <UiCheckbox class="check-row" :checked="selectedAds.has(ad.id)" @change="toggle(selectedAds, ad.id, $event.target.checked)">
             <div class="ad-preview">
               <strong>{{ ad.title }}<template v-if="ad.title2"> — {{ ad.title2 }}</template></strong>
               <span>{{ ad.text }}</span>
@@ -115,7 +117,7 @@
                 {{ CAMPAIGN_STATUSES[ad.status] || ad.status || '—' }} · {{ ad.adgroup_name }}
               </small>
             </div>
-          </label>
+          </UiCheckbox>
           <button class="btn btn--ghost" type="button" @click="openAdForm(ad)">Изменить</button>
         </div>
       </div>
@@ -135,10 +137,7 @@
       <form class="form-grid" @submit.prevent="createKeywords">
         <div v-field class="field">
           <label>Группа</label>
-          <select v-model="kwForm.adgroup_row_id" required>
-            <option value="">Выберите</option>
-            <option v-for="g in adgroups" :key="g.id" :value="String(g.id)">{{ g.name }}</option>
-          </select>
+          <UiSelect v-model="kwForm.adgroup_row_id" :options="adgroupOptions" required />
         </div>
         <div v-if="!autoBids" v-field class="field">
           <label>Ставка, ₽</label>
@@ -156,7 +155,7 @@
         <span>Выбрано: {{ selectedKeywords.size }}</span>
         <button class="btn btn--ghost" type="button" :disabled="busy" @click="keywordAction('suspend')">Остановить</button>
         <button class="btn btn--ghost" type="button" :disabled="busy" @click="keywordAction('resume')">Запустить</button>
-        <button class="btn btn--ghost btn--danger" type="button" :disabled="busy" @click="keywordAction('delete')">
+        <button class="btn btn--ghost" type="button" :disabled="busy" @click="keywordAction('delete')">
           Удалить
         </button>
       </div>
@@ -165,9 +164,9 @@
           <thead>
             <tr>
               <th class="check-col">
-                <input
-                  type="checkbox"
-                  :checked="filteredKeywords.every((k) => selectedKeywords.has(k.id))"
+                <UiCheckbox
+                  :checked="allIn(selectedKeywords, filteredKeywords)"
+                  :indeterminate="someIn(selectedKeywords, filteredKeywords)"
                   aria-label="Выбрать все"
                   @change="toggleAll(selectedKeywords, filteredKeywords, $event.target.checked)"
                 />
@@ -185,8 +184,7 @@
           <tbody>
             <tr v-for="kw in filteredKeywords" :key="kw.id" :class="{ 'is-off': kw.state && kw.state !== 'ON' }">
               <td class="check-col">
-                <input
-                  type="checkbox"
+                <UiCheckbox
                   :checked="selectedKeywords.has(kw.id)"
                   :aria-label="`Выбрать фразу «${kw.keyword}»`"
                   @change="toggle(selectedKeywords, kw.id, $event.target.checked)"
@@ -196,8 +194,8 @@
                 {{ kw.keyword }}
                 <small class="cell-note">{{ kw.adgroup_name }}</small>
               </td>
-              <td :title="keywordState(kw).hint">{{ keywordState(kw).text }}</td>
-              <td class="num" :title="autoBids ? 'Автостратегия: ставки фраз назначает Директ' : ''">
+              <td v-tip="keywordState(kw).hint">{{ keywordState(kw).text }}</td>
+              <td class="num" v-tip="autoBids ? 'Автостратегия: ставки фраз назначает Директ' : ''">
                 {{ autoBids ? 'авто' : kw.bid_rub != null ? rubles(kw.bid_rub, 2) : '—' }}
               </td>
               <td class="num">{{ num(kw.period_clicks) }}</td>
@@ -253,10 +251,7 @@
           <label>Мин. расход, ₽</label>
           <input v-model="searchForm.min_cost_rub" type="number" min="0" step="1" placeholder="0" />
         </div>
-        <label class="check-row">
-          <input v-model="searchForm.no_conversions" type="checkbox" />
-          Только без конверсий
-        </label>
+        <UiCheckbox v-model="searchForm.no_conversions" class="check-row">Только без конверсий</UiCheckbox>
         <button class="btn btn--ghost" type="submit" :disabled="busy">Показать</button>
       </form>
 
@@ -277,9 +272,9 @@
           <thead>
             <tr>
               <th class="check-col">
-                <input
-                  type="checkbox"
-                  :checked="searchQueries.every((q) => selectedQueries.has(q.id))"
+                <UiCheckbox
+                  :checked="allIn(selectedQueries, searchQueries)"
+                  :indeterminate="someIn(selectedQueries, searchQueries)"
                   aria-label="Выбрать все"
                   @change="toggleAll(selectedQueries, searchQueries, $event.target.checked)"
                 />
@@ -295,8 +290,7 @@
           <tbody>
             <tr v-for="q in searchQueries" :key="q.id">
               <td class="check-col">
-                <input
-                  type="checkbox"
+                <UiCheckbox
                   :checked="selectedQueries.has(q.id)"
                   :aria-label="`Выбрать запрос «${q.query}»`"
                   @change="toggle(selectedQueries, q.id, $event.target.checked)"
@@ -332,10 +326,7 @@
       <form id="ad-form" class="form-grid" @submit.prevent="saveAd">
         <div v-if="!adModal.item" v-field class="field field--wide">
           <label>Группа</label>
-          <select v-model="adForm.adgroup_row_id" required>
-            <option value="">Выберите</option>
-            <option v-for="g in adgroups" :key="g.id" :value="String(g.id)">{{ g.name }}</option>
-          </select>
+          <UiSelect v-model="adForm.adgroup_row_id" :options="adgroupOptions" required />
         </div>
         <div v-field class="field field--wide">
           <label>Заголовок 1 <span class="field-hint">{{ adForm.title.length }}/56</span></label>
@@ -395,13 +386,17 @@
 import { askConfirm, askText } from '../composables/useConfirm'
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import Modal from './ui/Modal.vue'
+import UiCheckbox from './ui/UiCheckbox.vue'
+import UiMenu from './ui/UiMenu.vue'
+import UiMenuItem from './ui/UiMenuItem.vue'
+import UiSelect from './ui/UiSelect.vue'
 import AdExtrasFields from './AdExtrasFields.vue'
 import { emptyExtras, extrasDiff, extrasEmpty, extrasFromApi, extrasPayload, extrasProblem } from '../utils/adExtras'
 import { errorText, jobProgressText, webApi, wsApi } from '../api/web'
 import { pushToast } from '../composables/useToasts'
 import { undoAction } from '../composables/useUndo'
 import { CAMPAIGN_STATES, CAMPAIGN_STATUSES, formatDate, formatDateTime, num, rub, rubles } from '../utils/format'
-import { Plus } from '@lucide/vue'
+import { Pencil, Plus, Trash2 } from '@lucide/vue'
 
 const props = defineProps({
   workspaceId: { type: Number, required: true },
@@ -411,6 +406,7 @@ const emit = defineEmits(['loaded'])
 
 const campaign = ref(null)
 const adgroups = ref([])
+const adgroupOptions = computed(() => adgroups.value.map((g) => ({ value: String(g.id), label: g.name })))
 const ads = ref([])
 const keywords = ref([])
 const searchQueries = ref([])
@@ -518,6 +514,15 @@ function toggle(setRef, id, on) {
   if (setRef === selectedAds.value) selectedAds.value = next
   else if (setRef === selectedKeywords.value) selectedKeywords.value = next
   else selectedQueries.value = next
+}
+
+function allIn(set, rows) {
+  return rows.length > 0 && rows.every((r) => set.has(r.id))
+}
+
+/** «Выбраны не все» — для черты во флажке «Выбрать все». */
+function someIn(set, rows) {
+  return rows.some((r) => set.has(r.id)) && !allIn(set, rows)
 }
 
 function toggleAll(setRef, rows, on) {

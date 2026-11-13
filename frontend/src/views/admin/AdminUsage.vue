@@ -2,9 +2,14 @@
   <section class="panel">
     <div class="panel__head">
       <h2>Расход сервиса</h2>
-      <select v-if="data && data.months.length > 1" :value="data.month" :disabled="busy" aria-label="Месяц" @change="load($event.target.value)">
-        <option v-for="m in data.months" :key="m" :value="m">{{ monthLabel(m) }}</option>
-      </select>
+      <UiSelect
+        v-if="data && data.months.length > 1"
+        :model-value="data.month"
+        :options="data.months.map((m) => ({ value: m, label: monthLabel(m) }))"
+        :disabled="busy"
+        aria-label="Месяц"
+        @change="load"
+      />
     </div>
     <p class="hint">
       Единицы — списано с лимитов пользователей. Себестоимость — сколько это стоило сервису по ценам, заданным в «ИИ и
@@ -84,6 +89,7 @@
 
 <script setup>
 import { onMounted, ref } from 'vue'
+import UiSelect from '../../components/ui/UiSelect.vue'
 import { adminApi } from '../../api/admin'
 import { errorText } from '../../api/web'
 import { pushToast } from '../../composables/useToasts'

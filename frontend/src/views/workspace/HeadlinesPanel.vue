@@ -18,10 +18,7 @@
         <small class="hint">— загрузить CSV или XLSX с колонками «Заголовок», «Клики», «Конверсии»…</small>
       </summary>
       <form class="hl-upload__form" @submit.prevent="upload">
-        <select v-model="uploadCampaign" aria-label="Кампания отчёта">
-          <option :value="null">Кампании — из колонки «№ кампании» или все</option>
-          <option v-for="c in campaigns" :key="c.campaign_row_id" :value="c.campaign_row_id">{{ c.name }}</option>
-        </select>
+        <UiSelect v-model="uploadCampaign" :options="campaignOptions" aria-label="Кампания отчёта" />
         <input ref="fileInput" type="file" accept=".csv,.xlsx,.txt" aria-label="Файл отчёта" @change="file = $event.target.files[0] || null" />
         <button class="btn btn--ghost" type="submit" :disabled="!file || uploading">
           {{ uploading ? 'Загружаем…' : 'Загрузить' }}
@@ -69,7 +66,7 @@
               <td class="num">{{ h.rank }}</td>
               <td class="hl-title">
                 {{ h.title }}
-                <span v-if="!h.enough" class="chip" title="Меньше 3 конверсий и 100 кликов">мало данных</span>
+                <span v-if="!h.enough" class="chip" v-tip="'Меньше 3 конверсий и 100 кликов'">мало данных</span>
                 <span v-if="h.sources.includes('report')" class="chip">отчёт</span>
                 <small v-if="h.ads.length" class="cell-note">
                   {{ h.ads.length }} {{ plural(h.ads.length, 'объявление', 'объявления', 'объявлений') }}:
@@ -122,6 +119,7 @@ import { readFileBase64 } from '../../utils/adExtras'
 import { formatDateTime, num, pct, plural, rub } from '../../utils/format'
 import { useWs } from './context'
 import TermHint from '../../components/TermHint.vue'
+import UiSelect from '../../components/ui/UiSelect.vue'
 
 const props = defineProps({
   // report.headlines из отчёта по объявлениям: {headlines, mixed}; null — отчёт ещё не строили.
@@ -137,6 +135,10 @@ const { ws } = useWs()
 
 const reports = ref([])
 const uploadCampaign = ref(null)
+const campaignOptions = computed(() => [
+  { value: null, label: 'Кампании — из колонки «№ кампании» или все' },
+  ...props.campaigns.map((c) => ({ value: c.campaign_row_id, label: c.name })),
+])
 const file = ref(null)
 const fileInput = ref(null)
 const uploading = ref(false)
@@ -225,7 +227,6 @@ onMounted(loadReports)
   margin: 8px 0;
 }
 /* Длинные названия кампаний не должны раздвигать форму шире экрана телефона. */
-.hl-upload__form select,
 .hl-upload__form input {
   min-width: 0;
   max-width: 100%;

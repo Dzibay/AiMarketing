@@ -137,6 +137,7 @@
 /* ---------- Выпадающий список ---------- */
 
 .ui-select {
+  position: relative;
   display: inline-flex;
   min-width: 0;
   max-width: 100%;
@@ -196,6 +197,29 @@
   cursor: not-allowed;
 }
 
+/* Обязательный список без выбора после попытки отправить форму. */
+.ui-select.is-invalid .ui-select__btn {
+  border-color: var(--danger);
+}
+
+/* Невидимое поле обязательного списка: лежит под кнопкой, чтобы сообщение браузера показывалось у неё. */
+.ui-select__native {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.ui-select:has(.ui-select__native:focus) .ui-select__btn {
+  border-color: var(--ink);
+}
+
 .ui-select--sm .ui-select__btn {
   height: 32px;
   padding: 0 8px 0 11px;
@@ -227,11 +251,86 @@
   transform: rotate(180deg);
 }
 
-.ui-select__list {
+.ui-select__pop {
+  display: flex;
+  flex-direction: column;
   max-width: min(420px, calc(100vw - 16px));
-  max-height: min(320px, 60vh);
+  max-height: min(360px, 60vh);
+}
+
+.ui-select__search {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 8px;
+  height: 36px;
+  margin: 0 0 6px;
+  padding: 0 10px;
+  border: 1px solid var(--line-2);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--faint);
+}
+
+.ui-select__search:focus-within {
+  border-color: var(--ink);
+}
+
+.ui-select__search svg {
+  flex: none;
+  width: 16px;
+  height: 16px;
+}
+
+.ui-select__search input {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  outline: 0;
+  background: none;
+  box-shadow: none;
+  color: var(--ink);
+  font: inherit;
+  font-size: 14px;
+}
+
+.ui-select__list {
+  flex: 1 1 auto;
+  min-height: 0;
+  margin: 0;
+  padding: 0;
   overflow-y: auto;
   list-style: none;
+  overscroll-behavior: contain;
+}
+
+.ui-select__list:focus {
+  outline: none;
+}
+
+.ui-select__sub {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ui-select__sec + .ui-select__sec {
+  margin-top: 4px;
+}
+
+.ui-select__group {
+  margin: 6px 10px 2px;
+  color: var(--faint);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.ui-select__empty {
+  margin: 6px 10px 8px;
+  color: var(--muted);
+  font-size: 13px;
 }
 
 .ui-select__opt {
@@ -275,6 +374,589 @@
   flex: none;
   width: 16px;
   height: 16px;
+}
+
+/* ---------- Календарь, период и дата (UiCalendar, UiDateRange, UiDatePicker) ---------- */
+
+/* Затемнение под панелью снизу на телефоне. */
+.ui-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 74;
+  background: var(--overlay);
+}
+
+/* Телефон: панель выезжает снизу во всю ширину. */
+.ui-pop.is-sheet {
+  top: auto;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  width: 100%;
+  max-width: none;
+  max-height: 88vh;
+  overflow-y: auto;
+  padding-bottom: env(safe-area-inset-bottom);
+  border-width: 1px 0 0;
+  border-radius: 18px 18px 0 0;
+}
+
+.ui-cal {
+  display: flex;
+  gap: 24px;
+}
+
+.ui-cal__month {
+  width: 252px;
+}
+
+.ui-cal__head {
+  display: grid;
+  grid-template-columns: 32px 1fr 32px;
+  align-items: center;
+  margin-bottom: 4px;
+}
+
+.ui-cal__title {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 700;
+  text-align: center;
+}
+
+.ui-cal__arrow {
+  appearance: none;
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.ui-cal__arrow:hover:not(:disabled) {
+  background: var(--surface-2);
+  color: var(--ink);
+}
+
+.ui-cal__arrow:disabled {
+  color: var(--line-2);
+  cursor: default;
+}
+
+.ui-cal__arrow svg {
+  width: 18px;
+  height: 18px;
+}
+
+.ui-cal__grid {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+}
+
+.ui-cal__grid th {
+  height: 28px;
+  padding: 0;
+  color: var(--faint);
+  font-size: 12px;
+  font-weight: 600;
+  text-align: center;
+}
+
+.ui-cal__grid td {
+  height: 36px;
+  padding: 1px 0;
+}
+
+.ui-cal__day {
+  appearance: none;
+  position: relative;
+  display: block;
+  width: 100%;
+  height: 34px;
+  padding: 0;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: 13.5px;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+}
+
+.ui-cal__day:hover:not(.is-off) {
+  background: var(--surface-2);
+}
+
+.ui-cal__day:focus-visible {
+  z-index: 1;
+  outline: 2px solid var(--ink);
+  outline-offset: 1px;
+}
+
+/* Сегодня — точка под числом. */
+.ui-cal__day.is-today {
+  font-weight: 800;
+}
+
+.ui-cal__day.is-today::after {
+  content: '';
+  position: absolute;
+  bottom: 4px;
+  left: 50%;
+  width: 4px;
+  height: 4px;
+  margin-left: -2px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.ui-cal__day.is-off {
+  color: var(--line-2);
+  cursor: default;
+}
+
+/* Период: полоса от первого дня до последнего, края — цветом кнопки. */
+.ui-cal__day.is-in,
+.ui-cal__day.is-in:hover:not(.is-off) {
+  border-radius: 0;
+  background: var(--surface-3);
+}
+
+.ui-cal__day.is-in.is-start {
+  border-radius: 9px 0 0 9px;
+}
+
+.ui-cal__day.is-in.is-end {
+  border-radius: 0 9px 9px 0;
+}
+
+.ui-cal__day.is-start,
+.ui-cal__day.is-end,
+.ui-cal__day.is-start:hover:not(.is-off),
+.ui-cal__day.is-end:hover:not(.is-off) {
+  background: var(--accent);
+  color: var(--on-accent);
+  font-weight: 700;
+}
+
+/* Пока выбран только первый день, полоса до курсора бледнее: период ещё не выбран. */
+.ui-cal__day.is-preview.is-in:not(.is-start):not(.is-end) {
+  background: var(--accent-soft);
+}
+
+/* Период отчёта: кнопка в строке над отчётом и подсказка «?» рядом. */
+.drange {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.drange__btn {
+  gap: 8px;
+  padding-left: 12px;
+}
+
+.drange__icon {
+  flex: none;
+  width: 17px;
+  height: 17px;
+  color: var(--muted);
+}
+
+.drange__dates {
+  color: var(--muted);
+  font-weight: 500;
+}
+
+.drp {
+  display: flex;
+  padding: 0;
+}
+
+.drp__presets {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 148px;
+  padding: 10px;
+  border-right: 1px solid var(--line);
+}
+
+.drp__preset {
+  appearance: none;
+  height: 34px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: 13.5px;
+  font-weight: 500;
+  text-align: left;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.drp__preset:hover {
+  background: var(--surface-2);
+}
+
+.drp__preset:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: -2px;
+}
+
+.drp__preset.is-current {
+  background: var(--surface-3);
+  font-weight: 700;
+}
+
+.drp__main {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 14px;
+}
+
+.drp__foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+}
+
+.drp__hint {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+/* На телефоне быстрые периоды — строкой сверху, календарь на всю ширину. */
+.drp.is-sheet {
+  flex-direction: column;
+}
+
+.drp.is-sheet .drp__presets {
+  flex-direction: row;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 12px;
+  border-right: 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.drp.is-sheet .drp__preset {
+  height: 36px;
+  border: 1px solid var(--line);
+  border-radius: var(--pill);
+}
+
+.drp.is-sheet .drp__preset.is-current {
+  border-color: var(--ink);
+}
+
+.ui-pop.is-sheet .ui-cal__month {
+  width: 100%;
+}
+
+.ui-pop.is-sheet .ui-cal__grid td {
+  height: 44px;
+}
+
+.ui-pop.is-sheet .ui-cal__day {
+  height: 42px;
+  font-size: 15px;
+}
+
+/* Одна дата: поле в форме. */
+.ui-date__icon {
+  flex: none;
+  width: 17px;
+  height: 17px;
+  color: var(--muted);
+}
+
+.ui-date__pop {
+  padding: 12px 14px;
+}
+
+.ui-date__pop.is-sheet {
+  padding: 14px 14px calc(14px + env(safe-area-inset-bottom));
+}
+
+.ui-date__foot {
+  margin-top: 8px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+}
+
+.ui-date__clear {
+  width: 100%;
+}
+
+.ui-date__clear.is-current {
+  border-color: var(--ink);
+}
+
+/* ---------- Подсказка (v-tip, TermHint) ---------- */
+/* Тёмная плашка в светлой теме и светлая в тёмной — не путается с панелями и меню. */
+.ui-tip {
+  position: fixed;
+  z-index: 1000;
+  width: max-content;
+  max-width: min(280px, calc(100vw - 16px));
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: var(--ink);
+  color: var(--surface);
+  box-shadow: var(--shadow-pop);
+  font-size: 12.5px;
+  font-weight: 500;
+  line-height: 1.4;
+  text-align: left;
+  text-transform: none;
+  letter-spacing: normal;
+  white-space: normal;
+  overflow-wrap: break-word;
+  pointer-events: none;
+  animation: ui-tip-in 0.12s ease-out;
+}
+
+.ui-tip.is-rich {
+  padding: 9px 12px;
+  font-weight: 400;
+}
+
+.ui-tip strong {
+  display: block;
+  margin-bottom: 2px;
+  font-weight: 700;
+}
+
+@keyframes ui-tip-in {
+  from {
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ui-tip {
+    animation: none;
+  }
+}
+
+/* ---------- Флажок и переключатель (UiCheckbox, UiSwitch) ---------- */
+/* Внутри настоящий input type=checkbox с appearance: none — вид одинаковый в любом браузере и теме. */
+
+.ui-check,
+.ui-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 500;
+  vertical-align: middle;
+  cursor: pointer;
+  user-select: none;
+}
+
+/* Подпись флажка внутри .field — обычный текст, а не заголовок поля. */
+.field label.ui-check,
+.field label.ui-switch {
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 500;
+}
+
+/* Подпись в две строки (с пояснением <small>) — флажок по первой строке, а не по центру. */
+.ui-check:has(.ui-check__text small),
+.ui-switch:has(.ui-switch__text small) {
+  align-items: flex-start;
+}
+
+.ui-check:has(.ui-check__text small) .ui-check__box {
+  margin-top: 1px;
+}
+
+/* .check-row — флажок с подписью отдельной строкой (в обычном потоке, а не в ряд с соседними). */
+.ui-check.check-row,
+.ui-switch.check-row {
+  display: flex;
+}
+
+/* :has — ещё и для флажков внутри fieldset disabled, где сам компонент о блокировке не знает. */
+.ui-check.is-disabled,
+.ui-switch.is-disabled,
+.ui-check:has(> input:disabled),
+.ui-switch:has(> input:disabled) {
+  cursor: not-allowed;
+}
+
+.ui-check:has(> input:disabled) .ui-check__text {
+  color: var(--muted);
+}
+
+.ui-check__text,
+.ui-switch__text {
+  min-width: 0;
+}
+
+.ui-check__text small,
+.ui-switch__text small {
+  display: block;
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 12.5px;
+  font-weight: 400;
+}
+
+.ui-check input.ui-check__box {
+  appearance: none;
+  display: inline-grid;
+  flex: none;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  padding: 0;
+  border: 1.5px solid var(--faint);
+  border-radius: 5px;
+  background: var(--surface);
+  cursor: inherit;
+  transition:
+    background-color 0.12s ease,
+    border-color 0.12s ease;
+}
+
+/* Галочка — уголок из двух сторон рамки, «выбраны не все» — черта. */
+.ui-check input.ui-check__box::after {
+  content: '';
+  width: 9px;
+  height: 5px;
+  margin-top: -2px;
+  border: solid var(--on-accent);
+  border-width: 0 0 2px 2px;
+  opacity: 0;
+  transform: rotate(-45deg);
+}
+
+.ui-check input.ui-check__box:indeterminate::after {
+  width: 8px;
+  height: 0;
+  margin-top: 0;
+  border-width: 0 0 2px;
+  transform: none;
+}
+
+.ui-check:hover input.ui-check__box:not(:disabled, :checked, :indeterminate) {
+  border-color: var(--ink);
+}
+
+.ui-check input.ui-check__box:checked,
+.ui-check input.ui-check__box:indeterminate {
+  border-color: var(--accent);
+  background: var(--accent);
+}
+
+.ui-check input.ui-check__box:checked::after,
+.ui-check input.ui-check__box:indeterminate::after {
+  opacity: 1;
+}
+
+.ui-check input.ui-check__box:disabled {
+  border-color: var(--line-2);
+  background: var(--surface-2);
+}
+
+.ui-check input.ui-check__box:disabled:checked,
+.ui-check input.ui-check__box:disabled:indeterminate {
+  background: var(--surface-3);
+}
+
+.ui-check input.ui-check__box:disabled::after {
+  border-color: var(--faint);
+}
+
+.ui-check input.ui-check__box:focus-visible,
+.ui-switch input.ui-switch__input:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: 2px;
+}
+
+.ui-switch input.ui-switch__input {
+  appearance: none;
+  position: relative;
+  flex: none;
+  width: 36px;
+  height: 20px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: var(--pill);
+  background: var(--faint);
+  cursor: inherit;
+  transition: background-color 0.15s ease;
+}
+
+.ui-switch input.ui-switch__input::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
+  transition: transform 0.15s ease;
+}
+
+.ui-switch input.ui-switch__input:checked {
+  background: var(--ok);
+}
+
+.ui-switch input.ui-switch__input:checked::after {
+  transform: translateX(16px);
+}
+
+/* Неактивный переключатель бледнее, но положение «вкл/выкл» по-прежнему видно. */
+.ui-switch input.ui-switch__input:disabled {
+  opacity: 0.5;
+}
+
+/* В ячейке таблицы флажок по центру колонки. */
+.check-col .ui-check {
+  justify-content: center;
+}
+
+@media (pointer: coarse) {
+  .ui-check input.ui-check__box {
+    width: 20px;
+    height: 20px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ui-check input.ui-check__box,
+  .ui-switch input.ui-switch__input,
+  .ui-switch input.ui-switch__input::after {
+    transition: none;
+  }
 }
 
 /* ---------- Поле для денег и чисел ---------- */

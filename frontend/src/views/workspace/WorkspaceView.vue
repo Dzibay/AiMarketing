@@ -38,13 +38,13 @@
       <RouterLink :to="`/w/${ws.id}/campaigns`">
         {{ ws.campaigns_count }} {{ plural(ws.campaigns_count, 'кампания', 'кампании', 'кампаний') }}
       </RouterLink>
-      <RouterLink v-if="ws.kpi_type" :to="settingsPath" title="Изменить цель в настройках проекта">
+      <RouterLink v-if="ws.kpi_type" :to="settingsPath" v-tip="'Изменить цель в настройках проекта'">
         {{ expert ? `KPI: ${ws.kpi_type === 'cpa' ? 'CPA' : 'ДРР'}` : KPI_PLAIN[ws.kpi_type] }}
         <template v-if="ws.kpi_target != null">
           {{ expert ? '≤' : 'до' }} {{ ws.kpi_type === 'cpa' ? rubles(ws.kpi_target) : pct(ws.kpi_target) }}
         </template>
       </RouterLink>
-      <RouterLink v-if="ws.goal_name" :to="settingsPath" title="Изменить цель в настройках проекта">
+      <RouterLink v-if="ws.goal_name" :to="settingsPath" v-tip="'Изменить цель в настройках проекта'">
         цель «{{ ws.goal_name }}»
       </RouterLink>
       <span v-if="expert" class="ws-meta__minor">счётчик № {{ ws.counter_id }}</span>

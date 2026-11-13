@@ -11,10 +11,9 @@
       расход пишется в «Расход ИИ» без пользователя.
     </p>
     <form class="form-grid" @submit.prevent="save">
-      <label class="check-row">
-        <input v-model="form.enabled" type="checkbox" />
-        <span>Включена — форма в первом экране лендинга проверяет сайт по-настоящему</span>
-      </label>
+      <UiCheckbox v-model="form.enabled" class="check-row">
+        Включена — форма в первом экране лендинга проверяет сайт по-настоящему
+      </UiCheckbox>
       <div v-field class="field">
         <label>Модель</label>
         <input v-model.trim="form.model" type="text" :placeholder="data.class_model || 'модель класса'" autocomplete="off" />
@@ -61,6 +60,7 @@
 
 <script setup>
 import { onMounted, reactive, ref } from 'vue'
+import UiCheckbox from '../../components/ui/UiCheckbox.vue'
 import { adminApi } from '../../api/admin'
 import { errorText } from '../../api/web'
 import { pushToast } from '../../composables/useToasts'

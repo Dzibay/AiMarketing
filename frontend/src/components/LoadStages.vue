@@ -1,6 +1,6 @@
 <template>
   <ul class="load-stages">
-    <li v-for="s in stages" :key="s.key" class="load-stage" :class="`is-${kind(s)}`" :title="hint(s)">
+    <li v-for="s in stages" :key="s.key" class="load-stage" :class="`is-${kind(s)}`" v-tip="hint(s)">
       <span class="load-stage__icon" aria-hidden="true">
         <span v-if="kind(s) === 'running'" class="spinner"></span>
         <template v-else>{{ ICONS[kind(s)] }}</template>

@@ -24,7 +24,7 @@
         class="btn btn--ghost"
         type="button"
         :disabled="syncing"
-        :title="syncedAgo ? `Данные из Директа обновлены ${syncedAgo}` : 'Обновить кампании из Директа'"
+        v-tip="syncedAgo ? `Данные из Директа обновлены ${syncedAgo}` : 'Обновить кампании из Директа'"
         @click="syncCampaigns"
       >
         <RefreshCw :class="{ spin: syncing }" aria-hidden="true" />
@@ -175,10 +175,7 @@
         <label>Изменить бюджет на, % (минус — уменьшить)</label>
         <input v-model.number="budgetModal.pct" type="number" min="-90" max="500" step="1" required />
       </div>
-      <label class="check-row field--wide">
-        <input v-model="budgetModal.target" type="checkbox" />
-        Изменить цену цели стратегии (CPA или CPC)
-      </label>
+      <UiCheckbox v-model="budgetModal.target" class="check-row field--wide">Изменить цену цели стратегии (CPA или CPC)</UiCheckbox>
       <div v-if="budgetModal.target" v-field class="field field--wide">
         <label>Цена цели, % (минус — снизить)</label>
         <input v-model.number="budgetModal.targetPct" type="number" min="-90" max="500" step="1" required />
@@ -207,6 +204,7 @@ import { Archive, ArchiveRestore, CloudOff, Copy, Megaphone, Pause, Play, Plus, 
 import Modal from '../../components/ui/Modal.vue'
 import EmptyState from '../../components/ui/EmptyState.vue'
 import PageHeader from '../../components/ui/PageHeader.vue'
+import UiCheckbox from '../../components/ui/UiCheckbox.vue'
 import UiMenu from '../../components/ui/UiMenu.vue'
 import UiMenuItem from '../../components/ui/UiMenuItem.vue'
 import UiNotice from '../../components/ui/UiNotice.vue'

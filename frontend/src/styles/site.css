@@ -48,7 +48,6 @@ a {
 
 button,
 input,
-select,
 textarea {
   font: inherit;
   color: inherit;
@@ -175,12 +174,6 @@ textarea {
 
 .btn:active {
   transform: translateY(1px);
-}
-
-.btn:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-  transform: none;
 }
 
 .btn svg {
@@ -349,7 +342,7 @@ textarea {
   font-weight: 520;
 }
 
-.field input {
+.field input:where(:not([type='checkbox'], [type='radio'])) {
   border: 1px solid var(--line-2);
   border-radius: var(--radius);
   padding: 0.74rem 0.9rem;
@@ -358,7 +351,7 @@ textarea {
   transition: border-color 0.15s ease, box-shadow 0.15s ease;
 }
 
-.field input:focus {
+.field input:where(:not([type='checkbox'], [type='radio'])):focus {
   outline: none;
   border-color: var(--accent);
   box-shadow: 0 0 0 4px var(--accent-soft);
@@ -616,8 +609,9 @@ button.stat-card[aria-pressed='true'] {
   gap: 0.5rem;
 }
 
-.admin-override select {
+.field .admin-override .ui-select {
   flex: 1 1 auto;
+  width: auto;
   min-width: 0;
 }
 
@@ -735,8 +729,6 @@ button.stat-card[aria-pressed='true'] {
   flex: 1 1 280px;
 }
 
-.filters select,
-.row-actions select,
 .filters input[type='text'],
 .filters input[type='search'],
 .filters input[type='date'],
@@ -754,8 +746,6 @@ button.stat-card[aria-pressed='true'] {
   border-radius: var(--radius);
 }
 
-.filters select:focus,
-.row-actions select:focus,
 .filters input:focus,
 .filters textarea:focus {
   outline: none;
@@ -847,22 +837,19 @@ button.stat-card[aria-pressed='true'] {
   flex: none;
 }
 
-input[type='checkbox'],
+/* Флажки — UiCheckbox и UiSwitch (ui.css); системными остались только переключатели-радио. */
 input[type='radio'] {
   accent-color: var(--accent);
   width: 16px;
   height: 16px;
 }
 
-/* У полей .field свой фокус через рамку, а у флажка её не видно — возвращаем кольцо. */
-.field input[type='checkbox']:focus-visible,
 .field input[type='radio']:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
 
 @media (pointer: coarse) {
-  input[type='checkbox'],
   input[type='radio'] {
     width: 20px;
     height: 20px;
@@ -1047,6 +1034,13 @@ input[type='radio'] {
 .list-row small + small {
   display: block;
   margin-top: 0.2rem;
+}
+
+/* Текст строки забирает свободное место, действия остаются справа; под текст они переносятся,
+   только когда на текст осталось меньше 16rem (узкий экран), а не из-за длинной строки. */
+.list-row > div:first-child {
+  flex: 1 1 16rem;
+  min-width: 0;
 }
 
 .row-actions {
@@ -1687,15 +1681,7 @@ a.btn {
   justify-content: center;
 }
 
-.btn--danger {
-  color: var(--danger);
-}
-
-.btn--danger:hover {
-  border-color: var(--danger);
-  background: var(--danger-soft);
-}
-
+/* Красная кнопка — только в подтверждении; в строках и карточках опасное действие — пункт «⋯» (UiMenuItem danger). */
 .btn--danger-solid {
   background: var(--danger);
   color: var(--on-danger);
@@ -1725,12 +1711,6 @@ a.btn {
   margin-bottom: 0;
 }
 
-select,
-textarea {
-  font: inherit;
-}
-
-.field select,
 .field textarea,
 .field input[type='search'] {
   border: 1px solid var(--line-2);
@@ -1748,7 +1728,6 @@ textarea {
   line-height: 1.45;
 }
 
-.field select:focus,
 .field textarea:focus,
 .field input[type='search']:focus {
   outline: none;
@@ -1757,7 +1736,6 @@ textarea {
 }
 
 .field input:disabled,
-.field select:disabled,
 .field textarea:disabled {
   background-color: var(--surface-2);
   color: var(--muted);
@@ -1788,12 +1766,6 @@ textarea {
 .field .range-row input[type='number'] {
   flex: none;
   width: 5.5rem;
-}
-
-.field input[type='checkbox'],
-.check-row input[type='checkbox'],
-.switch input {
-  accent-color: var(--accent);
 }
 
 .field-hint {
@@ -1886,9 +1858,7 @@ textarea {
   margin-right: auto;
 }
 
-.search-input,
-.ws-toolbar select,
-.panel__head select {
+.search-input {
   border: 1px solid var(--line-2);
   border-radius: var(--pill);
   padding: 0.55rem 0.95rem;
@@ -1897,9 +1867,7 @@ textarea {
   min-width: 180px;
 }
 
-.search-input:focus,
-.ws-toolbar select:focus,
-.panel__head select:focus {
+.search-input:focus {
   outline: none;
   border-color: var(--accent);
   box-shadow: 0 0 0 4px var(--accent-soft);
@@ -1978,58 +1946,6 @@ textarea {
   to {
     transform: rotate(360deg);
   }
-}
-
-.switch {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.55rem;
-  cursor: pointer;
-  font-size: 0.88rem;
-  font-weight: 520;
-  user-select: none;
-}
-
-.switch input {
-  appearance: none;
-  position: relative;
-  flex-shrink: 0;
-  width: 2.5rem;
-  height: 1.4rem;
-  margin: 0;
-  border: 0;
-  border-radius: var(--pill);
-  background: var(--surface-3);
-  box-shadow: inset 0 0 0 1px var(--line-2);
-  cursor: pointer;
-  transition: background 0.18s ease;
-}
-
-.switch input::after {
-  content: '';
-  position: absolute;
-  top: 3px;
-  left: 3px;
-  width: calc(1.4rem - 6px);
-  height: calc(1.4rem - 6px);
-  border-radius: 50%;
-  background: #fff;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
-  transition: transform 0.18s ease;
-}
-
-.switch input:checked {
-  background: var(--accent);
-  box-shadow: none;
-}
-
-.switch input:checked::after {
-  transform: translateX(1.1rem);
-}
-
-.switch input:disabled {
-  opacity: 0.5;
-  cursor: wait;
 }
 
 /* Сегменты-переключатели: пилюли в общей капсуле. */
@@ -3277,10 +3193,6 @@ body.has-modal {
   background: var(--surface-2);
 }
 
-.campaign-picker__row input {
-  margin-top: 0.2rem;
-}
-
 .campaign-picker__row > span {
   flex: 1;
   min-width: 0;
@@ -4226,10 +4138,8 @@ body.has-modal {
 }
 
 /* Строки, фразы и ссылки на доске: ждущие решения — пунктиром, без галочки — бледно, свои — с меткой. */
-.board input[type='checkbox'] {
+.board .ui-check {
   flex: none;
-  margin: 0;
-  accent-color: var(--accent);
 }
 
 .board-facts,
@@ -4427,15 +4337,8 @@ button.board-chips__text:disabled {
   background: var(--surface);
 }
 
-.board-select {
+.ui-select.board-select {
   max-width: 12rem;
-  padding: 0.22rem 0.5rem;
-  border: 1px solid var(--line-2);
-  border-radius: var(--pill);
-  background: var(--surface);
-  color: var(--ink);
-  font: inherit;
-  font-size: 0.78rem;
 }
 
 .board-group {
@@ -4629,7 +4532,7 @@ button.board-chips__text:disabled {
   align-items: flex-start;
 }
 
-.board-auds__row > input,
+.board-auds__row > .ui-check,
 .board-auds__row > .board-lines__ok,
 .board-auds__row > .board-x {
   margin-top: 0.15rem;
@@ -4734,7 +4637,7 @@ button.board-chips__text:disabled {
   white-space: nowrap;
 }
 
-.board-imgs__item > input {
+.board-imgs__item > .ui-check {
   position: absolute;
   top: 7px;
   left: 7px;
@@ -5108,10 +5011,7 @@ button.board-chips__text:disabled {
   margin-top: 0.45rem;
 }
 
-.decision__neg input,
-.decision__neg select,
-.decision__kw select,
-.queries-applybar select {
+.decision__neg input {
   border: 1px solid var(--line-2);
   border-radius: var(--pill);
   padding: 0.4rem 0.75rem;
@@ -5121,10 +5021,7 @@ button.board-chips__text:disabled {
   font-size: 0.86rem;
 }
 
-.decision__neg input:focus,
-.decision__neg select:focus,
-.decision__kw select:focus,
-.queries-applybar select:focus {
+.decision__neg input:focus {
   outline: none;
   border-color: var(--accent);
   box-shadow: 0 0 0 3px var(--accent-soft);
@@ -5202,29 +5099,6 @@ button.board-chips__text:disabled {
 .exp-finish .field,
 .exp-finish .hint {
   margin: 0;
-}
-
-/* Стрелка у выпадающих списков — в конце, чтобы не перебивалась паддингами выше. */
-.field select,
-.filters select,
-.row-actions select,
-.ws-toolbar select,
-.panel__head select {
-  appearance: none;
-  padding-right: 2.2rem;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%238a948f' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
-  background-repeat: no-repeat;
-  background-position: right 0.85rem center;
-}
-
-.decision__neg select,
-.decision__kw select,
-.queries-applybar select {
-  appearance: none;
-  padding-right: 2rem;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%238a948f' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
-  background-repeat: no-repeat;
-  background-position: right 0.7rem center;
 }
 
 /* Лендинг: при прокрутке шапка-пилюля чуть заметнее. */

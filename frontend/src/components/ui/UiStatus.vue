@@ -1,5 +1,5 @@
 <template>
-  <span class="ui-status" :class="`ui-status--${tone}`" :title="hint || undefined">
+  <span class="ui-status" :class="`ui-status--${tone}`" v-tip="hint || undefined">
     <component :is="icon || ICONS[tone] || Info" aria-hidden="true" />
     <span>{{ label }}</span>
   </span>

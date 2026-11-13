@@ -144,24 +144,20 @@
               <template v-else>ещё не синхронизировали</template>
             </div>
             <div class="role-toggles">
-              <label class="check-row">
-                <input
-                  type="checkbox"
-                  :checked="c.use_metrika"
-                  :disabled="busyId === c.id"
-                  @change="setRole(c, { use_metrika: $event.target.checked }, $event)"
-                />
+              <UiCheckbox
+                :checked="c.use_metrika"
+                :disabled="busyId === c.id"
+                @change="setRole(c, { use_metrika: $event.target.checked }, $event)"
+              >
                 Метрика
-              </label>
-              <label class="check-row">
-                <input
-                  type="checkbox"
-                  :checked="c.use_direct"
-                  :disabled="busyId === c.id"
-                  @change="setRole(c, { use_direct: $event.target.checked }, $event)"
-                />
+              </UiCheckbox>
+              <UiCheckbox
+                :checked="c.use_direct"
+                :disabled="busyId === c.id"
+                @change="setRole(c, { use_direct: $event.target.checked }, $event)"
+              >
                 Директ
-              </label>
+              </UiCheckbox>
             </div>
             <small v-if="needsAudience(c)" class="hint">
               Подключите Яндекс Аудитории, чтобы ИИ создавал новые LAL (похожих на покупателей). Войдите тем же
@@ -182,9 +178,13 @@
             <button class="btn btn--ghost" type="button" :disabled="busyId === c.id" @click="syncConnection(c)">
               {{ busyId === c.id ? 'Синхронизируем…' : 'Обновить' }}
             </button>
-            <button class="btn btn--ghost btn--danger" type="button" :disabled="busyId === c.id" @click="removeConnection(c)">
-              Отключить
-            </button>
+            <UiMenu
+              size="sm"
+              :label="`Действия с логином ${c.yandex_login || c.display_name || c.yandex_uid}`"
+              :disabled="busyId === c.id"
+            >
+              <UiMenuItem :icon="Unplug" danger @click="removeConnection(c)">Отключить логин</UiMenuItem>
+            </UiMenu>
           </div>
         </div>
       </div>
@@ -254,17 +254,20 @@
               Вернуть
             </button>
             <template v-else>
-              <button class="btn btn--ghost" type="button" @click="toggleCounter(m)">
-                {{ m.enabled ? 'Выключить' : 'Включить' }}
-              </button>
-              <button
-                class="btn btn--ghost btn--danger"
-                type="button"
+              <button v-if="!m.enabled" class="btn btn--ghost" type="button" @click="toggleCounter(m)">Включить</button>
+              <UiMenu
+                size="sm"
+                :label="`Действия со счётчиком ${m.name || m.counter_id}`"
                 :disabled="loadBusy === `s${m.counter_id}`"
-                @click="removeCounterSite(m)"
               >
-                {{ workspaceFor(m) ? 'Удалить сайт' : 'Скрыть' }}
-              </button>
+                <UiMenuItem v-if="m.enabled" :icon="PowerOff" hint="История останется" @click="toggleCounter(m)">
+                  Выключить
+                </UiMenuItem>
+                <UiMenuItem v-if="workspaceFor(m)" :icon="Trash2" danger @click="removeCounterSite(m)">
+                  Удалить сайт
+                </UiMenuItem>
+                <UiMenuItem v-else :icon="EyeOff" @click="removeCounterSite(m)">Скрыть</UiMenuItem>
+              </UiMenu>
             </template>
           </div>
         </div>
@@ -330,7 +333,7 @@
                 class="btn btn--ghost"
                 type="button"
                 :disabled="Boolean(accountLoad(a).job) || loadBusy === `a${a.id}`"
-                title="Кампании, изменения структуры, свежая статистика"
+                v-tip="'Кампании, изменения структуры, свежая статистика'"
                 @click="refreshAccount(a)"
               >
                 {{ accountLoad(a).job ? 'Загружается…' : 'Обновить' }}
@@ -339,7 +342,7 @@
                 class="btn btn--ghost"
                 type="button"
                 :disabled="Boolean(accountLoad(a).job) || loadBusy === `a${a.id}`"
-                title="Все кампании, группы, объявления, фразы, статистика и запросы за 30 дней — с нуля"
+                v-tip="'Все кампании, группы, объявления, фразы, статистика и запросы за 30 дней — с нуля'"
                 @click="reloadAccount(a)"
               >
                 Загрузить заново
@@ -385,9 +388,12 @@ import { askConfirm } from '../composables/useConfirm'
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { RouterLink } from 'vue-router'
 import LoadStages from '../components/LoadStages.vue'
-import { CircleCheck, Plug, RefreshCw, TriangleAlert } from '@lucide/vue'
+import { CircleCheck, EyeOff, Plug, PowerOff, RefreshCw, Trash2, TriangleAlert, Unplug } from '@lucide/vue'
 import ExpertHint from '../components/ExpertHint.vue'
 import SitesPanel from '../components/SitesPanel.vue'
+import UiCheckbox from '../components/ui/UiCheckbox.vue'
+import UiMenu from '../components/ui/UiMenu.vue'
+import UiMenuItem from '../components/ui/UiMenuItem.vue'
 import YandexConnectButton from '../components/YandexConnectButton.vue'
 import { errorDetail, errorText, JOB_LABELS, jobProgressText, webApi } from '../api/web'
 import { jobText, refreshLoads, stageErrorText, stageFailure, useLoads } from '../composables/useLoads'

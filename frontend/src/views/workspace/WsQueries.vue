@@ -181,7 +181,7 @@
         class="btn btn--ghost"
         type="button"
         :disabled="!!busy"
-        :title="`Загрузить поисковые запросы за последние ${days} дней`"
+        v-tip="`Загрузить поисковые запросы за последние ${days} дней`"
         @click="sync"
       >
         {{ busy === 'sync' ? 'Загружаем…' : 'Обновить из Директа' }}
@@ -190,7 +190,7 @@
         class="btn btn--accent"
         type="button"
         :disabled="!!busy || !canClassify"
-        :title="counts.new ? 'ИИ разберёт новые запросы и предложит минус-фразы' : 'Разметить заново неподтверждённые'"
+        v-tip="counts.new ? 'ИИ разберёт новые запросы и предложит минус-фразы' : 'Разметить заново неподтверждённые'"
         @click="classify"
       >
         {{ busy === 'classify' ? 'Размечаем…' : counts.new || !canClassify ? 'Разметить с ИИ' : 'Переразметить' }}
@@ -278,19 +278,13 @@
       </div>
       <div v-if="campaigns.length > 1" v-field class="field">
         <label>Кампания</label>
-        <select v-model="filters.campaign">
-          <option value="">Все кампании</option>
-          <option v-for="c in campaigns" :key="c.id" :value="String(c.id)">{{ campaignLabel(c, repeatedCampaigns) }}</option>
-        </select>
+        <UiSelect v-model="filters.campaign" :options="campaignOptions" />
       </div>
       <div v-field class="field">
         <label>Расход от, ₽</label>
         <input v-model="filters.minCost" type="number" min="0" step="10" placeholder="0" />
       </div>
-      <label class="check-row">
-        <input v-model="filters.noConv" type="checkbox" />
-        Без конверсий
-      </label>
+      <UiSwitch v-model="filters.noConv" class="check-row">Без конверсий</UiSwitch>
     </div>
 
     <p v-if="loading && !data" class="empty">Загружаем запросы…</p>
@@ -312,9 +306,9 @@
           <thead>
             <tr>
               <th class="check-col">
-                <input
-                  type="checkbox"
-                  :checked="items.every((q) => selected.has(q.query_norm))"
+                <UiCheckbox
+                  :checked="allPicked"
+                  :indeterminate="!allPicked && items.some((q) => selected.has(q.query_norm))"
                   aria-label="Выбрать все"
                   @change="toggleAll($event.target.checked)"
                 />
@@ -334,8 +328,7 @@
               :class="{ 'is-selected': selected.has(q.query_norm) }"
             >
               <td class="check-col">
-                <input
-                  type="checkbox"
+                <UiCheckbox
                   :checked="selected.has(q.query_norm)"
                   :aria-label="`Выбрать «${q.query}»`"
                   @change="toggle(q.query_norm, $event.target.checked)"
@@ -389,14 +382,13 @@
                       @input="touch(q.query_norm)"
                       @change="scheduleCheck([q.query_norm])"
                     />
-                    <select
+                    <UiSelect
                       v-model="decisions[q.query_norm].level"
+                      size="sm"
+                      :options="levelOptions(q)"
                       aria-label="Куда добавить"
                       @change="touch(q.query_norm); scheduleCheck([q.query_norm])"
-                    >
-                      <option value="adgroup" :disabled="!q.adgroups.length">на группу</option>
-                      <option value="campaign">на кампанию</option>
-                    </select>
+                    />
                   </div>
                   <p v-if="checkOf(q)?.problems.length" class="decision__warn tone-bad">
                     {{ checkOf(q).problems.join('; ') }}
@@ -405,23 +397,23 @@
                     Заденет ваши ключи: {{ conflictText(checkOf(q)) }}
                   </p>
                 </template>
-                <label v-else-if="decisions[q.query_norm].verdict === 'target'" class="check-row decision__kw">
-                  <input
+                <div v-else-if="decisions[q.query_norm].verdict === 'target'" class="check-row decision__kw">
+                  <UiCheckbox
                     v-model="decisions[q.query_norm].add_keyword"
-                    type="checkbox"
                     :disabled="!q.adgroups.length"
                     @change="touch(q.query_norm)"
-                  />
-                  <span>{{ q.adgroups.length ? 'Добавить в ключевые фразы' : 'Нет группы — в ключи не добавить' }}</span>
-                  <select
+                  >
+                    {{ q.adgroups.length ? 'Добавить в ключевые фразы' : 'Нет группы — в ключи не добавить' }}
+                  </UiCheckbox>
+                  <UiSelect
                     v-if="decisions[q.query_norm].add_keyword && q.adgroups.length > 1"
                     v-model="decisions[q.query_norm].adgroup_row_id"
+                    size="sm"
+                    :options="q.adgroups.map((g) => ({ value: g.id, label: groupLabel(q, g) }))"
                     aria-label="Группа"
                     @change="touch(q.query_norm)"
-                  >
-                    <option v-for="g in q.adgroups" :key="g.id" :value="g.id">{{ groupLabel(q, g) }}</option>
-                  </select>
-                </label>
+                  />
+                </div>
                 <p
                   v-if="rowResults[q.query_norm] && rowResults[q.query_norm].status !== 'ok'"
                   class="decision__warn"
@@ -447,11 +439,14 @@
       <span>Выбрано: {{ selected.size }}</span>
       <button class="btn btn--ghost" type="button" :disabled="!!busy" @click="markSelected('negative')">В минус</button>
       <button class="btn btn--ghost" type="button" :disabled="!!busy" @click="markSelected('target')">Целевые</button>
-      <select aria-label="Уровень минус-фраз" :disabled="!!busy" @change="setLevelSelected($event)">
-        <option value="">Уровень минус-фраз…</option>
-        <option value="adgroup">Все на группу</option>
-        <option value="campaign">Все на кампанию</option>
-      </select>
+      <UiSelect
+        :model-value="null"
+        :options="BULK_LEVELS"
+        placeholder="Уровень минус-фраз…"
+        aria-label="Уровень минус-фраз"
+        :disabled="!!busy"
+        @change="setLevelSelected"
+      />
       <button class="btn btn--accent" type="button" :disabled="!!busy" @click="openApply">
         {{ busy === 'apply' ? 'Применяем…' : `Применить (${readyCount})` }}
       </button>
@@ -476,16 +471,12 @@
       </div>
       <div v-field class="field">
         <label>Решение</label>
-        <select v-model="mem.verdict">
-          <option value="">Все</option>
-          <option value="negative">В минус</option>
-          <option value="target">Целевые</option>
-        </select>
+        <UiSelect v-model="mem.verdict" :options="VERDICTS" />
       </div>
     </div>
     <div v-if="mem.selected.size" class="bulk-bar">
       <span>Выбрано: {{ mem.selected.size }}</span>
-      <button class="btn btn--ghost btn--danger" type="button" :disabled="mem.busy" @click="forget">Забыть</button>
+      <button class="btn btn--ghost" type="button" :disabled="mem.busy" @click="forget">Забыть</button>
       <button class="btn btn--ghost" type="button" @click="mem.selected = new Set()">Снять выбор</button>
     </div>
     <p v-if="mem.loading && !mem.items.length" class="empty">Загружаем…</p>
@@ -498,9 +489,9 @@
         <thead>
           <tr>
             <th class="check-col">
-              <input
-                type="checkbox"
-                :checked="mem.items.every((m) => mem.selected.has(m.query_norm))"
+              <UiCheckbox
+                :checked="memAllPicked"
+                :indeterminate="!memAllPicked && mem.items.some((m) => mem.selected.has(m.query_norm))"
                 aria-label="Выбрать все"
                 @change="memToggleAll($event.target.checked)"
               />
@@ -514,8 +505,7 @@
         <tbody>
           <tr v-for="m in mem.items" :key="m.query_norm">
             <td class="check-col">
-              <input
-                type="checkbox"
+              <UiCheckbox
                 :aria-label="`Выбрать «${m.query}»`"
                 :checked="mem.selected.has(m.query_norm)"
                 @change="memToggle(m.query_norm, $event.target.checked)"
@@ -652,6 +642,9 @@
 
 <script setup>
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import UiCheckbox from '../../components/ui/UiCheckbox.vue'
+import UiSelect from '../../components/ui/UiSelect.vue'
+import UiSwitch from '../../components/ui/UiSwitch.vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
 import { CircleCheck } from '@lucide/vue'
 import ExpertHint from '../../components/ExpertHint.vue'
@@ -721,6 +714,26 @@ const mem = reactive({ items: [], total: 0, loading: false, busy: false, error: 
 const counts = computed(() => data.value?.counts || EMPTY_COUNTS)
 const campaigns = computed(() => data.value?.campaigns || [])
 const repeatedCampaigns = computed(() => repeatedNames(campaigns.value.map((c) => c.name)))
+const campaignOptions = computed(() => [
+  { value: '', label: 'Все кампании' },
+  ...campaigns.value.map((c) => ({ value: String(c.id), label: campaignLabel(c, repeatedCampaigns.value) })),
+])
+const BULK_LEVELS = [
+  { value: 'adgroup', label: 'Все на группу' },
+  { value: 'campaign', label: 'Все на кампанию' },
+]
+const VERDICTS = [
+  { value: '', label: 'Все' },
+  { value: 'negative', label: 'В минус' },
+  { value: 'target', label: 'Целевые' },
+]
+
+function levelOptions(q) {
+  return [
+    { value: 'adgroup', label: 'на группу', disabled: !q.adgroups.length },
+    { value: 'campaign', label: 'на кампанию' },
+  ]
+}
 
 // Группы с одинаковым названием (обычно из копии кампании) различаем кампанией.
 function groupLabel(q, g) {
@@ -1038,9 +1051,7 @@ function markSelected(verdict) {
   if (verdict === 'negative') scheduleCheck(norms)
 }
 
-function setLevelSelected(event) {
-  const level = event.target.value
-  event.target.value = ''
+function setLevelSelected(level) {
   if (!level) return
   const norms = [...selected.value].filter((n) => decisions[n]?.verdict === 'negative')
   for (const n of norms) {
@@ -1056,6 +1067,9 @@ function toggle(norm, on) {
   else next.delete(norm)
   selected.value = next
 }
+
+const allPicked = computed(() => items.value.length > 0 && items.value.every((q) => selected.value.has(q.query_norm)))
+const memAllPicked = computed(() => mem.items.length > 0 && mem.items.every((m) => mem.selected.has(m.query_norm)))
 
 function toggleAll(on) {
   selected.value = on ? new Set(items.value.map((q) => q.query_norm)) : new Set()

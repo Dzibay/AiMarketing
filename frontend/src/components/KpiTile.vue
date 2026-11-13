@@ -1,11 +1,11 @@
 <template>
   <div class="ktile">
-    <span class="ktile__label" :title="label">{{ label }}</span>
+    <span class="ktile__label" v-tip.truncate="label">{{ label }}</span>
     <div class="ktile__value">
       <strong>{{ value }}</strong>
       <DeltaChip v-if="change != null" :value="change" :good="good" :versus="versus" />
     </div>
-    <span v-if="note || $slots.note" class="ktile__note" :class="noteTone" :title="note || undefined">
+    <span v-if="note || $slots.note" class="ktile__note" :class="noteTone" v-tip.truncate="note || undefined">
       <slot name="note">{{ note }}</slot>
     </span>
     <Sparkline v-if="points.length" :points="points" :prev-points="prevPoints" :value-key="valueKey" :height="40" />

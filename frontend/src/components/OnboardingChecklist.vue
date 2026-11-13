@@ -22,7 +22,7 @@
         class="icon-btn onboarding__close"
         type="button"
         aria-label="Скрыть мастер"
-        title="Скрыть"
+        v-tip="'Скрыть'"
         :disabled="busy"
         @click="setDismissed(true)"
       >
@@ -55,7 +55,7 @@
         class="icon-btn onboarding__close"
         type="button"
         aria-label="Скрыть чек-лист"
-        title="Скрыть"
+        v-tip="'Скрыть'"
         :disabled="busy"
         @click="setDismissed(true)"
       >

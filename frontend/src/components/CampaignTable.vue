@@ -24,10 +24,7 @@
         :options="[{ value: '', label: scope.all }, ...scope.options]"
         :aria-label="scope.label"
       />
-      <label class="switch ltools__switch">
-        <input v-model="wasteOnly" type="checkbox" />
-        <span>Без конверсий</span>
-      </label>
+      <UiSwitch v-model="wasteOnly" class="ltools__switch">Без конверсий</UiSwitch>
     </div>
 
     <slot name="notices" />
@@ -53,9 +50,9 @@
         <thead>
           <tr>
             <th class="check-col">
-              <input
-                type="checkbox"
-                :checked="rows.every((r) => selected.has(r.campaign_row_id))"
+              <UiCheckbox
+                :checked="allPicked"
+                :indeterminate="!allPicked && rows.some((r) => selected.has(r.campaign_row_id))"
                 aria-label="Выбрать все"
                 @change="toggleAll($event.target.checked)"
               />
@@ -76,19 +73,18 @@
             @click="openRow($event, c)"
           >
             <td class="check-col">
-              <input
-                type="checkbox"
+              <UiCheckbox
                 :checked="selected.has(c.campaign_row_id)"
                 :aria-label="`Выбрать «${c.name}»`"
                 @change="toggle(c.campaign_row_id, $event.target.checked)"
               />
             </td>
             <td class="ctab__name">
-              <RouterLink :to="linkOf(c)" :title="c.name">{{ c.name }}</RouterLink>
+              <RouterLink :to="linkOf(c)" v-tip.truncate="c.name">{{ c.name }}</RouterLink>
               <small class="ctab__meta">{{ metaOf(c) }}</small>
             </td>
             <td v-if="showProject" class="ctab__project">
-              <RouterLink :to="`/w/${c.project.id}/campaigns`" :title="c.project.name">
+              <RouterLink :to="`/w/${c.project.id}/campaigns`" v-tip.truncate="c.project.name">
                 {{ c.project.name }}
               </RouterLink>
             </td>
@@ -99,7 +95,7 @@
               <template v-if="c.weekly_budget_rub">{{ rubles(c.weekly_budget_rub) }}/нед.</template>
               <template v-else-if="c.daily_budget_rub">{{ rubles(c.daily_budget_rub) }}/день</template>
               <template v-else>—</template>
-              <small v-if="c.strategy_label" class="ctab__meta" :title="strategyText(c)">{{ strategyText(c) }}</small>
+              <small v-if="c.strategy_label" class="ctab__meta" v-tip.truncate="strategyText(c)">{{ strategyText(c) }}</small>
             </td>
             <td class="num">{{ rub(c.cost_kopecks) }}</td>
             <td class="num">{{ num(c.clicks) }}</td>
@@ -151,7 +147,7 @@
             <td></td>
             <td class="num">
               <template v-if="budgetTotal?.mixed">—<small class="ctab__meta">разные типы бюджета</small></template>
-              <span v-else-if="budgetTotal" title="Сумма бюджетов запущенных кампаний">
+              <span v-else-if="budgetTotal" v-tip="'Сумма бюджетов запущенных кампаний'">
                 {{ rubles(budgetTotal.sum) }}{{ budgetTotal.unit === 'week' ? '/нед.' : '/день' }}
               </span>
               <template v-else>—</template>
@@ -184,8 +180,10 @@ import { Archive, ArchiveRestore, Copy, Pause, Play, Search, SearchX } from '@lu
 import EmptyState from './ui/EmptyState.vue'
 import UiMenu from './ui/UiMenu.vue'
 import UiMenuItem from './ui/UiMenuItem.vue'
+import UiCheckbox from './ui/UiCheckbox.vue'
 import UiSelect from './ui/UiSelect.vue'
 import UiStatus from './ui/UiStatus.vue'
+import UiSwitch from './ui/UiSwitch.vue'
 import TermHint from './TermHint.vue'
 import { campaignStatus, campaignTypeShort, num, pct, rub, rubles } from '../utils/format'
 
@@ -346,6 +344,8 @@ function toggle(id, on) {
   else next.delete(id)
   emit('update:selected', next)
 }
+
+const allPicked = computed(() => rows.value.length > 0 && rows.value.every((r) => props.selected.has(r.campaign_row_id)))
 
 function toggleAll(on) {
   const next = new Set(props.selected)

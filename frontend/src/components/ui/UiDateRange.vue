@@ -1,134 +1,195 @@
 <template>
+  <!-- Кнопка периода и то, что рядом (подсказка «?»), не разрываются при переносе строки. -->
   <div class="drange">
-    <div class="seg" role="group" aria-label="Быстрый период">
+    <span class="ui-select drange__pick" :class="{ 'is-open': open }">
       <button
-        v-for="p in presets"
-        :key="p"
+        ref="trigger"
+        class="ui-select__btn drange__btn"
         type="button"
-        :class="{ active: preset === p }"
-        :aria-pressed="preset === p"
+        aria-haspopup="dialog"
+        :aria-expanded="open"
+        :aria-label="`Период: ${presetLabel ? `${presetLabel}, ` : ''}${spokenRange}`"
         :disabled="disabled"
-        @click="pick(p)"
+        @click="toggle"
+        @keydown.down.prevent="openPanel"
       >
-        {{ p === 'month' ? 'Месяц' : `${p} дн.` }}
+        <CalendarDays class="drange__icon" aria-hidden="true" />
+        <span class="ui-select__value">
+          <template v-if="presetLabel">
+            {{ presetLabel }}<span class="drange__dates"> · {{ rangeText }}</span>
+          </template>
+          <template v-else>{{ rangeText }}</template>
+        </span>
+        <ChevronDown class="ui-select__chev" aria-hidden="true" />
       </button>
-    </div>
-    <!-- Поле дат и то, что рядом (подсказка «?»), не разрываются при переносе строки. -->
-    <div class="drange__end">
-      <div class="drange__dates" :class="{ 'is-custom': preset == null }" role="group" aria-label="Свой период">
-        <input
-          v-model="draftFrom"
-          type="date"
-          aria-label="С"
-          :max="draftTo || undefined"
-          :disabled="disabled"
-          @change="commit"
-        />
-        <span aria-hidden="true">—</span>
-        <input
-          v-model="draftTo"
-          type="date"
-          aria-label="По"
-          :min="draftFrom || undefined"
-          :disabled="disabled"
-          @change="commit"
-        />
+    </span>
+    <slot />
+
+    <Teleport to="body">
+      <div v-if="open && sheet" class="ui-scrim" aria-hidden="true"></div>
+      <div
+        v-if="open"
+        ref="panel"
+        class="ui-pop drp"
+        :class="{ 'is-sheet': sheet }"
+        role="dialog"
+        aria-label="Период отчёта"
+        :style="sheet ? null : style"
+        @keydown.esc.stop.prevent="close({ focus: true })"
+        @focusout="onFocusOut"
+      >
+        <div class="drp__presets" role="group" aria-label="Быстрый период">
+          <button
+            v-for="p in presets"
+            :key="p"
+            class="drp__preset"
+            :class="{ 'is-current': preset === p }"
+            type="button"
+            :aria-pressed="preset === p"
+            @click="pickPreset(p)"
+          >
+            {{ labelOf(p) }}
+          </button>
+          <button
+            class="drp__preset"
+            :class="{ 'is-current': preset == null }"
+            type="button"
+            :aria-pressed="preset == null"
+            @click="customRange"
+          >
+            Свой период
+          </button>
+        </div>
+        <div class="drp__main">
+          <UiCalendar
+            ref="cal"
+            range
+            :start="draft.start"
+            :end="draft.end"
+            :min="min"
+            :max="max"
+            :months="sheet ? 1 : 2"
+            @pick="pickDay"
+          />
+          <div class="drp__foot">
+            <p class="drp__hint" aria-live="polite">{{ hint }}</p>
+            <button class="btn btn--ghost btn--sm" type="button" @click="close({ focus: true })">Отмена</button>
+            <button class="btn btn--sm" type="button" :disabled="!draft.start" @click="applyDraft">Применить</button>
+          </div>
+        </div>
       </div>
-      <slot />
-    </div>
+    </Teleport>
   </div>
 </template>
 
 <script setup>
-import { ref, watch } from 'vue'
-import { lastDays, monthToDate } from '../../utils/format'
+import { computed, nextTick, reactive, ref } from 'vue'
+import { CalendarDays, ChevronDown } from '@lucide/vue'
+import { usePopover } from '../../composables/usePopover'
+import { formatRange, lastDays, monthToDate } from '../../utils/format'
+import UiCalendar from './UiCalendar.vue'
+import { addDays, previousMonth, spokenDay, todayIso } from './calendar'
 
 /**
- * Период отчёта: быстрые кнопки (7, 14, 30 дней, «Месяц» — с начала месяца) и свои даты «с — по».
- * Ничего не меняет сам: отдаёт change({ date_from, date_to, preset }), preset = null — свои даты.
+ * Период отчёта: кнопка «7 дней · 6–12 нояб.», по нажатию — быстрые периоды и календарь на два месяца
+ * (на телефоне — панель снизу и один месяц). Быстрый период применяется сразу; свой — вторым днём
+ * (или «Применить», если нужен один день). Ничего не меняет сам: отдаёт change({ date_from, date_to, preset }),
+ * preset = null — свои даты. Будущих дней в отчёте нет, поэтому позже max выбрать нельзя.
  */
 const props = defineProps({
   from: { type: String, required: true },
   to: { type: String, required: true },
   preset: { type: [Number, String], default: null },
-  presets: { type: Array, default: () => [7, 14, 30, 'month'] },
+  presets: { type: Array, default: () => ['yesterday', 7, 14, 30, 'month', 'prev_month'] },
+  min: { type: String, default: '' },
+  max: { type: String, default: () => todayIso() },
   disabled: { type: Boolean, default: false },
 })
 const emit = defineEmits(['change'])
 
-const draftFrom = ref(props.from)
-const draftTo = ref(props.to)
-watch(
-  () => [props.from, props.to],
-  ([from, to]) => {
-    draftFrom.value = from
-    draftTo.value = to
-  },
-)
+const LABELS = { yesterday: 'Вчера', month: 'Этот месяц', prev_month: 'Прошлый месяц' }
+const labelOf = (p) => LABELS[p] ?? `${p} дней`
 
-function pick(p) {
-  emit('change', { ...(p === 'month' ? monthToDate() : lastDays(p)), preset: p })
+const trigger = ref(null)
+const panel = ref(null)
+const cal = ref(null)
+const sheet = ref(false)
+const draft = reactive({ start: '', end: '' })
+const { open, style, show, close } = usePopover(trigger, panel, { align: 'start' })
+
+const presetLabel = computed(() => (props.preset == null ? '' : labelOf(props.preset)))
+const rangeText = computed(() => formatRange(props.from, props.to))
+const spokenRange = computed(() => {
+  if (props.from === props.to) return spokenDay(props.from)
+  const day = (iso) => spokenDay(iso, { weekday: false })
+  return `с ${day(props.from)} по ${day(props.to)}`
+})
+
+const hint = computed(() => {
+  if (!draft.start) return 'Выберите первый день'
+  if (!draft.end) return `С ${formatRange(draft.start)} — теперь последний день`
+  return formatRange(draft.start, draft.end)
+})
+
+function rangeOf(p) {
+  if (p === 'yesterday') {
+    const day = addDays(todayIso(), -1)
+    return { date_from: day, date_to: day }
+  }
+  if (p === 'month') return monthToDate()
+  if (p === 'prev_month') return previousMonth()
+  return lastDays(p)
 }
 
-function commit() {
-  // Пустая или перевёрнутая дата — ждём, пока поправят, отчёт не перезагружаем.
-  if (!draftFrom.value || !draftTo.value || draftFrom.value > draftTo.value) return
-  if (draftFrom.value === props.from && draftTo.value === props.to) return
-  emit('change', { date_from: draftFrom.value, date_to: draftTo.value, preset: null })
+async function openPanel() {
+  draft.start = props.from
+  draft.end = props.to
+  sheet.value = window.matchMedia('(max-width: 640px)').matches
+  await show()
+  await nextTick()
+  cal.value?.focus()
+}
+
+function toggle() {
+  if (open.value) close()
+  else openPanel()
+}
+
+function pickPreset(p) {
+  close({ focus: true })
+  emit('change', { ...rangeOf(p), preset: p })
+}
+
+function customRange() {
+  draft.start = ''
+  draft.end = ''
+  cal.value?.focus()
+}
+
+function apply(from, to) {
+  const [a, b] = from <= to ? [from, to] : [to, from]
+  close({ focus: true })
+  if (a === props.from && b === props.to) return
+  emit('change', { date_from: a, date_to: b, preset: null })
+}
+
+// Первый клик начинает период, второй — заканчивает и применяет.
+function pickDay(iso) {
+  if (!draft.start || draft.end) {
+    draft.start = iso
+    draft.end = ''
+  } else {
+    apply(draft.start, iso)
+  }
+}
+
+function applyDraft() {
+  if (draft.start) apply(draft.start, draft.end || draft.start)
+}
+
+// Фокус ушёл из панели (Tab за последнюю кнопку) — панель закрывается, как меню.
+function onFocusOut(event) {
+  const to = event.relatedTarget
+  if (to && !panel.value?.contains(to) && to !== trigger.value) close()
 }
 </script>
-
-<style scoped>
-.drange {
-  display: inline-flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 0.5rem;
-}
-
-.drange__end {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.3rem;
-}
-
-.drange__dates {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.25rem;
-  padding: 0 0.35rem;
-  border: 1px solid var(--line);
-  border-radius: var(--pill);
-  background: var(--surface);
-  color: var(--muted);
-}
-
-.drange__dates.is-custom {
-  border-color: var(--ink);
-}
-
-.drange__dates input {
-  height: 34px;
-  padding: 0 0.35rem;
-  border: 0;
-  background: transparent;
-  color: var(--ink);
-  font: inherit;
-  font-size: 0.86rem;
-  font-variant-numeric: tabular-nums;
-}
-
-.drange__dates input:focus {
-  outline: none;
-}
-
-.drange__dates:focus-within {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 3px var(--accent-soft);
-}
-
-.drange__dates input::-webkit-calendar-picker-indicator {
-  opacity: 0.55;
-  cursor: pointer;
-}
-</style>

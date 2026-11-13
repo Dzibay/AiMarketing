@@ -3,7 +3,7 @@
     <aside id="dside" ref="sideEl" class="dside" aria-label="Меню" :inert="narrow && !drawer" @click="closeDrawerOnLink">
       <div class="dside__scroll">
         <div class="dside__head">
-          <RouterLink class="dside__brand" to="/cabinet" aria-label="Толк — главная" :title="tip('Главная')">
+          <RouterLink class="dside__brand" to="/cabinet" aria-label="Толк — главная" v-tip.right="tip('Главная')">
             <TolkMark :size="28" />
             <span>толк</span>
           </RouterLink>
@@ -11,13 +11,13 @@
             v-if="expert"
             class="dside__mode"
             to="/cabinet/settings/interface"
-            title="Включён экспертный режим — что он добавляет и как выключить"
+            v-tip.right="'Включён экспертный режим — что он добавляет и как выключить'"
           >
             эксперт
           </RouterLink>
         </div>
 
-        <RouterLink v-if="accessOk" class="dside__newchat" :to="chatTo" :title="tip('Новый чат')">
+        <RouterLink v-if="accessOk" class="dside__newchat" :to="chatTo" v-tip.right="tip('Новый чат')">
           <Plus aria-hidden="true" />
           <span class="srow__t">Новый чат</span>
         </RouterLink>
@@ -29,7 +29,7 @@
             class="srow"
             :class="{ active: item.active }"
             :to="item.to"
-            :title="tip(item.label)"
+            v-tip.right="tip(item.label)"
           >
             <component :is="item.icon" aria-hidden="true" />
             <span class="srow__t">{{ item.label }}</span>
@@ -43,7 +43,7 @@
             :class="{ 'is-current': !projectId }"
             type="button"
             :aria-current="projectId ? undefined : 'true'"
-            :title="tip('Все проекты')"
+            v-tip.right="tip('Все проекты')"
             @click="selectProject(null)"
           >
             <Layers aria-hidden="true" />
@@ -58,7 +58,7 @@
               :class="{ 'is-current': ws.id === projectId }"
               type="button"
               :aria-current="ws.id === projectId ? 'true' : undefined"
-              :title="[ws.name, projectHint(ws)].filter(Boolean).join(' — ')"
+              v-tip.right="[ws.name, projectHint(ws)].filter(Boolean).join(' — ')"
               @click="selectProject(ws.id)"
             >
               <span class="pava" :class="`pava--${projectTone(ws)}`" :style="avaStyle(ws)" aria-hidden="true">
@@ -75,7 +75,7 @@
               class="dside__group"
               type="button"
               :aria-expanded="!group.collapsed"
-              :title="group.collapsed ? 'Развернуть' : 'Свернуть'"
+              v-tip="group.collapsed ? 'Развернуть' : 'Свернуть'"
               @click="toggleGroup(group.id)"
             >
               <ChevronDown aria-hidden="true" />
@@ -88,7 +88,7 @@
                 :class="{ 'is-current': ws.id === projectId }"
                 type="button"
                 :aria-current="ws.id === projectId ? 'true' : undefined"
-                :title="projectHint(ws)"
+                v-tip.right="projectHint(ws)"
                 @click="selectProject(ws.id)"
               >
                 <span class="sdot" :class="`sdot--${projectTone(ws)}`" v-bind="dotA11y(ws)"></span>
@@ -99,14 +99,14 @@
                 v-if="ws.id === projectId"
                 class="srow__gear"
                 :to="`/w/${ws.id}/settings`"
-                title="Настройки проекта"
+                v-tip="'Настройки проекта'"
                 aria-label="Настройки проекта"
               >
                 <Settings aria-hidden="true" />
               </RouterLink>
             </div>
           </template>
-          <RouterLink class="srow srow--quiet" to="/cabinet/connections" :title="tip('Добавить сайт')">
+          <RouterLink class="srow srow--quiet" to="/cabinet/connections" v-tip.right="tip('Добавить сайт')">
             <Plus aria-hidden="true" />
             <span class="srow__t">Добавить сайт</span>
           </RouterLink>
@@ -119,13 +119,13 @@
               class="srow srow--chat"
               :class="{ active: String(c.id) === String(route.params.chatId || '') }"
               :to="chatLink(c)"
-              :title="c.title"
+              v-tip.truncate.right="c.title"
             >
               <span v-if="c.status === 'running'" class="sdot sdot--run" aria-label="ИИ отвечает"></span>
               <span v-else-if="c.pending_actions" class="sdot sdot--lime" aria-hidden="true"></span>
               <MessageSquare v-else aria-hidden="true" />
               <span class="srow__t">{{ c.title }}</span>
-              <span v-if="c.pending_actions" class="srow__n" :title="`Ждут решения: ${c.pending_actions}`">
+              <span v-if="c.pending_actions" class="srow__n" v-tip="`Ждут решения: ${c.pending_actions}`">
                 {{ c.pending_actions }}
               </span>
             </RouterLink>
@@ -146,7 +146,7 @@
         class="dside__foot"
         :class="`is-${limitLevel || 'ok'}`"
         to="/cabinet/plan"
-        :title="
+        v-tip.right="
           sideCollapsed
             ? `Лимит ИИ: ${limitChip.percentText}. ${limitChip.text}`
             : 'Сколько помощника осталось в этом периоде. Нажмите, чтобы открыть тариф'
@@ -169,7 +169,7 @@
           class="dicon dbar__burger"
           type="button"
           :aria-label="burgerLabel"
-          :title="burgerLabel"
+          v-tip="burgerLabel"
           aria-controls="dside"
           :aria-expanded="narrow ? drawer : !sideCollapsed"
           @click="toggleSide"
@@ -184,12 +184,12 @@
           class="dchip dchip--btn dchip--lime"
           :class="{ active: route.meta.section === 'pending' }"
           to="/cabinet/pending"
-          title="Предложения ИИ, которые ждут вашего решения"
+          v-tip="'Предложения ИИ, которые ждут вашего решения'"
         >
           Ждёт решения: {{ pendingCount }}
         </RouterLink>
         <LoadsIndicator v-if="accessOk" :quiet="!expert" />
-        <button class="dicon" type="button" :aria-label="themeLabel" :title="themeLabel" @click="toggleTheme">
+        <button class="dicon" type="button" :aria-label="themeLabel" v-tip="themeLabel" @click="toggleTheme">
           <Sun v-if="isDark" aria-hidden="true" />
           <Moon v-else aria-hidden="true" />
         </button>

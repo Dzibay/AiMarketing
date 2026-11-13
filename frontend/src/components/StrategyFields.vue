@@ -2,24 +2,24 @@
   <div class="form-grid">
     <div v-field class="field">
       <label>Стратегия на поиске</label>
-      <select :value="model.search" @change="setSearch($event.target.value)">
-        <option v-for="s in opts.search_strategies" :key="s.id" :value="s.id">{{ s.label }}</option>
-      </select>
+      <UiSelect :model-value="model.search" :options="searchChoices" @change="setSearch" />
     </div>
     <div v-field class="field">
       <label>В сетях (РСЯ)<TermHint term="rsya" /></label>
-      <select :value="model.network" @change="setNetwork($event.target.value)">
-        <option v-for="n in networkChoices" :key="n.id" :value="n.id">{{ n.label }}</option>
-      </select>
+      <UiSelect :model-value="model.network" :options="networkSelect" @change="setNetwork" />
     </div>
     <div v-for="p in params" :key="p.key" v-field class="field">
       <label>
         {{ p.label }}<span v-if="p.required" aria-hidden="true"> *</span>
       </label>
-      <select v-if="p.key === 'goal_id'" :value="model.goal_id ?? ''" :required="p.required" @change="set('goal_id', $event.target.value ? Number($event.target.value) : null)">
-        <option value="">Выберите цель</option>
-        <option v-for="g in goals" :key="g.goal_id" :value="g.goal_id">{{ g.name }} ({{ g.goal_id }})</option>
-      </select>
+      <UiSelect
+        v-if="p.key === 'goal_id'"
+        :model-value="model.goal_id ?? null"
+        :options="goalChoices"
+        placeholder="Выберите цель"
+        :required="p.required"
+        @change="set('goal_id', $event)"
+      />
       <input
         v-else
         type="number"
@@ -51,6 +51,7 @@
 <script setup>
 import { computed, watch } from 'vue'
 import TermHint from './TermHint.vue'
+import UiSelect from './ui/UiSelect.vue'
 
 const props = defineProps({
   modelValue: { type: Object, required: true },
@@ -78,6 +79,12 @@ function paramsFor(search, network) {
 }
 
 const networkChoices = computed(() => networksFor(model.value.search))
+const toOption = (o) => ({ value: o.id, label: o.label })
+const searchChoices = computed(() => (opts.value.search_strategies || []).map(toOption))
+const networkSelect = computed(() => networkChoices.value.map(toOption))
+const goalChoices = computed(() =>
+  props.goals.map((g) => ({ value: Number(g.goal_id), label: `${g.name} (${g.goal_id})` })),
+)
 // Параметры автостратегии: у поиска, а если поиск выключен — у сетей.
 const params = computed(() => paramsFor(model.value.search, model.value.network))
 const manual = computed(

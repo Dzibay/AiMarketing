@@ -1,6 +1,6 @@
 <template>
   <div v-if="visible" ref="root" class="loads-ind" :class="[`is-${tone}`, { 'is-open': open }]">
-    <button class="loads-ind__toggle" type="button" :aria-expanded="open" :title="label" @click="open = !open">
+    <button class="loads-ind__toggle" type="button" :aria-expanded="open" v-tip="label" @click="open = !open">
       <span v-if="busy" class="spinner" aria-hidden="true"></span>
       <template v-else>
         <CloudDownload aria-hidden="true" />

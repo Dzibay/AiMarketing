@@ -12,7 +12,7 @@
         <input v-model="link.title" type="text" :maxlength="SITELINK_TITLE_LEN" placeholder="Заголовок" :aria-label="`Быстрая ссылка ${i + 1}: заголовок`" :disabled="disabled" />
         <input v-model="link.href" type="text" inputmode="url" placeholder="site.ru/razdel" :aria-label="`Быстрая ссылка ${i + 1}: адрес`" :disabled="disabled" />
         <input v-model="link.description" type="text" :maxlength="SITELINK_DESC_LEN" placeholder="Описание (необязательно)" :aria-label="`Быстрая ссылка ${i + 1}: описание`" :disabled="disabled" />
-        <button class="btn btn--ghost" type="button" :disabled="disabled" title="Убрать ссылку" aria-label="Убрать ссылку" @click="extras.sitelinks.splice(i, 1)">✕</button>
+        <button class="btn btn--ghost" type="button" :disabled="disabled" v-tip="'Убрать ссылку'" aria-label="Убрать ссылку" @click="extras.sitelinks.splice(i, 1)">✕</button>
       </div>
       <button
         v-if="extras.sitelinks.length < MAX_SITELINKS"
@@ -43,7 +43,7 @@
         <figure v-for="(img, i) in extras.images" :key="img.hash" class="ad-extras__img">
           <img v-if="img.preview_url" :src="img.preview_url" alt="" />
           <span v-else class="field-hint">{{ img.hash.slice(0, 8) }}…</span>
-          <button class="btn btn--ghost" type="button" :disabled="disabled" title="Убрать" @click="extras.images.splice(i, 1)">✕</button>
+          <button class="btn btn--ghost" type="button" :disabled="disabled" v-tip="'Убрать'" @click="extras.images.splice(i, 1)">✕</button>
         </figure>
         <label v-if="extras.images.length < maxImages && accountId" class="btn btn--ghost ad-extras__upload" :class="{ 'is-busy': uploading }">
           {{ uploading ? 'Загружаем…' : '+ Картинка' }}

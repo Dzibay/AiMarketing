@@ -21,16 +21,17 @@
           <button class="ai-check__link" type="button" :disabled="board.disabled.value" @click="startRename">
             Переименовать
           </button>
-          <select
+          <UiSelect
             v-if="others.length"
             class="board-select"
+            size="sm"
+            :model-value="null"
+            :options="otherOptions"
+            placeholder="Объединить с…"
             aria-label="Объединить с группой"
             :disabled="board.disabled.value"
-            @change="merge($event)"
-          >
-            <option value="">Объединить с…</option>
-            <option v-for="n in others" :key="n" :value="n">{{ n }}</option>
-          </select>
+            @change="merge"
+          />
         </span>
       </template>
     </header>
@@ -41,9 +42,8 @@
         :key="k.text"
         :class="{ 'is-pending': k.pending, 'is-off': !board.isOn(k), 'is-own': k.own, 'is-selected': selected.includes(k.text) }"
       >
-        <input
+        <UiCheckbox
           v-if="k.pending"
-          type="checkbox"
           :checked="board.isOn(k)"
           :disabled="board.disabled.value"
           :aria-label="k.text"
@@ -52,7 +52,7 @@
         <button
           type="button"
           class="board-chips__text"
-          :title="k.note || 'Выбрать: перенести, изменить или убрать'"
+          v-tip="k.note || 'Выбрать: перенести, изменить или убрать'"
           :aria-pressed="selected.includes(k.text)"
           :disabled="board.disabled.value"
           @click="select(k)"
@@ -83,10 +83,15 @@
     </form>
     <div v-else-if="selected.length" class="board-group__bar">
       <span>Выбрано: {{ selected.length }}</span>
-      <select v-if="others.length" v-model="moveTo" class="board-select" aria-label="Перенести в группу">
-        <option value="">Перенести в…</option>
-        <option v-for="n in others" :key="n" :value="n">{{ n }}</option>
-      </select>
+      <UiSelect
+        v-if="others.length"
+        v-model="moveTo"
+        class="board-select"
+        size="sm"
+        :options="otherOptions"
+        placeholder="Перенести в…"
+        aria-label="Перенести в группу"
+      />
       <button v-if="moveTo" class="btn btn--accent btn--xs" type="button" :disabled="board.disabled.value" @click="move">
         Перенести
       </button>
@@ -160,6 +165,8 @@
  * аудитории, заголовки и тексты с правкой, картинки и предпросмотр объявления на компьютере и телефоне.
  */
 import { computed, inject, nextTick, ref, watch } from 'vue'
+import UiCheckbox from '../../components/ui/UiCheckbox.vue'
+import UiSelect from '../../components/ui/UiSelect.vue'
 import { askConfirm } from '../../composables/useConfirm'
 import { plural } from '../../utils/format'
 import AdPreview from './AdPreview.vue'
@@ -196,6 +203,7 @@ const name = ref('')
 const nameField = ref(null)
 
 const others = computed(() => props.names.filter((n) => n !== props.group.name))
+const otherOptions = computed(() => others.value.map((n) => ({ value: n, label: n })))
 const shown = computed(() => (expanded.value ? props.group.keywords : props.group.keywords.slice(0, KEYWORDS_SHOWN)))
 const onKeywords = computed(() => props.group.keywords.filter(board.isOn).length)
 const audiences = computed(() => props.group.audiences || [])
@@ -281,9 +289,7 @@ async function rename() {
   if (await board.edit([{ op: 'rename_group', group: props.group.name, to: name.value.trim() }])) renaming.value = false
 }
 
-async function merge(event) {
-  const target = event.target.value
-  event.target.value = ''
+async function merge(target) {
   if (!target) return
   const ok = await askConfirm(
     `Объединить «${props.group.name}» с «${target}»? Фразы перейдут в «${target}»; объявление останется от «${target}», а если его там нет — возьмётся из «${props.group.name}».`,

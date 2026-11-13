@@ -16,11 +16,10 @@
         <thead>
           <tr>
             <th v-if="!readonly" class="ai-check__box" scope="col">
-              <input
-                type="checkbox"
+              <UiCheckbox
                 aria-label="Все строки"
                 :checked="onCount === rows.length"
-                :indeterminate.prop="onCount > 0 && onCount < rows.length"
+                :indeterminate="onCount > 0 && onCount < rows.length"
                 :disabled="disabled"
                 @change="setAll($event.target.checked)"
               />
@@ -32,16 +31,16 @@
         <tbody v-for="sec in sections" :key="sec.name">
           <tr v-if="sec.name" class="ai-check__section" :class="{ 'is-off': sec.group && isOff(sec.group) }">
             <th :colspan="span" scope="rowgroup">
-              <label v-if="!readonly" class="ai-check__section-label">
-                <input
-                  type="checkbox"
-                  :checked="sectionOn(sec)"
-                  :indeterminate.prop="sectionSome(sec)"
-                  :disabled="disabled"
-                  @change="setSection(sec, $event.target.checked)"
-                />
-                <span>{{ sec.name }}</span>
-              </label>
+              <UiCheckbox
+                v-if="!readonly"
+                class="ai-check__section-label"
+                :checked="sectionOn(sec)"
+                :indeterminate="sectionSome(sec)"
+                :disabled="disabled"
+                @change="setSection(sec, $event.target.checked)"
+              >
+                {{ sec.name }}
+              </UiCheckbox>
               <span v-else>{{ sec.name }}</span>
               <small>{{ sectionText(sec) }}</small>
             </th>
@@ -55,8 +54,7 @@
             @click="onRow(row, $event)"
           >
             <td v-if="!readonly" class="ai-check__box">
-              <input
-                type="checkbox"
+              <UiCheckbox
                 :checked="isOn(row)"
                 :disabled="disabled || isLocked(row)"
                 :aria-label="row.cells[0]"
@@ -84,6 +82,7 @@
  * v-model:off — id снятых строк. groups — {раздел: id строки «вся группа»}: снятая группа снимает и свои строки.
  */
 import { computed, ref } from 'vue'
+import UiCheckbox from '../../components/ui/UiCheckbox.vue'
 
 const props = defineProps({
   columns: { type: Array, default: () => [] },

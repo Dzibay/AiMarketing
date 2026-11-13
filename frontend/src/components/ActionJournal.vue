@@ -96,9 +96,8 @@
             <button
               v-else-if="a.undo"
               class="btn btn--ghost btn--sm"
-              :class="{ 'btn--danger': a.undo.danger }"
               type="button"
-              :title="a.undo.label"
+              v-tip="a.undo.label"
               @click="undoId = a.id"
             >
               <Undo2 aria-hidden="true" />{{ expert ? 'Откатить' : 'Вернуть как было' }}
@@ -111,7 +110,7 @@
                 :class="`hres--${result(a).tone}`"
                 type="button"
                 :aria-label="`${result(a).label} — показать подробности`"
-                :title="result(a).label"
+                v-tip="result(a).label"
                 :aria-expanded="open.has(a.id)"
                 :aria-controls="`hmore-${a.id}`"
                 @click="toggleOpen(a.id)"
@@ -124,7 +123,7 @@
                 :class="`hres--${result(a).tone}`"
                 role="img"
                 :aria-label="result(a).label"
-                :title="result(a).label"
+                v-tip="result(a).label"
               >
                 <component :is="result(a).icon" aria-hidden="true" />
               </span>
@@ -135,7 +134,7 @@
               class="hres hres--more"
               type="button"
               :aria-label="open.has(a.id) ? 'Скрыть параметры' : 'Параметры и ответ Директа'"
-              :title="open.has(a.id) ? 'Скрыть параметры' : 'Параметры и ответ Директа'"
+              v-tip="open.has(a.id) ? 'Скрыть параметры' : 'Параметры и ответ Директа'"
               :aria-expanded="open.has(a.id)"
               :aria-controls="`hmore-${a.id}`"
               @click="toggleOpen(a.id)"

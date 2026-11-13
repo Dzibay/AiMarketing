@@ -104,7 +104,7 @@
               <button class="btn btn--ghost btn--xs" type="button" :disabled="rowBusy === r.id" @click="toggle(r)">
                 {{ r.active ? 'Выключить' : 'Включить' }}
               </button>
-              <button class="btn btn--ghost btn--xs btn--danger" type="button" :disabled="rowBusy === r.id" @click="remove(r)">
+              <button class="btn btn--ghost btn--xs" type="button" :disabled="rowBusy === r.id" @click="remove(r)">
                 Удалить
               </button>
             </td>

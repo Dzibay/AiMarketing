@@ -13,9 +13,7 @@
     <form class="form-grid" @submit.prevent="saveAi">
       <div v-field class="field">
         <label>Провайдер</label>
-        <select v-model="aiForm.provider">
-          <option v-for="p in ai.providers" :key="p.id" :value="p.id">{{ p.label }}</option>
-        </select>
+        <UiSelect v-model="aiForm.provider" :options="choices(ai.providers)" />
       </div>
       <div v-field class="field">
         <label>Температура: {{ Number(aiForm.temperature).toFixed(1) }}</label>
@@ -65,7 +63,7 @@
           </thead>
           <tbody>
             <tr v-for="c in aiForm.classes" :key="c.id">
-              <td><input v-model="c.enabled" type="checkbox" :aria-label="`Класс «${c.name}» включён`" /></td>
+              <td><UiCheckbox v-model="c.enabled" :aria-label="`Класс «${c.name}» включён`" /></td>
               <td>
                 <input v-model.trim="c.name" type="text" maxlength="40" :aria-label="`Название класса ${c.id}`" />
                 <small class="cell-note model-dots">{{ dots(c.dots) }}</small>
@@ -84,9 +82,7 @@
       <h3>Фоновые задачи</h3>
       <div v-for="t in ai.tasks" :key="t.id" v-field class="field">
         <label>{{ t.label }}</label>
-        <select v-model="aiForm.task_classes[t.id]">
-          <option v-for="c in aiForm.classes" :key="c.id" :value="c.id">{{ c.name }}</option>
-        </select>
+        <UiSelect v-model="aiForm.task_classes[t.id]" :options="choices(aiForm.classes, 'name')" />
       </div>
 
       <p class="field-hint">Лимит единиц пользователя задаётся тарифом — вкладка «Тарифы».</p>
@@ -96,7 +92,7 @@
         <button class="btn btn--ghost" type="button" :disabled="aiBusy || !ai.configured" @click="testAi">
           {{ aiBusy && aiTesting ? 'Проверяем…' : 'Проверить подключение' }}
         </button>
-        <button v-if="ai.has_key" class="btn btn--ghost btn--danger" type="button" :disabled="aiBusy" @click="deleteAiKey">
+        <button v-if="ai.has_key" class="btn btn--ghost" type="button" :disabled="aiBusy" @click="deleteAiKey">
           Удалить ключ
         </button>
       </div>
@@ -157,7 +153,7 @@
       <div class="form-actions">
         <button class="btn btn--accent" type="submit" :disabled="wsBusy">Сохранить</button>
         <button class="btn btn--ghost" type="button" :disabled="wsBusy || !wordstat.configured" @click="testWordstat">Проверить</button>
-        <button v-if="wordstat.has_key" class="btn btn--ghost btn--danger" type="button" :disabled="wsBusy" @click="deleteWordstatKey">
+        <button v-if="wordstat.has_key" class="btn btn--ghost" type="button" :disabled="wsBusy" @click="deleteWordstatKey">
           Удалить ключ
         </button>
       </div>
@@ -185,9 +181,7 @@
     <form class="form-grid" @submit.prevent="saveImages">
       <div v-field class="field">
         <label>Провайдер</label>
-        <select v-model="igForm.provider">
-          <option v-for="p in images.providers" :key="p.id" :value="p.id">{{ p.label }}</option>
-        </select>
+        <UiSelect v-model="igForm.provider" :options="choices(images.providers)" />
       </div>
       <div v-field class="field">
         <label>Модель</label>
@@ -227,7 +221,7 @@
         <button class="btn btn--ghost" type="button" :disabled="igBusy || !images.configured" @click="testImages">
           {{ igBusy && igTesting ? 'Рисуем…' : 'Проверить' }}
         </button>
-        <button v-if="images.has_key" class="btn btn--ghost btn--danger" type="button" :disabled="igBusy" @click="deleteImagesKey">
+        <button v-if="images.has_key" class="btn btn--ghost" type="button" :disabled="igBusy" @click="deleteImagesKey">
           Удалить ключ
         </button>
       </div>
@@ -245,12 +239,17 @@
 
 <script setup>
 import { computed, onMounted, reactive, ref } from 'vue'
+import UiCheckbox from '../../components/ui/UiCheckbox.vue'
+import UiSelect from '../../components/ui/UiSelect.vue'
 import { adminApi } from '../../api/admin'
 import AdminSiteCheck from './AdminSiteCheck.vue'
 import { errorText } from '../../api/web'
 import { askConfirm } from '../../composables/useConfirm'
 import { pushToast } from '../../composables/useToasts'
 import { formatDateTime, num } from '../../utils/format'
+
+/** Пункты выпадающего списка из [{ id, label }] (или другого поля с названием). */
+const choices = (list, key = 'label') => (list || []).map((x) => ({ value: x.id, label: x[key] }))
 
 const props = defineProps({
   // Настройки моста из AdminBridge: через него ли ходят чат и картинки.

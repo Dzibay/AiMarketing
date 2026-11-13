@@ -11,7 +11,7 @@
           {{ s.severity === 'critical' ? 'Срочно' : 'Стоит посмотреть' }}
         </span>
         <span v-if="showProject" class="sig__ws">{{ s.workspace_name || 'Все проекты' }}</span>
-        <button class="sig__hide" type="button" title="Скрыть до завтра" aria-label="Скрыть до завтра" @click="hide(s)">
+        <button class="sig__hide" type="button" v-tip="'Скрыть до завтра'" aria-label="Скрыть до завтра" @click="hide(s)">
           <X :size="15" aria-hidden="true" />
         </button>
       </div>
@@ -19,7 +19,7 @@
       <p v-if="s.note">{{ s.note }}</p>
       <div class="sig__acts">
         <RouterLink v-if="s.link" class="btn btn--accent" :to="s.link.to">{{ s.link.label }}</RouterLink>
-        <button class="sig__ask" type="button" title="Спросить ИИ об этом" aria-label="Спросить ИИ об этом" @click="ask(s)">
+        <button class="sig__ask" type="button" v-tip="'Спросить ИИ об этом'" aria-label="Спросить ИИ об этом" @click="ask(s)">
           <Sparkles :size="16" aria-hidden="true" />
         </button>
       </div>

@@ -42,11 +42,11 @@
         </div>
         <div v-field class="field">
           <label>Начало</label>
-          <input v-model="form.start_date" type="date" />
+          <UiDatePicker v-model="form.start_date" />
         </div>
         <div v-field class="field">
-          <label>Окончание (пусто — без даты)</label>
-          <input v-model="form.end_date" type="date" :min="form.start_date" />
+          <label>Окончание</label>
+          <UiDatePicker v-model="form.end_date" :min="form.start_date" clearable clear-label="Без даты окончания" />
         </div>
         <!-- «Информации о клиенте» нет: Директ ведёт кампании как ЕПК, где ClientInfo не поддерживается. -->
       </div>
@@ -70,21 +70,17 @@
         </div>
         <div v-field class="field">
           <label>Модель атрибуции</label>
-          <select v-model="form.attribution_model">
-            <option value="" disabled>Не задана</option>
-            <option v-for="m in options?.attribution_models || []" :key="m.id" :value="m.id">{{ m.label }}</option>
-          </select>
+          <UiSelect v-model="form.attribution_model" :options="attributionOptions" placeholder="Не задана" />
         </div>
         <div v-field class="field field--wide">
           <label>Ключевые цели</label>
           <div v-for="(g, i) in form.priority_goals" :key="i" class="filters filters--inline">
-            <select v-model.number="g.goal_id" :aria-label="`Ключевая цель ${i + 1}`">
-              <option :value="null">Цель</option>
-              <option v-for="goal in options?.goals || []" :key="goal.goal_id" :value="goal.goal_id">
-                {{ goal.name }}
-              </option>
-              <option v-if="g.goal_id && !goalKnown(g.goal_id)" :value="g.goal_id">Цель {{ g.goal_id }}</option>
-            </select>
+            <UiSelect
+              v-model="g.goal_id"
+              :options="goalChoices(g.goal_id)"
+              placeholder="Цель"
+              :aria-label="`Ключевая цель ${i + 1}`"
+            />
             <input v-model.number="g.value_rub" type="number" min="0.3" step="any" placeholder="ценность от 0,3 ₽" :aria-label="`Ценность цели ${i + 1}, ₽`" />
             <button class="btn btn--ghost" type="button" @click="form.priority_goals.splice(i, 1)">Убрать</button>
           </div>
@@ -108,10 +104,7 @@
         <div v-field class="field field--wide">
           <label>Расписание</label>
           <ScheduleGrid v-model="form.schedule" />
-          <label class="check-row">
-            <input v-model="form.consider_working_weekends" type="checkbox" />
-            Учитывать перенос рабочих дней в праздники
-          </label>
+          <UiCheckbox v-model="form.consider_working_weekends" class="check-row">Учитывать перенос рабочих дней в праздники</UiCheckbox>
         </div>
         <div v-field class="field field--wide">
           <label>Минус-фразы кампании — по одной на строку ({{ lines(form.negative_keywords).length }})</label>
@@ -127,10 +120,9 @@
         </div>
         <div v-field class="field field--wide">
           <label>Опции</label>
-          <label v-for="o in options?.settings || []" :key="o.id" class="check-row">
-            <input v-model="form.settings[o.id]" type="checkbox" />
+          <UiCheckbox v-for="o in options?.settings || []" :key="o.id" v-model="form.settings[o.id]" class="check-row">
             {{ o.label }}
-          </label>
+          </UiCheckbox>
         </div>
       </div>
     </section>
@@ -149,6 +141,9 @@
 
 <script setup>
 import { computed, onMounted, reactive, ref } from 'vue'
+import UiCheckbox from '../../components/ui/UiCheckbox.vue'
+import UiDatePicker from '../../components/ui/UiDatePicker.vue'
+import UiSelect from '../../components/ui/UiSelect.vue'
 import ScheduleGrid from '../../components/ScheduleGrid.vue'
 import StrategyFields from '../../components/StrategyFields.vue'
 import { errorText, webApi, wsApi } from '../../api/web'
@@ -216,6 +211,17 @@ function counterIds() {
 
 function goalKnown(id) {
   return (options.value?.goals || []).some((g) => g.goal_id === id)
+}
+
+const attributionOptions = computed(() =>
+  (options.value?.attribution_models || []).map((m) => ({ value: m.id, label: m.label })),
+)
+
+/** Цели для строки ключевой цели; цель, которой уже нет в счётчике, остаётся в списке номером. */
+function goalChoices(current) {
+  const list = (options.value?.goals || []).map((g) => ({ value: g.goal_id, label: g.name }))
+  if (current && !goalKnown(current)) list.push({ value: current, label: `Цель ${current}` })
+  return list
 }
 
 function cleanStrategy(s) {

@@ -1,5 +1,5 @@
 <template>
-  <span ref="root" class="term-hint" :class="{ 'is-open': open }" @mouseenter="show" @mouseleave="hide">
+  <span class="term-hint" :class="{ 'is-open': shown }">
     <!-- span, а не button: подсказка стоит и внутри <label>, где кнопка перехватила бы связь подписи с полем. -->
     <span
       ref="btn"
@@ -7,29 +7,25 @@
       role="button"
       tabindex="0"
       :aria-label="`Что значит «${entry.title}»`"
-      :aria-expanded="open"
-      :aria-describedby="open ? id : undefined"
+      :aria-expanded="shown"
       @click.prevent="toggle"
       @keydown.enter.prevent="toggle"
       @keydown.space.prevent="toggle"
-      @focus="show"
-      @blur="hide"
+      @pointerenter="onEnter"
+      @pointerleave="onLeave"
+      @focus="show(false)"
+      @blur="hideTip(btn)"
     >?</span>
-    <!-- В body и position: fixed — таблицы с прокруткой и карточки не обрезают пояснение. -->
-    <Teleport to="body">
-      <span v-if="open" :id="id" class="term-hint__pop" role="tooltip" :style="popStyle">
-        <strong>{{ entry.title }}</strong>
-        {{ entry.text }}
-      </span>
-    </Teleport>
   </span>
 </template>
 
 <script setup>
 import { computed, onBeforeUnmount, ref } from 'vue'
+import { hideTip, showTip, tip } from '../composables/useTooltip'
 
 /**
  * Подсказка «?» к термину рекламы: наведение, фокус или нажатие (на телефоне) открывают пояснение.
+ * Пояснение рисует общий TooltipHost; нажатие закрепляет его до нажатия мимо.
  * term — из словаря ниже; title и text — своё пояснение к месту (например, как считается период).
  */
 const props = defineProps({
@@ -86,79 +82,33 @@ const TERMS = {
   },
 }
 
-const POP_WIDTH = 280
-const GAP = 8
-
 const entry = computed(() =>
   props.text ? { title: props.title, text: props.text } : TERMS[props.term] || { title: props.title || props.term, text: '' },
 )
-const id = `term-hint-${Math.random().toString(36).slice(2, 9)}`
-const open = ref(false)
-const pinned = ref(false)
-const root = ref(null)
 const btn = ref(null)
-const popStyle = ref({})
+const shown = computed(() => !!btn.value && tip.el === btn.value)
 
-function place() {
-  const rect = btn.value?.getBoundingClientRect()
-  if (!rect) return
-  const vw = window.innerWidth
-  const half = Math.min(POP_WIDTH, vw * 0.8) / 2
-  const center = Math.min(Math.max(rect.left + rect.width / 2, half + GAP), vw - half - GAP)
-  // Снизу не помещается — показываем над значком.
-  const below = rect.bottom + 6 + 140 < window.innerHeight
-  popStyle.value = below
-    ? { left: `${center}px`, top: `${rect.bottom + 6}px` }
-    : { left: `${center}px`, bottom: `${window.innerHeight - rect.top + 6}px` }
-}
-
-function setOpen(value) {
-  if (value && !open.value) {
-    place()
-    window.addEventListener('scroll', close, true)
-    window.addEventListener('resize', close)
-    document.addEventListener('click', onDocClick)
-    document.addEventListener('keydown', onKey)
-  } else if (!value && open.value) {
-    unlisten()
-  }
-  open.value = value
-}
-
-function show() {
-  setOpen(true)
-}
-
-function hide() {
-  setOpen(pinned.value)
-}
-
-function close() {
-  pinned.value = false
-  setOpen(false)
+function show(pinned) {
+  if (!btn.value || !entry.value.text) return
+  showTip(btn.value, { title: entry.value.title, text: entry.value.text, pinned })
 }
 
 function toggle() {
-  pinned.value = !pinned.value
-  setOpen(pinned.value)
+  if (shown.value && tip.pinned) hideTip(btn.value)
+  else show(true)
 }
 
-function onDocClick(event) {
-  if (root.value && !root.value.contains(event.target)) close()
+function onEnter(event) {
+  if (event.pointerType === 'mouse') show(false)
 }
 
-function onKey(event) {
-  if (event.key === 'Escape') close()
+function onLeave() {
+  if (shown.value && !tip.pinned) hideTip(btn.value)
 }
 
-function unlisten() {
-  window.removeEventListener('scroll', close, true)
-  window.removeEventListener('resize', close)
-  document.removeEventListener('click', onDocClick)
-  document.removeEventListener('keydown', onKey)
-}
-
-onBeforeUnmount(unlisten)
+onBeforeUnmount(() => {
+  if (btn.value) hideTip(btn.value)
+})
 </script>
 
 <style scoped>
@@ -193,32 +143,5 @@ onBeforeUnmount(unlisten)
 .term-hint__btn:focus-visible {
   outline: 2px solid var(--accent-ring, var(--accent));
   outline-offset: 2px;
-}
-
-.term-hint__pop {
-  position: fixed;
-  z-index: 1000;
-  transform: translateX(-50%);
-  width: max-content;
-  max-width: min(280px, 80vw);
-  padding: 0.6rem 0.75rem;
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  background: var(--surface);
-  color: var(--ink);
-  box-shadow: var(--shadow, 0 8px 24px rgb(0 0 0 / 0.12));
-  font-size: 0.8rem;
-  font-weight: 400;
-  line-height: 1.4;
-  text-align: left;
-  text-transform: none;
-  letter-spacing: normal;
-  white-space: normal;
-  pointer-events: none;
-}
-
-.term-hint__pop strong {
-  display: block;
-  margin-bottom: 0.2rem;
 }
 </style>

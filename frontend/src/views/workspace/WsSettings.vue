@@ -106,7 +106,6 @@
                 <button
                   v-if="expert || !ws.counter_id"
                   class="btn btn--ghost"
-                  :class="{ 'btn--danger': !ws.counter_id }"
                   type="button"
                   :disabled="archiveBusy"
                   @click="toggleArchive"
@@ -115,7 +114,7 @@
                 </button>
                 <button
                   v-if="ws.counter_id"
-                  class="btn btn--ghost btn--danger"
+                  class="btn btn--ghost"
                   type="button"
                   :disabled="archiveBusy"
                   @click="removeThisSite"
@@ -236,19 +235,15 @@
           </div>
         </div>
         <form class="ai-access" @submit.prevent="saveAi">
-          <label class="check-row ai-access__full">
-            <input v-model="ai.full_access" type="checkbox" />
-            <span>
-              <strong>Полный доступ</strong>
-              <small>ИИ выполняет любые действия в рамках проекта без согласования. Удаление — тоже.</small>
-            </span>
-          </label>
+          <UiCheckbox v-model="ai.full_access" class="check-row ai-access__full">
+            <strong>Полный доступ</strong>
+            <small>ИИ выполняет любые действия в рамках проекта без согласования. Удаление — тоже.</small>
+          </UiCheckbox>
           <fieldset class="ai-access__cats" :disabled="ai.full_access">
             <legend>Без согласования разрешено</legend>
-            <label v-for="c in ws.ai_categories" :key="c.key" class="check-row">
-              <input v-model="ai.categories[c.key]" type="checkbox" />
-              <span>{{ c.label }}</span>
-            </label>
+            <UiCheckbox v-for="c in ws.ai_categories" :key="c.key" v-model="ai.categories[c.key]" class="check-row">
+              {{ c.label }}
+            </UiCheckbox>
           </fieldset>
           <div v-field class="field">
             <label>Предел разового изменения бюджета или ставки, %</label>
@@ -333,27 +328,25 @@
                   {{ a.counter_access.hint }}
                 </small>
               </div>
-              <button class="btn btn--ghost btn--danger" type="button" :disabled="accountBusy === a.id" @click="removeAccount(a)">
-                Отключить
-              </button>
+              <div class="row-actions">
+                <UiMenu size="sm" :label="`Действия с кабинетом ${a.client_login}`" :disabled="accountBusy === a.id">
+                  <UiMenuItem :icon="Unplug" danger @click="removeAccount(a)">Отключить кабинет</UiMenuItem>
+                </UiMenu>
+              </div>
             </div>
           </div>
 
           <div v-if="available.length" class="add-account">
             <h3>Подключить кабинет</h3>
             <form class="filters filters--inline" @submit.prevent="addAccount">
-              <select v-model="addForm.account_id" required aria-label="Кабинет">
-                <option :value="null" disabled>Кабинет…</option>
-                <option v-for="a in available" :key="a.id" :value="a.id" :disabled="!a.enabled">
-                  {{ a.name || a.client_login }} · кампаний {{ a.campaigns_total
-                  }}{{ a.campaigns_matching ? `, со счётчиком ${a.campaigns_matching}` : '' }}
-                </option>
-              </select>
-              <select v-model="addForm.campaigns" aria-label="Какие кампании забрать">
-                <option value="matching">Забрать кампании с этим счётчиком</option>
-                <option value="all">Забрать все свободные кампании</option>
-                <option value="none">Без кампаний</option>
-              </select>
+              <UiSelect
+                v-model="addForm.account_id"
+                :options="availableOptions"
+                placeholder="Кабинет…"
+                aria-label="Кабинет"
+                required
+              />
+              <UiSelect v-model="addForm.campaigns" :options="TAKE_CAMPAIGNS" aria-label="Какие кампании забрать" />
               <button class="btn btn--accent" type="submit" :disabled="!addForm.account_id || accountBusy === 'add'">
                 {{ accountBusy === 'add' ? 'Подключаем…' : 'Подключить' }}
               </button>
@@ -379,14 +372,8 @@
 
           <div class="filters filters--inline">
             <input v-model.trim="campaignSearch" class="search-input" type="search" placeholder="Название или № кампании" aria-label="Поиск кампании" />
-            <label class="check-row">
-              <input v-model="onlyMatching" type="checkbox" />
-              <span>Только со счётчиком № {{ ws.counter_id }}</span>
-            </label>
-            <label class="check-row">
-              <input v-model="showArchived" type="checkbox" />
-              <span>Показывать архивные</span>
-            </label>
+            <UiSwitch v-model="onlyMatching">Только со счётчиком № {{ ws.counter_id }}</UiSwitch>
+            <UiSwitch v-model="showArchived">Показывать архивные</UiSwitch>
           </div>
 
           <p v-if="candidatesLoading && !groups.length" class="empty">Загружаем кампании…</p>
@@ -398,23 +385,26 @@
           <template v-else>
             <div v-for="g in visibleGroups" :key="g.account_id" class="campaign-picker">
               <div class="campaign-picker__head">
-                <label class="check-row">
-                  <input
-                    type="checkbox"
-                    :checked="g.items.length > 0 && g.items.every((c) => selected.has(c.id))"
-                    :indeterminate.prop="g.items.some((c) => selected.has(c.id)) && !g.items.every((c) => selected.has(c.id))"
-                    @change="toggleGroup(g, $event.target.checked)"
-                  />
+                <UiCheckbox
+                  :checked="g.items.length > 0 && g.items.every((c) => selected.has(c.id))"
+                  :indeterminate="g.items.some((c) => selected.has(c.id)) && !g.items.every((c) => selected.has(c.id))"
+                  @change="toggleGroup(g, $event.target.checked)"
+                >
                   <strong>{{ g.account_name }}</strong>
-                </label>
+                </UiCheckbox>
                 <small>
                   {{ g.client_login }}
                   <template v-if="!g.linked"> · кабинет подключится автоматически</template>
                 </small>
               </div>
-              <label v-for="c in g.items" :key="c.id" class="campaign-picker__row" :class="{ 'is-off': c.state === 'ARCHIVED' }">
-                <input type="checkbox" :checked="selected.has(c.id)" @change="toggle(c.id, $event.target.checked)" />
-                <span>
+              <UiCheckbox
+                v-for="c in g.items"
+                :key="c.id"
+                class="check-row campaign-picker__row"
+                :class="{ 'is-off': c.state === 'ARCHIVED' }"
+                :checked="selected.has(c.id)"
+                @change="toggle(c.id, $event.target.checked)"
+              >
                   {{ c.name }}
                   <small>
                     № {{ c.campaign_id }} · {{ CAMPAIGN_STATES[c.state] || c.state || '—' }} ·
@@ -424,8 +414,7 @@
                     </template>
                     <template v-if="c.workspace_id && !c.in_this"> · сейчас в «{{ c.workspace_name }}»</template>
                   </small>
-                </span>
-              </label>
+              </UiCheckbox>
             </div>
             <p v-if="!visibleGroups.length" class="empty">Под фильтр ничего не подходит.</p>
           </template>
@@ -460,10 +449,12 @@
 
         <div v-field class="field client-pick">
           <label>Папка клиента</label>
-          <select :value="ws.client_id ?? ''" :disabled="clientBusy" @change="pickClient($event.target.value)">
-            <option value="">Без клиента</option>
-            <option v-for="c in clientOptions" :key="c.id" :value="c.id">{{ c.name }}{{ c.archived ? ' (в архиве)' : '' }}</option>
-          </select>
+          <UiSelect
+            :model-value="ws.client_id ?? null"
+            :options="clientChoices"
+            :disabled="clientBusy"
+            @change="pickClient"
+          />
         </div>
 
         <template v-if="currentClient">
@@ -482,13 +473,16 @@
             </div>
             <div class="form-actions">
               <button class="btn btn--accent" type="submit" :disabled="clientBusy || !clientChanged">Сохранить клиента</button>
-              <button class="btn btn--ghost" type="button" :disabled="clientBusy" @click="detachClient">Убрать проект от клиента</button>
-              <button class="btn btn--ghost" type="button" :disabled="clientBusy" @click="archiveClient(currentClient, !currentClient.archived)">
-                {{ currentClient.archived ? 'Вернуть из архива' : 'В архив' }}
-              </button>
-              <button class="btn btn--ghost btn--danger" type="button" :disabled="clientBusy" @click="removeClient(currentClient)">
-                Удалить клиента
-              </button>
+              <UiMenu :label="`Ещё действия с клиентом «${currentClient.name}»`" :disabled="clientBusy">
+                <UiMenuItem :icon="Unlink" @click="detachClient">Убрать проект от клиента</UiMenuItem>
+                <UiMenuItem
+                  :icon="currentClient.archived ? ArchiveRestore : Archive"
+                  @click="archiveClient(currentClient, !currentClient.archived)"
+                >
+                  {{ currentClient.archived ? 'Вернуть из архива' : 'В архив' }}
+                </UiMenuItem>
+                <UiMenuItem :icon="Trash2" danger @click="removeClient(currentClient)">Удалить клиента</UiMenuItem>
+              </UiMenu>
             </div>
           </form>
           <p class="hint">
@@ -525,9 +519,9 @@
               </div>
               <div class="row-actions">
                 <button class="btn btn--ghost" type="button" :disabled="clientBusy" @click="archiveClient(c, false)">Вернуть</button>
-                <button class="btn btn--ghost btn--danger" type="button" :disabled="clientBusy" @click="removeClient(c)">
-                  Удалить
-                </button>
+                <UiMenu size="sm" :label="`Действия с клиентом «${c.name}»`" :disabled="clientBusy">
+                  <UiMenuItem :icon="Trash2" danger @click="removeClient(c)">Удалить клиента</UiMenuItem>
+                </UiMenu>
               </div>
             </div>
           </div>
@@ -543,7 +537,20 @@
 import { askConfirm } from '../../composables/useConfirm'
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
-import { Archive, FileText, Folder, Link2, Lock, Megaphone, SlidersHorizontal, Sparkles, Trash2 } from '@lucide/vue'
+import {
+  Archive,
+  ArchiveRestore,
+  FileText,
+  Folder,
+  Link2,
+  Lock,
+  Megaphone,
+  SlidersHorizontal,
+  Sparkles,
+  Trash2,
+  Unlink,
+  Unplug,
+} from '@lucide/vue'
 import { aiApi, errorText, jobProgressText, webApi, wsApi } from '../../api/web'
 import { removeSite } from '../../composables/useSiteRemoval'
 import { pushToast } from '../../composables/useToasts'
@@ -554,8 +561,12 @@ import ContextFilesPanel from './ContextFilesPanel.vue'
 import LinkTemplatePanel from './LinkTemplatePanel.vue'
 import { useWs } from './context'
 import TermHint from '../../components/TermHint.vue'
+import UiCheckbox from '../../components/ui/UiCheckbox.vue'
+import UiMenu from '../../components/ui/UiMenu.vue'
+import UiMenuItem from '../../components/ui/UiMenuItem.vue'
 import UiNumber from '../../components/ui/UiNumber.vue'
 import UiSelect from '../../components/ui/UiSelect.vue'
+import UiSwitch from '../../components/ui/UiSwitch.vue'
 import ExpertHint from '../../components/ExpertHint.vue'
 import { useExpert } from '../../composables/useExpert'
 
@@ -678,6 +689,10 @@ async function saveGeneral() {
 // --- Клиент (бывшая страница «Клиенты») ---------------------------------------------------------
 
 const clientOptions = computed(() => clients.value.filter((c) => !c.archived || c.id === ws.value.client_id))
+const clientChoices = computed(() => [
+  { value: null, label: 'Без клиента' },
+  ...clientOptions.value.map((c) => ({ value: c.id, label: `${c.name}${c.archived ? ' (в архиве)' : ''}` })),
+])
 const archivedClients = computed(() => clients.value.filter((c) => c.archived && c.id !== ws.value.client_id))
 const currentClient = computed(() => clients.value.find((c) => c.id === ws.value.client_id) || null)
 const clientProjects = computed(() => workspaces.value.filter((w) => w.client_id === ws.value.client_id))
@@ -796,6 +811,19 @@ const accountsError = ref('')
 const accountBusy = ref(null)
 const addForm = reactive({ account_id: null, campaigns: 'matching' })
 const available = computed(() => candidates.value.filter((a) => !a.linked))
+const availableOptions = computed(() =>
+  available.value.map((a) => ({
+    value: a.id,
+    label: a.name || a.client_login,
+    hint: `кампаний ${a.campaigns_total}${a.campaigns_matching ? `, со счётчиком ${a.campaigns_matching}` : ''}`,
+    disabled: !a.enabled,
+  })),
+)
+const TAKE_CAMPAIGNS = [
+  { value: 'matching', label: 'Забрать кампании с этим счётчиком' },
+  { value: 'all', label: 'Забрать все свободные кампании' },
+  { value: 'none', label: 'Без кампаний' },
+]
 
 async function loadAccounts() {
   accountsError.value = ''

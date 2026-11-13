@@ -40,10 +40,9 @@
           autocomplete="new-password"
         />
       </div>
-      <label v-if="data.captcha.server_key_set" class="check-row">
-        <input v-model="form.captcha_clear" type="checkbox" />
-        <span>Стереть ключ сервера</span>
-      </label>
+      <UiCheckbox v-if="data.captcha.server_key_set" v-model="form.captcha_clear" class="check-row">
+        Стереть ключ сервера
+      </UiCheckbox>
 
       <h3 class="form-sub">ИИ-генераторы</h3>
       <p class="field-hint">
@@ -51,10 +50,9 @@
         сервисы»), расход — в «Расход» без пользователя. Сегодня: {{ num(data.tools.stats.today) }} · за 7 дней:
         {{ num(data.tools.stats.week) }}.
       </p>
-      <label class="check-row">
-        <input v-model="form.tools_enabled" type="checkbox" />
-        <span>Включены</span>
-      </label>
+      <UiCheckbox v-model="form.tools_enabled" class="check-row">
+        Включены
+      </UiCheckbox>
       <div v-field class="field">
         <label>Запусков с одного IP в сутки</label>
         <input v-model="form.tools_ip_daily" type="number" min="1" max="200" step="1" inputmode="numeric" />
@@ -92,7 +90,7 @@
             <td>{{ w.label }}</td>
             <td><a :href="`mailto:${w.email}`">{{ w.email }}</a></td>
             <td>
-              <button class="btn btn--ghost btn--xs btn--danger" type="button" :disabled="rowBusy === w.id" @click="remove(w)">
+              <button class="btn btn--ghost btn--xs" type="button" :disabled="rowBusy === w.id" @click="remove(w)">
                 Удалить
               </button>
             </td>
@@ -105,6 +103,7 @@
 
 <script setup>
 import { onMounted, reactive, ref } from 'vue'
+import UiCheckbox from '../../components/ui/UiCheckbox.vue'
 import { adminApi } from '../../api/admin'
 import { errorText } from '../../api/web'
 import { askConfirm } from '../../composables/useConfirm'

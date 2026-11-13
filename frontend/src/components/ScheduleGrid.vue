@@ -9,7 +9,7 @@
       <span></span>
       <span v-for="h in 24" :key="`h${h}`" class="schedule__hour">{{ h - 1 }}</span>
       <template v-for="(row, d) in grid" :key="`d${d}`">
-        <button type="button" class="schedule__day" :title="`Переключить ${DAYS[d]}`" @click="toggleRow(d)">
+        <button type="button" class="schedule__day" v-tip="`Переключить ${DAYS[d]}`" @click="toggleRow(d)">
           {{ DAYS[d] }}
         </button>
         <button

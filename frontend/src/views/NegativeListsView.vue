@@ -50,7 +50,20 @@
     </aside>
 
     <div class="neg-main">
-      <h2 class="section-h">{{ editing ? (selectedId ? detail?.name || 'Список' : 'Новый список') : 'Список' }}</h2>
+      <div class="neg-main-h">
+        <h2 class="section-h">{{ editing ? (selectedId ? detail?.name || 'Список' : 'Новый список') : 'Список' }}</h2>
+        <UiMenu v-if="editing && selectedId" size="sm" :label="`Действия со списком «${detail?.name || ''}»`" :disabled="busy">
+          <UiMenuItem
+            :icon="Trash2"
+            danger
+            :disabled="detail?.linked > 0"
+            :hint="detail?.linked ? 'Сначала снимите список со всех кампаний' : ''"
+            @click="remove"
+          >
+            Удалить список
+          </UiMenuItem>
+        </UiMenu>
+      </div>
       <EmptyState
         v-if="!editing"
         :icon="ListX"
@@ -86,16 +99,6 @@
             предпросмотр и примените заново.
           </p>
           <div class="neg-foot">
-            <button
-              v-if="selectedId"
-              class="btn btn--ghost btn--danger neg-del"
-              type="button"
-              :disabled="busy || detail?.linked > 0"
-              :title="detail?.linked ? 'Сначала снимите список со всех кампаний' : ''"
-              @click="remove"
-            >
-              <Trash2 :size="15" aria-hidden="true" />Удалить
-            </button>
             <button v-if="dirty" class="btn btn--ghost" type="button" :disabled="busy" @click="resetForm">
               {{ selectedId ? 'Отменить правки' : 'Отмена' }}
             </button>
@@ -121,24 +124,25 @@
 
         <div v-if="groups.length" class="ccard neg-camps">
           <div v-for="g in groups" :key="g.key" class="neg-group">
-            <label class="neg-group__h">
-              <input
-                type="checkbox"
-                :checked="g.allChecked"
-                :indeterminate.prop="g.someChecked && !g.allChecked"
-                :disabled="!g.selectable.length"
-                @change="toggleGroup(g, $event.target.checked)"
-              />
+            <UiCheckbox
+              class="neg-group__h"
+              :checked="g.allChecked"
+              :indeterminate="g.someChecked && !g.allChecked"
+              :disabled="!g.selectable.length"
+              @change="toggleGroup(g, $event.target.checked)"
+            >
               <b>{{ g.name }}</b>
               <span class="cgroup__n">{{ g.checkedCount }} из {{ g.items.length }}</span>
-            </label>
-            <label v-for="t in g.items" :key="t.id" class="neg-target" :class="{ 'is-off': isDisabled(t) }">
-              <input
-                type="checkbox"
-                :checked="checked.has(t.id)"
-                :disabled="isDisabled(t)"
-                @change="toggle(t.id, $event.target.checked)"
-              />
+            </UiCheckbox>
+            <UiCheckbox
+              v-for="t in g.items"
+              :key="t.id"
+              class="neg-target"
+              :class="{ 'is-off': isDisabled(t) }"
+              :checked="checked.has(t.id)"
+              :disabled="isDisabled(t)"
+              @change="toggle(t.id, $event.target.checked)"
+            >
               <span class="neg-target__name">
                 {{ t.name }}
                 <small>
@@ -150,7 +154,7 @@
                 {{ linkOf(t.id).stale ? 'ждёт обновления' : 'применён' }}
               </span>
               <span v-if="t.blocked" class="st st--off">{{ blockedLabel(t.blocked) }}</span>
-            </label>
+            </UiCheckbox>
           </div>
         </div>
         <div v-else-if="targets.length" class="ccard ccard--note">Ничего не нашлось.</div>
@@ -216,8 +220,8 @@
                   <span v-if="row.blocked" class="st st--off">{{ blockedLabel(row.blocked) }}</span>
                   <template v-else>{{ ACTION_LABELS[row.action] }}</template>
                 </td>
-                <td :title="row.add.join(', ')">{{ phraseSample(row.add) }}</td>
-                <td :title="row.remove.join(', ')">{{ phraseSample(row.remove) }}</td>
+                <td v-tip="row.add.join(', ')">{{ phraseSample(row.add) }}</td>
+                <td v-tip="row.remove.join(', ')">{{ phraseSample(row.remove) }}</td>
                 <td class="num">
                   {{ row.before }} → {{ row.after }}
                   <span class="cell-note">{{ row.chars.toLocaleString('ru-RU') }} симв.</span>
@@ -258,6 +262,7 @@ import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
 import { ChevronDown, FilePlus, ListPlus, ListX, Plus, Trash2 } from '@lucide/vue'
 import EmptyState from '../components/ui/EmptyState.vue'
 import PageHeader from '../components/ui/PageHeader.vue'
+import UiCheckbox from '../components/ui/UiCheckbox.vue'
 import UiMenu from '../components/ui/UiMenu.vue'
 import UiMenuItem from '../components/ui/UiMenuItem.vue'
 import { ERRORS, errorText, jobProgressText, webApi } from '../api/web'
@@ -618,6 +623,18 @@ onMounted(async () => {
 .neg-main > .section-h {
   margin-top: 0;
 }
+/* Заголовок редактора с «⋯» — на одной линии с заголовком «Списки» слева. */
+.neg-main-h {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  height: 22px;
+  margin-bottom: 10px;
+}
+.neg-main-h .section-h {
+  margin: 0;
+}
 .neg-main {
   min-width: 0;
 }
@@ -705,9 +722,6 @@ onMounted(async () => {
   justify-content: flex-end;
   gap: 8px;
 }
-.neg-del {
-  margin-right: auto;
-}
 .neg-camps-h {
   display: flex;
   flex-wrap: wrap;
@@ -725,6 +739,7 @@ onMounted(async () => {
 .neg-group__h,
 .neg-target {
   display: flex;
+  width: 100%;
   align-items: center;
   gap: 10px;
   padding: 10px 18px;
@@ -742,13 +757,12 @@ onMounted(async () => {
   cursor: default;
   opacity: 0.55;
 }
-.neg-group__h input,
-.neg-target input {
-  flex-shrink: 0;
-  width: 16px;
-  height: 16px;
-  margin: 0;
-  accent-color: var(--ink);
+.neg-group__h :deep(.ui-check__text),
+.neg-target :deep(.ui-check__text) {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 10px;
 }
 .neg-target__name {
   flex: 1;

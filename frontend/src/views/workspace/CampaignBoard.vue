@@ -15,7 +15,7 @@
           type="button"
           class="board__step"
           :class="`is-${s.status}`"
-          :title="STATUS[s.status] || s.status"
+          v-tip="STATUS[s.status] || s.status"
           @click="show(s.section)"
         >
           <span class="board__dot">{{ s.status === 'done' ? '✓' : i + 1 }}</span>
@@ -83,9 +83,8 @@
           :key="n.text"
           :class="{ 'is-pending': n.pending, 'is-off': !isOn(n), 'is-own': n.own }"
         >
-          <input
+          <UiCheckbox
             v-if="n.pending"
-            type="checkbox"
             :checked="isOn(n)"
             :disabled="disabled"
             :aria-label="n.text"
@@ -95,7 +94,7 @@
           <button
             class="board-x"
             type="button"
-            :title="n.pending && !n.added ? 'Снять галочку' : 'Убрать'"
+            v-tip="n.pending && !n.added ? 'Снять галочку' : 'Убрать'"
             :aria-label="`Убрать: ${n.text}`"
             :disabled="disabled"
             @click="remove('negative', '', [n])"
@@ -128,7 +127,7 @@
             :key="l.text"
             :class="{ 'is-pending': l.pending, 'is-off': !isOn(l) }"
           >
-            <input v-if="l.pending" type="checkbox" :checked="isOn(l)" :disabled="disabled" :aria-label="l.text" @change="toggle(l)" />
+            <UiCheckbox v-if="l.pending" :checked="isOn(l)" :disabled="disabled" :aria-label="l.text" @change="toggle(l)" />
             <strong>{{ l.text }}</strong>
             <small v-if="l.description">{{ l.description }}</small>
             <small v-if="l.href" class="board-links__href">{{ l.href }}</small>
@@ -139,7 +138,7 @@
         <h5 class="board__subhead">Уточнения</h5>
         <ul class="board-chips">
           <li v-for="c in build.callouts" :key="c.text" :class="{ 'is-pending': c.pending, 'is-off': !isOn(c) }">
-            <input v-if="c.pending" type="checkbox" :checked="isOn(c)" :disabled="disabled" :aria-label="c.text" @change="toggle(c)" />
+            <UiCheckbox v-if="c.pending" :checked="isOn(c)" :disabled="disabled" :aria-label="c.text" @change="toggle(c)" />
             <span class="board-chips__text">{{ c.text }}</span>
           </li>
         </ul>
@@ -204,6 +203,7 @@
  * готовности. Данные — build из get_chat; правки уходят через edit(ops) и возвращают чат целиком.
  */
 import { computed, nextTick, onMounted, provide, reactive, ref, watch } from 'vue'
+import UiCheckbox from '../../components/ui/UiCheckbox.vue'
 import { RouterLink } from 'vue-router'
 import { aiApi } from '../../api/web'
 import { plural } from '../../utils/format'

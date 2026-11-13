@@ -64,9 +64,7 @@
       </div>
       <div v-field class="field">
         <label>Что даёт</label>
-        <select v-model="form.kind">
-          <option v-for="(label, key) in kinds" :key="key" :value="key">{{ label }}</option>
-        </select>
+        <UiSelect v-model="form.kind" :options="kindOptions" />
       </div>
       <div v-if="form.kind === 'units'" v-field class="field">
         <label>Единиц к лимиту</label>
@@ -75,12 +73,7 @@
       </div>
       <div v-if="form.kind === 'plan'" v-field class="field">
         <label>Тариф</label>
-        <select v-model="form.plan_id" required>
-          <option :value="null" disabled>Выберите тариф</option>
-          <option v-for="pl in plans" :key="pl.id" :value="pl.id">
-            {{ pl.name }}{{ pl.active ? '' : ' (выключен)' }}
-          </option>
-        </select>
+        <UiSelect v-model="form.plan_id" :options="planOptions" placeholder="Выберите тариф" required />
       </div>
       <div v-if="form.kind !== 'units'" v-field class="field">
         <label>Дней</label>
@@ -95,24 +88,23 @@
       </div>
       <div v-field class="field">
         <label>Действует до</label>
-        <input v-model="form.valid_until" type="date" />
-        <small class="field-hint">Включительно, по Москве. Пусто — бессрочно.</small>
+        <UiDatePicker v-model="form.valid_until" clearable clear-label="Бессрочно" />
+        <small class="field-hint">Включительно, по Москве.</small>
       </div>
       <div v-field class="field field--wide">
         <label>Заметка</label>
         <input v-model="form.note" type="text" maxlength="200" placeholder="Для кого и зачем — видно только в админке" />
       </div>
-      <label class="check-row">
-        <input v-model="form.active" type="checkbox" />
-        <span>Включён — код можно активировать</span>
-      </label>
+      <UiCheckbox v-model="form.active" class="check-row">
+        Включён — код можно активировать
+      </UiCheckbox>
       <p v-if="form.id && form.uses" class="field-hint">
         Код уже активировали {{ num(form.uses) }} {{ plural(form.uses, 'раз', 'раза', 'раз') }}. Новые условия коснутся
         только следующих активаций.
       </p>
     </form>
     <template #footer>
-      <button v-if="form?.id" class="btn btn--ghost btn--danger" type="button" :disabled="busy" @click="remove">
+      <button v-if="form?.id" class="btn btn--ghost" type="button" :disabled="busy" @click="remove">
         Удалить
       </button>
       <button class="btn btn--ghost" type="button" :disabled="busy" @click="form = null">Отмена</button>
@@ -124,8 +116,11 @@
 </template>
 
 <script setup>
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
+import UiCheckbox from '../../components/ui/UiCheckbox.vue'
 import Modal from '../../components/ui/Modal.vue'
+import UiDatePicker from '../../components/ui/UiDatePicker.vue'
+import UiSelect from '../../components/ui/UiSelect.vue'
 import { adminApi } from '../../api/admin'
 import { errorText } from '../../api/web'
 import { askConfirm } from '../../composables/useConfirm'
@@ -135,6 +130,10 @@ import { formatDay, isoDay, num, plural } from '../../utils/format'
 const items = ref([])
 const kinds = ref({ units: 'Единицы к лимиту', days: 'Дни к подписке', plan: 'Тариф на N дней' })
 const plans = ref([])
+const kindOptions = computed(() => Object.entries(kinds.value).map(([value, label]) => ({ value, label })))
+const planOptions = computed(() =>
+  plans.value.map((pl) => ({ value: pl.id, label: `${pl.name}${pl.active ? '' : ' (выключен)'}` })),
+)
 const loading = ref(true)
 const form = ref(null)
 const busy = ref(false)

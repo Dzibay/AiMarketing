@@ -5,18 +5,16 @@
       <RouterLink :to="`/w/${ws.id}/campaigns`">← Все кампании</RouterLink>
     </template>
     <template v-if="!expert && !loadError" #actions>
-      <label v-if="canToggle" class="camp-switch">
-        <span class="switch">
-          <input
-            type="checkbox"
-            :checked="state === 'ON'"
-            :disabled="busy || !state"
-            :aria-label="state === 'ON' ? 'Остановить показы' : 'Запустить показы'"
-            @click.prevent="toggleState"
-          />
-        </span>
+      <UiSwitch
+        v-if="canToggle"
+        class="camp-switch"
+        :checked="state === 'ON'"
+        :disabled="busy || !state"
+        :aria-label="state === 'ON' ? 'Остановить показы' : 'Запустить показы'"
+        @click.prevent="toggleState"
+      >
         {{ state === 'ON' ? 'Идут показы' : 'Остановлена' }}
-      </label>
+      </UiSwitch>
       <RouterLink class="btn btn--accent" :to="aiLink">Разобрать с ИИ</RouterLink>
     </template>
   </PageHeader>
@@ -246,6 +244,7 @@ import PageHeader from '../../components/ui/PageHeader.vue'
 import UiMenu from '../../components/ui/UiMenu.vue'
 import UiMenuItem from '../../components/ui/UiMenuItem.vue'
 import UiStatus from '../../components/ui/UiStatus.vue'
+import UiSwitch from '../../components/ui/UiSwitch.vue'
 import { confirmCampaignArchive, confirmCampaignToggle } from '../../utils/campaignConfirm'
 import { useExpert } from '../../composables/useExpert'
 import { campaignHealth } from '../../utils/campaignHealth'

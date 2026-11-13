@@ -14,7 +14,7 @@
     </div>
     <p v-if="callouts.length" class="ad-preview__callouts">{{ callouts.slice(0, mobile ? 3 : 4).join(' · ') }}</p>
     <ul v-if="links.length" class="ad-preview__links">
-      <li v-for="(l, i) in links" :key="i" :title="l.description || l.href">{{ l.text }}</li>
+      <li v-for="(l, i) in links" :key="i" v-tip="l.description || l.href">{{ l.text }}</li>
     </ul>
     <div v-if="total > 1" class="ad-preview__nav">
       <button type="button" class="ad-preview__arrow" aria-label="Предыдущий вариант" @click="step(-1)">‹</button>

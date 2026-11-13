@@ -12,7 +12,7 @@
       }"
       type="button"
       :aria-label="label"
-      :title="label"
+      v-tip="label"
       aria-haspopup="menu"
       :aria-expanded="open"
       :disabled="disabled"

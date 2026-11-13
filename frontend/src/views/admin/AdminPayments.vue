@@ -22,14 +22,12 @@
           :placeholder="settings.has_key ? `Сохранён ${settings.key_hint} — пусто, чтобы не менять` : 'test_… или live_…'"
         />
       </div>
-      <label class="check-row">
-        <input v-model="form.test_mode" type="checkbox" />
-        <span>Тестовый режим — ключ тестового магазина, деньги не списываются; платежи не идут в выручку</span>
-      </label>
-      <label class="check-row">
-        <input v-model="form.enabled" type="checkbox" />
-        <span>Оплата включена — пользователи платят на странице «Тариф»</span>
-      </label>
+      <UiCheckbox v-model="form.test_mode" class="check-row">
+        Тестовый режим — ключ тестового магазина, деньги не списываются; платежи не идут в выручку
+      </UiCheckbox>
+      <UiCheckbox v-model="form.enabled" class="check-row">
+        Оплата включена — пользователи платят на странице «Тариф»
+      </UiCheckbox>
 
       <div class="field field--wide">
         <label>HTTP-уведомления</label>
@@ -51,7 +49,7 @@
         <button class="btn btn--ghost" type="button" :disabled="busy || !settings.configured" @click="test">
           {{ testing ? 'Проверяем…' : 'Проверить подключение' }}
         </button>
-        <button v-if="settings.has_key" class="btn btn--ghost btn--danger" type="button" :disabled="busy" @click="deleteKey">
+        <button v-if="settings.has_key" class="btn btn--ghost" type="button" :disabled="busy" @click="deleteKey">
           Удалить ключ
         </button>
       </div>
@@ -150,15 +148,15 @@
               <small v-if="p.refunded_rub" class="cell-note">возврат {{ rubles(p.refunded_rub, 2) }}</small>
             </td>
             <td>
-              <label v-if="p.status === 'succeeded' && !p.test" class="check-row check-row--inline">
-                <input
-                  type="checkbox"
-                  :checked="p.receipt_done"
-                  :disabled="rowBusy === p.id"
-                  @change="setReceipt(p, $event.target.checked)"
-                />
-                <span>пробит</span>
-              </label>
+              <UiCheckbox
+                v-if="p.status === 'succeeded' && !p.test"
+                class="check-row--inline"
+                :checked="p.receipt_done"
+                :disabled="rowBusy === p.id"
+                @change="setReceipt(p, $event.target.checked)"
+              >
+                пробит
+              </UiCheckbox>
               <span v-else class="cell-note">—</span>
             </td>
             <td>
@@ -167,7 +165,7 @@
                 class="btn btn--ghost btn--xs"
                 type="button"
                 :disabled="rowBusy === p.id"
-                title="Перечитать статус и возврат из ЮKassa"
+                v-tip="'Перечитать статус и возврат из ЮKassa'"
                 @click="sync(p)"
               >
                 Сверить
@@ -182,6 +180,7 @@
 
 <script setup>
 import { computed, onMounted, reactive, ref } from 'vue'
+import UiCheckbox from '../../components/ui/UiCheckbox.vue'
 import { adminApi } from '../../api/admin'
 import { errorText } from '../../api/web'
 import { askConfirm } from '../../composables/useConfirm'

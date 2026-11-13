@@ -143,6 +143,29 @@ export function formatDate(iso) {
   return d.toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' })
 }
 
+/**
+ * Период коротко: «12 нояб.», «5–11 нояб.», «28 окт. – 3 нояб.». Год — только если он не текущий:
+ * «5–11 нояб. 2025», «28 дек. 2025 – 3 янв. 2026».
+ */
+export function formatRange(from, to) {
+  if (!from) return '—'
+  const year = String(new Date().getFullYear())
+  const dm = (iso, withYear) => {
+    const text = new Date(`${iso}T00:00:00`).toLocaleDateString('ru-RU', {
+      day: 'numeric',
+      month: 'short',
+      ...(withYear ? { year: 'numeric' } : {}),
+    })
+    return text.replace(/\s*г\.$/, '')
+  }
+  const end = to || from
+  const [y1, y2] = [from.slice(0, 4), end.slice(0, 4)]
+  if (from === end) return dm(from, y1 !== year)
+  if (from.slice(0, 7) === end.slice(0, 7)) return `${Number(from.slice(8))}–${dm(end, y2 !== year)}`
+  if (y1 === y2) return `${dm(from, false)} – ${dm(end, y2 !== year)}`
+  return `${dm(from, true)} – ${dm(end, true)}`
+}
+
 /** «15 декабря 2026» — сроки подписки и тарифа. */
 export function formatDay(iso) {
   if (!iso) return '—'

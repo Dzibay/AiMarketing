@@ -11,29 +11,14 @@
       </div>
       <div v-field class="field field--wide">
         <label>Проект для копии</label>
-        <select v-model.number="form.target_workspace_id">
-          <option v-for="w in workspaceChoices" :key="w.id" :value="w.id">
-            {{ w.name }} · счётчик {{ w.counter_id }}{{ w.client_name ? ` · ${w.client_name}` : '' }}
-          </option>
-        </select>
+        <UiSelect v-model="form.target_workspace_id" :options="workspaceOptions" />
         <p v-if="form.target_workspace_id !== workspace.id" class="field-hint">
           Копия получит счётчик выбранного проекта вместо № {{ workspace.counter_id }}.
         </p>
       </div>
       <div v-field class="field field--wide">
         <label>Кабинет Директа</label>
-        <select v-model.number="form.target_account_id" required>
-          <optgroup v-if="accounts.length" label="Кабинеты проекта">
-            <option v-for="a in accounts" :key="a.id" :value="a.id" :disabled="!a.enabled">
-              {{ accountLabel(a) }}
-            </option>
-          </optgroup>
-          <optgroup v-if="otherAccounts.length" label="Другие кабинеты — подключатся к проекту">
-            <option v-for="a in otherAccounts" :key="a.id" :value="a.id">
-              {{ accountLabel(a) }}
-            </option>
-          </optgroup>
-        </select>
+        <UiSelect v-model="form.target_account_id" :options="accountOptions" placeholder="Выберите кабинет" required />
         <p v-if="accountsError" class="field-hint tone-bad">{{ accountsError }}</p>
         <p v-else-if="!accounts.length && !otherAccounts.length" class="field-hint tone-warn">
           Нет ни одного кабинета Директа — подключите логин на странице «Подключения».
@@ -58,6 +43,7 @@
 <script setup>
 import { computed, reactive, ref, watch } from 'vue'
 import Modal from '../../components/ui/Modal.vue'
+import UiSelect from '../../components/ui/UiSelect.vue'
 import { errorText, jobProgressText, wsApi } from '../../api/web'
 import { loadWorkspaces, useWorkspaces } from '../../composables/useWorkspaces'
 
@@ -82,6 +68,26 @@ const workspaceChoices = computed(() => {
   const list = workspaces.value.filter((w) => !w.archived || w.id === props.workspace.id)
   return list.some((w) => w.id === props.workspace.id) ? list : [props.workspace, ...list]
 })
+const workspaceOptions = computed(() =>
+  workspaceChoices.value.map((w) => ({
+    value: w.id,
+    label: w.name,
+    hint: [`счётчик ${w.counter_id}`, w.client_name].filter(Boolean).join(' · '),
+  })),
+)
+const accountOptions = computed(() => [
+  ...accounts.value.map((a) => ({
+    value: a.id,
+    label: accountLabel(a),
+    disabled: !a.enabled,
+    group: 'Кабинеты проекта',
+  })),
+  ...otherAccounts.value.map((a) => ({
+    value: a.id,
+    label: accountLabel(a),
+    group: 'Другие кабинеты — подключатся к проекту',
+  })),
+])
 const targetAccount = computed(
   () => [...accounts.value, ...otherAccounts.value].find((a) => a.id === form.target_account_id) || null,
 )

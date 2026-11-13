@@ -10,14 +10,13 @@
         :key="i.hash"
         class="board-imgs__item"
         :class="{ 'is-pending': i.pending, 'is-off': !board.isOn(i), 'is-own': i.own }"
-        :title="[i.text, i.note].filter(Boolean).join(' · ')"
+        v-tip="[i.text, i.note].filter(Boolean).join(' · ')"
       >
         <img v-if="i.preview_url" :src="i.preview_url" :alt="i.text" loading="lazy" />
         <span v-else class="board-imgs__none">нет превью</span>
         <span class="board-imgs__name">{{ i.text }}</span>
-        <input
+        <UiCheckbox
           v-if="i.pending"
-          type="checkbox"
           :checked="board.isOn(i)"
           :disabled="board.disabled.value"
           :aria-label="i.text"
@@ -26,7 +25,7 @@
         <button
           class="board-x"
           type="button"
-          :title="i.pending && !i.added ? 'Снять галочку' : 'Убрать'"
+          v-tip="i.pending && !i.added ? 'Снять галочку' : 'Убрать'"
           :aria-label="`Убрать картинку: ${i.text}`"
           :disabled="board.disabled.value"
           @click="board.remove('image', group, [i])"
@@ -38,16 +37,17 @@
     <p v-else class="hint">Без картинок объявление покажется только текстом. ИИ предложит их на этапе «Картинки» — или добавьте сами.</p>
 
     <div class="board-imgs__tools">
-      <select
+      <UiSelect
         v-if="!account && images.accounts.value.length > 1"
         class="board-select"
+        size="sm"
+        :model-value="null"
+        :options="accountOptions"
+        placeholder="Кабинет…"
         aria-label="Кабинет для картинок"
-        @change="images.chooseAccount(Number($event.target.value) || null)"
-      >
-        <option value="">Кабинет…</option>
-        <option v-for="a in images.accounts.value" :key="a.id" :value="a.id">{{ a.name || a.client_login }}</option>
-      </select>
-      <label class="btn btn--xs" :class="{ 'is-disabled': !canAdd || !account }" :title="account ? '' : 'Сначала выберите кабинет'">
+        @change="images.chooseAccount"
+      />
+      <label class="btn btn--xs" :class="{ 'is-disabled': !canAdd || !account }" v-tip="account ? '' : 'Сначала выберите кабинет'">
         Загрузить
         <input
           type="file"
@@ -74,7 +74,7 @@
         :class="{ active: mode === 'generate' }"
         :aria-pressed="mode === 'generate'"
         :disabled="!canAdd || !images.canGenerate.value"
-        :title="images.canGenerate.value ? '' : 'Генерация картинок временно недоступна'"
+        v-tip="images.canGenerate.value ? '' : 'Генерация картинок временно недоступна'"
         @click="open('generate')"
       >
         Сгенерировать
@@ -96,7 +96,7 @@
             :class="{ 'is-on': picked.includes(l) }"
             :aria-pressed="picked.includes(l)"
             :disabled="hashes.has(l.hash)"
-            :title="[(l.campaigns || []).join(', '), `в ${l.ads} ${plural(l.ads, 'объявлении', 'объявлениях', 'объявлениях')}`].filter(Boolean).join(' · ')"
+            v-tip="[(l.campaigns || []).join(', '), `в ${l.ads} ${plural(l.ads, 'объявлении', 'объявлениях', 'объявлениях')}`].filter(Boolean).join(' · ')"
             @click="pick(l)"
           >
             <img :src="l.preview_url" alt="" loading="lazy" />
@@ -123,9 +123,7 @@
         aria-label="Описание картинки"
       />
       <div class="board-imgs__tools">
-        <select v-model.number="count" class="board-select" aria-label="Сколько картинок">
-          <option v-for="n in countOptions" :key="n" :value="n">{{ n }} {{ plural(n, 'картинка', 'картинки', 'картинок') }}</option>
-        </select>
+        <UiSelect v-model="count" class="board-select" size="sm" :options="countChoices" aria-label="Сколько картинок" />
         <button class="btn btn--accent btn--xs" type="submit" :disabled="!prompt.trim() || !canAdd || !account || !!busy">
           Сгенерировать
         </button>
@@ -145,6 +143,8 @@
  * Загруженное и сгенерированное ложится в библиотеку кабинета, на доску — правкой по хэшу.
  */
 import { computed, inject, ref } from 'vue'
+import UiCheckbox from '../../components/ui/UiCheckbox.vue'
+import UiSelect from '../../components/ui/UiSelect.vue'
 import { RouterLink } from 'vue-router'
 import { aiApi, errorText, webApi } from '../../api/web'
 import { plural } from '../../utils/format'
@@ -174,6 +174,12 @@ const free = computed(() => Math.max(0, MAX - onCount.value))
 const canAdd = computed(() => free.value > 0 && !board.disabled.value && !busy.value)
 const hashes = computed(() => new Set(props.items.map((i) => i.hash)))
 const countOptions = computed(() => Array.from({ length: Math.max(1, Math.min(GENERATE_MAX, free.value)) }, (_, i) => i + 1))
+const countChoices = computed(() =>
+  countOptions.value.map((n) => ({ value: n, label: `${n} ${plural(n, 'картинка', 'картинки', 'картинок')}` })),
+)
+const accountOptions = computed(() =>
+  images.accounts.value.map((a) => ({ value: a.id, label: a.name || a.client_login })),
+)
 
 async function open(next) {
   error.value = ''

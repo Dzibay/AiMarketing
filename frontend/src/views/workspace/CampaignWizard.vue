@@ -15,17 +15,7 @@
         <div v-show="step === 0" class="form-grid">
           <div v-field class="field field--wide">
             <label>Кабинет Директа, где создать кампанию</label>
-            <select v-model.number="form.account_id" required>
-              <option :value="null" disabled>Выберите кабинет</option>
-              <optgroup v-if="accounts.length" label="Кабинеты проекта">
-                <option v-for="a in accounts" :key="a.id" :value="a.id" :disabled="!a.enabled">
-                  {{ accountLabel(a) }}{{ a.enabled ? '' : ' — выключен' }}
-                </option>
-              </optgroup>
-              <optgroup v-if="otherAccounts.length" label="Другие кабинеты — подключатся к проекту">
-                <option v-for="a in otherAccounts" :key="a.id" :value="a.id">{{ accountLabel(a) }}</option>
-              </optgroup>
-            </select>
+            <UiSelect v-model="form.account_id" :options="accountOptions" placeholder="Выберите кабинет" required />
             <p v-if="!accounts.length && !otherAccounts.length" class="field-hint tone-warn">
               Нет ни одного кабинета Директа — подключите логин на странице
               <RouterLink to="/cabinet/connections">«Подключения»</RouterLink>.
@@ -40,9 +30,7 @@
           </div>
           <div v-field class="field">
             <label>Тип<TermHint term="epk" /></label>
-            <select v-model="form.type">
-              <option v-for="t in options.types" :key="t.id" :value="t.id">{{ t.label }}</option>
-            </select>
+            <UiSelect v-model="form.type" :options="typeOptions" />
           </div>
           <div v-field class="field">
             <label>Название</label>
@@ -50,11 +38,16 @@
           </div>
           <div v-field class="field">
             <label>Начало показов</label>
-            <input v-model="form.start_date" type="date" :min="today" />
+            <UiDatePicker v-model="form.start_date" :min="today" />
           </div>
           <div v-field class="field">
-            <label>Окончание (необязательно)</label>
-            <input v-model="form.end_date" type="date" :min="form.start_date || today" />
+            <label>Окончание</label>
+            <UiDatePicker
+              v-model="form.end_date"
+              :min="form.start_date || today"
+              clearable
+              clear-label="Без даты окончания"
+            />
           </div>
           <p class="field-hint field--wide">
             Счётчик проекта № {{ options.counter_id }} подключится к кампании автоматически — без него Директ не
@@ -85,18 +78,17 @@
             </div>
             <div v-field class="field">
               <label>Модель атрибуции</label>
-              <select v-model="form.attribution_model">
-                <option value="">По умолчанию Директа</option>
-                <option v-for="m in options.attribution_models" :key="m.id" :value="m.id">{{ m.label }}</option>
-              </select>
+              <UiSelect v-model="form.attribution_model" :options="attributionOptions" />
             </div>
             <div v-field class="field field--wide">
               <label>Ключевые цели (для оптимизации и отчётов)</label>
               <div v-for="(g, i) in form.priority_goals" :key="i" class="filters filters--inline">
-                <select v-model.number="g.goal_id" :aria-label="`Ключевая цель ${i + 1}`">
-                  <option :value="null">Цель</option>
-                  <option v-for="goal in options.goals" :key="goal.goal_id" :value="goal.goal_id">{{ goal.name }}</option>
-                </select>
+                <UiSelect
+                  v-model="g.goal_id"
+                  :options="goalOptions"
+                  placeholder="Цель"
+                  :aria-label="`Ключевая цель ${i + 1}`"
+                />
                 <input v-model.number="g.value_rub" type="number" min="0.3" step="any" placeholder="ценность от 0,3 ₽" :aria-label="`Ценность цели ${i + 1}, ₽`" />
                 <button class="btn btn--ghost" type="button" @click="form.priority_goals.splice(i, 1)">Убрать</button>
               </div>
@@ -118,10 +110,7 @@
           <div v-field class="field field--wide">
             <label>Расписание показов</label>
             <ScheduleGrid v-model="form.schedule" />
-            <label class="check-row">
-              <input v-model="form.consider_working_weekends" type="checkbox" />
-              Учитывать перенос рабочих дней в праздники
-            </label>
+            <UiCheckbox v-model="form.consider_working_weekends" class="check-row">Учитывать перенос рабочих дней в праздники</UiCheckbox>
           </div>
           <div v-field class="field field--wide">
             <label>Минус-фразы кампании — по одной на строку</label>
@@ -141,19 +130,17 @@
           </div>
           <div v-field class="field field--wide">
             <label>Опции</label>
-            <label v-for="o in options.settings" :key="o.id" class="check-row">
-              <input v-model="form.settings[o.id]" type="checkbox" />
+            <UiCheckbox v-for="o in options.settings" :key="o.id" v-model="form.settings[o.id]" class="check-row">
               {{ o.label }}
-            </label>
+            </UiCheckbox>
           </div>
         </div>
 
         <!-- 4. Первая группа -->
         <div v-show="step === 3" class="form-grid">
-          <label class="check-row field--wide">
-            <input v-model="form.with_group" type="checkbox" />
+          <UiCheckbox v-model="form.with_group" class="check-row field--wide">
             Сразу создать первую группу с фразами и объявлением
-          </label>
+          </UiCheckbox>
           <template v-if="form.with_group">
             <div v-field class="field">
               <label>Название группы</label>
@@ -161,10 +148,7 @@
             </div>
             <div v-field class="field">
               <label>Регион показа</label>
-              <select v-model="form.group.region">
-                <option v-for="r in REGIONS" :key="r.id" :value="r.id">{{ r.label }}</option>
-                <option value="custom">Свой список ID регионов</option>
-              </select>
+              <UiSelect v-model="form.group.region" :options="REGION_OPTIONS" />
             </div>
             <div v-if="form.group.region === 'custom'" v-field class="field field--wide">
               <label>ID регионов Директа через запятую (минус — исключить)</label>
@@ -261,6 +245,9 @@
 
 <script setup>
 import { computed, reactive, ref, watch } from 'vue'
+import UiCheckbox from '../../components/ui/UiCheckbox.vue'
+import UiDatePicker from '../../components/ui/UiDatePicker.vue'
+import UiSelect from '../../components/ui/UiSelect.vue'
 import { RouterLink } from 'vue-router'
 import Modal from '../../components/ui/Modal.vue'
 import TermHint from '../../components/TermHint.vue'
@@ -285,6 +272,10 @@ const REGIONS = [
   { id: '10174', label: 'Санкт-Петербург и область', ids: [10174] },
   { id: '2', label: 'Санкт-Петербург', ids: [2] },
   { id: '225-1', label: 'Россия без Москвы и области', ids: [225, -1] },
+]
+const REGION_OPTIONS = [
+  ...REGIONS.map((r) => ({ value: r.id, label: r.label })),
+  { value: 'custom', label: 'Свой список ID регионов' },
 ]
 const COUNTER_TONES = { ok: 'tone-ok', unknown: 'tone-warn' }
 
@@ -337,6 +328,25 @@ function blankForm() {
 const form = reactive(blankForm())
 const accounts = computed(() => options.value?.accounts || [])
 const otherAccounts = computed(() => options.value?.other_accounts || [])
+const accountOptions = computed(() => [
+  ...accounts.value.map((a) => ({
+    value: a.id,
+    label: `${accountLabel(a)}${a.enabled ? '' : ' — выключен'}`,
+    disabled: !a.enabled,
+    group: 'Кабинеты проекта',
+  })),
+  ...otherAccounts.value.map((a) => ({
+    value: a.id,
+    label: accountLabel(a),
+    group: 'Другие кабинеты — подключатся к проекту',
+  })),
+])
+const typeOptions = computed(() => (options.value?.types || []).map((t) => ({ value: t.id, label: t.label })))
+const attributionOptions = computed(() => [
+  { value: '', label: 'По умолчанию Директа' },
+  ...(options.value?.attribution_models || []).map((m) => ({ value: m.id, label: m.label })),
+])
+const goalOptions = computed(() => (options.value?.goals || []).map((g) => ({ value: g.goal_id, label: g.name })))
 const account = computed(
   () => [...accounts.value, ...otherAccounts.value].find((a) => a.id === form.account_id) || null,
 )

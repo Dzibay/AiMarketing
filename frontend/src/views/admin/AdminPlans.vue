@@ -125,19 +125,16 @@
       </div>
       <fieldset>
         <legend>Функции</legend>
-        <label v-for="(label, key) in features" :key="key" class="check-row">
-          <input v-model="form.features[key]" type="checkbox" />
-          <span>{{ label }}</span>
-        </label>
+        <UiCheckbox v-for="(label, key) in features" :key="key" v-model="form.features[key]" class="check-row">
+          {{ label }}
+        </UiCheckbox>
       </fieldset>
-      <label class="check-row">
-        <input v-model="form.is_trial" type="checkbox" />
-        <span>Пробный — выдаётся новым пользователям при регистрации (отметка снимется с прежнего пробного)</span>
-      </label>
-      <label class="check-row">
-        <input v-model="form.active" type="checkbox" />
-        <span>Включён — предлагается пользователям</span>
-      </label>
+      <UiCheckbox v-model="form.is_trial" class="check-row">
+        Пробный — выдаётся новым пользователям при регистрации (отметка снимется с прежнего пробного)
+      </UiCheckbox>
+      <UiCheckbox v-model="form.active" class="check-row">
+        Включён — предлагается пользователям
+      </UiCheckbox>
       <div v-field class="field">
         <label>Порядок в списке</label>
         <input v-model="form.position" type="number" step="1" inputmode="numeric" placeholder="0" />
@@ -146,7 +143,7 @@
     <template #footer>
       <button
         v-if="form?.id"
-        class="btn btn--ghost btn--danger"
+        class="btn btn--ghost"
         type="button"
         :disabled="busy"
         @click="remove"
@@ -163,6 +160,7 @@
 
 <script setup>
 import { computed, onMounted, ref } from 'vue'
+import UiCheckbox from '../../components/ui/UiCheckbox.vue'
 import Modal from '../../components/ui/Modal.vue'
 import { adminApi } from '../../api/admin'
 import { errorText } from '../../api/web'

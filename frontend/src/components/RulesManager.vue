@@ -18,19 +18,8 @@
       <h3>Новое правило</h3>
       <div class="sentence">
         <span>Если у</span>
-        <select v-model="form.target" aria-label="Что проверять">
-          <option value="campaign">кампании</option>
-          <option value="keyword">фразы</option>
-          <option value="query">запроса</option>
-        </select>
-        <select v-model="form.rule_type" aria-label="Условие">
-          <option value="cpa_above">{{ COND.cpa_above }}</option>
-          <option v-if="form.target !== 'query'" value="cpa_below">{{ COND.cpa_below }}</option>
-          <option value="spend_no_conv">{{ COND.spend_no_conv }}</option>
-          <option value="cpc_above">{{ COND.cpc_above }}</option>
-          <option v-if="form.target === 'campaign'" value="daily_budget_pct">{{ COND.daily_budget_pct }}</option>
-          <option v-if="form.target === 'campaign'" value="weekly_budget_pct">{{ COND.weekly_budget_pct }}</option>
-        </select>
+        <UiSelect v-model="form.target" class="sentence__sel" :options="targetOptions" aria-label="Что проверять" />
+        <UiSelect v-model="form.rule_type" class="sentence__sel" :options="condOptions" aria-label="Условие" />
         <span class="inp">
           <input v-model.number="form.threshold_value" type="number" min="0" step="1" aria-label="Порог" />
           <i>{{ unitOf(form.rule_type) }}</i>
@@ -43,17 +32,7 @@
           </span>
         </template>
         <span>—</span>
-        <select v-model="form.action" aria-label="Что сделать">
-          <option v-if="form.target !== 'query'" value="pause">{{ DO.pause }}</option>
-          <option v-if="form.target !== 'query'" value="resume">{{ DO.resume }}</option>
-          <option v-if="form.target === 'campaign'" value="set_budget">{{ DO.set_budget }}</option>
-          <option v-if="form.target === 'campaign'" value="set_weekly_budget">{{ DO.set_weekly_budget }}</option>
-          <option v-if="form.target === 'campaign'" value="change_budget_pct">{{ DO.change_budget_pct }}</option>
-          <option v-if="form.target === 'keyword'" value="set_bid">{{ DO.set_bid }}</option>
-          <option v-if="form.target === 'query'" value="negative_adgroup">{{ DO.negative_adgroup }}</option>
-          <option v-if="form.target === 'query'" value="negative_campaign">{{ DO.negative_campaign }}</option>
-          <option value="notify">{{ DO.notify }}</option>
-        </select>
+        <UiSelect v-model="form.action" class="sentence__sel" :options="actionOptions" aria-label="Что сделать" />
         <span v-if="['set_budget', 'set_weekly_budget'].includes(form.action)" class="inp">
           <input v-model.number="form.action_budget_rub" type="number" min="300" step="100" aria-label="Бюджет" />
           <i>{{ form.action === 'set_weekly_budget' ? '₽/нед.' : '₽' }}</i>
@@ -78,35 +57,19 @@
         </div>
         <div v-if="!workspace" v-field class="field">
           <label>Где работает</label>
-          <select v-model="form.scope_workspace_id">
-            <option value="">Все сайты</option>
-            <option v-for="w in workspaces" :key="w.id" :value="String(w.id)">{{ w.name }}</option>
-          </select>
+          <UiSelect v-model="form.scope_workspace_id" :options="workspaceChoices" />
         </div>
         <div v-field class="field">
           <label>Кабинет Директа</label>
-          <select v-model="form.scope_account_id">
-            <option value="">Все</option>
-            <option v-for="a in accounts" :key="a.id" :value="String(a.id)">{{ a.name || a.client_login }}</option>
-          </select>
+          <UiSelect v-model="form.scope_account_id" :options="accountChoices" />
         </div>
         <div v-field class="field">
           <label>Кампания</label>
-          <select v-model="form.scope_campaign_row_id">
-            <option value="">Все</option>
-            <option v-for="c in campaignOptions" :key="c.id" :value="String(c.id)">
-              {{ campaignLabel(c, repeatedCampaigns) }}
-            </option>
-          </select>
+          <UiSelect v-model="form.scope_campaign_row_id" :options="campaignChoices" />
         </div>
         <div v-if="form.target === 'campaign'" v-field class="field">
           <label>Конверсии</label>
-          <select v-model="form.goal_row_id">
-            <option value="">Конверсии Директа</option>
-            <option v-for="g in goals" :key="g.id" :value="String(g.id)">
-              {{ g.name || `Цель ${g.goal_id}` }}<template v-if="g.counter_name"> · {{ g.counter_name }}</template>
-            </option>
-          </select>
+          <UiSelect v-model="form.goal_row_id" :options="goalChoices" />
         </div>
         <div v-if="form.action === 'change_budget_pct'" v-field class="field">
           <label>{{ form.action_pct < 0 ? 'Не ниже' : 'Не выше' }}, ₽/нед. (необязательно)</label>
@@ -114,13 +77,10 @@
         </div>
       </div>
 
-      <label class="builder__dry">
-        <span class="switch"><input v-model="form.dry_run" type="checkbox" /></span>
-        <span>
-          <b>Сначала только проверять</b>
-          <small>Правило пишет, что сделало бы, но рекламу не трогает. Удобно в первую неделю.</small>
-        </span>
-      </label>
+      <UiSwitch v-model="form.dry_run" class="builder__dry">
+        <b>Сначала только проверять</b>
+        <small>Правило пишет, что сделало бы, но рекламу не трогает. Удобно в первую неделю.</small>
+      </UiSwitch>
       <p v-if="['set_weekly_budget', 'change_budget_pct'].includes(form.action)" class="hint">
         Пример: CPA ниже 800 ₽ за 7 дней → бюджет +20 %, не выше 30 000 ₽/нед. Автостратегии и ручные ставки ЕПК
         получат недельный бюджет, ручные ставки ТГО — дневной (недельная сумма ÷ 7). Каждый запуск — запись в «Истории»
@@ -143,15 +103,13 @@
     </h2>
     <div v-if="rules.length" class="ccard rules-list">
       <div v-for="rule in rules" :key="rule.id" class="prow rule" :class="{ 'is-off': !rule.enabled }">
-        <label class="switch" :title="rule.enabled ? 'Выключить правило' : 'Включить правило'">
-          <input
-            type="checkbox"
-            :checked="rule.enabled"
-            :disabled="busy"
-            :aria-label="`Правило «${rule.name}»`"
-            @change="patch(rule, { enabled: !rule.enabled })"
-          />
-        </label>
+        <UiSwitch
+          v-tip="rule.enabled ? 'Выключить правило' : 'Включить правило'"
+          :checked="rule.enabled"
+          :disabled="busy"
+          :aria-label="`Правило «${rule.name}»`"
+          @change="patch(rule, { enabled: !rule.enabled })"
+        />
         <div class="prow__main">
           <b>
             {{ rule.name }}
@@ -171,7 +129,7 @@
             class="btn btn--ghost btn--sm"
             type="button"
             :disabled="busy"
-            title="Посчитать по текущей статистике, ничего не меняя"
+            v-tip="'Посчитать по текущей статистике, ничего не меняя'"
             @click="run(rule, true)"
           >
             Проверить
@@ -258,7 +216,9 @@ import FeatureLockNotice from './FeatureLockNotice.vue'
 import EmptyState from './ui/EmptyState.vue'
 import UiMenu from './ui/UiMenu.vue'
 import UiMenuItem from './ui/UiMenuItem.vue'
+import UiSelect from './ui/UiSelect.vue'
 import UiStatus from './ui/UiStatus.vue'
+import UiSwitch from './ui/UiSwitch.vue'
 import { errorText, webApi, wsApi } from '../api/web'
 import { pushToast } from '../composables/useToasts'
 import { useWorkspaces } from '../composables/useWorkspaces'
@@ -295,6 +255,18 @@ const DO = {
   negative_campaign: 'добавить в минус-фразы кампании',
   notify: 'только уведомить',
 }
+// Какие условия и действия есть у каждого объекта проверки.
+const CONDS_FOR = {
+  campaign: Object.keys(COND),
+  keyword: ['cpa_above', 'cpa_below', 'spend_no_conv', 'cpc_above'],
+  query: ['cpa_above', 'spend_no_conv', 'cpc_above'],
+}
+const ACTIONS_FOR = {
+  campaign: ['pause', 'resume', 'set_budget', 'set_weekly_budget', 'change_budget_pct', 'notify'],
+  keyword: ['pause', 'resume', 'set_bid', 'notify'],
+  query: ['negative_adgroup', 'negative_campaign', 'notify'],
+}
+const targetOptions = Object.entries(WHO).map(([value, label]) => ({ value, label }))
 
 function unitOf(type) {
   return String(type).endsWith('_pct') ? '%' : '₽'
@@ -393,6 +365,29 @@ const campaignOptions = computed(() => {
   )
 })
 const repeatedCampaigns = computed(() => repeatedNames(campaignOptions.value.map((c) => c.name)))
+
+const condOptions = computed(() => CONDS_FOR[form.target].map((value) => ({ value, label: COND[value] })))
+const actionOptions = computed(() => ACTIONS_FOR[form.target].map((value) => ({ value, label: DO[value] })))
+const workspaceChoices = computed(() => [
+  { value: '', label: 'Все сайты' },
+  ...workspaces.value.map((w) => ({ value: String(w.id), label: w.name })),
+])
+const accountChoices = computed(() => [
+  { value: '', label: 'Все' },
+  ...accounts.value.map((a) => ({ value: String(a.id), label: a.name || a.client_login })),
+])
+const campaignChoices = computed(() => [
+  { value: '', label: 'Все' },
+  ...campaignOptions.value.map((c) => ({ value: String(c.id), label: campaignLabel(c, repeatedCampaigns.value) })),
+])
+const goalChoices = computed(() => [
+  { value: '', label: 'Конверсии Директа' },
+  ...goals.value.map((g) => ({
+    value: String(g.id),
+    label: g.name || `Цель ${g.goal_id}`,
+    hint: g.counter_name || undefined,
+  })),
+])
 
 watch(campaignOptions, (list) => {
   if (form.scope_campaign_row_id && !list.some((c) => String(c.id) === form.scope_campaign_row_id)) {
@@ -561,17 +556,11 @@ onMounted(load)
   font-size: 15px;
   font-weight: 600;
 }
-.sentence select {
-  /* По ширине выбранного варианта, а не самого длинного, — так предложение читается слитно. */
-  field-sizing: content;
+/* Список по ширине выбранного варианта, а не самого длинного, — так предложение читается слитно. */
+.sentence__sel :deep(.ui-select__btn) {
   height: 34px;
-  padding: 0 10px;
-  border: 1px solid var(--line);
+  padding: 0 8px 0 10px;
   border-radius: 9px;
-  background: var(--surface);
-  color: var(--ink);
-  font: inherit;
-  font-size: 14px;
 }
 .inp {
   display: inline-flex;
@@ -584,8 +573,7 @@ onMounted(load)
   background: var(--surface);
   font-size: 14px;
 }
-.inp:focus-within,
-.sentence select:focus {
+.inp:focus-within {
   border-color: var(--ink);
   outline: 0;
 }
@@ -619,14 +607,6 @@ onMounted(load)
   border-radius: 12px;
   cursor: pointer;
 }
-.builder__dry .switch {
-  margin-top: 2px;
-}
-.builder__dry small {
-  display: block;
-  color: var(--muted);
-  font-size: 13px;
-}
 .builder .hint {
   margin: 12px 0 0;
 }
@@ -656,7 +636,7 @@ onMounted(load)
   align-items: flex-start;
   justify-content: flex-start;
 }
-.rule > .switch {
+.rule > .ui-switch {
   margin-top: 3px;
 }
 .rule .prow__main {

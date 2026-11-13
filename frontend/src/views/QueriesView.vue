@@ -86,10 +86,7 @@
           <input v-model="filters.minCost" type="number" min="0" step="10" placeholder="0" aria-label="Расход от, ₽" />
           <span>₽</span>
         </label>
-        <label class="switch ltools__switch">
-          <input v-model="filters.noConv" type="checkbox" />
-          <span>Без конверсий</span>
-        </label>
+        <UiSwitch v-model="filters.noConv" class="ltools__switch">Без конверсий</UiSwitch>
       </div>
 
       <p v-if="projectInfo" class="sync-status">
@@ -129,9 +126,9 @@
             <thead>
               <tr>
                 <th v-if="canApply" class="check-col">
-                  <input
-                    type="checkbox"
-                    :checked="selectable.length > 0 && selectable.every((q) => selected.has(key(q)))"
+                  <UiCheckbox
+                    :checked="allPicked"
+                    :indeterminate="!allPicked && selectable.some((q) => selected.has(key(q)))"
                     aria-label="Выбрать все"
                     @change="toggleAll($event.target.checked)"
                   />
@@ -146,8 +143,7 @@
             <tbody>
               <tr v-for="q in data.items" :key="key(q)" :class="{ 'is-selected': selected.has(key(q)) }">
                 <td v-if="canApply" class="check-col">
-                  <input
-                    type="checkbox"
+                  <UiCheckbox
                     :checked="selected.has(key(q))"
                     :disabled="!isSelectable(q)"
                     :aria-label="`Выбрать «${q.query}»`"
@@ -258,7 +254,9 @@ import EmptyState from '../components/ui/EmptyState.vue'
 import Modal from '../components/ui/Modal.vue'
 import PageHeader from '../components/ui/PageHeader.vue'
 import UiNotice from '../components/ui/UiNotice.vue'
+import UiCheckbox from '../components/ui/UiCheckbox.vue'
 import UiSelect from '../components/ui/UiSelect.vue'
+import UiSwitch from '../components/ui/UiSwitch.vue'
 import { CircleCheck, CloudOff, ListX, Search, SearchX, TriangleAlert } from '@lucide/vue'
 import { useExpert } from '../composables/useExpert'
 
@@ -328,6 +326,7 @@ const preview = reactive({ open: false, groups: [] })
 
 const canApply = computed(() => tab.value === 'negative' || tab.value === 'target')
 const selectable = computed(() => (data.value?.items || []).filter(isSelectable))
+const allPicked = computed(() => selectable.value.length > 0 && selectable.value.every((q) => selected.value.has(key(q))))
 // Список проектов для фильтра не сужается, когда фильтр по проекту уже выбран.
 const projectOptions = computed(() => allProjects.value.map((p) => ({ value: String(p.id), label: p.name })))
 // Выбран один проект — показываем, когда загружали его запросы и куда идти за новыми.

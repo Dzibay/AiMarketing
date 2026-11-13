@@ -14,10 +14,9 @@
           class="crow"
           :class="{ 'crow--pick': selected, 'is-sel': selected?.has(c.campaign_row_id) }"
         >
-          <input
+          <UiCheckbox
             v-if="selected"
             class="crow__pick"
-            type="checkbox"
             :checked="selected.has(c.campaign_row_id)"
             :aria-label="`Выбрать «${c.name}»`"
             @change="$emit('pick', c.campaign_row_id, $event.target.checked)"
@@ -31,15 +30,14 @@
             <b>{{ rub(c.cost_kopecks) }}</b>
             <small>{{ num(c.conversions || 0) }} {{ leadWord(c.conversions || 0) }}</small>
           </div>
-          <label v-if="canToggle(c)" class="switch" :title="c.state === 'ON' ? 'Остановить показы' : 'Запустить показы'">
-            <input
-              type="checkbox"
-              :checked="c.state === 'ON'"
-              :disabled="busy"
-              :aria-label="`${c.state === 'ON' ? 'Остановить' : 'Запустить'} «${c.name}»`"
-              @click.prevent="$emit('toggle', c)"
-            />
-          </label>
+          <UiSwitch
+            v-if="canToggle(c)"
+            v-tip="c.state === 'ON' ? 'Остановить показы' : 'Запустить показы'"
+            :checked="c.state === 'ON'"
+            :disabled="busy"
+            :aria-label="`${c.state === 'ON' ? 'Остановить' : 'Запустить'} «${c.name}»`"
+            @click.prevent="$emit('toggle', c)"
+          />
           <span v-else></span>
         </div>
       </div>
@@ -51,6 +49,8 @@
 import { computed } from 'vue'
 import { RouterLink } from 'vue-router'
 import { TriangleAlert, CircleCheck, CircleDashed, CirclePause, OctagonAlert } from '@lucide/vue'
+import UiCheckbox from './ui/UiCheckbox.vue'
+import UiSwitch from './ui/UiSwitch.vue'
 import { HEALTH_GROUPS, campaignHealth, leadWord } from '../utils/campaignHealth'
 import { num, plural, rub } from '../utils/format'
 

@@ -79,24 +79,23 @@
             балансы обновляются.
           </p>
           <div class="filters">
-            <label class="check-row">
-              <input
-                type="checkbox"
-                :checked="digest.enabled"
-                :disabled="digestBusy"
-                @change="saveDigest({ enabled: $event.target.checked })"
-              />
+            <UiSwitch
+              class="check-row"
+              :checked="digest.enabled"
+              :disabled="digestBusy"
+              @change="saveDigest({ enabled: $event.target.checked })"
+            >
               Присылать каждое утро
-            </label>
+            </UiSwitch>
             <div v-field class="field">
               <label>Время, МСК</label>
-              <select
-                :value="digest.hour"
+              <UiSelect
+                :model-value="digest.hour"
+                :options="HOURS"
+                :searchable="false"
                 :disabled="digestBusy || !digest.enabled"
-                @change="saveDigest({ hour: Number($event.target.value) })"
-              >
-                <option v-for="h in 24" :key="h" :value="h - 1">{{ String(h - 1).padStart(2, '0') }}:00</option>
-              </select>
+                @change="saveDigest({ hour: $event })"
+              />
             </div>
           </div>
           <p v-if="digest.last_sent_on" class="sync-status">
@@ -125,10 +124,9 @@
     <template v-if="tab === 'interface'">
       <section class="panel">
         <h2>Экспертный режим</h2>
-        <label class="switch">
-          <input type="checkbox" :checked="expert" @change="setExpert($event.target.checked)" />
-          <span>{{ expert ? 'Включён' : 'Выключен' }}</span>
-        </label>
+        <UiSwitch :checked="expert" @change="setExpert($event.target.checked)">
+          {{ expert ? 'Включён' : 'Выключен' }}
+        </UiSwitch>
         <p class="hint">
           Без него кабинет показывает главное: главную, кампании, запросы, отчёты и историю, а ручные настройки ИИ
           приносит готовыми предложениями. Переключается и в меню профиля, выбор хранится в этом браузере.
@@ -185,7 +183,9 @@
 import { onMounted, reactive, ref, watch, watchEffect } from 'vue'
 import { RouterLink } from 'vue-router'
 import FeatureLockNotice from '../components/FeatureLockNotice.vue'
+import UiSelect from '../components/ui/UiSelect.vue'
 import UiStatus from '../components/ui/UiStatus.vue'
+import UiSwitch from '../components/ui/UiSwitch.vue'
 import { errorText, webApi } from '../api/web'
 import { useExpert } from '../composables/useExpert'
 import { loadProfile, setUser, useProfile } from '../composables/useProfile'
@@ -193,6 +193,8 @@ import { useTheme } from '../composables/useTheme'
 import { pushToast } from '../composables/useToasts'
 import { useHead } from '../utils/useHead'
 import { formatDate } from '../utils/format'
+
+const HOURS = Array.from({ length: 24 }, (_, h) => ({ value: h, label: `${String(h).padStart(2, '0')}:00` }))
 
 /** tab: profile — почта, вход, пароль; notifications — Telegram и утренний дайджест; interface — режим и тема. */
 const props = defineProps({ tab: { type: String, default: 'profile' } })

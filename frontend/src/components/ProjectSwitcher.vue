@@ -8,7 +8,7 @@
       aria-haspopup="dialog"
       :aria-expanded="open"
       :aria-label="triggerLabel"
-      title="Сменить проект"
+      v-tip="'Сменить проект'"
       @click="toggle"
       @keydown.down.prevent="openPanel"
     >
@@ -72,7 +72,7 @@
               type="button"
               tabindex="-1"
               :aria-current="ws.id === projectId ? 'true' : undefined"
-              :title="[ws.name, projectHint(ws)].filter(Boolean).join(' — ')"
+              v-tip="[ws.name, projectHint(ws)].filter(Boolean).join(' — ')"
               @click="pick(ws.id)"
             >
               <span class="sdot" :class="`sdot--${projectTone(ws)}`" v-bind="projectDotA11y(ws)"></span>

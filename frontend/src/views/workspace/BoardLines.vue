@@ -11,15 +11,14 @@
         class="board-lines__row"
         :class="{ 'is-pending': item.pending, 'is-off': !board.isOn(item), 'is-own': item.own }"
       >
-        <input
+        <UiCheckbox
           v-if="item.pending"
-          type="checkbox"
           :checked="board.isOn(item)"
           :disabled="board.disabled.value"
           :aria-label="item.text"
           @change="board.toggle(item)"
         />
-        <span v-else class="board-lines__ok" title="Согласовано" aria-hidden="true">✓</span>
+        <span v-else class="board-lines__ok" v-tip="'Согласовано'" aria-hidden="true">✓</span>
         <form v-if="editing === item.text" class="board-lines__form" @submit.prevent="save(item)">
           <input
             ref="field"
@@ -39,7 +38,7 @@
           <button
             class="board-lines__text"
             type="button"
-            title="Изменить"
+            v-tip="'Изменить'"
             :disabled="board.disabled.value"
             @click="start(item)"
           >
@@ -51,7 +50,7 @@
           <button
             class="board-x"
             type="button"
-            :title="item.pending && !item.added ? 'Снять галочку' : 'Убрать'"
+            v-tip="item.pending && !item.added ? 'Снять галочку' : 'Убрать'"
             :aria-label="`Убрать: ${item.text}`"
             :disabled="board.disabled.value"
             @click="board.remove(kind, group, [item])"
@@ -81,6 +80,7 @@
 <script setup>
 /** Заголовки или тексты группы на доске: правка по щелчку со счётчиком знаков, «×» и новая строка. */
 import { computed, inject, nextTick, ref } from 'vue'
+import UiCheckbox from '../../components/ui/UiCheckbox.vue'
 
 const props = defineProps({
   items: { type: Array, required: true },

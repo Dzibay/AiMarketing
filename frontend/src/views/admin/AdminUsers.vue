@@ -65,14 +65,14 @@
             <td class="num">{{ num(u.usage?.calls) }}</td>
             <td class="num">{{ rubAi(u.usage?.cost_rub) }}</td>
             <td>
-              <span v-if="u.blocked" class="tone-bad" :title="u.blocked_reason">
+              <span v-if="u.blocked" class="tone-bad" v-tip="u.blocked_reason">
                 заблокирован<template v-if="u.blocked_reason">: {{ u.blocked_reason }}</template>
               </span>
               <span v-else class="tone-ok">активен</span>
               <button class="btn btn--ghost btn--xs" type="button" @click="openEvents(u)">События</button>
               <button
                 v-if="!u.blocked"
-                class="btn btn--ghost btn--xs btn--danger"
+                class="btn btn--ghost btn--xs"
                 type="button"
                 :disabled="busyId === u.id"
                 @click="blockUser(u)"
@@ -98,18 +98,13 @@
       </p>
       <div v-field class="field">
         <label>Тариф</label>
-        <select v-model="edit.plan_id">
-          <option :value="null">Без тарифа — без ограничений</option>
-          <option v-for="p in plans" :key="p.id" :value="p.id">
-            {{ p.name }}{{ p.is_trial ? ' (пробный)' : '' }}{{ p.active ? '' : ' — выключен' }} · {{ p.days }} дн.
-          </option>
-        </select>
+        <UiSelect v-model="edit.plan_id" :options="planOptions" />
       </div>
       <div v-field class="field">
         <label>Последний день подписки</label>
-        <input v-model="edit.until" type="date" />
+        <UiDatePicker v-model="edit.until" clearable clear-label="Без срока" />
         <small class="field-hint">
-          Пусто — без срока. При смене тарифа без даты — срок тарифа с сегодняшнего дня. Прошедшая дата закрывает доступ.
+          При смене тарифа без срока — срок тарифа с сегодняшнего дня. Прошедшая дата закрывает доступ.
         </small>
       </div>
 
@@ -117,11 +112,7 @@
       <div v-field class="field">
         <label>Единиц за период</label>
         <div class="admin-override">
-          <select v-model="edit.units_mode" aria-label="Лимит единиц">
-            <option value="plan">как в тарифе ({{ planLimitText('units_limit') }})</option>
-            <option value="none">без лимита</option>
-            <option value="custom">своё значение</option>
-          </select>
+          <UiSelect v-model="edit.units_mode" :options="limitModes('units_limit')" aria-label="Лимит единиц" />
           <input
             v-if="edit.units_mode === 'custom'"
             v-model="edit.units_limit"
@@ -137,11 +128,7 @@
       <div v-field class="field">
         <label>Проектов</label>
         <div class="admin-override">
-          <select v-model="edit.projects_mode" aria-label="Лимит проектов">
-            <option value="plan">как в тарифе ({{ planLimitText('projects_limit') }})</option>
-            <option value="none">без лимита</option>
-            <option value="custom">своё значение</option>
-          </select>
+          <UiSelect v-model="edit.projects_mode" :options="limitModes('projects_limit')" aria-label="Лимит проектов" />
           <input
             v-if="edit.projects_mode === 'custom'"
             v-model="edit.projects_limit"
@@ -158,11 +145,7 @@
         <legend>Функции</legend>
         <div v-for="(label, key) in features" :key="key" v-field class="field">
           <label>{{ label }}</label>
-          <select v-model="edit.features[key]">
-            <option value="plan">как в тарифе ({{ planFeature(key) ? 'есть' : 'нет' }})</option>
-            <option value="on">открыта</option>
-            <option value="off">закрыта</option>
-          </select>
+          <UiSelect v-model="edit.features[key]" :options="featureModes(key)" />
         </div>
       </fieldset>
     </form>
@@ -171,7 +154,7 @@
         class="btn btn--ghost"
         type="button"
         :disabled="saving || !edit?.user.subscription?.plan"
-        :title="edit?.user.subscription?.plan ? '' : 'Продлить можно только подписку с тарифом'"
+        v-tip="edit?.user.subscription?.plan ? '' : 'Продлить можно только подписку с тарифом'"
         @click="renew"
       >
         Продлить на {{ edit?.user.subscription?.plan?.days || '' }} дн.
@@ -208,8 +191,10 @@
 </template>
 
 <script setup>
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import Modal from '../../components/ui/Modal.vue'
+import UiDatePicker from '../../components/ui/UiDatePicker.vue'
+import UiSelect from '../../components/ui/UiSelect.vue'
 import { adminApi } from '../../api/admin'
 import { errorText } from '../../api/web'
 import { askText } from '../../composables/useConfirm'
@@ -220,6 +205,13 @@ const loading = ref(true)
 const users = ref([])
 const total = ref(0)
 const plans = ref([])
+const planOptions = computed(() => [
+  { value: null, label: 'Без тарифа — без ограничений' },
+  ...plans.value.map((p) => ({
+    value: p.id,
+    label: `${p.name}${p.is_trial ? ' (пробный)' : ''}${p.active ? '' : ' — выключен'} · ${p.days} дн.`,
+  })),
+])
 const features = ref({})
 const busyId = ref(null)
 const edit = ref(null)
@@ -335,6 +327,22 @@ function planLimitText(key) {
 function planFeature(key) {
   const p = selectedPlan()
   return !p || p.features?.[key] !== false
+}
+
+function limitModes(key) {
+  return [
+    { value: 'plan', label: `как в тарифе (${planLimitText(key)})` },
+    { value: 'none', label: 'без лимита' },
+    { value: 'custom', label: 'своё значение' },
+  ]
+}
+
+function featureModes(key) {
+  return [
+    { value: 'plan', label: `как в тарифе (${planFeature(key) ? 'есть' : 'нет'})` },
+    { value: 'on', label: 'открыта' },
+    { value: 'off', label: 'закрыта' },
+  ]
 }
 
 function overridesOf(e) {

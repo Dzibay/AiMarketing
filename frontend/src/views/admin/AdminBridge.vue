@@ -47,10 +47,9 @@
       </template>
 
       <form class="form-grid" @submit.prevent="saveBridge()">
-        <label class="check-row field--wide">
-          <input v-model="brForm.enabled" type="checkbox" />
+        <UiCheckbox v-model="brForm.enabled" class="check-row field--wide">
           Мост включён
-        </label>
+        </UiCheckbox>
         <template v-if="brForm.kind === 'worker'">
           <div v-field class="field field--wide">
             <label>Адрес Worker'а</label>
@@ -92,8 +91,8 @@
         </template>
         <div class="field field--wide">
           <label>Что пускать через мост</label>
-          <label class="check-row"><input v-model="brForm.use_chat" type="checkbox" /> ИИ (чат и тексты)</label>
-          <label class="check-row"><input v-model="brForm.use_images" type="checkbox" /> Генерация картинок (OpenAI)</label>
+          <UiCheckbox v-model="brForm.use_chat" class="check-row">ИИ (чат и тексты)</UiCheckbox>
+          <UiCheckbox v-model="brForm.use_images" class="check-row">Генерация картинок (OpenAI)</UiCheckbox>
         </div>
         <div class="form-actions">
           <button class="btn btn--accent" type="submit" :disabled="brBusy">Сохранить</button>
@@ -198,6 +197,7 @@
 <script setup>
 // Мост Cloudflare — только у администратора: им ходят общие ключи ИИ и картинок к зарубежным провайдерам.
 import { computed, onMounted, reactive, ref } from 'vue'
+import UiCheckbox from '../../components/ui/UiCheckbox.vue'
 import { adminApi } from '../../api/admin'
 import { errorText } from '../../api/web'
 import { pushToast } from '../../composables/useToasts'

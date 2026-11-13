@@ -1,5 +1,5 @@
 <template>
-  <span class="delta" :class="tone" role="img" :aria-label="spoken" :title="spoken">
+  <span class="delta" :class="tone" role="img" :aria-label="spoken" v-tip="spoken">
     <ArrowUp v-if="rounded > 0" aria-hidden="true" />
     <ArrowDown v-else-if="rounded < 0" aria-hidden="true" />
     {{ pct(Math.abs(rounded), 0) }}

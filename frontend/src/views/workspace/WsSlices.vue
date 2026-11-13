@@ -38,22 +38,22 @@
         <summary>
           Кампании: {{ campaignIds.length === campaigns.length ? 'все' : campaignIds.length }} из {{ campaigns.length }}
         </summary>
-        <label class="slice-camps__all">
-          <input
-            type="checkbox"
-            :checked="campaignIds.length === campaigns.length"
-            @change="pickAll($event.target.checked)"
-          />
+        <UiCheckbox
+          class="slice-camps__all"
+          :checked="campaignIds.length === campaigns.length"
+          :indeterminate="campaignIds.length > 0 && campaignIds.length < campaigns.length"
+          @change="pickAll($event.target.checked)"
+        >
           Все
-        </label>
-        <label v-for="c in campaigns" :key="c.campaign_row_id">
-          <input
-            type="checkbox"
-            :checked="picked.has(c.campaign_row_id)"
-            @change="pick(c.campaign_row_id, $event.target.checked)"
-          />
+        </UiCheckbox>
+        <UiCheckbox
+          v-for="c in campaigns"
+          :key="c.campaign_row_id"
+          :checked="picked.has(c.campaign_row_id)"
+          @change="pick(c.campaign_row_id, $event.target.checked)"
+        >
           {{ c.name }} <small class="cell-note">{{ CAMPAIGN_TYPES[c.type] || c.type }}</small>
-        </label>
+        </UiCheckbox>
       </details>
       <p class="sync-status">
         <template v-if="busyText">{{ busyText }}</template>
@@ -134,12 +134,12 @@
             class="btn btn--ghost"
             type="button"
             :disabled="!!busy || !report.items.length"
-            title="ИИ посмотрит площадки с расходом и предложит, что запретить. Ничего не меняет"
+            v-tip="'ИИ посмотрит площадки с расходом и предложит, что запретить. Ничего не меняет'"
             @click="askAi"
           >
             {{ busy === 'ai' ? 'ИИ думает…' : 'Разобрать с ИИ' }}
           </button>
-          <button class="btn btn--danger-solid" type="button" :disabled="!!busy || !selected.size" @click="excludeSelected">
+          <button class="btn" type="button" :disabled="!!busy || !selected.size" @click="excludeSelected">
             Запретить выбранные ({{ selected.size }})
           </button>
         </div>
@@ -151,9 +151,9 @@
           <thead>
             <tr>
               <th class="check-col">
-                <input
-                  type="checkbox"
+                <UiCheckbox
                   :checked="placementRows.length > 0 && placementRows.every((r) => selected.has(r.key))"
+                  :indeterminate="placementRows.some((r) => selected.has(r.key)) && !placementRows.every((r) => selected.has(r.key))"
                   aria-label="Выбрать все"
                   @change="toggleAll(placementRows, $event.target.checked)"
                 />
@@ -172,10 +172,9 @@
           <tbody>
             <tr v-for="r in placementRows" :key="r.key" :class="{ 'is-off': excluded.has(r.key) }">
               <td class="check-col">
-                <input
-                  type="checkbox"
+                <UiCheckbox
                   :disabled="excluded.has(r.key) || !r.excludable"
-                  :title="r.excludable ? '' : 'Эту площадку Директ запретить не даёт'"
+                  v-tip="r.excludable ? '' : 'Эту площадку Директ запретить не даёт'"
                   :checked="selected.has(r.key)"
                   :aria-label="`Выбрать площадку «${r.label}»`"
                   @change="toggle(r.key, $event.target.checked)"
@@ -247,7 +246,7 @@
               <th class="num">Отказы</th>
               <th class="num">Сейчас</th>
               <th class="num">Подсказка</th>
-              <th class="num" title="Изменение ставки в процентах: −20 — на 20 % ниже, −100 — не показывать">Новая, %</th>
+              <th class="num" v-tip="'Изменение ставки в процентах: −20 — на 20 % ниже, −100 — не показывать'">Новая, %</th>
             </tr>
           </thead>
           <tbody>
@@ -294,6 +293,7 @@
 
 <script setup>
 import { computed, onMounted, reactive, ref } from 'vue'
+import UiCheckbox from '../../components/ui/UiCheckbox.vue'
 import { RouterLink } from 'vue-router'
 import { errorText, jobProgressText, wsApi } from '../../api/web'
 import { askConfirm } from '../../composables/useConfirm'

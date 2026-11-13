@@ -14,7 +14,7 @@
           :options="accessOptions"
           :disabled="accessBusy"
           aria-label="Права ИИ в этом проекте"
-          title="Права ИИ в этом проекте"
+          v-tip="'Права ИИ в этом проекте'"
           @change="setAccessMode"
         />
         <button v-if="chats.length || chatsError" class="btn btn--ghost btn--sm" type="button" @click="chatsOpen = true">
@@ -254,19 +254,19 @@
                       class="btn btn--ghost"
                       type="button"
                       :disabled="deciding"
-                      title="Свернуть карточку: решить можно позже здесь или на главной"
+                      v-tip="'Свернуть карточку: решить можно позже здесь или на главной'"
                       @click="setLater(a, true)"
                     >
                       Позже
                     </button>
                     <span v-if="allOff(a)" class="hint">Сняты все строки — отклоните действие</span>
-                    <label
+                    <UiCheckbox
                       v-if="!general && a.categories?.length && !a.categories.some((c) => c.id === 'destructive')"
+                      v-model="remember[a.id]"
                       class="check-row"
                     >
-                      <input v-model="remember[a.id]" type="checkbox" />
-                      <span>Больше не спрашивать для «{{ a.categories.map((c) => c.label).join('», «') }}»</span>
-                    </label>
+                      Больше не спрашивать для «{{ a.categories.map((c) => c.label).join('», «') }}»
+                    </UiCheckbox>
                     <p v-if="!expert" class="action-card__note">
                       Ничего не изменится, пока вы не нажмёте «Выполнить». Вернуть как было можно в «Истории».
                     </p>
@@ -347,7 +347,7 @@
               v-if="otherProjects.length"
               class="composer__icon"
               type="button"
-              :title="general ? 'Указать проект' : 'Сослаться на другой проект'"
+              v-tip="general ? 'Указать проект' : 'Сослаться на другой проект'"
               :aria-label="general ? 'Указать проект' : 'Сослаться на другой проект'"
               :disabled="inputOff"
               @mousedown.prevent
@@ -363,7 +363,7 @@
               :options="modelOptions"
               :disabled="modelBusy || inputOff"
               aria-label="Модель ответа"
-              title="Модель ответа"
+              v-tip="'Модель ответа'"
               @change="chooseModel"
             />
             <span class="composer__tip">{{ composerTip }}</span>
@@ -372,7 +372,7 @@
               type="submit"
               :disabled="!canSend"
               :aria-label="busy ? 'ИИ отвечает' : 'Отправить'"
-              :title="busy ? 'ИИ отвечает' : 'Отправить'"
+              v-tip="busy ? 'ИИ отвечает' : 'Отправить'"
             >
               <span v-if="busy" class="spinner" aria-hidden="true" />
               <ArrowUp v-else aria-hidden="true" />
@@ -392,7 +392,7 @@
             class="starter starter--main"
             type="button"
             :disabled="!canSendStarter"
-            title="ИИ задаст вопросы по продукту, гео, бюджету и цели, изучит спрос в Вордстате и предложит направления"
+            v-tip="'ИИ задаст вопросы по продукту, гео, бюджету и цели, изучит спрос в Вордстате и предложит направления'"
             @click="send(NEW_CAMPAIGN_PROMPT)"
           >
             <Sparkles aria-hidden="true" />
@@ -403,7 +403,7 @@
             class="starter starter--main"
             type="button"
             :disabled="!canReview"
-            title="Что работает, что затухает и почему, что стоит повторить. Сигналы за 30 дней считает код — ИИ получает короткую выжимку"
+            v-tip="'Что работает, что затухает и почему, что стоит повторить. Сигналы за 30 дней считает код — ИИ получает короткую выжимку'"
             @click="startReview()"
           >
             <ScanSearch aria-hidden="true" />
@@ -414,7 +414,7 @@
             :key="s.label"
             class="starter"
             type="button"
-            :title="s.prompt"
+            v-tip="s.prompt"
             :disabled="!canSendStarter"
             @click="send(s.prompt)"
           >
@@ -500,6 +500,7 @@ import CampaignBoard from './CampaignBoard.vue'
 import { useWs } from './context'
 import { useExpert } from '../../composables/useExpert'
 import PageHeader from '../../components/ui/PageHeader.vue'
+import UiCheckbox from '../../components/ui/UiCheckbox.vue'
 import UiMenu from '../../components/ui/UiMenu.vue'
 import UiMenuItem from '../../components/ui/UiMenuItem.vue'
 import UiNotice from '../../components/ui/UiNotice.vue'

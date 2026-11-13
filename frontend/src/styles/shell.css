@@ -1155,7 +1155,8 @@
 }
 
 .hask__send:disabled {
-  opacity: 0.4;
+  background: var(--surface-3);
+  color: var(--faint);
   cursor: not-allowed;
 }
 
@@ -1322,23 +1323,20 @@
   height: 15px;
 }
 
-/* Неактивная — та же кнопка, только прозрачнее: без серой заливки и без отклика на наведение. */
+/* Неактивная кнопка любого вида — нейтрально-серая и без отклика на наведение. Не прозрачность: лайм на 40 %
+   поверх тёмного фона выглядит оливковым, а красная «опасная» — розовой. */
 .btn:disabled,
-.btn[aria-disabled='true'] {
-  opacity: 0.4;
+.btn:disabled:hover,
+.btn[aria-disabled='true'],
+.btn[aria-disabled='true']:hover {
+  opacity: 1;
+  border-color: var(--line);
+  background: var(--surface-2);
+  color: var(--faint);
+  box-shadow: none;
   cursor: not-allowed;
   filter: none;
   transform: none;
-}
-
-.btn--ghost:disabled:hover,
-.btn--danger:disabled:hover {
-  border-color: var(--line);
-  background: var(--surface);
-}
-
-.btn--danger-solid:disabled:hover {
-  background: var(--danger);
 }
 
 .btn:focus-visible {
@@ -1445,16 +1443,14 @@
   font-weight: 700;
 }
 
-.field input,
-.field select,
+.field input:where(:not([type='checkbox'], [type='radio'])),
 .field textarea,
 .field input[type='search'] {
   border-color: var(--line);
   border-radius: var(--radius);
 }
 
-.field input:focus,
-.field select:focus,
+.field input:where(:not([type='checkbox'], [type='radio'])):focus,
 .field textarea:focus {
   border-color: var(--ink);
   box-shadow: none;
@@ -1526,12 +1522,6 @@
 }
 .crow.is-sel {
   background: color-mix(in srgb, var(--lime) 12%, transparent);
-}
-.crow__pick {
-  width: 16px;
-  height: 16px;
-  margin: 0;
-  accent-color: var(--ink);
 }
 .crow__name a {
   display: block;

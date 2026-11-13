@@ -111,7 +111,7 @@
             type="button"
             :disabled="busy !== null"
             :aria-label="`Не показывать ${c.site || c.name || c.counter_id}`"
-            title="Не показывать"
+            v-tip="'Не показывать'"
             @click="dismiss(c)"
           >
             <EyeOff :size="15" aria-hidden="true" />

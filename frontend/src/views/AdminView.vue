@@ -56,13 +56,13 @@
               <small>{{ s.label }}</small>
               <strong :class="s.ok ? 'tone-ok' : 'tone-warn'">{{ s.ok ? 'работает' : 'не подключено' }}</strong>
             </div>
-            <div class="stat-card" :title="summary.email_check ? '' : 'Без SMTP письма не уходят — кабинет открыт сразу после регистрации'">
+            <div class="stat-card" v-tip="summary.email_check ? '' : 'Без SMTP письма не уходят — кабинет открыт сразу после регистрации'">
               <small>Подтверждение почты</small>
               <strong :class="summary.email_check ? 'tone-ok' : 'tone-warn'">
                 {{ summary.email_check ? 'включено' : 'выкл.: нет SMTP' }}
               </strong>
             </div>
-            <div class="stat-card" :title="summary.payments?.no_receipt ? `Без чека в «Мой налог»: ${summary.payments.no_receipt}` : ''">
+            <div class="stat-card" v-tip="summary.payments?.no_receipt ? `Без чека в «Мой налог»: ${summary.payments.no_receipt}` : ''">
               <small>Оплаты за месяц</small>
               <strong>{{ rubles(summary.payments?.month_rub || 0) }}</strong>
               <span class="cell-note">

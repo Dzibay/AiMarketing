@@ -6,9 +6,8 @@
       :class="{ 'is-pending': f.pending, 'is-off': !board.isOn(f), 'is-own': f.own }"
       :style="bars && width(f) != null ? { '--bar': `${width(f)}%` } : null"
     >
-      <input
+      <UiCheckbox
         v-if="f.pending"
-        type="checkbox"
         :checked="board.isOn(f)"
         :disabled="board.disabled.value"
         :aria-label="f.text"
@@ -24,6 +23,7 @@
 <script setup>
 /** Строки этапа на доске: цели, спрос (bars — полосы по числу), ссылка, настройки. Ждущие — с галочками. */
 import { computed, inject } from 'vue'
+import UiCheckbox from '../../components/ui/UiCheckbox.vue'
 
 const props = defineProps({
   items: { type: Array, required: true },

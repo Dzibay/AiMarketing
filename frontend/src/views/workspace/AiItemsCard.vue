@@ -17,7 +17,7 @@
           :aria-pressed="!isOff(r)"
           :aria-label="r.cells[0] || 'Картинка'"
           :disabled="!pending || disabled"
-          :title="[r.cells[1], r.cells[2]].filter(Boolean).join(' · ')"
+          v-tip="[r.cells[1], r.cells[2]].filter(Boolean).join(' · ')"
           @click="flip(r)"
         >
           <img v-if="r.image?.preview_url" :src="r.image.preview_url" :alt="r.cells[0] || 'Картинка'" loading="lazy" />

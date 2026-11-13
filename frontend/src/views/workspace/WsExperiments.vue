@@ -51,7 +51,7 @@
     </dl>
 
     <template v-if="e.progress">
-      <div class="meter exp__meter" :title="`День ${e.progress.day} из ${e.days}`">
+      <div class="meter exp__meter" v-tip="`День ${e.progress.day} из ${e.days}`">
         <span :style="{ width: `${dayPct(e)}%` }"></span>
       </div>
       <p class="exp__reason" :class="REASON_TONES[e.progress.status]">{{ capitalize(e.progress.reason) }}</p>
@@ -64,7 +64,7 @@
               <th class="num">Расход</th>
               <th class="num">Конверсии</th>
               <th class="num">Цена конверсии</th>
-              <th v-if="e.weekly_limit_rub != null" class="num" title="С понедельника — неделя Директа">За неделю</th>
+              <th v-if="e.weekly_limit_rub != null" class="num" v-tip="'С понедельника — неделя Директа'">За неделю</th>
             </tr>
           </thead>
           <tbody>
@@ -181,7 +181,7 @@
         :class="{ 'btn--accent': isDue(e) }"
         type="button"
         :disabled="reviewingId !== null"
-        title="ИИ разберёт итоги и предложит, что дальше: масштабировать или остановить"
+        v-tip="'ИИ разберёт итоги и предложит, что дальше: масштабировать или остановить'"
         @click="review(e)"
       >
         <Sparkles :size="14" aria-hidden="true" />{{ reviewingId === e.id ? 'Запускаем…' : 'Разобрать итоги с ИИ' }}
@@ -190,9 +190,9 @@
         Завершить
       </button>
       <RouterLink v-if="e.chat_id" class="btn btn--ghost" :to="`/w/${ws.id}/chat/${e.chat_id}`">Чат эксперимента</RouterLink>
-      <button class="btn btn--ghost btn--danger" type="button" :disabled="busyId === e.id" @click="cancel(e)">
-        Отменить
-      </button>
+      <UiMenu size="sm" :label="`Действия с экспериментом «${e.title}»`" :disabled="busyId === e.id">
+        <UiMenuItem :icon="CircleX" danger @click="cancel(e)">Отменить эксперимент</UiMenuItem>
+      </UiMenu>
     </div>
   </article>
 
@@ -248,9 +248,11 @@
 <script setup>
 import { computed, onMounted, ref } from 'vue'
 import { RouterLink, useRouter } from 'vue-router'
-import { Check, Sparkles } from '@lucide/vue'
+import { Check, CircleX, Sparkles } from '@lucide/vue'
 import { aiApi, errorText } from '../../api/web'
 import FeatureLockNotice from '../../components/FeatureLockNotice.vue'
+import UiMenu from '../../components/ui/UiMenu.vue'
+import UiMenuItem from '../../components/ui/UiMenuItem.vue'
 import { askConfirm } from '../../composables/useConfirm'
 import { pushToast } from '../../composables/useToasts'
 import { CAMPAIGN_STATES, CAMPAIGN_STATUSES, formatDate, num, pct, plural, rub, rubExact, rubles } from '../../utils/format'

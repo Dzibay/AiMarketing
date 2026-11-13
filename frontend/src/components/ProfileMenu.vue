@@ -29,7 +29,7 @@
         type="button"
         role="menuitemcheckbox"
         :aria-checked="expert"
-        title="Добавляет «Автопилот», отчёты по площадкам и объявлениям, списки минус-фраз и папки клиентов в меню"
+        v-tip="'Добавляет «Автопилот», отчёты по площадкам и объявлениям, списки минус-фраз и папки клиентов в меню'"
         @click="setExpert(!expert)"
       >
         <SlidersHorizontal aria-hidden="true" />

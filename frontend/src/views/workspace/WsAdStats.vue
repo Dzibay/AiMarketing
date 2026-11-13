@@ -25,22 +25,22 @@
         <summary>
           Кампании: {{ campaignIds.length === campaigns.length ? 'все' : campaignIds.length }} из {{ campaigns.length }}
         </summary>
-        <label class="slice-camps__all">
-          <input
-            type="checkbox"
-            :checked="campaignIds.length === campaigns.length"
-            @change="pickAll($event.target.checked)"
-          />
+        <UiCheckbox
+          class="slice-camps__all"
+          :checked="campaignIds.length === campaigns.length"
+          :indeterminate="campaignIds.length > 0 && campaignIds.length < campaigns.length"
+          @change="pickAll($event.target.checked)"
+        >
           Все
-        </label>
-        <label v-for="c in campaigns" :key="c.campaign_row_id">
-          <input
-            type="checkbox"
-            :checked="picked.has(c.campaign_row_id)"
-            @change="pick(c.campaign_row_id, $event.target.checked)"
-          />
+        </UiCheckbox>
+        <UiCheckbox
+          v-for="c in campaigns"
+          :key="c.campaign_row_id"
+          :checked="picked.has(c.campaign_row_id)"
+          @change="pick(c.campaign_row_id, $event.target.checked)"
+        >
           {{ c.name }}
-        </label>
+        </UiCheckbox>
       </details>
       <p class="sync-status">
         <template v-if="busyText">{{ busyText }}</template>
@@ -114,7 +114,7 @@
             class="btn btn--ghost"
             type="button"
             :disabled="!!busy || !selected.size"
-            :title="`ИИ предложит новые тексты для выбранных (до ${AI_MAX}). Ничего не меняет`"
+            v-tip="`ИИ предложит новые тексты для выбранных (до ${AI_MAX}). Ничего не меняет`"
             @click="askAi"
           >
             {{ busy === 'ai' ? 'ИИ пишет…' : `Переписать с ИИ (${Math.min(selected.size, AI_MAX)})` }}
@@ -126,10 +126,7 @@
       <div v-if="draftIds.length" class="ad-drafts">
         <div class="filters">
           <strong>Новые варианты: {{ usedDrafts.length }} из {{ draftIds.length }}</strong>
-          <label class="ad-moderate">
-            <input v-model="moderate" type="checkbox" />
-            Сразу на модерацию
-          </label>
+          <UiCheckbox v-model="moderate" class="ad-moderate">Сразу на модерацию</UiCheckbox>
           <div class="row-actions">
             <button class="btn btn--ghost" type="button" :disabled="!!busy" @click="clearDrafts">Сбросить</button>
             <button
@@ -144,10 +141,9 @@
         </div>
         <article v-for="id in draftIds" :key="id" class="ad-draft" :class="{ 'is-off': !drafts[id].use }">
           <header>
-            <label>
-              <input v-model="drafts[id].use" type="checkbox" />
+            <UiCheckbox v-model="drafts[id].use">
               <strong>{{ byId[id]?.adgroup_name }}</strong>
-            </label>
+            </UiCheckbox>
             <small class="cell-note">{{ byId[id]?.campaign_name }}</small>
           </header>
           <div class="ad-draft__cols">
@@ -188,9 +184,9 @@
           <thead>
             <tr>
               <th class="check-col">
-                <input
-                  type="checkbox"
-                  :checked="shown.length > 0 && shown.every((r) => !r.rewritable || selected.has(r.ad_row_id))"
+                <UiCheckbox
+                  :checked="allPicked"
+                  :indeterminate="!allPicked && shown.some((r) => selected.has(r.ad_row_id))"
                   aria-label="Выбрать все"
                   @change="toggleAll($event.target.checked)"
                 />
@@ -211,10 +207,9 @@
           <tbody>
             <tr v-for="r in shown" :key="r.ad_row_id">
               <td class="check-col">
-                <input
-                  type="checkbox"
+                <UiCheckbox
                   :disabled="!r.rewritable"
-                  :title="r.rewritable ? '' : 'Переписать можно только текстовые и комбинаторные объявления'"
+                  v-tip="r.rewritable ? '' : 'Переписать можно только текстовые и комбинаторные объявления'"
                   :checked="selected.has(r.ad_row_id)"
                   :aria-label="`Выбрать объявление «${r.title || r.ad_row_id}»`"
                   @change="toggle(r.ad_row_id, $event.target.checked)"
@@ -260,6 +255,7 @@
 
 <script setup>
 import { computed, onMounted, reactive, ref } from 'vue'
+import UiCheckbox from '../../components/ui/UiCheckbox.vue'
 import { RouterLink } from 'vue-router'
 import { errorText, jobProgressText, wsApi } from '../../api/web'
 import { askConfirm } from '../../composables/useConfirm'
@@ -372,6 +368,10 @@ function toggle(id, on) {
   on ? next.add(id) : next.delete(id)
   selected.value = next
 }
+
+const allPicked = computed(
+  () => shown.value.length > 0 && shown.value.every((r) => !r.rewritable || selected.value.has(r.ad_row_id)),
+)
 
 function toggleAll(on) {
   const next = new Set(selected.value)
@@ -598,11 +598,6 @@ onMounted(loadCampaigns)
   align-items: baseline;
   justify-content: space-between;
   margin-bottom: 8px;
-}
-.ad-draft header label {
-  display: flex;
-  gap: 8px;
-  align-items: center;
 }
 .ad-draft__cols {
   display: grid;

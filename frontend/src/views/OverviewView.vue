@@ -116,11 +116,9 @@
             <Search aria-hidden="true" />
             <input v-model.trim="search" type="search" placeholder="Сайт или клиент" aria-label="Поиск по проектам" />
           </label>
-          <label class="switch ltools__switch">
-            <input v-model="onlyProblems" type="checkbox" :disabled="!problemProjects && !onlyProblems" />
-            <span>С проблемами</span>
-            <span class="seg__n">{{ problemProjects }}</span>
-          </label>
+          <UiSwitch v-model="onlyProblems" class="ltools__switch" :disabled="!problemProjects && !onlyProblems">
+            С проблемами<span class="seg__n">{{ problemProjects }}</span>
+          </UiSwitch>
         </div>
         <p v-if="!tableItems.length" class="empty">Нет проектов под фильтр.</p>
         <div v-else class="table-scroll">
@@ -128,7 +126,7 @@
             <thead>
               <tr>
                 <th v-for="col in COLUMNS" :key="col.key" :class="{ num: col.num }" :aria-sort="ariaSort(col.key)">
-                  <button class="th-sort" type="button" :title="sortTitle(col)" @click="sortBy(col.key)">
+                  <button class="th-sort" type="button" v-tip="sortTitle(col)" @click="sortBy(col.key)">
                     {{ col.label }}{{ sortMark(col.key) }}
                   </button>
                   <TermHint v-if="col.term" :term="col.term" />
@@ -168,7 +166,7 @@
                 >
                   <td>
                     <div class="ovt-name">
-                      <span class="sevdot" :class="`is-${item.w.severity || 'ok'}`" :title="severityTitle(item.w)"></span>
+                      <span class="sevdot" :class="`is-${item.w.severity || 'ok'}`" v-tip="severityTitle(item.w)"></span>
                       <div>
                         <RouterLink v-if="item.w.id" :to="`/w/${item.w.id}/summary`" @click.stop>
                           <strong>{{ item.w.name }}</strong>
@@ -233,7 +231,7 @@
                       v-if="item.w.severity"
                       class="th-sort problem-counts"
                       type="button"
-                      title="Показать проблемы проекта"
+                      v-tip="'Показать проблемы проекта'"
                       @click.stop="focusWorkspace(item.w.id)"
                     >
                       <span v-if="item.w.problems.critical" class="tone-bad">
@@ -308,6 +306,7 @@ import SignalCards from '../components/SignalCards.vue'
 import TermHint from '../components/TermHint.vue'
 import PageHeader from '../components/ui/PageHeader.vue'
 import UiSelect from '../components/ui/UiSelect.vue'
+import UiSwitch from '../components/ui/UiSwitch.vue'
 import { errorText, jobProgressText, webApi } from '../api/web'
 import { useExpert } from '../composables/useExpert'
 import { pushToast } from '../composables/useToasts'

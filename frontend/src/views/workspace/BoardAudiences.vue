@@ -11,22 +11,21 @@
         class="board-lines__row board-auds__row"
         :class="{ 'is-pending': a.pending, 'is-off': !board.isOn(a), 'is-own': a.own }"
       >
-        <input
+        <UiCheckbox
           v-if="a.pending"
-          type="checkbox"
           :checked="board.isOn(a)"
           :disabled="board.disabled.value"
           :aria-label="a.text"
           @change="board.toggle(a)"
         />
-        <span v-else class="board-lines__ok" title="Согласовано" aria-hidden="true">✓</span>
+        <span v-else class="board-lines__ok" v-tip="'Согласовано'" aria-hidden="true">✓</span>
         <div class="board-auds__body">
           <div class="board-auds__name">
             <strong>{{ a.text }}</strong>
-            <span class="chip" :class="TYPES[a.type]?.chip" :title="TYPES[a.type]?.hint">
+            <span class="chip" :class="TYPES[a.type]?.chip" v-tip="TYPES[a.type]?.hint">
               {{ TYPES[a.type]?.label || 'аудитория' }}
             </span>
-            <span v-if="a.lal && a.type !== 'lookalike'" class="chip chip--warning" :title="LAL_HINT">LAL</span>
+            <span v-if="a.lal && a.type !== 'lookalike'" class="chip chip--warning" v-tip="LAL_HINT">LAL</span>
           </div>
           <small v-if="a.lookalike" class="board-auds__what">
             Похожие на {{ a.lookalike.source }} · похожесть {{ a.lookalike.similarity }} из 5
@@ -37,7 +36,7 @@
         <button
           class="board-x"
           type="button"
-          :title="a.pending && !a.added ? 'Снять галочку' : 'Убрать'"
+          v-tip="a.pending && !a.added ? 'Снять галочку' : 'Убрать'"
           :aria-label="`Убрать: ${a.text}`"
           :disabled="board.disabled.value"
           @click="board.remove('audience', group, [a])"
@@ -56,6 +55,7 @@
  * интересы и привычки и новый LAL из Яндекс Аудиторий (источник и похожесть). Галочки ждущей таблицы, «убрать»; новые аудитории предлагает ИИ в чате.
  */
 import { computed, inject } from 'vue'
+import UiCheckbox from '../../components/ui/UiCheckbox.vue'
 
 const props = defineProps({
   items: { type: Array, required: true },

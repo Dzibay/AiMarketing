@@ -29,7 +29,7 @@
             :role="q.multiple ? 'checkbox' : 'radio'"
             :aria-checked="isPicked(q, o)"
             :disabled="disabled || locked(q, o)"
-            :title="locked(q, o) ? NEED_TEXT[q.needs[o]] : undefined"
+            v-tip="locked(q, o) ? NEED_TEXT[q.needs[o]] : undefined"
             @click="toggle(q, o)"
           >
             {{ o }}

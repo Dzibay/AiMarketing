@@ -93,14 +93,13 @@
 
       <ul class="ctx-files">
         <li v-for="f in items" :key="f.id" class="ctx-files__item" :class="{ 'is-off': !f.enabled }">
-          <label class="check-row ctx-files__main">
-            <input
-              type="checkbox"
-              :checked="f.enabled"
-              :disabled="busyId === f.id"
-              :aria-label="`Отправлять ИИ «${f.filename}»`"
-              @change="toggle(f, $event.target.checked)"
-            />
+          <UiCheckbox
+            class="check-row ctx-files__main"
+            :checked="f.enabled"
+            :disabled="busyId === f.id"
+            :aria-label="`Отправлять ИИ «${f.filename}»`"
+            @change="toggle(f, $event.target.checked)"
+          >
             <span class="ctx-files__name">
               {{ f.filename }}
               <small class="cell-note">
@@ -109,13 +108,13 @@
                 · {{ formatDateTime(f.uploaded_at) }}
               </small>
             </span>
-          </label>
+          </UiCheckbox>
           <span class="chip" :class="STATES[f.state]?.cls">{{ stateText(f) }}</span>
           <button class="btn btn--ghost" type="button" :disabled="busyId === f.id" @click="remove(f)">Удалить</button>
         </li>
       </ul>
       <div class="form-actions">
-        <button class="btn btn--ghost btn--danger" type="button" :disabled="!!busyId || uploading" @click="clearAll">
+        <button class="btn btn--ghost" type="button" :disabled="!!busyId || uploading" @click="clearAll">
           Удалить все
         </button>
       </div>
@@ -126,6 +125,7 @@
 
 <script setup>
 import { computed, onMounted, reactive, ref, watch } from 'vue'
+import UiCheckbox from '../../components/ui/UiCheckbox.vue'
 import { errorText, wsApi } from '../../api/web'
 import { askConfirm } from '../../composables/useConfirm'
 import { pushToast } from '../../composables/useToasts'

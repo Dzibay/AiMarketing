@@ -6,12 +6,12 @@
       class="plist__row"
       :class="`is-${p.severity || 'info'}`"
     >
-      <span class="plist__sev" role="img" :aria-label="SEVERITY_LABELS[p.severity]" :title="SEVERITY_LABELS[p.severity]">
+      <span class="plist__sev" role="img" :aria-label="SEVERITY_LABELS[p.severity]" v-tip="SEVERITY_LABELS[p.severity]">
         <component :is="ICONS[p.severity] || Info" aria-hidden="true" />
       </span>
       <div class="plist__text">
-        <span class="plist__title" :title="p.title">{{ p.title }}</span>
-        <small v-if="whereOf(p)" class="plist__where" :title="whereOf(p)">{{ whereOf(p) }}</small>
+        <span class="plist__title" v-tip.truncate="p.title">{{ p.title }}</span>
+        <small v-if="whereOf(p)" class="plist__where" v-tip.truncate="whereOf(p)">{{ whereOf(p) }}</small>
       </div>
       <RouterLink v-if="problemLink(p)" class="btn btn--ghost btn--sm plist__act" :to="problemLink(p).to">
         {{ problemLink(p).label }}

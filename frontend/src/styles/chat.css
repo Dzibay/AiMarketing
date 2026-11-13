@@ -161,6 +161,13 @@
   color: var(--on-accent);
 }
 
+.starter--main:disabled {
+  border-color: transparent;
+  background: var(--surface-3);
+  color: var(--faint);
+  opacity: 1;
+}
+
 .starter--main:hover:not(:disabled) {
   border-color: transparent;
   color: var(--on-accent);
