@@ -49,6 +49,19 @@
           Экспертный режим
           <span class="menu-switch" :class="{ 'is-on': expert }" aria-hidden="true"></span>
         </button>
+        <!-- На узком экране кнопки темы в верхней строке нет — переключатель здесь и в «Ещё». -->
+        <button
+          v-if="narrow"
+          class="menu-item menu-item--switch"
+          type="button"
+          role="menuitemcheckbox"
+          :aria-checked="isDark"
+          @click="toggleTheme"
+        >
+          <Moon aria-hidden="true" />
+          Тёмная тема
+          <span class="menu-switch" :class="{ 'is-on': isDark }" aria-hidden="true"></span>
+        </button>
         <hr />
         <button class="menu-item is-danger" type="button" role="menuitem" @click="signOut">
           <LogOut aria-hidden="true" />
@@ -62,17 +75,19 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { RouterLink } from 'vue-router'
-import { ChevronDown, CreditCard, LogOut, PlugZap, Settings, SlidersHorizontal } from '@lucide/vue'
+import { ChevronDown, CreditCard, LogOut, Moon, PlugZap, Settings, SlidersHorizontal } from '@lucide/vue'
 import UiSheet from './ui/UiSheet.vue'
 import { useExpert } from '../composables/useExpert'
 import { useProfile } from '../composables/useProfile'
+import { useTheme } from '../composables/useTheme'
 import { useViewport } from '../composables/useViewport'
 
 const emit = defineEmits(['logout'])
 
 const { user, subscription } = useProfile()
 const { expert, setExpert } = useExpert()
-const { phone } = useViewport()
+const { isDark, toggleTheme } = useTheme()
+const { phone, narrow } = useViewport()
 const open = ref(false)
 
 const planName = computed(() => subscription.value?.plan?.name || '')

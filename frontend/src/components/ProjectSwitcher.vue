@@ -1,18 +1,28 @@
 <template>
-  <span class="pswitch">
+  <span class="pswitch" :class="{ 'pswitch--row': row }">
     <button
       ref="trigger"
-      class="dchip dchip--btn pswitch__btn"
-      :class="{ 'is-open': open }"
+      :class="[row ? 'more__row' : 'dchip dchip--btn pswitch__btn', { 'is-open': open }]"
       type="button"
       aria-haspopup="dialog"
       :aria-expanded="open"
       :aria-label="triggerLabel"
-      v-tip="'Сменить проект'"
+      v-tip="row ? null : 'Сменить проект'"
       @click="toggle"
       @keydown.down.prevent="openPanel"
     >
-      <template v-if="project">
+      <template v-if="row">
+        <span v-if="project" class="more__dot" aria-hidden="true">
+          <span class="sdot" :class="`sdot--${projectTone(project)}`"></span>
+        </span>
+        <Layers v-else aria-hidden="true" />
+        <span class="more__t">
+          <b>{{ project ? niceQuotes(project.name) : 'Все проекты' }}</b>
+          <small>Проект — нажмите, чтобы сменить</small>
+        </span>
+        <ChevronRight class="more__go" aria-hidden="true" />
+      </template>
+      <template v-else-if="project">
         <span class="sdot" :class="`sdot--${projectTone(project)}`" aria-hidden="true"></span>
         <span class="dchip__t">{{ niceQuotes(project.name) }}</span>
       </template>
@@ -20,7 +30,7 @@
         <Layers aria-hidden="true" />
         <span class="dchip__t">Все проекты</span>
       </template>
-      <ChevronDown class="pswitch__caret" aria-hidden="true" />
+      <ChevronDown v-if="!row" class="pswitch__caret" aria-hidden="true" />
     </button>
 
     <Teleport to="body">
@@ -109,7 +119,7 @@
 <script setup>
 import { computed, nextTick, ref } from 'vue'
 import { RouterLink } from 'vue-router'
-import { Check, ChevronDown, Layers, Lock, Plus, Search, Settings } from '@lucide/vue'
+import { Check, ChevronDown, ChevronRight, Layers, Lock, Plus, Search, Settings } from '@lucide/vue'
 import { useExpert } from '../composables/useExpert'
 import { usePopover } from '../composables/usePopover'
 import { useProjectFilter } from '../composables/useProjectFilter'
@@ -126,8 +136,12 @@ import {
  * Переключатель проекта в верхней строке: «Все проекты» и список проектов (в экспертном режиме — по папкам
  * клиентов), внизу настройки выбранного проекта и «Добавить сайт». Выбор открывает тот же раздел у другого проекта.
  * Клавиатура: ↓/↑ — по пунктам, Enter — выбрать, Esc — закрыть; набранный текст сразу уходит в поиск.
- * На телефоне панель выезжает снизу во всю ширину.
+ * На телефоне панель выезжает снизу во всю ширину. row — кнопка строкой с пояснением, для шторки «Ещё».
  */
+defineProps({
+  row: { type: Boolean, default: false },
+})
+
 const SEARCH_FROM = 7
 
 const { projectId, project, selectProject } = useProjectFilter()

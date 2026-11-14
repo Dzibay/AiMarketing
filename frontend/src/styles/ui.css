@@ -1513,7 +1513,7 @@ body.has-sheet {
 /* Панель массовых действий — снизу экрана, пока есть выбранные. */
 .bulk-dock {
   position: sticky;
-  bottom: 12px;
+  bottom: calc(12px + var(--bbar-h));
   z-index: 6;
   display: flex;
   flex-wrap: wrap;

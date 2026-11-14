@@ -785,7 +785,7 @@ onMounted(async () => {
 }
 .neg-bar {
   position: sticky;
-  bottom: 12px;
+  bottom: calc(12px + var(--bbar-h));
   display: flex;
   flex-wrap: wrap;
   align-items: center;

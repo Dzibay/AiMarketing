@@ -1,6 +1,7 @@
 <template>
-  <div class="dshell" :class="{ 'is-drawer': drawer, 'is-expert': expert, 'is-collapsed': sideCollapsed }">
-    <aside id="dside" ref="sideEl" class="dside" aria-label="Меню" :inert="narrow && !drawer" @click="closeDrawerOnLink">
+  <div class="dshell" :class="{ 'is-expert': expert, 'is-collapsed': sideCollapsed }">
+    <!-- До 900 px бокового меню нет: разделы — в нижней панели (BottomBar). -->
+    <aside v-if="!narrow" id="dside" class="dside" aria-label="Меню">
       <div class="dside__scroll">
         <div class="dside__head">
           <RouterLink class="dside__brand" to="/cabinet" aria-label="Толк — главная" v-tip.right="tip('Главная')">
@@ -160,27 +161,33 @@
       </RouterLink>
     </aside>
 
-    <button class="dscrim" type="button" aria-label="Закрыть меню" @click="closeDrawer"></button>
-
-    <div class="dmain" :inert="narrow && drawer">
+    <div class="dmain">
       <header class="dbar">
         <button
-          ref="burgerEl"
+          v-if="!narrow"
           class="dicon dbar__burger"
           type="button"
           :aria-label="burgerLabel"
           v-tip="burgerLabel"
           aria-controls="dside"
-          :aria-expanded="narrow ? drawer : !sideCollapsed"
+          :aria-expanded="!sideCollapsed"
           @click="toggleSide"
         >
           <Menu aria-hidden="true" />
         </button>
+        <!-- На странице чата нижней панели нет — выйти из чата можно стрелкой. -->
+        <button v-else-if="inChat" class="dicon dbar__back" type="button" aria-label="Назад" @click="leaveChat">
+          <ArrowLeft aria-hidden="true" />
+        </button>
+        <RouterLink v-else class="dbar__mark" to="/cabinet" aria-label="Толк — главная">
+          <TolkMark :size="28" />
+        </RouterLink>
         <div class="dbar__scope">
           <ProjectSwitcher v-if="accessOk && currentSection && (project || currentSection.all)" />
         </div>
+        <!-- На узком экране счётчик решений — в нижней панели, тема — в «Ещё» и в меню профиля. -->
         <RouterLink
-          v-if="accessOk && pendingCount > 0"
+          v-if="!narrow && accessOk && pendingCount > 0"
           class="dchip dchip--btn dchip--lime"
           :class="{ active: route.meta.section === 'pending' }"
           to="/cabinet/pending"
@@ -189,7 +196,7 @@
           Ждёт решения: {{ pendingCount }}
         </RouterLink>
         <LoadsIndicator v-if="accessOk" :quiet="!expert" />
-        <button class="dicon" type="button" :aria-label="themeLabel" v-tip="themeLabel" @click="toggleTheme">
+        <button v-if="!narrow" class="dicon" type="button" :aria-label="themeLabel" v-tip="themeLabel" @click="toggleTheme">
           <Sun v-if="isDark" aria-hidden="true" />
           <Moon v-else aria-hidden="true" />
         </button>
@@ -248,6 +255,8 @@
       </div>
     </div>
 
+    <BottomBar v-if="narrow" :access-ok="accessOk" :chat-to="chatTo" :limit-chip="limitChip" @logout="logout" />
+
     <Modal :open="!!upgrade" :title="upgrade?.title || ''" wide @close="upgrade = null">
       <template v-if="upgrade">
         <p>{{ upgrade.text }}</p>
@@ -286,9 +295,23 @@
 </template>
 
 <script setup>
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { RouterLink, RouterView, useRoute, useRouter } from 'vue-router'
-import { ChevronDown, Layers, Lock, Menu, MessageSquare, Moon, Plus, Settings, SlidersHorizontal, Sun, X } from '@lucide/vue'
+import {
+  ArrowLeft,
+  ChevronDown,
+  Layers,
+  Lock,
+  Menu,
+  MessageSquare,
+  Moon,
+  Plus,
+  Settings,
+  SlidersHorizontal,
+  Sun,
+  X,
+} from '@lucide/vue'
+import BottomBar from './BottomBar.vue'
 import TolkMark from './TolkMark.vue'
 import UndoHost from './UndoHost.vue'
 import LoadsIndicator from './LoadsIndicator.vue'
@@ -306,6 +329,7 @@ import { featureLocked, loadProfile, resetProfile, useProfile } from '../composa
 import { resetProjectFilter, useProjectFilter } from '../composables/useProjectFilter'
 import { clearSession, getSession } from '../composables/useSession'
 import { useTheme } from '../composables/useTheme'
+import { useViewport } from '../composables/useViewport'
 import {
   loadWorkspaces,
   projectDotA11y as dotA11y,
@@ -322,7 +346,8 @@ import { formatDay, niceQuotes, pct } from '../utils/format'
 /**
  * Оболочка кабинета «Диалог» — родительский маршрут всех его страниц. Слева — меню: «Новый чат», разделы,
  * проекты (это фильтр разделов) и лимит ИИ внизу. Сверху — выбранный проект, «Ждёт решения», тема и профиль.
- * На узком экране меню выезжает по кнопке. Экспертный режим (меню профиля или Настройки → Интерфейс) открывает ручные разделы.
+ * На узком экране (до 900 px) бокового меню нет: разделы — в нижней панели (BottomBar), в верхней строке остаются
+ * знак, проект, загрузки и профиль. Экспертный режим (меню профиля или Настройки → Интерфейс) открывает ручные разделы.
  */
 const route = useRoute()
 const router = useRouter()
@@ -333,43 +358,13 @@ const { pendingCount } = usePending()
 const { projectId, project, selectProject } = useProjectFilter()
 const { workspaces, grouped } = useWorkspaces()
 const { expert, setExpert } = useExpert()
+const { narrow } = useViewport()
 
 // Подписка закончилась или почта не подтверждена — данных кабинета нет, проекты и загрузки не показываем.
 const accessOk = computed(() => !subscription.value || subscription.value.state === 'ok')
 const themeLabel = computed(() => (isDark.value ? 'Светлая тема' : 'Тёмная тема'))
 
 // --- Меню ---
-
-const drawer = ref(false)
-watch(
-  () => route.fullPath,
-  () => {
-    drawer.value = false
-  },
-)
-
-// До 900 px меню — выезжающая шторка. Закрытая не должна ловить Tab (иначе фокус уходит за край экрана),
-// открытая — модальна: фокус внутри, страница под ней недоступна.
-const NARROW = '(max-width: 900px)'
-const narrowQuery = window.matchMedia(NARROW)
-const narrow = ref(narrowQuery.matches)
-const onNarrow = (event) => (narrow.value = event.matches)
-const sideEl = ref(null)
-const burgerEl = ref(null)
-
-watch(drawer, async (open) => {
-  if (!open || !narrow.value) return
-  await nextTick()
-  sideEl.value?.querySelector('a[href], button')?.focus()
-})
-
-async function closeDrawer() {
-  if (!drawer.value) return
-  drawer.value = false
-  if (!narrow.value) return
-  await nextTick() // кнопка «Меню» в .dmain — фокус возможен, только когда с неё снят inert
-  burgerEl.value?.focus()
-}
 
 // Шире 900 px меню сворачивается в иконки — кнопкой «Меню» или Ctrl+\. Выбор запоминается; пока его нет,
 // на 901–1279 px меню свёрнуто, шире — развёрнуто.
@@ -379,17 +374,10 @@ const midQuery = window.matchMedia('(max-width: 1279px)')
 const mid = ref(midQuery.matches)
 const onMid = (event) => (mid.value = event.matches)
 const sideCollapsed = computed(() => !narrow.value && (sidePref.value ? sidePref.value === 'collapsed' : mid.value))
-const burgerLabel = computed(() => {
-  if (narrow.value) return 'Открыть меню'
-  return sideCollapsed.value ? 'Развернуть меню (Ctrl+\\)' : 'Свернуть меню (Ctrl+\\)'
-})
+const burgerLabel = computed(() => (sideCollapsed.value ? 'Развернуть меню (Ctrl+\\)' : 'Свернуть меню (Ctrl+\\)'))
 
 function toggleSide() {
-  if (narrow.value) {
-    if (drawer.value) closeDrawer()
-    else drawer.value = true
-    return
-  }
+  if (narrow.value) return
   sidePref.value = sideCollapsed.value ? 'open' : 'collapsed'
   localStorage.setItem(SIDE_KEY, sidePref.value)
 }
@@ -417,7 +405,8 @@ const chats = ref([])
 let chatsReq = 0
 
 async function loadSideChats() {
-  if (!accessOk.value) return
+  // На узком экране меню нет — чаты открываются со страницы чата («Все чаты»).
+  if (!accessOk.value || narrow.value) return
   const req = ++chatsReq
   const wsId = projectId.value
   try {
@@ -445,12 +434,7 @@ function chatLink(c) {
 
 // Новый чат получает id в адресе, название появляется после первого ответа, решения меняют счётчик —
 // поэтому перечитываем список при смене страницы и счётчика.
-watch([projectId, () => route.path, pendingCount, accessOk], loadSideChats, { immediate: true })
-
-// Ссылка на текущую страницу не меняет адрес — закрываем меню по самому нажатию.
-function closeDrawerOnLink(event) {
-  if (event.target.closest('a')) drawer.value = false
-}
+watch([projectId, () => route.path, pendingCount, accessOk, narrow], loadSideChats, { immediate: true })
 
 const sections = computed(() =>
   SECTIONS.filter((s) => !s.hidden && (expert.value || !s.expert)).map((s) => ({
@@ -505,6 +489,14 @@ const tabs = computed(() =>
   ),
 )
 const expertGate = computed(() => !!route.meta.expert && !expert.value)
+
+// Телефон, страница чата: «назад» — туда, откуда пришли; открыли чат по ссылке — на главную.
+const inChat = computed(() => route.meta.section === 'chat')
+
+function leaveChat() {
+  if (window.history.state?.back) router.back()
+  else router.push(sectionTo(SECTIONS[0], projectId.value))
+}
 
 /** «12 декабря» — без года, место узкое. */
 function dayMonth(iso) {
@@ -682,8 +674,7 @@ watch(accessOk, (ok, was) => {
 })
 
 function onKey(event) {
-  if (event.key === 'Escape') closeDrawer()
-  else if ((event.ctrlKey || event.metaKey) && !event.altKey && (event.code === 'Backslash' || event.key === '\\')) {
+  if ((event.ctrlKey || event.metaKey) && !event.altKey && (event.code === 'Backslash' || event.key === '\\')) {
     // По физической клавише: в русской раскладке на ней «\» или «/» — всё равно сворачиваем меню. По символу —
     // для экранных клавиатур и удалённого доступа, которые не сообщают клавишу (пустой event.code).
     event.preventDefault()
@@ -748,7 +739,6 @@ onMounted(() => {
   window.addEventListener(ACCESS_EVENT, onAccess)
   document.addEventListener('visibilitychange', pollPending)
   document.addEventListener('keydown', onKey)
-  narrowQuery.addEventListener('change', onNarrow)
   midQuery.addEventListener('change', onMid)
   pendingTimer = setInterval(pollPending, PENDING_MS)
   boot()
@@ -758,7 +748,6 @@ onBeforeUnmount(() => {
   window.removeEventListener(ACCESS_EVENT, onAccess)
   document.removeEventListener('visibilitychange', pollPending)
   document.removeEventListener('keydown', onKey)
-  narrowQuery.removeEventListener('change', onNarrow)
   midQuery.removeEventListener('change', onMid)
   clearInterval(pendingTimer)
 })

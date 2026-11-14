@@ -8,6 +8,7 @@ import { ChartLine, CreditCard, History, House, ListFilter, Megaphone, PlugZap, 
  * 'project' — по одному, 'neutral' — от проекта не зависит (подключения, тариф): фильтр на ней не сбрасывается.
  * expert у раздела или вкладки — виден только в экспертном режиме (Настройки → Интерфейс).
  * feature у вкладки — функция тарифа: выключена — у вкладки замок, раздел открывается с подсказкой о тарифе.
+ * hint — строка пояснения под названием в шторке «Ещё» на телефоне (BottomBar).
  */
 export const SECTIONS = [
   { key: 'summary', label: 'Главная', icon: House, all: '/cabinet', project: (id) => `/w/${id}/summary` },
@@ -32,6 +33,7 @@ export const SECTIONS = [
     icon: ListFilter,
     all: '/cabinet/queries',
     project: (id) => `/w/${id}/queries`,
+    hint: 'Что искали люди и какие запросы лишние',
   },
   {
     key: 'analytics',
@@ -39,6 +41,7 @@ export const SECTIONS = [
     icon: ChartLine,
     all: '/cabinet/analytics',
     project: (id) => `/w/${id}/analytics`,
+    hint: 'Расход, заявки и цена заявки по дням',
   },
   {
     key: 'autopilot',
@@ -47,8 +50,16 @@ export const SECTIONS = [
     all: '/cabinet/autopilot',
     project: (id) => `/w/${id}/autopilot`,
     expert: true,
+    hint: 'Правила, которые работают без вас',
   },
-  { key: 'history', label: 'История', icon: History, all: '/cabinet/history', project: (id) => `/w/${id}/history` },
+  {
+    key: 'history',
+    label: 'История',
+    icon: History,
+    all: '/cabinet/history',
+    project: (id) => `/w/${id}/history`,
+    hint: 'Что менялось в кампаниях и кто это сделал',
+  },
   {
     key: 'project-settings',
     label: 'Настройки проекта',
@@ -59,11 +70,11 @@ export const SECTIONS = [
   },
 ]
 
-/** Служебные разделы: в меню профиля, от проекта не зависят. */
+/** Служебные разделы: в меню профиля и в «Ещё» на телефоне, от проекта не зависят. */
 export const SERVICE = [
-  { key: 'settings', label: 'Настройки', icon: Settings, to: '/cabinet/settings' },
-  { key: 'connections', label: 'Подключения', icon: PlugZap, to: '/cabinet/connections' },
-  { key: 'plan', label: 'Тариф и лимит', icon: CreditCard, to: '/cabinet/plan' },
+  { key: 'settings', label: 'Настройки', icon: Settings, to: '/cabinet/settings', hint: 'Профиль, уведомления, интерфейс' },
+  { key: 'connections', label: 'Подключения', icon: PlugZap, to: '/cabinet/connections', hint: 'Сайты, Директ и Метрика' },
+  { key: 'plan', label: 'Тариф и лимит', icon: CreditCard, to: '/cabinet/plan', hint: 'Срок тарифа и остаток лимита ИИ' },
 ]
 
 /** Адрес раздела при выбранном проекте (id) или «Все проекты» (null); null — раздел без версии «по всем». */

@@ -94,7 +94,7 @@ function ask(preset) {
 <style scoped>
 .cask {
   position: sticky;
-  bottom: 0;
+  bottom: var(--bbar-h);
   z-index: 5;
   margin-top: 24px;
   padding: 14px 0 16px;
