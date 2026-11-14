@@ -258,6 +258,11 @@ export const webApi = {
   me: () => request('/api/web/me'),
   updateProfile: (payload) => request('/api/web/me', { method: 'PATCH', body: JSON.stringify(payload) }),
   /**
+   * Настройки интерфейса в аккаунте: { role: 'owner' | 'pro', expert, hints_seen: [...], whats_new_seen }.
+   * Шлём только меняемые ключи, null сбрасывает ключ; hints_seen дополняет сохранённый список. Ответ — { user }.
+   */
+  updateUi: (patch) => request('/api/web/me/ui', { method: 'PATCH', body: JSON.stringify(patch) }),
+  /**
    * Тариф, расход лимита за период, тарифы для перехода (цены со скидкой), история,
    * payments_enabled / payments_test и платежи [{ id, plan_name, amount_rub, status, status_label, applied,
    * last_day, cancel_reason, confirmation_url, refunded_rub, test, created_at }].
@@ -482,6 +487,8 @@ export const ERRORS = {
   'project-locked': 'Проект не входит в ваш тариф.',
   'projects-limit': 'На вашем тарифе больше проектов не добавить.',
   'name-too-long': 'Имя — не длиннее 120 символов.',
+  'ui-unknown': 'Не получилось сохранить настройку интерфейса.',
+  'ui-value': 'Не получилось сохранить настройку интерфейса.',
   'too-soon': 'Письмо уже отправлено — повторить можно через минуту.',
   'plan-in-use': 'На этом тарифе есть пользователи.',
   'payments-off': 'Онлайн-оплата пока не подключена — напишите в поддержку, подключим тариф вручную.',

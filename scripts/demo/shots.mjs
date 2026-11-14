@@ -111,6 +111,8 @@ socket.addEventListener('message', (ev) => {
   if (msg.id && waiting.has(msg.id)) {
     waiting.get(msg.id)(msg)
     waiting.delete(msg.id)
+  } else if (msg.method === 'Fetch.requestPaused') {
+    pinMode(msg.params)
   }
 })
 const send = (method, params = {}) =>
@@ -126,6 +128,27 @@ const evaluate = async (expression) => {
 }
 
 await send('Page.enable')
+// Режим кабинета хранится в аккаунте (user.ui.expert), а прогоны с разными режимами идут параллельно под одним
+// демо-пользователем. Поэтому на сервер режим не пишем, а подставляем в ответ /api/web/me своему Chrome.
+let shotMode = 'simple'
+await send('Fetch.enable', { patterns: [{ urlPattern: '*/api/web/me', requestStage: 'Response' }] })
+async function pinMode({ requestId, responseStatusCode, responseHeaders = [] }) {
+  try {
+    if (responseStatusCode !== 200) throw new Error('не профиль')
+    const got = (await send('Fetch.getResponseBody', { requestId })).result
+    const data = JSON.parse(got.base64Encoded ? Buffer.from(got.body, 'base64').toString('utf8') : got.body)
+    data.user.ui = { ...data.user.ui, expert: shotMode === 'expert' }
+    await send('Fetch.fulfillRequest', {
+      requestId,
+      responseCode: 200,
+      // Тело стало другим: длину и сжатие Chrome посчитает сам.
+      responseHeaders: responseHeaders.filter((h) => !/^content-(length|encoding)$/i.test(h.name)),
+      body: Buffer.from(JSON.stringify(data)).toString('base64'),
+    })
+  } catch {
+    await send('Fetch.continueRequest', { requestId })
+  }
+}
 if (stable) {
   // Часы стоят: «20 минут назад» и «сегодня» одинаковы в прогонах «до» и «после».
   const now = Number(opt('now', Date.now()))
@@ -151,6 +174,7 @@ for (const width of widths) {
     for (const mode of modes) {
       const dir = join(outDir, `${theme}-${mode}-${width}`)
       mkdirSync(dir, { recursive: true })
+      shotMode = mode
       await send('Page.navigate', { url: BASE + '/login' })
       await waitLoaded()
       await evaluate(`localStorage.setItem('aimarketing-session', ${JSON.stringify(token)});

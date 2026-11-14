@@ -85,6 +85,7 @@ from app.users import (
     public_user,
     register_user,
     set_name,
+    set_ui,
 )
 from app.web_auth import make_session, require_web_identity, require_web_user, verify_session
 from app.workspaces import ensure_workspaces, list_workspaces
@@ -486,6 +487,18 @@ def web_patch_me(body: ProfileBody, user_id: int = Depends(require_web_identity)
     """Имя в профиле — доступно и при закончившейся подписке."""
     try:
         return {"user": set_name(user_id, body.name)}
+    except UsersError as exc:
+        raise _http(exc) from exc
+
+
+@router.patch("/me/ui")
+def web_patch_me_ui(body: dict, user_id: int = Depends(require_web_identity)) -> dict:
+    """Настройки интерфейса (роль, режим, подсказки) — едут за аккаунтом на любое устройство.
+
+    Присланные ключи сливаются с сохранёнными, `null` сбрасывает ключ. Чужой ключ или кривое значение — 400.
+    """
+    try:
+        return {"user": set_ui(user_id, body)}
     except UsersError as exc:
         raise _http(exc) from exc
 

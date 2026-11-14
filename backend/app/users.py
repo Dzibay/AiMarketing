@@ -4,10 +4,18 @@ from __future__ import annotations
 
 import re
 
+from psycopg.types.json import Jsonb
+
 from app.db import pool
 from app.passwords import hash_password, verify_password
 
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+# Настройки интерфейса в аккаунте (users.ui). Чужие ключи не принимаем: это не свалка для фронтенда.
+UI_ROLES = ("owner", "pro")
+UI_KEYS = ("role", "expert", "hints_seen", "whats_new_seen")
+_UI_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_.:-]{0,39}$")
+_UI_HINTS_MAX = 200
 
 
 class UsersError(Exception):
@@ -39,7 +47,7 @@ def get_user(user_id: int) -> dict | None:
         return conn.execute(
             """
             SELECT id, email, name, yandex_uid, blocked_at, blocked_reason,
-                   telegram_chat_id, email_verified_at, created_at
+                   telegram_chat_id, email_verified_at, created_at, ui
             FROM users WHERE id = %s
             """,
             (user_id,),
@@ -50,7 +58,8 @@ def get_user_by_email(email: str) -> dict | None:
     with pool.connection() as conn:
         return conn.execute(
             """
-            SELECT id, email, name, password_hash, yandex_uid, blocked_at, blocked_reason, email_verified_at, created_at
+            SELECT id, email, name, password_hash, yandex_uid, blocked_at, blocked_reason, email_verified_at, created_at,
+                   ui
             FROM users WHERE lower(email) = %s
             """,
             (normalize_email(email),),
@@ -63,7 +72,7 @@ def get_user_by_yandex_uid(yandex_uid: str) -> dict | None:
     with pool.connection() as conn:
         return conn.execute(
             """
-            SELECT id, email, name, yandex_uid, blocked_at, blocked_reason, email_verified_at, created_at
+            SELECT id, email, name, yandex_uid, blocked_at, blocked_reason, email_verified_at, created_at, ui
             FROM users WHERE yandex_uid = %s
             """,
             (yandex_uid,),
@@ -109,7 +118,7 @@ def register_user(*, email: str, password: str, name: str = "") -> dict:
             """
             INSERT INTO users (email, password_hash, name)
             VALUES (%s, %s, %s)
-            RETURNING id, email, name, yandex_uid, blocked_at, blocked_reason, email_verified_at, created_at
+            RETURNING id, email, name, yandex_uid, blocked_at, blocked_reason, email_verified_at, created_at, ui
             """,
             (email_n, hash_password(password_n), display),
         ).fetchone()
@@ -133,6 +142,7 @@ def login_user(*, email: str, password: str) -> dict:
         "blocked_reason": user["blocked_reason"],
         "email_verified_at": user["email_verified_at"],
         "created_at": user["created_at"],
+        "ui": user["ui"],
     }
 
 
@@ -181,7 +191,7 @@ def upsert_yandex_user(
                         password_hash = CASE WHEN email_verified_at IS NULL THEN NULL ELSE password_hash END,
                         email_verified_at = COALESCE(email_verified_at, NOW())
                     WHERE id = %s
-                    RETURNING id, email, name, yandex_uid, blocked_at, blocked_reason, email_verified_at, created_at
+                    RETURNING id, email, name, yandex_uid, blocked_at, blocked_reason, email_verified_at, created_at, ui
                     """,
                     (yandex_uid, (name or "").strip()[:120], by_email["id"]),
                 ).fetchone()
@@ -191,7 +201,7 @@ def upsert_yandex_user(
             """
             INSERT INTO users (email, name, yandex_uid, email_verified_at)
             VALUES (%s, %s, %s, NOW())
-            RETURNING id, email, name, yandex_uid, blocked_at, blocked_reason, email_verified_at, created_at
+            RETURNING id, email, name, yandex_uid, blocked_at, blocked_reason, email_verified_at, created_at, ui
             """,
             (email_n, (name or "").strip()[:120], yandex_uid),
         ).fetchone()
@@ -212,6 +222,54 @@ def set_name(user_id: int, name: str) -> dict:
     return public_user(user)
 
 
+def _ui_value(key: str, value):
+    """Одно значение настроек интерфейса; кривое — ошибка, а не молчаливая правка."""
+    if key == "role":
+        ok = value in UI_ROLES
+    elif key == "expert":
+        ok = isinstance(value, bool)
+    elif key == "hints_seen":
+        ok = (
+            isinstance(value, list)
+            and len(value) <= _UI_HINTS_MAX
+            and all(isinstance(item, str) and _UI_ID_RE.match(item) for item in value)
+        )
+    else:  # whats_new_seen — метка последней прочитанной записи «Что нового»
+        ok = isinstance(value, str) and bool(_UI_ID_RE.match(value))
+    if not ok:
+        raise UsersError("ui-value")
+    return value
+
+
+def set_ui(user_id: int, patch: dict) -> dict:
+    """Настройки интерфейса: меняет только присланные ключи, остальные остаются как были.
+
+    `null` сбрасывает ключ. Подсказки (`hints_seen`) дополняют сохранённый список, а не заменяют его:
+    телефон и компьютер закрывают разные подсказки и не должны затирать друг друга.
+    """
+    patch = patch or {}
+    if any(key not in UI_KEYS for key in patch):
+        raise UsersError("ui-unknown")
+    clean = {key: None if value is None else _ui_value(key, value) for key, value in patch.items()}
+    with pool.connection() as conn:
+        row = conn.execute("SELECT ui FROM users WHERE id = %s FOR UPDATE", (user_id,)).fetchone()
+        if row is None:
+            raise UsersError("not-found")
+        ui = dict(row["ui"] or {})
+        for key, value in clean.items():
+            if value is None:
+                ui.pop(key, None)
+            elif key == "hints_seen":
+                ui[key] = list(dict.fromkeys([*(ui.get(key) or []), *value]))[-_UI_HINTS_MAX:]
+            else:
+                ui[key] = value
+        conn.execute("UPDATE users SET ui = %s WHERE id = %s", (Jsonb(ui), user_id))
+    user = get_user(user_id)
+    if user is None:
+        raise UsersError("not-found")
+    return public_user(user)
+
+
 def public_user(user: dict) -> dict:
     return {
         "id": user["id"],
@@ -222,6 +280,8 @@ def public_user(user: dict) -> dict:
         "telegram_linked": bool(user.get("telegram_chat_id")),
         "email_verified": user.get("email_verified_at") is not None,
         "created_at": user["created_at"].isoformat() if user.get("created_at") else None,
+        # Настройки интерфейса: роль, режим, просмотренные подсказки. Пусто — ещё ничего не выбирали.
+        "ui": dict(user.get("ui") or {}),
     }
 
 
@@ -244,7 +304,7 @@ def set_user_blocked(user_id: int, *, blocked: bool, reason: str = "") -> dict:
                 SET blocked_at = COALESCE(blocked_at, NOW()),
                     blocked_reason = %s
                 WHERE id = %s
-                RETURNING id, email, name, yandex_uid, blocked_at, blocked_reason, email_verified_at, created_at
+                RETURNING id, email, name, yandex_uid, blocked_at, blocked_reason, email_verified_at, created_at, ui
                 """,
                 (reason_n, user_id),
             ).fetchone()
@@ -254,7 +314,7 @@ def set_user_blocked(user_id: int, *, blocked: bool, reason: str = "") -> dict:
                 UPDATE users
                 SET blocked_at = NULL, blocked_reason = ''
                 WHERE id = %s
-                RETURNING id, email, name, yandex_uid, blocked_at, blocked_reason, email_verified_at, created_at
+                RETURNING id, email, name, yandex_uid, blocked_at, blocked_reason, email_verified_at, created_at, ui
                 """,
                 (user_id,),
             ).fetchone()
