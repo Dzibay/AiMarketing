@@ -1,6 +1,7 @@
 import { computed, inject, nextTick, onBeforeUnmount, onMounted, provide, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { aiApi, errorText } from '../api/web'
+import { useAnswerWatch } from './useAnswerWatch'
 import { refreshPending } from './usePending'
 import { pushToast } from './useToasts'
 import { loadWorkspaces, useWorkspaces } from './useWorkspaces'
@@ -79,6 +80,8 @@ export function mentionParts(item) {
 export function provideChat({ general, ws, basePath, reloadWs }) {
   const route = useRoute()
   const router = useRouter()
+  const answers = useAnswerWatch()
+  answers.setRouter(router)
   const { workspaces } = useWorkspaces()
 
   const chats = ref([])
@@ -450,6 +453,7 @@ export function provideChat({ general, ws, basePath, reloadWs }) {
       const count = res.messages.length + res.actions.length
       if (!quiet && jumpId.value) revealMessage(jumpId.value)
       else if (!quiet || count !== prevCount) scrollDown(!quiet)
+      if (prevStatus === 'running' && res.chat.status !== 'running') answers.answeredHidden(res.chat, `${basePath.value}/${id}`)
       if (prevStatus && prevStatus !== res.chat.status) loadChats()
       else if (!quiet) {
         const inList = chats.value.find((c) => c.id === id)
@@ -688,7 +692,15 @@ export function provideChat({ general, ws, basePath, reloadWs }) {
     },
   )
 
-  watch(chatId, (id) => {
+  // Ушли из чата, пока ИИ думал, — ответ ждём в фоне: всплывающее сообщение и число в заголовке вкладки.
+  function leaveChat(id) {
+    const left = data.value?.chat
+    if (id && left?.id === id && left.status === 'running') answers.awaitAnswer(left, `${basePath.value}/${id}`)
+  }
+
+  watch(chatId, (id, old) => {
+    leaveChat(old)
+    answers.chatOpened(id)
     stopPolling()
     pendingAsk.value = null
     loadError.value = ''
@@ -703,8 +715,14 @@ export function provideChat({ general, ws, basePath, reloadWs }) {
     if (id && data.value?.chat?.id === chatId.value) revealMessage(id)
   })
 
-  onMounted(() => window.addEventListener('scroll', onScroll, { passive: true }))
+  onMounted(() => {
+    answers.chatOpened(chatId.value)
+    window.addEventListener('scroll', onScroll, { passive: true })
+  })
   onBeforeUnmount(() => {
+    // Адрес к этому моменту уже новый — чат берём из загруженных данных.
+    leaveChat(data.value?.chat?.id)
+    answers.chatOpened(null)
     stopPolling()
     window.removeEventListener('scroll', onScroll)
   })

@@ -229,7 +229,10 @@
 
       <div v-if="status === 'running'" class="msg msg--ai msg--thinking" role="status">
         <span class="spinner" aria-hidden="true" />
-        {{ thinkingText }}
+        <span class="msg__thinking">
+          {{ thinkingText }}
+          <small v-if="longWait">Можно уйти со страницы: ответ сохранится в чате, а мы подскажем, когда он будет готов.</small>
+        </span>
       </div>
       <UiNotice v-if="status === 'error' && chat?.error && !errorInFeed" tone="error" class="chat-error">
         {{ chat.error }}
@@ -246,6 +249,7 @@
 
 <script setup>
 import { BookmarkPlus, Check, Clock, CornerDownRight, PencilLine, RotateCcw, Sparkles } from '@lucide/vue'
+import { onBeforeUnmount, ref, watch } from 'vue'
 import { RouterLink } from 'vue-router'
 import { aiApi, errorText } from '../../api/web'
 import { askText } from '../../composables/useConfirm'
@@ -306,6 +310,21 @@ const {
   scroller,
   onScroll,
 } = useChat()
+// Ответ готовится дольше 10 секунд — подсказка, что ждать на странице не обязательно (useAnswerWatch).
+const LONG_WAIT_MS = 10000
+const longWait = ref(false)
+let longTimer = 0
+watch(
+  status,
+  (s) => {
+    clearTimeout(longTimer)
+    longWait.value = false
+    if (s === 'running') longTimer = setTimeout(() => (longWait.value = true), LONG_WAIT_MS)
+  },
+  { immediate: true },
+)
+onBeforeUnmount(() => clearTimeout(longTimer))
+
 const { expert } = useExpert()
 const { phone } = useViewport()
 
