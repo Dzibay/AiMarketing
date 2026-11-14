@@ -26,7 +26,6 @@
     <slot />
 
     <Teleport to="body">
-      <div v-if="open && sheet" class="ui-scrim" aria-hidden="true"></div>
       <div
         v-if="open"
         ref="panel"
@@ -34,7 +33,7 @@
         :class="{ 'is-sheet': sheet }"
         role="dialog"
         aria-label="Период отчёта"
-        :style="sheet ? null : style"
+        :style="style"
         @keydown.esc.stop.prevent="close({ focus: true })"
         @focusout="onFocusOut"
       >
@@ -113,9 +112,8 @@ const labelOf = (p) => LABELS[p] ?? `${p} дней`
 const trigger = ref(null)
 const panel = ref(null)
 const cal = ref(null)
-const sheet = ref(false)
 const draft = reactive({ start: '', end: '' })
-const { open, style, show, close } = usePopover(trigger, panel, { align: 'start' })
+const { open, style, sheet, show, close } = usePopover(trigger, panel, { align: 'start' })
 
 const presetLabel = computed(() => (props.preset == null ? '' : labelOf(props.preset)))
 const rangeText = computed(() => formatRange(props.from, props.to))
@@ -144,7 +142,6 @@ function rangeOf(p) {
 async function openPanel() {
   draft.start = props.from
   draft.end = props.to
-  sheet.value = window.matchMedia('(max-width: 640px)').matches
   await show()
   await nextTick()
   cal.value?.focus()

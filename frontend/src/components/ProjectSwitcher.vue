@@ -24,16 +24,17 @@
     </button>
 
     <Teleport to="body">
-      <div v-if="open" class="pswitch-scrim" aria-hidden="true"></div>
       <div
         v-if="open"
         ref="panel"
         class="ui-pop pswitch__pop"
+        :class="{ 'is-sheet': sheet }"
         role="dialog"
         aria-label="Выбор проекта"
         :style="style"
         @keydown="onKey"
       >
+        <p v-if="sheet" class="ui-sheet__title" aria-hidden="true">Проект</p>
         <label v-if="searchable" class="pswitch__search">
           <Search aria-hidden="true" />
           <input
@@ -137,7 +138,7 @@ const trigger = ref(null)
 const panel = ref(null)
 const searchEl = ref(null)
 const query = ref('')
-const { open, style, show, close } = usePopover(trigger, panel, {
+const { open, style, sheet, show, close } = usePopover(trigger, panel, {
   align: 'start',
   follow: true,
   onClose: () => (query.value = ''),
@@ -171,8 +172,8 @@ function focusItem(index) {
 async function openPanel() {
   await show()
   await nextTick()
-  if (searchable.value && !window.matchMedia('(max-width: 640px)').matches) {
-    // На телефоне поле не фокусируем сразу: клавиатура закрыла бы половину списка.
+  if (searchable.value && !sheet.value) {
+    // В шторке на телефоне поле не фокусируем сразу: клавиатура закрыла бы половину списка.
     searchEl.value?.focus()
     return
   }

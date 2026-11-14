@@ -37,7 +37,8 @@
       @keydown="onNativeKey"
     />
     <Teleport to="body">
-      <div v-if="open" ref="panel" class="ui-pop ui-select__pop" :style="style">
+      <div v-if="open" ref="panel" class="ui-pop ui-select__pop" :class="{ 'is-sheet': sheet }" :style="style">
+        <p v-if="sheet && sheetTitle" class="ui-sheet__title" aria-hidden="true">{{ sheetTitle }}</p>
         <label v-if="withSearch" class="ui-select__search">
           <Search aria-hidden="true" />
           <input
@@ -120,6 +121,7 @@ import { usePopover } from '../../composables/usePopover'
  * required — без выбора (null или '') форма не отправится, а рамка станет красной.
  * Клавиатура: ↓/↑ открывают и выбирают, Enter — выбрать, Esc — закрыть; без поиска пробел тоже выбирает,
  * а первая буква переводит к пункту, с поиском набранный текст уходит в поле.
+ * На телефоне список открывается шторкой снизу, сверху — подпись поля.
  */
 const SEARCH_FROM = 11
 
@@ -146,7 +148,8 @@ const searchEl = ref(null)
 const query = ref('')
 const active = ref(-1)
 const invalid = ref(false)
-const { open, style, show, close } = usePopover(trigger, panel, {
+const sheetTitle = ref('')
+const { open, style, sheet, show, close } = usePopover(trigger, panel, {
   align: 'start',
   matchWidth: true,
   onClose: () => (query.value = ''),
@@ -210,9 +213,17 @@ function scrollToActive() {
   panel.value?.querySelector(`#${activeId.value}`)?.scrollIntoView({ block: 'nearest' })
 }
 
+// Заголовок шторки — подпись поля: aria-label, иначе текст подписи, с которой кнопку связал v-field.
+function fieldTitle() {
+  if (props.ariaLabel) return props.ariaLabel
+  const label = trigger.value?.labels?.[0] || document.getElementById(props.ariaLabelledby.split(' ')[0] || ' ')
+  return (label?.textContent || '').replace(/\s+/g, ' ').trim()
+}
+
 async function openList() {
   const at = view.value.findIndex(({ o }) => same(o.value, props.modelValue))
   active.value = at >= 0 ? at : enabledFrom(0, 1)
+  sheetTitle.value = fieldTitle()
   await show()
   await nextTick()
   // На телефоне поиск сразу не фокусируем: экранная клавиатура закрыла бы половину списка.

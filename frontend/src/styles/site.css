@@ -2134,7 +2134,7 @@ a.btn {
   animation: rise-in 0.18s ease both;
 }
 
-.profile__menu p {
+.profile__items > p {
   margin: 0;
   padding: 0.55rem 0.7rem 0.6rem;
   border-bottom: 1px solid var(--line);
@@ -2925,15 +2925,49 @@ body.has-modal {
   background: var(--surface-2);
 }
 
+/* Телефон: окно прижато к низу и растёт до всего экрана, кнопки стоят внизу под пальцем, прокручивается только
+   содержимое. Большое окно (wide) — сразу на весь экран. Над экранной клавиатурой — отступ --kb (useViewport.js). */
 @media (max-width: 640px) {
   .modal {
-    padding: 0;
+    padding: 0 0 var(--kb, 0px);
     place-items: end stretch;
   }
 
   .modal__panel {
-    max-height: 92vh;
-    border-radius: 26px 26px 0 0;
+    width: 100%;
+    max-height: calc(100vh - var(--kb, 0px));
+    max-height: calc(100dvh - var(--kb, 0px));
+    border-width: 1px 0 0;
+    border-radius: 22px 22px 0 0;
+  }
+
+  .modal__panel--wide {
+    height: calc(100vh - var(--kb, 0px));
+    height: calc(100dvh - var(--kb, 0px));
+    border: 0;
+    border-radius: 0;
+  }
+
+  .modal__head {
+    padding: 0.9rem 1rem 0.8rem;
+  }
+
+  .modal__panel--wide .modal__head {
+    padding-top: max(0.9rem, env(safe-area-inset-top));
+  }
+
+  .modal__close {
+    width: 44px;
+    height: 44px;
+    margin: -4px -6px -4px 0;
+  }
+
+  .modal__body {
+    padding: 1rem;
+  }
+
+  .modal__footer {
+    padding: 0.75rem 1rem calc(0.75rem + env(safe-area-inset-bottom));
   }
 
   .modal__footer .btn {

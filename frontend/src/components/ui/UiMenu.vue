@@ -27,12 +27,14 @@
         v-if="open"
         ref="panel"
         class="ui-pop ui-menu__list"
+        :class="{ 'is-sheet': sheet }"
         role="menu"
         :aria-label="label"
         :style="style"
         @keydown="onKey"
         @click="onClick"
       >
+        <p v-if="sheet" class="ui-sheet__title" role="presentation">{{ label }}</p>
         <slot :close="close" />
       </div>
     </Teleport>
@@ -47,6 +49,7 @@ import { usePopover } from '../../composables/usePopover'
 /**
  * Меню вторичных действий «⋯». Пункты — UiMenuItem в слоте; опасные ставятся последними и сами открывают
  * подтверждение. Клавиатура: ↓/↑ открывают и ходят по пунктам, Esc закрывает и возвращает фокус на кнопку.
+ * На телефоне меню открывается шторкой снизу, сверху — название меню (label).
  */
 const props = defineProps({
   label: { type: String, default: 'Ещё действия' },
@@ -59,7 +62,7 @@ const props = defineProps({
 
 const trigger = ref(null)
 const panel = ref(null)
-const { open, style, show, close } = usePopover(trigger, panel, { align: props.align })
+const { open, style, sheet, show, close } = usePopover(trigger, panel, { align: props.align })
 
 function items() {
   return [...(panel.value?.querySelectorAll('[role="menuitem"]:not(:disabled)') || [])]

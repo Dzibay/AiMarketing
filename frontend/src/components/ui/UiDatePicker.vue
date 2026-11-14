@@ -18,7 +18,6 @@
     </button>
 
     <Teleport to="body">
-      <div v-if="open && sheet" class="ui-scrim" aria-hidden="true"></div>
       <div
         v-if="open"
         ref="panel"
@@ -26,7 +25,7 @@
         :class="{ 'is-sheet': sheet }"
         role="dialog"
         :aria-label="ariaLabel || 'Выбор даты'"
-        :style="sheet ? null : style"
+        :style="style"
         @keydown.esc.stop.prevent="close({ focus: true })"
         @focusout="onFocusOut"
       >
@@ -77,8 +76,7 @@ const emit = defineEmits(['update:modelValue', 'change'])
 const trigger = ref(null)
 const panel = ref(null)
 const cal = ref(null)
-const sheet = ref(false)
-const { open, style, show, close } = usePopover(trigger, panel, { align: 'start' })
+const { open, style, sheet, show, close } = usePopover(trigger, panel, { align: 'start' })
 
 const text = computed(() => {
   if (props.modelValue) return formatDay(props.modelValue)
@@ -86,7 +84,6 @@ const text = computed(() => {
 })
 
 async function openPanel() {
-  sheet.value = window.matchMedia('(max-width: 640px)').matches
   await show()
   await nextTick()
   cal.value?.focus()

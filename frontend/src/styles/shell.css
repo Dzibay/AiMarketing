@@ -791,43 +791,37 @@
   font-weight: 600;
 }
 
-.pswitch-scrim {
-  display: none;
+/* Телефон: список проектов — шторка снизу (общие правила шторки — в ui.css, .ui-pop.is-sheet).
+   .ui-pop.pswitch__pop: ui.css подключается позже и иначе перебил бы ширину и отступы. */
+.ui-pop.pswitch__pop.is-sheet {
+  width: 100%;
+  max-width: none;
+  padding: 0 10px calc(10px + env(safe-area-inset-bottom));
 }
 
-/* Телефон: панель выезжает снизу во всю ширину, страница под ней затемнена. */
-@media (max-width: 640px) {
-  .pswitch-scrim {
-    position: fixed;
-    inset: 0;
-    z-index: 74;
-    display: block;
-    background: var(--overlay);
-  }
+.pswitch__pop.is-sheet .pswitch__list {
+  flex: 1;
+  min-height: 0;
+  max-height: none;
+}
 
-  /* .ui-pop.pswitch__pop: ui.css подключается позже и иначе перебил бы рамку, скругление и отступы. */
-  .ui-pop.pswitch__pop {
-    top: auto !important;
-    right: 0;
-    bottom: 0;
-    left: 0 !important;
-    width: 100%;
-    max-width: none;
-    max-height: 80vh;
-    padding: 10px 10px calc(10px + env(safe-area-inset-bottom));
-    border-width: 1px 0 0;
-    border-radius: 18px 18px 0 0;
-  }
+.pswitch__pop.is-sheet .pswitch__item {
+  min-height: 48px;
+  font-size: 16px;
+}
 
-  .pswitch__list {
-    max-height: none;
-    flex: 1;
-    min-height: 0;
-  }
+.pswitch__pop.is-sheet .pswitch__search {
+  height: 44px;
+  margin-bottom: 8px;
+}
 
-  .pswitch__item {
-    min-height: 44px;
-  }
+.pswitch__pop.is-sheet .pswitch__search input {
+  font-size: 16px;
+}
+
+.pswitch__pop.is-sheet .pswitch__group,
+.pswitch__pop.is-sheet .pswitch__empty {
+  font-size: 13px;
 }
 
 .dicon {
@@ -973,7 +967,7 @@
   transform: translateX(12px);
 }
 
-.profile__menu hr {
+.profile__items hr {
   margin: 0.3rem 0;
   border: 0;
   border-top: 1px solid var(--line);

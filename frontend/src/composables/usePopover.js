@@ -1,4 +1,6 @@
 import { nextTick, onBeforeUnmount, ref } from 'vue'
+import { sheetLayer } from './useSheet'
+import { isPhone } from './useViewport'
 
 /**
  * Всплывающая панель у кнопки — меню «⋯» и выпадающий список.
@@ -10,12 +12,18 @@ import { nextTick, onBeforeUnmount, ref } from 'vue'
  * trigger и panel — ref на элементы. align: 'end' — правым краем к кнопке, 'start' — левым.
  * matchWidth — панель не уже кнопки (выпадающий список).
  * follow — при прокрутке и смене размера окна панель переставляется, а не закрывается. Для кнопки в закреплённой
- * верхней строке: на телефоне окно «сжимает» экранная клавиатура, и панель с полем поиска иначе закрылась бы
+ * верхней строке: окно «сжимает» экранная клавиатура, и панель с полем поиска иначе закрылась бы
  * от нажатия на это поле.
+ *
+ * На телефоне (до 640 px) панель открывается шторкой снизу: sheet = true, у кнопки её не ставим (style пустой),
+ * затемнение, жест вниз и Esc — в useSheet. Панели нужно :class="{ 'is-sheet': sheet }". Закрытая шторка
+ * возвращает фокус на кнопку всегда: пока она открыта, остальная страница недоступна.
  */
 export function usePopover(trigger, panel, { align = 'end', gap = 6, matchWidth = false, follow = false, onClose } = {}) {
   const open = ref(false)
   const style = ref({})
+  const sheet = ref(false)
+  const layer = sheetLayer(() => close())
 
   function place() {
     const t = trigger.value
@@ -56,6 +64,11 @@ export function usePopover(trigger, panel, { align = 'end', gap = 6, matchWidth 
     else close()
   }
 
+  // Шторка: клавиатура и поворот экрана меняют размер окна — закрываем, только если экран стал широким.
+  function onSheetResize() {
+    if (!isPhone()) close()
+  }
+
   function listen(on) {
     const method = on ? 'addEventListener' : 'removeEventListener'
     document[method]('pointerdown', onPointerDown, true)
@@ -65,7 +78,15 @@ export function usePopover(trigger, panel, { align = 'end', gap = 6, matchWidth 
 
   async function show() {
     if (open.value) return
+    sheet.value = isPhone()
     open.value = true
+    if (sheet.value) {
+      style.value = {}
+      await nextTick()
+      layer.attach(panel.value)
+      window.addEventListener('resize', onSheetResize)
+      return
+    }
     // Сначала панель невидима: размеры известны только после отрисовки, а прыгать на глазах ей нельзя.
     style.value = { visibility: 'hidden' }
     await nextTick()
@@ -77,7 +98,9 @@ export function usePopover(trigger, panel, { align = 'end', gap = 6, matchWidth 
     if (!open.value) return
     open.value = false
     listen(false)
-    if (focus) trigger.value?.focus()
+    window.removeEventListener('resize', onSheetResize)
+    layer.detach()
+    if (focus || sheet.value) trigger.value?.focus({ preventScroll: sheet.value })
     onClose?.()
   }
 
@@ -86,7 +109,11 @@ export function usePopover(trigger, panel, { align = 'end', gap = 6, matchWidth 
     else show()
   }
 
-  onBeforeUnmount(() => listen(false))
+  onBeforeUnmount(() => {
+    listen(false)
+    window.removeEventListener('resize', onSheetResize)
+    layer.detach()
+  })
 
-  return { open, style, show, close, toggle, place }
+  return { open, style, sheet, show, close, toggle, place }
 }
