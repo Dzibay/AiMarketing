@@ -46,21 +46,24 @@
     <p v-else-if="chatsError" class="hint">{{ chatsError }}</p>
     <p v-else-if="!chats.length" class="hint">Чатов пока нет.</p>
     <nav v-else class="chat__list" aria-label="Чаты">
-      <RouterLink
-        v-for="c in chats"
-        :key="c.id"
-        :to="`${basePath}/${c.id}`"
-        class="chat__item"
-        :class="{ active: c.id === chatId }"
-      >
-        <span class="chat__item-title">{{ c.title }}</span>
-        <small>
-          <span v-if="c.status === 'running'" class="tone-warn">отвечает…</span>
-          <span v-else-if="c.pending_actions" class="chat__item-wait">ждёт решения: {{ c.pending_actions }}</span>
-          <span v-else-if="c.status === 'error'" class="tone-bad">ошибка</span>
-          {{ formatDateTime(c.updated_at) }}
-        </small>
-      </RouterLink>
+      <section v-for="g in groups" :key="g.key" class="chat__group" :aria-labelledby="`chat-group-${g.key}`">
+        <h3 :id="`chat-group-${g.key}`" class="chat__group-h">{{ g.title }}</h3>
+        <RouterLink
+          v-for="c in g.items"
+          :key="c.id"
+          :to="`${basePath}/${c.id}`"
+          class="chat__item"
+          :class="{ active: c.id === chatId }"
+        >
+          <span class="chat__item-title">{{ c.title }}</span>
+          <small>
+            <span v-if="c.status === 'running'" class="tone-warn">отвечает…</span>
+            <span v-else-if="c.pending_actions" class="chat__item-wait">ждёт решения: {{ c.pending_actions }}</span>
+            <span v-else-if="c.status === 'error'" class="tone-bad">ошибка</span>
+            {{ g.key === 'waiting' ? formatDateTime(c.updated_at) : chatTime(c.updated_at) }}
+          </small>
+        </RouterLink>
+      </section>
     </nav>
   </aside>
   <div v-if="open" class="chat-backdrop" @click="emit('close')" />
@@ -72,7 +75,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { RouterLink } from 'vue-router'
 import { aiApi, errorText } from '../../api/web'
 import { useChat } from '../../composables/useChat'
-import { formatDateTime } from '../../utils/format'
+import { chatTime, formatDateTime, groupChats } from '../../utils/format'
 
 /**
  * Список чатов раздела: панель слева с затемнением. Открывает и закрывает её страница.
@@ -86,6 +89,9 @@ const emit = defineEmits(['close', 'new'])
 
 const { general, ws, basePath, chats, chatsError, chatId, sending } = useChat()
 const closeButton = ref(null)
+
+// Ждут решения · Сегодня · Вчера · На этой неделе · В этом месяце · Раньше.
+const groups = computed(() => groupChats(chats.value))
 
 // --- Поиск ---
 const query = ref('')

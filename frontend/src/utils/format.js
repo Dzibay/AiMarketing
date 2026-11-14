@@ -121,6 +121,54 @@ export function formatDateTime(iso) {
   return new Date(iso).toLocaleString('ru-RU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })
 }
 
+// Группы по давности: порядок — как в списке, сверху свежие.
+const DATE_GROUPS = [
+  { key: 'today', title: 'Сегодня' },
+  { key: 'yesterday', title: 'Вчера' },
+  { key: 'week', title: 'На этой неделе' },
+  { key: 'month', title: 'В этом месяце' },
+  { key: 'earlier', title: 'Раньше' },
+]
+
+/** Группа даты относительно now: today | yesterday | week (с понедельника) | month | earlier. Время — местное. */
+export function dateGroup(iso, now = new Date()) {
+  if (!iso) return 'earlier'
+  const d = new Date(iso)
+  const day = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+  if (d >= day) return 'today'
+  const yesterday = new Date(day)
+  yesterday.setDate(day.getDate() - 1)
+  if (d >= yesterday) return 'yesterday'
+  const monday = new Date(day)
+  monday.setDate(day.getDate() - ((day.getDay() + 6) % 7))
+  if (d >= monday) return 'week'
+  if (d >= new Date(now.getFullYear(), now.getMonth(), 1)) return 'month'
+  return 'earlier'
+}
+
+/**
+ * Чаты по группам: «Ждут решения» (есть действия на согласовании) первыми, остальные — по давности updated_at.
+ * Порядок внутри группы — как пришёл с сервера. Пустые группы не возвращаются.
+ */
+export function groupChats(chats, now = new Date()) {
+  const waiting = chats.filter((c) => c.pending_actions > 0)
+  const groups = [{ key: 'waiting', title: 'Ждут решения', items: waiting }]
+  for (const g of DATE_GROUPS) groups.push({ ...g, items: [] })
+  const byKey = Object.fromEntries(groups.map((g) => [g.key, g]))
+  for (const c of chats) if (!(c.pending_actions > 0)) byKey[dateGroup(c.updated_at, now)].items.push(c)
+  return groups.filter((g) => g.items.length)
+}
+
+/** Время чата в списке: за сегодня и вчера — только часы (дата уже в заголовке группы), дальше — дата и время. */
+export function chatTime(iso, now = new Date()) {
+  if (!iso) return ''
+  const group = dateGroup(iso, now)
+  if (group === 'today' || group === 'yesterday') {
+    return new Date(iso).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })
+  }
+  return formatDateTime(iso)
+}
+
 /**
  * На какой момент цифра за неполный день: «на 14:05», если обновляли сегодня, иначе «на 11 нояб., 23:40».
  * Почасовых данных нет, поэтому «сегодня» ни с чем не сравниваем — только говорим, когда его сняли.

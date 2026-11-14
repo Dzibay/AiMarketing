@@ -1736,6 +1736,20 @@
   overscroll-behavior: contain;
 }
 
+.chat__group {
+  display: grid;
+  gap: 2px;
+}
+.chat__group + .chat__group {
+  margin-top: 10px;
+}
+.chat__group-h {
+  margin: 6px 10px 2px;
+  color: var(--faint);
+  font-size: 12px;
+  font-weight: 700;
+}
+
 .chat__item {
   display: grid;
   gap: 2px;

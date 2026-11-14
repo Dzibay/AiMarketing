@@ -112,7 +112,7 @@
             <span class="srow__t">Добавить сайт</span>
           </RouterLink>
 
-          <template v-for="block in sideCollapsed ? [] : chatBlocks" :key="block.title">
+          <template v-for="block in sideCollapsed ? [] : chatBlocks" :key="block.key">
             <h4 class="dside__h">{{ block.title }}</h4>
             <RouterLink
               v-for="c in block.items"
@@ -360,7 +360,7 @@ import {
 } from '../composables/useWorkspaces'
 import { ACCESS_EVENT, ApiError, aiApi, errorText } from '../api/web'
 import { pushToast } from '../composables/useToasts'
-import { formatDay, niceQuotes, pct } from '../utils/format'
+import { formatDay, groupChats, niceQuotes, pct } from '../utils/format'
 
 /**
  * Оболочка кабинета «Диалог» — родительский маршрут всех его страниц. Слева — меню: «Новый чат», разделы,
@@ -437,13 +437,11 @@ async function loadSideChats() {
   }
 }
 
+// Ждущие решения — все, остальные — до RECENT_LIMIT в сумме; и те и другие по группам давности, как в списке чатов.
 const chatBlocks = computed(() => {
   const waiting = chats.value.filter((c) => c.pending_actions > 0)
   const rest = chats.value.filter((c) => !c.pending_actions).slice(0, Math.max(0, RECENT_LIMIT - waiting.length))
-  return [
-    { title: 'Ждут вашего решения', items: waiting },
-    { title: 'Недавние чаты', items: rest },
-  ].filter((b) => b.items.length)
+  return groupChats([...waiting, ...rest])
 })
 const shownChats = computed(() => chatBlocks.value.reduce((n, b) => n + b.items.length, 0))
 
