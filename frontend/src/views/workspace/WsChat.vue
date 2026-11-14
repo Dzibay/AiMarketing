@@ -82,20 +82,20 @@
       </div>
 
       <div v-if="showIntro" class="chat__intro">
-        <div class="starters">
+        <div v-if="!general" class="starters">
           <button
-            v-if="!general && isFirst"
+            v-if="isFirst"
             class="starter starter--main"
             type="button"
-            :disabled="!canSendStarter"
+            :disabled="!canSendStarter || !newCampaignText"
             v-tip="'ИИ задаст вопросы по продукту, гео, бюджету и цели, изучит спрос в Вордстате и предложит направления'"
-            @click="send(NEW_CAMPAIGN_PROMPT)"
+            @click="send(newCampaignText)"
           >
             <Sparkles aria-hidden="true" />
             Собрать первую кампанию
           </button>
           <button
-            v-else-if="!general"
+            v-else
             class="starter starter--main"
             type="button"
             :disabled="!canReview"
@@ -105,18 +105,31 @@
             <ScanSearch aria-hidden="true" />
             {{ reviewing ? 'Запускаем…' : 'Разбор проекта' }}
           </button>
-          <button
-            v-for="s in starters"
-            :key="s.label"
-            class="starter"
-            type="button"
-            v-tip="s.prompt"
-            :disabled="!canSendStarter"
-            @click="send(s.prompt)"
-          >
-            {{ s.label }}
-          </button>
         </div>
+
+        <!-- Готовые задачи по категориям: видно, что сервис умеет. Нажатие отправляет задачу сообщением. -->
+        <div v-if="taskGroups.length" class="task-groups">
+          <div v-for="g in taskGroups" :key="g.key" class="task-group">
+            <h3 class="task-group__h">{{ g.label }}</h3>
+            <div class="task-group__items">
+              <button
+                v-for="s in g.items"
+                :key="s.key"
+                class="starter"
+                type="button"
+                v-tip="s.text"
+                :disabled="!canSendStarter"
+                @click="send(s.text)"
+              >
+                {{ s.title }}
+              </button>
+            </div>
+          </div>
+        </div>
+        <p class="hint task-groups__hint">
+          Все задачи — кнопкой «Задачи» в поле ввода или «/» в начале строки. Своё сообщение можно сохранить как задачу в
+          его меню «⋯».
+        </p>
 
         <p v-if="signalsError" class="hint">Сигналы не посчитались: {{ signalsError }}</p>
         <template v-else-if="signals?.suggestions.length">
@@ -169,6 +182,7 @@ import { RouterLink, useRoute, useRouter } from 'vue-router'
 import { aiApi, errorText, wsApi } from '../../api/web'
 import { provideChat } from '../../composables/useChat'
 import { takeHomeQuestion } from '../../composables/useHomeAsk'
+import { promptByKey, usePrompts } from '../../composables/usePrompts'
 import { pushToast } from '../../composables/useToasts'
 import { niceQuotes, pct } from '../../utils/format'
 import CampaignBoard from './CampaignBoard.vue'
@@ -188,30 +202,6 @@ import UiSelect from '../../components/ui/UiSelect.vue'
  * Страница чата с ИИ: шапка, приветствие с подсказками и сигналами, права ИИ и доска кампании.
  * Сам разговор — в composables/useChat.js; список чатов, лента и поле ввода — в components/chat.
  */
-const NEW_CAMPAIGN_PROMPT = 'Хочу собрать новую кампанию. Задай вопросы, которых не хватает, и веди меня по этапам'
-// Подсказки пустого чата: на кнопке — коротко, ИИ уходит полный запрос (он же во всплывающей подсказке).
-const SUGGESTIONS = [
-  { label: 'Где сливается бюджет?', prompt: 'Где сливается бюджет? Найди кампании и фразы с расходом без конверсий' },
-  { label: 'Минус-фразы из запросов', prompt: 'Почисти поисковые запросы: предложи минус-фразы' },
-  { label: 'План на неделю', prompt: 'Составь план оптимизации на неделю' },
-  { label: 'Новая кампания', prompt: NEW_CAMPAIGN_PROMPT },
-]
-// В проекте без кампаний нет ни статистики, ни запросов: спрашивать про них нечего.
-const FIRST_SUGGESTIONS = [
-  { label: 'Заполнить бриф', prompt: 'Помоги заполнить бриф: продукт, оффер, гео, бюджет и цель' },
-  { label: 'Стратегия и бюджет для старта', prompt: 'Какую стратегию и какой бюджет выбрать для первой кампании?' },
-]
-// Общий чат: ИИ сравнивает проекты и предлагает правки в любом из них.
-const GENERAL_SUGGESTIONS = [
-  { label: 'Сравнить проекты за 7 дней', prompt: 'Сравни проекты за последние 7 дней: расход, конверсии, CPA' },
-  { label: 'Где сливается бюджет?', prompt: 'Где во всех проектах сливается бюджет без конверсий?' },
-  { label: 'Кто выбивается из KPI?', prompt: 'Какие проекты выбиваются из KPI и почему?' },
-  {
-    label: 'Что остановить, что масштабировать',
-    prompt: 'Найди кампании, которые стоит остановить, и те, что стоит масштабировать',
-  },
-  { label: 'План работ на неделю', prompt: 'Составь план работ на неделю по всем проектам' },
-]
 const FULL_ACCESS_CONFIRM =
   'Включить полный доступ? ИИ сможет менять бюджеты и ставки, создавать, копировать и удалять кампании без подтверждения.'
 // Общий чат живёт вне проекта: заглушка вместо проекта, чтобы шаблон не ветвился на каждом шаге.
@@ -320,10 +310,20 @@ async function setAccessMode(mode) {
 
 // Первая кампания: «Разбор» и сигналы без данных пусты, вместо них — сборка по этапам.
 const isFirst = computed(() => !ws.value.campaigns_count)
-// «Собрать первую кампанию» и «Разбор проекта» — главная кнопка перед подсказками, в подсказках их нет.
-const starters = computed(() => {
-  if (props.general) return GENERAL_SUGGESTIONS
-  return isFirst.value ? FIRST_SUGGESTIONS : SUGGESTIONS
+// Готовые задачи места (backend/app/ai_prompts.py): общий чат, проект с кампаниями или без них.
+const place = computed(() => (props.general ? 'general' : isFirst.value ? 'first' : 'project'))
+const { groups: promptGroups, builtin: placePrompts, own: ownPrompts } = usePrompts(place)
+const newCampaignText = computed(() => placePrompts.value.find((p) => p.key === 'new_campaign')?.text || '')
+// Свои задачи — первыми (не больше 6, остальные — в «Задачах»). «Собрать первую кампанию» — главная кнопка
+// перед задачами, среди задач её не повторяем.
+const taskGroups = computed(() => {
+  const own = ownPrompts.value.slice(-6).map((p) => ({ ...p, key: `own-${p.id}` }))
+  return [
+    ...(own.length ? [{ key: 'own', label: 'Мои задачи', items: own }] : []),
+    ...promptGroups.value
+      .map((g) => ({ ...g, items: isFirst.value ? g.items.filter((p) => p.key !== 'new_campaign') : g.items }))
+      .filter((g) => g.items.length),
+  ]
 })
 const helloTitle = computed(() => (props.general ? 'Чем помочь по всем проектам?' : `Чем помочь с «${niceQuotes(ws.value.name)}»?`))
 const helloText = computed(() => {
@@ -429,51 +429,28 @@ async function deleteChat() {
 
 // --- Запрос из других вкладок (?ask=…) --------------------------------------------------------
 
+/** Запросы с подставленными данными раздела (период, кампания). Остальные ключи — готовые задачи (usePrompts). */
 function askPrompt(q) {
   switch (q.ask) {
-    case 'problems':
-      return 'Разбери проблемы проекта из сводки: где сливается бюджет, что с KPI и темпом расхода. Дай конкретные действия по важности.'
     case 'analytics':
       return `Проанализируй аналитику за период ${q.from || ''} — ${q.to || ''}: динамика расхода, конверсий и CPA, что изменилось и почему, какие кампании тянут результат вниз. Дай рекомендации.`
     case 'campaign':
       return `Разбери кампанию${q.name ? ` «${q.name}»` : ''} (campaign_row_id ${q.cid}): настройки и стратегия, структура, ключевые фразы, объявления, поисковые запросы и статистика. Найди проблемы и предложи правки.`
-    case 'audit':
-      return 'Проведи аудит всех кампаний проекта: структура, стратегии и бюджеты, минус-фразы, объявления, поисковые запросы, расход без конверсий. Дай список проблем по важности и план правок.'
-    case 'experiment':
-      return 'Предложи эксперимент: какую гипотезу стоит проверить в этом проекте — перезапуск копией, новое гео, другие ключи или тип кампании, — на каких кампаниях и почему. Опирайся на то, что уже работает, и на прошлые эксперименты.'
     case 'headlines':
       return `Масштабируй выгодные заголовки${q.name ? ` кампании «${q.name}»` : ''}${q.cid ? ` (campaign_row_id ${q.cid})` : ''}: разбери статистику заголовков и конверсии по ключевой цели, покажи лучшие и предложи тест с похожими заголовками. Согласуй каждый шаг.`
-    case 'links':
-      return 'Проверь ссылки кампаний по шаблону сайта и предложи исправить косяки.'
-    default:
-      return ''
-  }
-}
-
-/** Вопросы из разделов «Все проекты» — в общий чат. */
-function generalAskPrompt(q) {
-  switch (q.ask) {
-    case 'analytics':
-      return 'Сравни проекты за последнюю неделю: где растёт расход без конверсий, у кого CPA или ДРР хуже KPI, какие кампании тянут результат вниз. Дай по каждому проекту главное действие.'
-    // Первые вопросы из мастера «Начало работы».
-    case 'first':
-      return 'Посмотри мои проекты и кампании и скажи, с чего начать: где теряются деньги, что настроено не так и какие три действия дадут результат быстрее всего.'
-    case 'cleanup':
-      return 'Найди по всем проектам поисковые запросы, которые тратят деньги без конверсий, и предложи минус-фразы для них.'
-    case 'kpi':
-      return 'Проверь, в каких проектах не выбрана цель Метрики, не задан KPI или месячный бюджет, и предложи значения по данным за последний месяц.'
     default:
       return ''
   }
 }
 
 async function handleAsk() {
-  const prompt =
-    route.query.ask === 'text'
-      ? takeHomeQuestion()
-      : props.general
-        ? generalAskPrompt(route.query)
-        : askPrompt(route.query)
+  const q = route.query
+  let prompt = q.ask === 'text' ? takeHomeQuestion() : props.general ? '' : askPrompt(q)
+  if (!prompt && q.ask !== 'text') {
+    // Ключ готовой задачи этого места: «Что горит» со сводки, «С чего начать» из мастера и т. п.
+    const places = props.general ? ['general'] : ['project', 'first']
+    prompt = (await promptByKey(String(q.ask), places).catch(() => null))?.text || ''
+  }
   if (!prompt) {
     await router.replace({ path: basePath.value })
     return

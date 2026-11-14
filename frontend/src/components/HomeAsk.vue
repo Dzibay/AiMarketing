@@ -16,9 +16,9 @@
       </button>
     </form>
     <div class="hask__chips">
-      <button v-for="p in presets" :key="p.ask" class="hask__chip" type="button" @click="preset(p.ask)">
-        <component :is="p.icon" aria-hidden="true" />
-        {{ p.label }}
+      <button v-for="p in home" :key="p.key" class="hask__chip" type="button" v-tip="p.text" @click="preset(p.key)">
+        <component :is="ICONS[p.icon] || Sparkles" aria-hidden="true" />
+        {{ p.title }}
       </button>
     </div>
   </section>
@@ -31,6 +31,7 @@ import { ArrowUp, FlaskConical, Link2, ListChecks, SearchCheck, Sparkles, Target
 import PageHeader from './ui/PageHeader.vue'
 import { putHomeQuestion } from '../composables/useHomeAsk'
 import { useProfile } from '../composables/useProfile'
+import { usePrompts } from '../composables/usePrompts'
 
 /** Главная «Диалога»: вопрос ИИ крупно сверху, под ним — быстрые вопросы. Без wsId — общий чат. */
 const props = defineProps({ wsId: { type: [Number, String], default: null } })
@@ -54,21 +55,9 @@ const lead = computed(() =>
     : 'Спросите про любой проект — ИИ посмотрит кампании, запросы и статистику и предложит правки на согласование.',
 )
 
-const presets = computed(() =>
-  props.wsId
-    ? [
-        { ask: 'problems', label: 'Что горит', icon: Sparkles },
-        { ask: 'audit', label: 'Аудит кампаний', icon: ListChecks },
-        { ask: 'experiment', label: 'Предложить эксперимент', icon: FlaskConical },
-        { ask: 'links', label: 'Проверить ссылки', icon: Link2 },
-      ]
-    : [
-        { ask: 'first', label: 'С чего начать', icon: Sparkles },
-        { ask: 'cleanup', label: 'Почистить запросы', icon: SearchCheck },
-        { ask: 'analytics', label: 'Сравнить проекты', icon: TrendingUp },
-        { ask: 'kpi', label: 'Проверить цели проектов', icon: Target },
-      ],
-)
+// Быстрые вопросы — готовые задачи с пометкой home (backend/app/ai_prompts.py); чат берёт текст по ключу.
+const ICONS = { FlaskConical, Link2, ListChecks, SearchCheck, Sparkles, Target, TrendingUp }
+const { home } = usePrompts(computed(() => (props.wsId ? 'project' : 'general')))
 
 function submit() {
   const q = text.value.trim()

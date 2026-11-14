@@ -31,6 +31,13 @@
         <small v-if="w.site">{{ w.site }}</small>
       </button>
     </div>
+    <PromptPicker
+      v-if="tasksOpen"
+      :place="place"
+      :anchor="tasksBtn"
+      @pick="pickTask"
+      @close="closeTasks(true)"
+    />
     <textarea
       ref="input"
       v-model="draft"
@@ -42,7 +49,7 @@
       :aria-activedescendant="picker.open && picker.items[picker.index] ? `mention-${picker.items[picker.index].id}` : null"
       :disabled="inputOff"
       :placeholder="placeholder"
-      @input="updatePicker"
+      @input="onInput"
       @click="updatePicker"
       @keyup.left="updatePicker"
       @keyup.right="updatePicker"
@@ -50,6 +57,21 @@
       @keydown="onKeydown"
     />
     <div class="composer__row">
+      <button
+        ref="tasksBtn"
+        class="composer__tasks"
+        :class="{ 'is-open': tasksOpen }"
+        type="button"
+        v-tip="'Готовые задачи — или «/» в начале строки'"
+        aria-haspopup="dialog"
+        :aria-expanded="tasksOpen"
+        :disabled="inputOff"
+        @mousedown.prevent
+        @click="tasksOpen ? closeTasks(true) : openTasks()"
+      >
+        <ListChecks aria-hidden="true" />
+        <span>Задачи</span>
+      </button>
       <button
         v-if="otherProjects.length"
         class="composer__icon"
@@ -89,13 +111,17 @@
 </template>
 
 <script setup>
-import { ArrowUp, AtSign } from '@lucide/vue'
-import { computed, nextTick, reactive, watch } from 'vue'
+import { ArrowUp, AtSign, ListChecks } from '@lucide/vue'
+import { computed, nextTick, reactive, ref, watch } from 'vue'
 import { useChat } from '../../composables/useChat'
 import { niceQuotes, plural } from '../../utils/format'
 import UiSelect from '../ui/UiSelect.vue'
+import PromptPicker from './PromptPicker.vue'
 
-/** Поле ввода чата: текст, @-упоминание другого проекта, модель ответа и кнопка отправки. */
+/**
+ * Поле ввода чата: текст, готовые задачи («Задачи» и «/»), @-упоминание другого проекта,
+ * модель ответа и кнопка отправки.
+ */
 
 // Подсказка к классу модели в списке «Модель ответа».
 const MODEL_HINTS = {
@@ -108,6 +134,7 @@ const INPUT_MAX = 200
 
 const {
   general,
+  ws,
   draft,
   mentions,
   otherProjects,
@@ -151,7 +178,7 @@ const placeholder = computed(() => {
   return showIntro.value ? 'Спросите или поручите задачу…' : 'Уточните или попросите что-то ещё…'
 })
 const composerTip = computed(
-  () => `Enter — отправить · Shift+Enter — перенос${otherProjects.value.length ? ' · @ — проект' : ''}`,
+  () => `Enter — отправить · Shift+Enter — перенос · / — задачи${otherProjects.value.length ? ' · @ — проект' : ''}`,
 )
 // Пока ИИ отвечает, писать нельзя: остановить ход нечем, новое сообщение ушло бы в середину ответа.
 const inputOff = computed(() => status.value === 'running' || !aiConfigured.value)
@@ -172,6 +199,63 @@ function autosize() {
   if (empty) el.value = ''
   el.style.height = `${Math.min(height, INPUT_MAX)}px`
   el.style.overflowY = height > INPUT_MAX ? 'auto' : 'hidden'
+}
+
+// --- Готовые задачи -----------------------------------------------------------------------------
+
+const place = computed(() => (general ? 'general' : ws?.value?.campaigns_count ? 'project' : 'first'))
+const tasksOpen = ref(false)
+const tasksBtn = ref(null)
+// Куда встанет выбранная задача: курсор на момент открытия списка.
+let taskAt = { start: 0, end: 0 }
+
+function openTasks() {
+  const el = input.value
+  const pos = el?.selectionStart ?? draft.value.length
+  taskAt = { start: pos, end: el?.selectionEnd ?? pos }
+  closePicker()
+  tasksOpen.value = true
+}
+
+function closeTasks(refocus) {
+  tasksOpen.value = false
+  if (!refocus) return
+  const el = input.value
+  nextTick(() => {
+    el?.focus()
+    el?.setSelectionRange(taskAt.start, taskAt.end)
+  })
+}
+
+/** Текст задачи — в поле на место курсора, отдельной строкой; отправляет человек сам. */
+function pickTask(text) {
+  const before = draft.value.slice(0, taskAt.start)
+  const after = draft.value.slice(taskAt.end)
+  const lead = before && !before.endsWith('\n') ? '\n' : ''
+  const tail = after && !after.startsWith('\n') ? '\n' : ''
+  draft.value = `${before}${lead}${text}${tail}${after}`
+  const caret = before.length + lead.length + text.length
+  taskAt = { start: caret, end: caret }
+  closeTasks(true)
+}
+
+/** «/» в начале строки открывает задачи; сам знак убираем. */
+function slashTasks(e) {
+  const el = input.value
+  if (!el || e.inputType !== 'insertText' || e.data !== '/') return false
+  const caret = el.selectionStart ?? 0
+  const at = caret - 1
+  if (draft.value[at] !== '/' || (at > 0 && draft.value[at - 1] !== '\n')) return false
+  draft.value = draft.value.slice(0, at) + draft.value.slice(caret)
+  nextTick(() => {
+    el.setSelectionRange(at, at)
+    openTasks()
+  })
+  return true
+}
+
+function onInput(e) {
+  if (!slashTasks(e)) updatePicker()
 }
 
 // --- @-упоминания проектов --------------------------------------------------------------------

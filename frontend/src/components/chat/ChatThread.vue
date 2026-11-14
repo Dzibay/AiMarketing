@@ -12,7 +12,14 @@
       <template v-for="item in items" :key="item.key">
         <div v-if="item.role === 'user'" class="msg msg--user">
           <div class="msg__bubble"><template v-for="(part, i) in mentionParts(item)" :key="i"><RouterLink v-if="part.ref" class="mention" :to="`/w/${part.ref.id}/summary`">{{ part.text }}</RouterLink><template v-else>{{ part.text }}</template></template></div>
-          <time v-if="item.created" class="msg__time" :datetime="item.created">{{ formatDateTime(item.created) }}</time>
+          <div v-if="item.created || item.content" class="msg__meta">
+            <time v-if="item.created" class="msg__time" :datetime="item.created">{{ formatDateTime(item.created) }}</time>
+            <UiMenu v-if="item.content" class="msg__menu" size="sm" label="Действия с сообщением">
+              <UiMenuItem :icon="BookmarkPlus" @click="saveAsTask(item)">
+                Сохранить как задачу
+              </UiMenuItem>
+            </UiMenu>
+          </div>
         </div>
 
         <p v-else-if="item.role === 'note'" class="chat-note">
@@ -238,9 +245,12 @@
 </template>
 
 <script setup>
-import { Check, Clock, CornerDownRight, PencilLine, RotateCcw, Sparkles } from '@lucide/vue'
+import { BookmarkPlus, Check, Clock, CornerDownRight, PencilLine, RotateCcw, Sparkles } from '@lucide/vue'
 import { RouterLink } from 'vue-router'
-import { aiApi } from '../../api/web'
+import { aiApi, errorText } from '../../api/web'
+import { askText } from '../../composables/useConfirm'
+import { saveOwnPrompt } from '../../composables/usePrompts'
+import { pushToast } from '../../composables/useToasts'
 import { STATUS_LABELS, mentionParts, useChat } from '../../composables/useChat'
 import { useExpert } from '../../composables/useExpert'
 import { useViewport } from '../../composables/useViewport'
@@ -305,5 +315,24 @@ function hasArgs(args) {
 
 function pretty(value) {
   return typeof value === 'string' ? value : JSON.stringify(value, null, 2)
+}
+
+/** Своё сообщение — в «Мои задачи»: название по первой строке, его можно поправить. */
+async function saveAsTask(item) {
+  const first = item.content.trim().split('\n')[0].replace(/\s+/g, ' ')
+  const value = first.length > 60 ? `${first.slice(0, 59).trimEnd()}…` : first
+  const title = await askText('Название задачи', {
+    title: 'Сохранить как задачу',
+    value,
+    message: 'Текст сообщения станет задачей: её можно вставить в поле ввода кнопкой «Задачи» или «/».',
+    required: true,
+  })
+  if (title == null) return
+  try {
+    await saveOwnPrompt(title.trim(), item.content)
+    pushToast('Задача сохранена — найдёте её через «Задачи» или «/»')
+  } catch (err) {
+    pushToast(errorText(err), 'error')
+  }
 }
 </script>

@@ -181,6 +181,42 @@
   gap: 8px;
 }
 
+/* Готовые задачи по категориям: название категории слева, задачи — кнопками по ширине текста. */
+.task-groups {
+  display: grid;
+  gap: 10px;
+  margin-top: 16px;
+}
+
+.starters + .task-groups {
+  margin-top: 22px;
+}
+
+.task-group {
+  display: grid;
+  grid-template-columns: 104px minmax(0, 1fr);
+  gap: 8px 12px;
+  align-items: start;
+}
+
+.task-group__h {
+  margin: 0;
+  padding-top: 13px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.task-group__items {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.task-groups__hint {
+  margin: 14px 0 0;
+}
+
 .starter {
   appearance: none;
   display: flex;
@@ -420,13 +456,27 @@
   transition: opacity 0.15s ease;
 }
 
-.msg--user:hover .msg__time,
-.msg--user:focus-within .msg__time {
+.msg__meta {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 28px;
+}
+
+.msg__menu .ui-menu__btn {
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+
+.msg--user:hover :is(.msg__time, .msg__menu .ui-menu__btn),
+.msg--user:focus-within :is(.msg__time, .msg__menu .ui-menu__btn),
+.msg__menu .ui-menu__btn.is-open {
   opacity: 1;
 }
 
 @media (hover: none) {
-  .msg__time {
+  .msg__time,
+  .msg__menu .ui-menu__btn {
     opacity: 1;
   }
 }
@@ -1460,6 +1510,40 @@
   height: 16px;
 }
 
+.composer__tasks {
+  appearance: none;
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 12px 0 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--pill);
+  background: var(--surface);
+  color: var(--ink-2);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.composer__tasks:hover:not(:disabled),
+.composer__tasks.is-open {
+  border-color: var(--faint);
+  color: var(--ink);
+}
+
+.composer__tasks:disabled {
+  color: var(--faint);
+  cursor: not-allowed;
+}
+
+.composer__tasks svg {
+  width: 16px;
+  height: 16px;
+}
+
 .composer__model {
   flex: none;
 }
@@ -1784,6 +1868,15 @@
 
   .starters {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  .task-group {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 6px;
+  }
+
+  .task-group__h {
+    padding-top: 0;
   }
 
   /* Поле ввода — над клавиатурой: там, где она не сжимает окно (iOS), её высота в --kb. */

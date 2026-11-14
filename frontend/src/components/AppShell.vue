@@ -341,6 +341,7 @@ import { useExpert } from '../composables/useExpert'
 import { pageTitleOverride } from '../composables/usePageTitle'
 import { resetLoads } from '../composables/useLoads'
 import { loadPending, resetPending, usePending } from '../composables/usePending'
+import { resetPrompts } from '../composables/usePrompts'
 import { loadPlan, resetPlan, usePlan } from '../composables/usePlan'
 import { featureLocked, loadProfile, resetProfile, useProfile } from '../composables/useProfile'
 import { resetProjectFilter, useProjectFilter } from '../composables/useProjectFilter'
@@ -553,6 +554,7 @@ function logout() {
   resetProfile()
   resetPlan()
   resetPending()
+  resetPrompts()
   resetProjectFilter()
   router.replace('/login')
 }
@@ -690,6 +692,7 @@ async function boot() {
       resetWorkspaces()
       resetProfile()
       resetPlan()
+      resetPrompts()
       router.replace('/login')
       return
     }

@@ -5,7 +5,7 @@
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
-from app import ai, ai_agent, ai_feedback, billing, events, experiments, insights, site_check, workspaces
+from app import ai, ai_agent, ai_feedback, ai_prompts, billing, events, experiments, insights, site_check, workspaces
 from app.api.web import _http
 from app.web_auth import require_web_user
 from app.yandex import YandexError
@@ -38,6 +38,18 @@ class FeedbackBody(BaseModel):
     # Ключи ai_feedback.REASONS; только у «вниз».
     reasons: list[str] = []
     comment: str = ""
+
+
+class PromptBody(BaseModel):
+    # Пустое название — начало текста.
+    title: str = ""
+    text: str
+
+
+class PromptPatchBody(BaseModel):
+    title: str | None = None
+    text: str | None = None
+    sort: int | None = None
 
 
 class SiteCheckClaimBody(BaseModel):
@@ -260,6 +272,28 @@ def chat_message(chat_id: int, body: MessageBody, user_id: int = Depends(require
 def message_feedback(message_id: int, body: FeedbackBody, user_id: int = Depends(require_web_user)) -> dict:
     """Оценка ответа ИИ → {feedback}; null — оценка снята."""
     return {"feedback": _call(ai_feedback.save, user_id, message_id, body.rating, body.reasons, body.comment)}
+
+
+@router.get("/ai/prompts")
+def prompts_list(user_id: int = Depends(require_web_user)) -> dict:
+    """Готовые задачи: категории, встроенный набор с местами показа и свои задачи пользователя."""
+    return _call(ai_prompts.overview, user_id)
+
+
+@router.post("/ai/prompts")
+def prompts_create(body: PromptBody, user_id: int = Depends(require_web_user)) -> dict:
+    return {"prompt": _call(ai_prompts.create, user_id, body.title, body.text)}
+
+
+@router.patch("/ai/prompts/{prompt_id}")
+def prompts_update(prompt_id: int, body: PromptPatchBody, user_id: int = Depends(require_web_user)) -> dict:
+    return {"prompt": _call(ai_prompts.update, user_id, prompt_id, body.title, body.text, body.sort)}
+
+
+@router.delete("/ai/prompts/{prompt_id}")
+def prompts_delete(prompt_id: int, user_id: int = Depends(require_web_user)) -> dict:
+    _call(ai_prompts.delete, user_id, prompt_id)
+    return {"ok": True}
 
 
 @router.post("/ai/chats/{chat_id}/retry")

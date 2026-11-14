@@ -36,7 +36,7 @@
       </button>
     </form>
     <div class="hask__chips">
-      <button v-for="s in starters" :key="s" class="hask__chip" type="button" @click="ask(s)">{{ s }}</button>
+      <button v-for="s in starters" :key="s.key" class="hask__chip" type="button" @click="ask(s.text)">{{ s.title }}</button>
     </div>
   </section>
 </template>
@@ -46,6 +46,7 @@ import { computed, nextTick, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ArrowUp, Sparkles, X } from '@lucide/vue'
 import { putHomeQuestion } from '../composables/useHomeAsk'
+import { usePrompts } from '../composables/usePrompts'
 import { useViewport } from '../composables/useViewport'
 import { plural } from '../utils/format'
 
@@ -84,11 +85,8 @@ const allText = computed(() => {
   const n = props.rows.length
   return `${n === 1 ? 'эту' : 'все'} ${n} ${plural(n, 'кампанию', 'кампании', 'кампаний')}`
 })
-const starters = computed(() =>
-  picked.value.length
-    ? ['Почему у них дорогая заявка?', 'Что из этого отключить?', 'Сравни их между собой']
-    : ['Какие тратят впустую?', 'Что отключить?', 'Куда добавить бюджет?'],
-)
+// Подсказки — готовые задачи (backend/app/ai_prompts.py): про все кампании списка или про отмеченные.
+const { builtin: starters } = usePrompts(computed(() => (picked.value.length ? 'campaigns_picked' : 'campaigns')))
 
 // Один проект у всех выбранных — его чат: там ИИ видит кампании целиком. Иначе — общий чат.
 const projectId = computed(() => {

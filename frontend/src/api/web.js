@@ -225,6 +225,12 @@ export const aiApi = {
   snooze: (actionId, on = true) => post(`/api/web/ai/actions/${actionId}/${on ? 'snooze' : 'unsnooze'}`, {}),
   /** Перенос «Позже», сохранённых раньше в браузере → { ids }. */
   snoozeMany: (ids) => post('/api/web/ai/actions/snooze', { ids }),
+  /** Готовые задачи → { categories, builtin: [{ key, category, title, text, places, home, icon }], own: [{ id, title, text }] }. */
+  prompts: () => request('/api/web/ai/prompts'),
+  /** Своя задача → { prompt }; тот же текст — уже сохранённая. */
+  createPrompt: (title, text) => post('/api/web/ai/prompts', { title, text }),
+  updatePrompt: (id, fields) => patch(`/api/web/ai/prompts/${id}`, fields),
+  deletePrompt: (id) => del(`/api/web/ai/prompts/${id}`),
   /** exclude — { id действия: [id снятых строк] }. */
   decideAll: (chatId, approve, exclude = {}) => post(`/api/web/ai/chats/${chatId}/decide-all`, { approve, exclude }),
   /** Ответы в карточке вопросов ИИ: { answers: [{ n, selected, text }], comment } или { skip: true }. */
