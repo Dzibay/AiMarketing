@@ -244,6 +244,12 @@ export function provideChat({ general, ws, basePath, reloadWs }) {
     return out
   })
 
+  // Подсказки «что дальше» — только под последним ответом и пока ИИ ничего не ждёт: следующее сообщение их убирает.
+  const followupKey = computed(() => {
+    const last = items.value[items.value.length - 1]
+    return last?.role === 'assistant' && last.followups.length && status.value === 'idle' ? last.key : ''
+  })
+
   /** Ответ ИИ: текст, шаги чтения, вопросы, план, таблицы и карточки действий (решаемое на доске — плашкой). */
   function assistantItem(m, results, byCall) {
     const reads = []
@@ -285,6 +291,7 @@ export function provideChat({ general, ws, basePath, reloadWs }) {
       content: m.content,
       model: m.model || '',
       created: m.created_at || '',
+      followups: m.followups || [],
       reads,
       asks,
       writes,
@@ -642,6 +649,7 @@ export function provideChat({ general, ws, basePath, reloadWs }) {
     thinkingText,
     errorInFeed,
     lastMessageKey,
+    followupKey,
     // Предложения ИИ и решения по ним
     actions,
     pendingActions,

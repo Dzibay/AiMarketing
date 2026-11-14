@@ -173,6 +173,53 @@ def test_action_waits_for_approval_then_runs(db, monkeypatch):
     assert tool_msg["role"] == "tool" and json.loads(tool_msg["content"])["ok"] is True
     final = ai_agent.get_chat(s["user"], s["chat"])
     assert final["actions"][0]["status"] == "done" and final["messages"][-1]["content"] == "Остановил."
+    # ИИ продолжений не назвал — запасные после выполненной правки.
+    assert final["messages"][-1]["followups"] == ai_agent.FOLLOWUPS_AFTER_DONE
+
+
+def _suggest(items, content="", call_id="s1"):
+    args = json.dumps({"items": items}, ensure_ascii=False)
+    return {"content": content, "tool_calls": [{"id": call_id, "name": "suggest_next", "arguments": args}]}
+
+
+def test_followups_under_final_answer(db, monkeypatch):
+    s = _seed(db)
+    fake, out = _start(
+        s["user"], s["chat"], "Как дела?", monkeypatch, _suggest(["Что отключить?", "Покажи по дням"], "Всё ровно.")
+    )
+    assert out["status"] == "idle" and len(fake.calls) == 1  # подсказки — без лишнего запроса к модели
+    chat = ai_agent.get_chat(s["user"], s["chat"])
+    last = chat["messages"][-1]
+    assert last["content"] == "Всё ровно." and last["followups"] == ["Что отключить?", "Покажи по дням"]
+    assert last["tool_calls"] == []
+
+    # Следующий ход: вызова suggest_next в истории для модели нет, а без своих подсказок и без правок — пусто.
+    fake, _out = _start(s["user"], s["chat"], "Что отключить?", monkeypatch, _text("Ничего."))
+    history = fake.calls[0][1:]
+    assert all(not m.get("tool_calls") for m in history) and not any(m["role"] == "tool" for m in history)
+    assert ai_agent.get_chat(s["user"], s["chat"])["messages"][-1]["followups"] == []
+
+
+def test_followups_in_separate_step_and_after_review(db, monkeypatch):
+    s = _seed(db)
+    # Текст с чтением, затем отдельный шаг только с подсказками — они уходят к тексту хода.
+    first = _call("get_signals", {})
+    first["content"] = "Смотрю сигналы."
+    _fake, out = _start(s["user"], s["chat"], "Разбери", monkeypatch, first, _suggest(["Предложи правки"]))
+    assert out["status"] == "idle"
+    msgs = ai_agent.get_chat(s["user"], s["chat"])["messages"]
+    assert msgs[-1]["role"] == "tool" and msgs[-2]["followups"] == ["Предложи правки"]
+
+    # Разбор без своих подсказок — запасные после разбора.
+    _start(s["user"], s["chat"], "Ещё раз", monkeypatch, _call("get_signals", {}), _text("Затухает РСЯ."))
+    assert ai_agent.get_chat(s["user"], s["chat"])["messages"][-1]["followups"] == ai_agent.FOLLOWUPS_AFTER_REVIEW
+
+    # Подсказки рядом с другим вызовом — ход не закончен, они не сохраняются.
+    mixed = _call("list_campaigns", {})
+    mixed["tool_calls"].append(_suggest(["Лишнее"])["tool_calls"][0])
+    fake, _out = _start(s["user"], s["chat"], "Кампании?", monkeypatch, mixed, _text("Две."))
+    rows = ai_agent.get_chat(s["user"], s["chat"])["messages"]
+    assert [c["name"] for c in rows[-3]["tool_calls"]] == ["list_campaigns"] and rows[-1]["followups"] == []
 
 
 def test_access_rules_and_scope(db, monkeypatch):

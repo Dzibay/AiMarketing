@@ -4171,6 +4171,36 @@ def _q_items(ctx: Context, args: dict) -> dict:
 
 ASK_TOOLS = {"ask_questions": _q_questions, "propose_plan": _q_plan, "propose_items": _q_items}
 
+# Служебные инструменты: не читают и не меняют данные, ответ на них модели не нужен.
+# suggest_next — подсказки «что дальше»: из вызова они уходят в meta ответа, в историю вызов не попадает.
+SUGGEST_TOOL = "suggest_next"
+SERVICE_TOOLS = frozenset({SUGGEST_TOOL})
+MAX_FOLLOWUPS = 3
+FOLLOWUP_LEN = 60
+# Запасные подсказки, если ИИ свои не назвал.
+FOLLOWUPS_AFTER_DONE = ["Что изменилось?", "Что ещё улучшить?"]
+FOLLOWUPS_AFTER_REVIEW = ["Покажи по кампаниям", "Предложи правки"]
+FOLLOWUPS_AFTER_STOP = ["Продолжай"]
+_REVIEW_TOOLS = ("get_signals", "get_experiments")
+FOLLOWUP_RULE = (
+    "- Закончив ответ, если не ждёшь решения по карточке, в том же сообщении вызови suggest_next: 2–3 логичных "
+    "следующих вопроса или просьбы от лица маркетолога. Уже сделанное не предлагай."
+)
+
+
+def _followups(calls: list[dict]) -> list[str]:
+    """Фразы из последнего вызова suggest_next: без пустых, длинных и повторов."""
+    found = [c for c in calls if c.get("name") == SUGGEST_TOOL]
+    if not found:
+        return []
+    items = _parse_args(found[-1].get("arguments") or "").get("items")
+    out: list[str] = []
+    for raw in items if isinstance(items, list) else []:
+        text = re.sub(r"^\s*(?:\d+[.)]|[-•])\s*", "", str(raw or "")).strip().strip("«»\"'").strip()
+        if text and len(text) <= FOLLOWUP_LEN and text.casefold() not in {o.casefold() for o in out}:
+            out.append(text)
+    return out[:MAX_FOLLOWUPS]
+
 
 def _kind(tool: str) -> str:
     if tool in ASK_TOOLS:
@@ -4228,6 +4258,7 @@ TOOL_LABELS = {
     "update_text_ads": "Правка объявлений",
     "ads_action": "Объявления",
     "fix_links": "Ссылки по шаблону",
+    "suggest_next": "Подсказки «что дальше»",
 }
 
 
@@ -4993,6 +5024,14 @@ TOOLS = [
         {"campaign_row_ids": _IDS, **_REASON},
         ["campaign_row_ids"],
     ),
+    _fn(
+        "suggest_next",
+        "Служебный: кнопки «что дальше» под твоим ответом. Вызывай в том же сообщении, что и итоговый текст "
+        f"ответа. До {MAX_FOLLOWUPS} фраз от лица маркетолога, каждая до {FOLLOWUP_LEN} символов: "
+        "«Покажи по кампаниям», «Что отключить?». Нажатие отправит фразу как его сообщение.",
+        {"items": {"type": "array", "items": {"type": "string"}}},
+        ["items"],
+    ),
 ]
 
 for _tool in TOOLS:
@@ -5023,7 +5062,7 @@ GENERAL_WRITE_TOOLS = (
 )
 GENERAL_ASK_TOOLS = ("ask_questions", "propose_plan")
 GENERAL_TOOL_NAMES = frozenset(
-    {"list_projects", "get_project", *CROSS_PROJECT_TOOLS, *GENERAL_WRITE_TOOLS, *GENERAL_ASK_TOOLS}
+    {"list_projects", "get_project", *CROSS_PROJECT_TOOLS, *GENERAL_WRITE_TOOLS, *GENERAL_ASK_TOOLS, SUGGEST_TOOL}
 )
 
 
@@ -5164,6 +5203,7 @@ def _general_prompt(ctx: Context) -> str:
         "бриф и ответы маркетолога. Предложи открыть ИИ-помощника в нужном проекте.",
         "- Если действие отклонено, не повторяй его без новой просьбы. Если ошибка — объясни её.",
         "- Если часть согласованного плана не выполнена, прямо скажи, что именно не сделано.",
+        FOLLOWUP_RULE,
     ]
     return "\n".join(lines)
 
@@ -5347,6 +5387,7 @@ def _system_prompt(ctx: Context) -> str:
         "не подтвердилось — остановить тестовые кампании. Итог записывай finish_experiment, когда маркетолог "
         "согласен с выводом.",
         "- Если действие отклонено, не повторяй его без новой просьбы. Если ошибка — объясни её пользователю.",
+        FOLLOWUP_RULE,
         "- Если часть согласованного плана не выполнена (ошибка, отклонено, пропущено) или ты её убрал, прямо "
         "скажи, что именно не сделано, — не называй план выполненным.",
         "- Менять можно только кампании и кабинеты этого проекта. Другие проекты пользователя — только "
@@ -5466,6 +5507,7 @@ def _message_out(row: dict) -> dict:
         "tool_call_id": row.get("tool_call_id") or "",
         "tool_name": row.get("tool_name") or "",
         "refs": row.get("refs") or [],
+        "followups": (row.get("meta") or {}).get("followups") or [],
         "model": row.get("model") or "",
         "created_at": _iso(row.get("created_at")),
     }
@@ -6730,11 +6772,12 @@ def _insert_message(
     tool_name="",
     refs=None,
     model="",
+    meta=None,
 ) -> dict:
     return conn.execute(
         """
-        INSERT INTO ai_messages (chat_id, role, content, tool_calls, tool_call_id, tool_name, refs, model)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING *
+        INSERT INTO ai_messages (chat_id, role, content, tool_calls, tool_call_id, tool_name, refs, model, meta)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING *
         """,
         (
             chat_id,
@@ -6745,6 +6788,7 @@ def _insert_message(
             tool_name,
             Jsonb(refs) if refs else None,
             model or "",
+            Jsonb(meta or {}),
         ),
     ).fetchone()
 
@@ -7750,6 +7794,60 @@ def _handle_call(ctx: Context, chat_id: int, message_id: int, call: dict) -> int
     return 0
 
 
+def _turn_rows(conn, chat_id: int) -> list[dict]:
+    """Сообщения текущего хода: после последней реплики маркетолога."""
+    return conn.execute(
+        """
+        SELECT * FROM ai_messages
+        WHERE chat_id = %s AND id > COALESCE((SELECT MAX(id) FROM ai_messages WHERE chat_id = %s AND role = 'user'), 0)
+        ORDER BY id
+        """,
+        (chat_id, chat_id),
+    ).fetchall()
+
+
+def _attach_followups(chat_id: int, followups: list[str]) -> None:
+    """Подсказки, присланные отдельным шагом без текста, — к последнему текстовому ответу хода."""
+    with pool.connection() as conn:
+        answers = [r for r in _turn_rows(conn, chat_id) if r["role"] == "assistant" and (r["content"] or "").strip()]
+        if not answers:
+            return
+        if followups:
+            conn.execute(
+                "UPDATE ai_messages SET meta = meta || %s WHERE id = %s",
+                (Jsonb({"followups": followups}), answers[-1]["id"]),
+            )
+    if not followups:
+        _fallback_followups(chat_id)
+
+
+def _fallback_followups(chat_id: int) -> None:
+    """ИИ не назвал продолжения — запасные по правилам: после выполненной правки и после разбора."""
+    with pool.connection() as conn:
+        rows = _turn_rows(conn, chat_id)
+        last = next((r for r in reversed(rows) if r["role"] == "assistant" and (r["content"] or "").strip()), None)
+        if last is None or (last.get("meta") or {}).get("followups"):
+            return
+        first = rows[0]["id"] if rows else last["id"]
+        done = conn.execute(
+            """
+            SELECT 1 FROM ai_actions
+            WHERE chat_id = %s AND message_id >= %s AND status = 'done' AND tool <> 'board_edit' AND tool <> ALL(%s)
+            LIMIT 1
+            """,
+            (chat_id, first, list(ASK_TOOLS)),
+        ).fetchone()
+        if done:
+            followups = FOLLOWUPS_AFTER_DONE
+        elif any(c.get("name") in _REVIEW_TOOLS for r in rows for c in r.get("tool_calls") or []):
+            followups = FOLLOWUPS_AFTER_REVIEW
+        else:
+            return
+        conn.execute(
+            "UPDATE ai_messages SET meta = meta || %s WHERE id = %s", (Jsonb({"followups": followups}), last["id"])
+        )
+
+
 def run_chat(user_id: int, chat_id: int, progress=None) -> dict:
     """Ход агента: выполнить одобренное, затем звать модель, пока она вызывает инструменты."""
     with pool.connection() as conn:
@@ -7805,11 +7903,25 @@ def run_chat(user_id: int, chat_id: int, progress=None) -> dict:
                 log.exception("ИИ-чат %s", chat_id)
                 return _end_with_error(chat_id, "Сбой при обращении к ИИ", request)
             calls = [c for c in reply["tool_calls"] if c.get("name")]
+            # Подсказки — только у итогового ответа: рядом с другими вызовами ход ещё не закончен.
+            followups = _followups(calls)
+            calls = [c for c in calls if c["name"] not in SERVICE_TOOLS]
+            if not calls and not (reply["content"] or "").strip():
+                # Одни подсказки без текста — к последнему ответу хода; пустое сообщение в ленту не пишем.
+                _attach_followups(chat_id, followups)
+                break
             with pool.connection() as conn:
                 message = _insert_message(
-                    conn, chat_id, "assistant", reply["content"], tool_calls=calls or None, model=cfg["class_name"]
+                    conn,
+                    chat_id,
+                    "assistant",
+                    reply["content"],
+                    tool_calls=calls or None,
+                    model=cfg["class_name"],
+                    meta={"followups": followups} if followups and not calls else None,
                 )
             if not calls:
+                _fallback_followups(chat_id)
                 break
             waiting = 0
             for call in calls:
@@ -7825,6 +7937,7 @@ def run_chat(user_id: int, chat_id: int, progress=None) -> dict:
                     chat_id,
                     "assistant",
                     "Остановился после нескольких шагов подряд. Напишите «продолжай», если нужно продолжить.",
+                    meta={"followups": FOLLOWUPS_AFTER_STOP},
                 )
     _set_status(chat_id, "idle")
     return {"status": "idle"}

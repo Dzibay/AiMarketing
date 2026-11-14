@@ -226,7 +226,8 @@ CHATS = [
         ("assistant", "За 7 дней быстрее всего растёт **Мебель Вектор**: +18% к прошлой неделе при ДРР 24% "
                       "(цель 20%).\n\n- «Поиск | Диваны | СПб» — 36 400 ₽, 14 продаж\n"
                       "- «Товарная кампания» — 21 000 ₽, 21 продажа\n\nПредлагаю срезать ставки в «Поиск | Диваны» "
-                      "на 10%."),
+                      "на 10%.",
+         {"followups": ["Срежь ставки на 10%", "Покажи по дням", "А что с цветами?"]}),
     ]),
     (ws_r, "Минус-слова для доставки цветов", [
         ("user", "Почисти запросы в поиске"),
@@ -242,8 +243,8 @@ with pool.connection() as conn:
             (uid, ws, title),
         ).fetchone()["id"]
         chats.append(chat)
-        for role, text in messages:
-            ai_agent._insert_message(conn, chat, role, text)
+        for role, text, *meta in messages:
+            ai_agent._insert_message(conn, chat, role, text, meta=meta[0] if meta else None)
 
 
 def ask_card(conn, chat, text, tool, args, payload, *, summary, category="", call="call_demo"):

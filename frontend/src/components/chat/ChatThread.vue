@@ -199,6 +199,20 @@
             <span v-if="expert && item.model">{{ item.model }}</span>
             <time v-if="item.created" :datetime="item.created">{{ formatDateTime(item.created) }}</time>
           </p>
+
+          <div v-if="item.key === followupKey" class="chat-next" role="group" aria-label="Что дальше">
+            <button
+              v-for="f in item.followups"
+              :key="f"
+              class="chat-next__btn"
+              type="button"
+              :disabled="!canSendStarter"
+              @click="send(f)"
+            >
+              <CornerDownRight aria-hidden="true" />
+              {{ f }}
+            </button>
+          </div>
         </div>
       </template>
 
@@ -220,7 +234,7 @@
 </template>
 
 <script setup>
-import { Check, Clock, PencilLine, RotateCcw, Sparkles } from '@lucide/vue'
+import { Check, Clock, CornerDownRight, PencilLine, RotateCcw, Sparkles } from '@lucide/vue'
 import { RouterLink } from 'vue-router'
 import { aiApi } from '../../api/web'
 import { STATUS_LABELS, mentionParts, useChat } from '../../composables/useChat'
@@ -256,6 +270,9 @@ const {
   thinkingText,
   errorInFeed,
   lastMessageKey,
+  followupKey,
+  canSendStarter,
+  send,
   canRetry,
   retryTurn,
   caps,

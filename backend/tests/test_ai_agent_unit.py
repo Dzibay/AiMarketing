@@ -1,5 +1,6 @@
 """ИИ-ассистент без БД и модели: перезапуск копией, системные правила, запомненные ответы."""
 
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -137,8 +138,26 @@ def test_restart_reports_failed_pause(direct):
 
 def test_every_tool_has_schema_and_label():
     schemas = {tool["function"]["name"] for tool in ai_agent.TOOLS}
-    assert schemas == set(ai_agent.READ_TOOLS) | set(ai_agent.WRITE_TOOLS) | set(ai_agent.ASK_TOOLS)
+    assert schemas == (
+        set(ai_agent.READ_TOOLS) | set(ai_agent.WRITE_TOOLS) | set(ai_agent.ASK_TOOLS) | ai_agent.SERVICE_TOOLS
+    )
     assert set(ai_agent.WRITE_TOOLS) | set(ai_agent.ASK_TOOLS) <= set(ai_agent.TOOL_LABELS)
+    assert ai_agent.SUGGEST_TOOL in ai_agent.GENERAL_TOOL_NAMES
+
+
+def test_followups_from_suggest_call():
+    def call(items):
+        return {"id": "s", "name": "suggest_next", "arguments": json.dumps({"items": items}, ensure_ascii=False)}
+
+    assert ai_agent._followups([{"id": "r", "name": "list_campaigns", "arguments": "{}"}]) == []
+    # Последний вызов важнее; нумерация, кавычки, повторы, пустые и длинные фразы убираются, не больше трёх.
+    calls = [
+        call(["старое"]),
+        call(["1. «Что отключить?»", "что отключить?", "", "x" * 61, "- Покажи по дням", "Сравни с прошлым", "Четвёртая"]),
+    ]
+    assert ai_agent._followups(calls) == ["Что отключить?", "Покажи по дням", "Сравни с прошлым"]
+    assert ai_agent._followups([{"id": "s", "name": "suggest_next", "arguments": "не json"}]) == []
+    assert ai_agent._followups([call("строка вместо списка")]) == []
 
 
 @pytest.fixture
