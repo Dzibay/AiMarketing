@@ -129,4 +129,15 @@ export const adminApi = {
 
   /** Расход сервиса за месяц (ГГГГ-ММ, по умолчанию текущий): по видам и по пользователям. */
   usage: (month = '') => call(`/usage${month ? `?month=${encodeURIComponent(month)}` : ''}`),
+
+  /**
+   * Оценки ответов ИИ, новые сверху: { rating (-1 | 1 | 0 — все), model, reason, limit, offset } →
+   * { total, items: [{ rating, reasons, comment, model, user, chat_id, message_id, question, answer }], models, reasons }.
+   */
+  feedback: (params = {}) => {
+    const q = new URLSearchParams(Object.entries(params).filter(([, v]) => v !== '' && v != null).map(([k, v]) => [k, String(v)]))
+    return call(`/feedback?${q}`)
+  },
+  /** Чат пользователя на чтение: { chat, messages: [{ role, content, model, feedback }] }. */
+  chat: (id) => call(`/chats/${id}`),
 }

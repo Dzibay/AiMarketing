@@ -30,6 +30,16 @@
           <small>Себестоимость</small>
           <strong>{{ rubAi(data.total.cost_rub) }}</strong>
         </div>
+        <div class="stat-card" v-tip="'Доля оценок «палец вниз» среди всех оценок ответов за месяц, по классам моделей'">
+          <small>Ответы «вниз»</small>
+          <strong :class="downTone">{{ feedbackTotal ? pct(downShare) : '—' }}</strong>
+          <span class="cell-note">
+            <template v-if="!feedbackTotal">оценок нет</template>
+            <template v-else>
+              <span v-for="(m, i) in data.feedback" :key="m.model">{{ i ? ' · ' : '' }}{{ m.model || 'без модели' }}: {{ pct(m.down_share) }} из {{ num(m.total) }}</span>
+            </template>
+          </span>
+        </div>
       </div>
       <p v-if="!data.total.calls" class="empty">В этом месяце платных вызовов не было.</p>
       <template v-else>
@@ -88,7 +98,7 @@
 </template>
 
 <script setup>
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import UiSelect from '../../components/ui/UiSelect.vue'
 import { adminApi } from '../../api/admin'
 import { errorText } from '../../api/web'
@@ -97,6 +107,14 @@ import { num, rubAi } from '../../utils/format'
 
 const data = ref(null)
 const busy = ref(false)
+
+const feedbackTotal = computed(() => (data.value?.feedback || []).reduce((sum, m) => sum + m.total, 0))
+const downShare = computed(() =>
+  feedbackTotal.value ? data.value.feedback.reduce((sum, m) => sum + m.down, 0) / feedbackTotal.value : 0,
+)
+// Больше трети «вниз» — повод разобраться: жёлтым; больше половины — красным.
+const downTone = computed(() => (!feedbackTotal.value ? '' : downShare.value > 0.5 ? 'tone-bad' : downShare.value > 0.33 ? 'tone-warn' : 'tone-ok'))
+const pct = (share) => `${Math.round(share * 100)}%`
 
 // Доля входа из кэша провайдера: « (кэш 82%)»; кэша не было — пусто.
 function cacheShare(row) {

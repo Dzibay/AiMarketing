@@ -195,10 +195,13 @@
             </div>
           </template>
 
-          <p v-if="item.content && (item.created || (expert && item.model))" class="msg__meta">
-            <span v-if="expert && item.model">{{ item.model }}</span>
-            <time v-if="item.created" :datetime="item.created">{{ formatDateTime(item.created) }}</time>
-          </p>
+          <div v-if="item.content" class="msg__foot">
+            <p v-if="item.created || (expert && item.model)" class="msg__meta">
+              <span v-if="expert && item.model">{{ item.model }}</span>
+              <time v-if="item.created" :datetime="item.created">{{ formatDateTime(item.created) }}</time>
+            </p>
+            <ChatRate :message-id="item.id" :feedback="item.feedback" />
+          </div>
 
           <div v-if="item.key === followupKey" class="chat-next" role="group" aria-label="Что дальше">
             <button
@@ -248,6 +251,7 @@ import AiItemsCard from '../../views/workspace/AiItemsCard.vue'
 import AiPlanCard from '../../views/workspace/AiPlanCard.vue'
 import AiQuestionsCard from '../../views/workspace/AiQuestionsCard.vue'
 import UiCheckbox from '../ui/UiCheckbox.vue'
+import ChatRate from './ChatRate.vue'
 import UiMenu from '../ui/UiMenu.vue'
 import UiMenuItem from '../ui/UiMenuItem.vue'
 import UiNotice from '../ui/UiNotice.vue'

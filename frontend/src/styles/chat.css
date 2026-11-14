@@ -441,12 +441,168 @@
   overflow-wrap: anywhere;
 }
 
+/* Под ответом: время (и модель в экспертном режиме) слева, оценка справа. */
+.msg__foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px 12px;
+  margin-top: -10px;
+}
+
 .msg__meta {
   display: flex;
   flex-wrap: wrap;
-  margin-top: -6px;
+  margin: 0;
   color: var(--faint);
   font-size: 12px;
+}
+
+/* Оценка ответа: значки едва заметны, пока ответ не оценён; форма причин — под строкой во всю ширину. */
+.rate {
+  display: contents;
+}
+
+.rate__btns {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: auto;
+}
+
+.rate__btn {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: none;
+  color: var(--faint);
+  cursor: pointer;
+}
+
+.rate__btn svg {
+  width: 16px;
+  height: 16px;
+}
+
+.rate__btn:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--ink) 7%, transparent);
+  color: var(--ink);
+}
+
+.rate__btn.is-on {
+  color: var(--ink);
+}
+
+.rate__btn.is-on svg {
+  fill: currentColor;
+  fill-opacity: 0.18;
+}
+
+.rate__thanks {
+  margin-left: 6px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.rate-form {
+  display: grid;
+  gap: 10px;
+  flex-basis: 100%;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--surface);
+}
+
+.rate-form__title {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.rate-form__reasons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.rate-form__reason {
+  min-height: 32px;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: none;
+  color: var(--ink-2);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.rate-form__reason:hover {
+  border-color: var(--ink);
+}
+
+.rate-form__reason.is-on {
+  border-color: var(--ink);
+  background: var(--ink);
+  color: var(--bg);
+}
+
+.rate-form__comment {
+  width: 100%;
+  min-height: 60px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--bg);
+  font-size: 14px;
+  resize: vertical;
+}
+
+.rate-form__comment:focus {
+  border-color: var(--ink);
+  outline: none;
+}
+
+.rate-form__acts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.rate-form__clear {
+  margin-left: auto;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--muted);
+  font-size: 13px;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+@media (pointer: coarse) {
+  .rate__btn {
+    width: 44px;
+    height: 44px;
+  }
+
+  .rate-form__reason,
+  .rate-form__clear {
+    min-height: 44px;
+  }
+}
+
+/* Телефон: поле не меньше 16 px, иначе iOS увеличит страницу при фокусе. */
+@media (max-width: 640px) {
+  .rate-form__comment {
+    font-size: 16px;
+  }
 }
 
 .msg__meta > * + *::before {

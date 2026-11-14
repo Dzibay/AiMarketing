@@ -5,7 +5,7 @@
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
-from app import ai, ai_agent, billing, events, experiments, insights, site_check, workspaces
+from app import ai, ai_agent, ai_feedback, billing, events, experiments, insights, site_check, workspaces
 from app.api.web import _http
 from app.web_auth import require_web_user
 from app.yandex import YandexError
@@ -28,6 +28,14 @@ class MessageBody(BaseModel):
     text: str
     # id других проектов пользователя, упомянутых через @: ИИ получит их на чтение.
     refs: list[int] = []
+
+
+class FeedbackBody(BaseModel):
+    # 1 — «вверх», -1 — «вниз», 0 — снять оценку.
+    rating: int
+    # Ключи ai_feedback.REASONS; только у «вниз».
+    reasons: list[str] = []
+    comment: str = ""
 
 
 class SiteCheckClaimBody(BaseModel):
@@ -239,6 +247,12 @@ def chat_message(chat_id: int, body: MessageBody, user_id: int = Depends(require
     out = _call(ai_agent.post_message, user_id, chat_id, body.text, refs=body.refs)
     events.record(user_id, "ai_question", chat_id=chat_id)
     return out
+
+
+@router.post("/ai/messages/{message_id}/feedback")
+def message_feedback(message_id: int, body: FeedbackBody, user_id: int = Depends(require_web_user)) -> dict:
+    """Оценка ответа ИИ → {feedback}; null — оценка снята."""
+    return {"feedback": _call(ai_feedback.save, user_id, message_id, body.rating, body.reasons, body.comment)}
 
 
 @router.post("/ai/chats/{chat_id}/retry")

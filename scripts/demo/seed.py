@@ -20,7 +20,7 @@ from datetime import timedelta
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import env  # noqa: E402  — до app.*: настройки читаются при импорте
 
-from app import ai_agent, journal, negative_lists, rules, search_queries, stats  # noqa: E402
+from app import ai_agent, ai_feedback, journal, negative_lists, rules, search_queries, stats  # noqa: E402
 from app.clients import create_client  # noqa: E402
 from app.clock import now_msk  # noqa: E402
 from app.db import ensure_schema, pool  # noqa: E402
@@ -245,6 +245,17 @@ with pool.connection() as conn:
         chats.append(chat)
         for role, text, *meta in messages:
             ai_agent._insert_message(conn, chat, role, text, meta=meta[0] if meta else None)
+
+# Оценки ответов: «вверх» в общем чате, «вниз» с причинами — в чате минус-слов (видно в админке, «Оценки»).
+with pool.connection() as conn:
+    answers = [
+        conn.execute(
+            "SELECT id FROM ai_messages WHERE chat_id = %s AND role = 'assistant' ORDER BY id DESC LIMIT 1", (c,)
+        ).fetchone()["id"]
+        for c in chats
+    ]
+ai_feedback.save(uid, answers[0], 1)
+ai_feedback.save(uid, answers[1], -1, ["wrong_data", "too_long"], "Запросов было пять, а не четыре")
 
 
 def ask_card(conn, chat, text, tool, args, payload, *, summary, category="", call="call_demo"):

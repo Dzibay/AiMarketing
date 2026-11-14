@@ -287,11 +287,13 @@ export function provideChat({ general, ws, basePath, reloadWs }) {
     if (!m.content && !reads.length && !asks.length && !writes.length) return null
     return {
       key: `m${m.id}`,
+      id: m.id,
       role: 'assistant',
       content: m.content,
       model: m.model || '',
       created: m.created_at || '',
       followups: m.followups || [],
+      feedback: m.feedback || null,
       reads,
       asks,
       writes,
@@ -602,6 +604,16 @@ export function provideChat({ general, ws, basePath, reloadWs }) {
     chats.value = chats.value.map((c) => (c.id === updated.id ? updated : c))
   }
 
+  /** Оценка ответа ИИ { rating, reasons?, comment? }: на сервере и в ленте. Ошибку показывает тот, кто вызвал. */
+  async function rateMessage(messageId, payload) {
+    const { feedback } = await aiApi.rate(messageId, payload)
+    if (!data.value) return
+    data.value = {
+      ...data.value,
+      messages: data.value.messages.map((m) => (m.id === messageId ? { ...m, feedback } : m)),
+    }
+  }
+
   /** Удалить открытый чат на сервере и из списка. Ошибку показывает тот, кто вызвал. */
   async function deleteChat() {
     const id = chat.value.id
@@ -673,6 +685,7 @@ export function provideChat({ general, ws, basePath, reloadWs }) {
     decide,
     decideAll,
     respond,
+    rateMessage,
     editBoard,
     // Сообщение и модель ответа
     draft,

@@ -7,7 +7,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
-from app import ai, ai_bridge, auth, billing, events, image_gen, mailer, payments, plans, promos, referrals, site_check, site_extras, wordstat
+from app import ai, ai_bridge, ai_feedback, auth, billing, events, image_gen, mailer, payments, plans, promos, referrals, site_check, site_extras, wordstat
 from app.api.web import _http
 from app.users import UsersError, count_users, list_users, mark_email_verified, set_user_blocked
 from app.yandex import YandexError, yandex_configured
@@ -425,7 +425,24 @@ def admin_images_test() -> dict:
 
 @router.get("/usage")
 def admin_usage(month: str = "") -> dict:
-    return _call(billing.service_usage, month or None)
+    out = _call(billing.service_usage, month or None)
+    _, start, end = billing.month_bounds(out["month"])
+    out["feedback"] = ai_feedback.stats(start, end)
+    return out
+
+
+# --- Оценки ответов ИИ ---------------------------------------------------------------------------
+
+
+@router.get("/feedback")
+def admin_feedback(rating: int = 0, model: str = "", reason: str = "", limit: int = 100, offset: int = 0) -> dict:
+    return ai_feedback.admin_list(rating, model, reason, limit, offset)
+
+
+@router.get("/chats/{chat_id}")
+def admin_chat(chat_id: int) -> dict:
+    """Чат пользователя на чтение — из списка оценок."""
+    return _call(ai_feedback.admin_chat, chat_id)
 
 
 # --- Оплата (ЮKassa) -----------------------------------------------------------------------------

@@ -200,6 +200,54 @@ def test_followups_under_final_answer(db, monkeypatch):
     assert ai_agent.get_chat(s["user"], s["chat"])["messages"][-1]["followups"] == []
 
 
+def test_answer_feedback(db, monkeypatch):
+    s = _seed(db)
+    _start(s["user"], s["chat"], "Как дела?", monkeypatch, _text("Всё ровно."))
+    answer = ai_agent.get_chat(s["user"], s["chat"])["messages"][-1]
+    question = ai_agent.get_chat(s["user"], s["chat"])["messages"][-2]
+    assert answer["feedback"] is None
+    client = TestClient(app)
+    auth = {"Authorization": f"Bearer {make_session(s['user'])}"}
+    other = {"Authorization": f"Bearer {make_session(make_user(db, 'x@example.com'))}"}
+    url = f"/api/web/ai/messages/{answer['id']}/feedback"
+
+    # «Вверх» — без причин и комментария, даже если их прислали.
+    up = client.post(url, headers=auth, json={"rating": 1, "reasons": ["unclear"], "comment": "x"}).json()
+    assert up == {"feedback": {"rating": 1, "reasons": [], "comment": ""}}
+    # Повторная оценка заменяет прежнюю; неизвестные и повторные причины отбрасываются.
+    down = client.post(url, headers=auth, json={
+        "rating": -1, "reasons": ["wrong_data", "nope", "wrong_data", "too_long"], "comment": "  Цифры не те  ",
+    }).json()["feedback"]
+    assert down == {"rating": -1, "reasons": ["wrong_data", "too_long"], "comment": "Цифры не те"}
+    assert ai_agent.get_chat(s["user"], s["chat"])["messages"][-1]["feedback"] == down
+    # Чужой чат, вопрос пользователя и неверная оценка — нельзя.
+    assert client.post(url, headers=other, json={"rating": 1}).status_code == 404
+    assert client.post(f"/api/web/ai/messages/{question['id']}/feedback", headers=auth, json={"rating": 1}).status_code == 404
+    assert client.post(url, headers=auth, json={"rating": 5}).status_code == 400
+
+    admin = admin_headers()
+    listed = client.get("/api/admin/feedback", headers=admin).json()
+    assert listed["total"] == 1 and listed["models"] == ["Стандартная"]
+    item = listed["items"][0]
+    assert item["question"] == "Как дела?" and item["answer"] == "Всё ровно." and item["model"] == "Стандартная"
+    assert [r["label"] for r in item["reasons"]] == ["Неверные данные", "Слишком длинно"]
+    assert client.get("/api/admin/feedback?reason=unclear", headers=admin).json()["total"] == 0
+    assert client.get("/api/admin/feedback?rating=1", headers=admin).json()["total"] == 0
+    assert client.get("/api/admin/feedback?model=Стандартная&rating=-1", headers=admin).json()["total"] == 1
+    assert client.get("/api/admin/feedback", headers=auth).status_code == 401
+    read = client.get(f"/api/admin/chats/{item['chat_id']}", headers=admin).json()
+    assert [m["role"] for m in read["messages"]] == ["user", "assistant"] and read["messages"][1]["feedback"]["rating"] == -1
+    assert client.get("/api/admin/chats/999999", headers=admin).status_code == 404
+    usage = client.get("/api/admin/usage", headers=admin).json()
+    assert usage["feedback"] == [{"model": "Стандартная", "total": 1, "down": 1, "down_share": 1.0}]
+
+    # 0 снимает оценку; удаление чата убирает и оценки.
+    assert client.post(url, headers=auth, json={"rating": 0}).json() == {"feedback": None}
+    client.post(url, headers=auth, json={"rating": 1})
+    ai_agent.delete_chat(s["user"], s["chat"])
+    assert client.get("/api/admin/feedback", headers=admin).json()["total"] == 0
+
+
 def test_followups_in_separate_step_and_after_review(db, monkeypatch):
     s = _seed(db)
     # Текст с чтением, затем отдельный шаг только с подсказками — они уходят к тексту хода.

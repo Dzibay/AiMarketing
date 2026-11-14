@@ -16,7 +16,7 @@ from datetime import date, datetime, timedelta, timezone
 
 from psycopg.types.json import Jsonb
 
-from app import ai, audiences, context_files, experiments, image_gen, plans
+from app import ai, ai_feedback, audiences, context_files, experiments, image_gen, plans
 from app.actions import BULK_ACTIONS, SETTINGS_LABELS, campaign_options
 from app.brief import brief_filled, normalize_brief
 from app.clock import today_msk
@@ -5508,6 +5508,7 @@ def _message_out(row: dict) -> dict:
         "tool_name": row.get("tool_name") or "",
         "refs": row.get("refs") or [],
         "followups": (row.get("meta") or {}).get("followups") or [],
+        "feedback": ai_feedback.feedback_out(row),
         "model": row.get("model") or "",
         "created_at": _iso(row.get("created_at")),
     }
@@ -6710,7 +6711,13 @@ def get_chat(user_id: int, chat_id: int) -> dict:
     with pool.connection() as conn:
         _require_chat(conn, user_id, chat_id)
         chat = conn.execute(_CHAT_SELECT + " WHERE ch.id = %s", (chat_id,)).fetchone()
-        messages = conn.execute("SELECT * FROM ai_messages WHERE chat_id = %s ORDER BY id", (chat_id,)).fetchall()
+        messages = conn.execute(
+            """
+            SELECT m.*, f.rating, f.reasons, f.comment FROM ai_messages m
+            LEFT JOIN ai_feedback f ON f.message_id = m.id WHERE m.chat_id = %s ORDER BY m.id
+            """,
+            (chat_id,),
+        ).fetchall()
         actions = conn.execute("SELECT * FROM ai_actions WHERE chat_id = %s ORDER BY id", (chat_id,)).fetchall()
     if chat["workspace_id"] is None:
         return {

@@ -41,7 +41,7 @@
       <template v-else>
         <div class="admin-head">
           <h1>Админка</h1>
-          <p>Пользователи и подписки, тарифы и оплата, промокоды и реф-ссылки, общие ИИ, Вордстат и картинки, расход сервиса.</p>
+          <p>Пользователи и подписки, тарифы и оплата, промокоды и реф-ссылки, общие ИИ, Вордстат и картинки, расход сервиса и оценки ответов ИИ.</p>
         </div>
 
         <div v-if="!summary" class="panel"><p class="empty">Загружаем…</p></div>
@@ -100,6 +100,7 @@
           </template>
           <AdminSite v-else-if="tab === 'site'" />
           <AdminUsage v-else-if="tab === 'usage'" />
+          <AdminFeedback v-else-if="tab === 'feedback'" />
         </template>
       </template>
     </main>
@@ -112,6 +113,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { LogOut, Moon, Sun } from '@lucide/vue'
 import TolkMark from '../components/TolkMark.vue'
 import AdminBridge from './admin/AdminBridge.vue'
+import AdminFeedback from './admin/AdminFeedback.vue'
 import AdminPayments from './admin/AdminPayments.vue'
 import AdminPlans from './admin/AdminPlans.vue'
 import AdminPromos from './admin/AdminPromos.vue'
@@ -139,6 +141,7 @@ const TABS = [
   { id: 'services', label: 'ИИ и сервисы' },
   { id: 'site', label: 'Сайт' },
   { id: 'usage', label: 'Расход' },
+  { id: 'feedback', label: 'Оценки' },
 ]
 
 const route = useRoute()
