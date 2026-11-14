@@ -142,6 +142,17 @@ def test_pending_queue_skips_archived_projects_and_api(db, monkeypatch):
     assert items[0]["project"] == {"id": s["ws"], "name": "Магазин"} and items[0]["chat"]["general"] is False
     assert client.get(f"/api/web/ai/pending?workspace_id={_blog(user)}", headers=auth).json()["items"] == []
 
+    # «Позже» и обратно через API; перенос номеров из браузера.
+    action_id = items[0]["id"]
+    snoozed = client.post(f"/api/web/ai/actions/{action_id}/snooze", headers=auth).json()["action"]
+    assert snoozed["snoozed"] is True
+    assert client.get("/api/web/ai/pending/count", headers=auth).json() == {"count": 0}
+    assert client.get("/api/web/ai/pending", headers=auth).json()["snoozed_total"] == 1
+    assert client.post(f"/api/web/ai/actions/{action_id}/unsnooze", headers=auth).json()["action"]["snoozed"] is False
+    assert client.post("/api/web/ai/actions/snooze", headers=auth, json={"ids": [action_id]}).json() == {"ids": [action_id]}
+    assert client.post(f"/api/web/ai/actions/{action_id}/unsnooze", headers=auth).status_code == 200
+    assert client.post("/api/web/ai/actions/999999/snooze", headers=auth).status_code == 404
+
     created = client.post("/api/web/ai/chats", headers=auth, json={"title": "Все проекты"}).json()
     assert created["workspace_id"] is None and created["title"] == "Все проекты"
     assert [c["id"] for c in client.get("/api/web/ai/chats", headers=auth).json()["items"]] == [created["id"]]

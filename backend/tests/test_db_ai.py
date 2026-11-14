@@ -257,6 +257,57 @@ def test_message_keeps_pending_actions(db, monkeypatch):
     assert ai_agent.pending_count(s["user"])["count"] == 0
 
 
+def test_snooze_keeps_action_out_of_the_counter(db, monkeypatch):
+    s = _seed(db)
+    pause = {"campaign_row_ids": [s["search"]], "action": "pause", "reason": "дорого"}
+    _fake, out = _start(s["user"], s["chat"], "Останови Поиск", monkeypatch, _call("campaigns_action", pause))
+    assert out["status"] == "waiting"
+    action = ai_agent.get_chat(s["user"], s["chat"])["actions"][0]
+    assert action["snoozed"] is False and ai_agent.pending_count(s["user"])["count"] == 1
+
+    # «Позже»: ждёт решения, но не в счётчике и в очереди — отдельной группой.
+    out = ai_agent.snooze_action(s["user"], action["id"], True)
+    assert out["action"]["snoozed"] is True and out["action"]["status"] == "pending"
+    assert ai_agent.pending_count(s["user"])["count"] == 0
+    queue = ai_agent.pending_actions(s["user"])
+    assert queue["items"] == [] and queue["total"] == 0
+    assert [a["id"] for a in queue["snoozed"]] == [action["id"]] and queue["snoozed_total"] == 1
+    assert queue["snoozed"][0]["chat"]["id"] == s["chat"]
+    assert ai_agent.get_chat(s["user"], s["chat"])["actions"][0]["snoozed"] is True
+
+    # «Решить сейчас» возвращает в счётчик.
+    assert ai_agent.snooze_action(s["user"], action["id"], False)["action"]["snoozed"] is False
+    assert ai_agent.pending_count(s["user"])["count"] == 1
+
+    # Перенос из браузера: чужие, неизвестные и повторные номера пропускаются молча.
+    assert ai_agent.snooze_actions(s["user"], [action["id"], action["id"], 999999])["ids"] == [action["id"]]
+    assert ai_agent.snooze_actions(s["user"], [action["id"]])["ids"] == []
+    stranger = make_user(db, "stranger@example.com")
+    assert ai_agent.snooze_actions(stranger, [action["id"]])["ids"] == []
+    assert ai_agent.snooze_actions(s["user"], [])["ids"] == []
+    with pytest.raises(YandexError) as err:
+        ai_agent.snooze_action(stranger, action["id"])
+    assert err.value.code == "not-found"
+
+    # Отложенное решается как обычно; решённое отложить нельзя.
+    ai_agent.decide_action(s["user"], action["id"], approve=False)
+    assert ai_agent.pending_actions(s["user"])["snoozed"] == []
+    monkeypatch.setattr(ai, "complete", FakeModel(_text("Не трогаю.")))
+    assert ai_agent.run_chat(s["user"], s["chat"])["status"] == "idle"
+    with pytest.raises(YandexError) as err:
+        ai_agent.snooze_action(s["user"], action["id"])
+    assert err.value.code == "decided"
+
+    # Вопросы не откладываются: ИИ ждёт ответа, чтобы продолжить.
+    ask = _call("ask_questions", {"understanding": "x", "questions": [{"question": "Бюджет?", "options": ["1", "2"]}]}, "q1")
+    _fake, out = _start(s["user"], s["chat"], "Спроси", monkeypatch, ask)
+    card = next(a for a in ai_agent.get_chat(s["user"], s["chat"])["actions"] if a["tool_call_id"] == "q1")
+    with pytest.raises(YandexError) as err:
+        ai_agent.snooze_action(s["user"], card["id"])
+    assert err.value.code == "args"
+    assert ai_agent.snooze_actions(s["user"], [card["id"]])["ids"] == []
+
+
 def _suggest(items, content="", call_id="s1"):
     args = json.dumps({"items": items}, ensure_ascii=False)
     return {"content": content, "tool_calls": [{"id": call_id, "name": "suggest_next", "arguments": args}]}

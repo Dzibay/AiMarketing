@@ -6,26 +6,43 @@
     </p>
   </div>
 
-  <div v-if="loading && !items.length" class="ccard ccard--note">Загружаем…</div>
+  <div v-if="loading && !items.length && !snoozed.length" class="ccard ccard--note">Загружаем…</div>
   <div v-else-if="loadError" class="ccard ccard--note tone-bad">{{ loadError }}</div>
-  <EmptyState
-    v-else-if="!items.length"
-    :icon="Check"
-    text="Решений ничего не ждёт. Новые предложения ИИ появятся здесь, на главной и в чатах."
-  >
-    <template #action><RouterLink class="btn btn--accent" :to="chatHome">Спросить ИИ</RouterLink></template>
-  </EmptyState>
   <template v-else>
+    <EmptyState
+      v-if="!items.length"
+      :icon="Check"
+      :text="
+        snoozed.length
+          ? 'Сейчас решений ничего не ждёт — остались только отложенные, они ниже.'
+          : 'Решений ничего не ждёт. Новые предложения ИИ появятся здесь, на главной и в чатах.'
+      "
+    >
+      <template #action><RouterLink class="btn btn--accent" :to="chatHome">Спросить ИИ</RouterLink></template>
+    </EmptyState>
     <section v-for="g in groups" :key="g.key">
       <h2 class="section-h pend-h">
-        <RouterLink v-if="g.project" :to="`/w/${g.project.id}/summary`">{{ niceQuotes(g.project.name) }}</RouterLink>
-        <span v-else>Все сайты</span>
-        <span class="cgroup__n">{{ g.items.length }}</span>
+        <template v-if="g.snoozed">
+          <span>Отложено</span>
+          <span class="cgroup__n">{{ snoozedTotal }}</span>
+          <button class="btn btn--ghost btn--sm pend-h__toggle" type="button" :aria-expanded="showSnoozed" @click="showSnoozed = !showSnoozed">
+            {{ showSnoozed ? 'Свернуть' : 'Показать' }}
+          </button>
+        </template>
+        <template v-else>
+          <RouterLink v-if="g.project" :to="`/w/${g.project.id}/summary`">{{ niceQuotes(g.project.name) }}</RouterLink>
+          <span v-else>Все сайты</span>
+          <span class="cgroup__n">{{ g.items.length }}</span>
+        </template>
       </h2>
-      <div class="ccard pend-list">
+      <p v-if="g.snoozed && !showSnoozed" class="meta-note">
+        Вы отложили их кнопкой «Позже». В счётчик «Ждёт решения» они не входят, но ничего не выполнено.
+      </p>
+      <div v-if="!g.snoozed || showSnoozed" class="ccard pend-list">
         <article v-for="a in g.items" :key="a.id" class="prow pend" :data-action="a.id">
           <div class="prow__main">
             <small>
+              <template v-if="g.snoozed">{{ a.project ? niceQuotes(a.project.name) : 'Все сайты' }} · </template>
               {{ formatDateTime(a.created_at) }} · {{ a.chat.general ? 'общий чат' : 'чат' }} «{{ a.chat.title }}»
             </small>
             <b>{{ a.label }}</b>
@@ -49,13 +66,21 @@
                 Отклонить
               </button>
             </template>
-            <!-- На телефоне три кнопки в ряд не помещаются: чат — в «⋯». -->
-            <UiMenu v-if="phone && a.kind === 'write'">
-              <UiMenuItem :icon="MessageSquare" :to="chatLink(a)">Открыть чат</UiMenuItem>
-            </UiMenu>
-            <RouterLink v-else class="btn" :class="a.kind === 'ask' ? 'btn--accent' : 'btn--ghost'" :to="chatLink(a)">
-              {{ a.kind === 'ask' ? 'Ответить в чате' : 'Открыть чат' }}
-            </RouterLink>
+            <RouterLink v-if="a.kind !== 'write'" class="btn btn--accent" :to="chatLink(a)">Ответить в чате</RouterLink>
+            <template v-else>
+              <RouterLink v-if="!phone" class="btn btn--ghost" :to="chatLink(a)">Открыть чат</RouterLink>
+              <!-- «Позже» — в «⋯»; на телефоне туда же чат: кнопки в ряд не помещаются. -->
+              <UiMenu :disabled="!!busy[a.id]">
+                <UiMenuItem
+                  :icon="a.snoozed ? Undo2 : Clock"
+                  :hint="a.snoozed ? 'снова в счётчике «Ждёт решения»' : 'убрать из счётчика, решить потом'"
+                  @click="snooze(a, !a.snoozed)"
+                >
+                  {{ a.snoozed ? 'Вернуть в ждущие' : 'Позже' }}
+                </UiMenuItem>
+                <UiMenuItem v-if="phone" :icon="MessageSquare" :to="chatLink(a)">Открыть чат</UiMenuItem>
+              </UiMenu>
+            </template>
           </div>
         </article>
       </div>
@@ -67,7 +92,7 @@
 <script setup>
 import { computed, reactive, ref, watch } from 'vue'
 import { RouterLink } from 'vue-router'
-import { Check, MessageSquare } from '@lucide/vue'
+import { Check, Clock, MessageSquare, Undo2 } from '@lucide/vue'
 import EmptyState from '../components/ui/EmptyState.vue'
 import UiMenu from '../components/ui/UiMenu.vue'
 import UiMenuItem from '../components/ui/UiMenuItem.vue'
@@ -94,6 +119,10 @@ const { phone } = useViewport()
 
 const items = ref([])
 const total = ref(0)
+// Отложенные «Позже»: отдельной группой в конце, свёрнуты — ждут, но не торопят.
+const snoozed = ref([])
+const snoozedTotal = ref(0)
+const showSnoozed = ref(false)
 const loading = ref(false)
 const loadError = ref('')
 const busy = reactive({})
@@ -102,7 +131,7 @@ const decided = new Set()
 
 const chatHome = computed(() => (projectId.value ? `/w/${projectId.value}/chat` : '/cabinet/chat'))
 
-/** По проектам — в порядке первой карточки; общие вопросы без проекта — в конце. */
+/** По проектам — в порядке первой карточки; общие вопросы без проекта — после них; отложенные — в самом конце. */
 const groups = computed(() => {
   const map = new Map()
   for (const a of items.value) {
@@ -110,7 +139,9 @@ const groups = computed(() => {
     if (!map.has(key)) map.set(key, { key, project: a.project, items: [] })
     map.get(key).items.push(a)
   }
-  return [...map.values()].sort((x, y) => Number(!x.project) - Number(!y.project))
+  const out = [...map.values()].sort((x, y) => Number(!x.project) - Number(!y.project))
+  if (snoozed.value.length) out.push({ key: 'snoozed', snoozed: true, project: null, items: snoozed.value })
+  return out
 })
 
 function chatLink(a) {
@@ -128,6 +159,8 @@ async function load() {
     if (n !== seq) return
     items.value = (res.items || []).filter((a) => !decided.has(a.id))
     total.value = Math.max(items.value.length, (res.total || 0) - (res.items || []).length + items.value.length)
+    snoozed.value = (res.snoozed || []).filter((a) => !decided.has(a.id))
+    snoozedTotal.value = Math.max(snoozed.value.length, (res.snoozed_total || 0) - (res.snoozed || []).length + snoozed.value.length)
   } catch (err) {
     if (n === seq) loadError.value = errorText(err)
   } finally {
@@ -136,13 +169,47 @@ async function load() {
   refreshPending()
 }
 
+/** Убрать карточку из её списка: из ждущих или из отложенных. */
+function drop(a) {
+  if (a.snoozed) {
+    snoozed.value = snoozed.value.filter((x) => x.id !== a.id)
+    snoozedTotal.value = Math.max(0, snoozedTotal.value - 1)
+  } else {
+    items.value = items.value.filter((x) => x.id !== a.id)
+    total.value = Math.max(0, total.value - 1)
+  }
+}
+
+/** «Позже» (on) или «Вернуть в ждущие»: карточка переходит в другую группу без перезагрузки списка. */
+async function snooze(a, on) {
+  busy[a.id] = true
+  try {
+    const { action } = await aiApi.snooze(a.id, on)
+    drop(a)
+    const moved = { ...a, snoozed: action.snoozed }
+    if (on) {
+      snoozed.value = [moved, ...snoozed.value]
+      snoozedTotal.value += 1
+    } else {
+      items.value = [moved, ...items.value].sort((x, y) => y.id - x.id)
+      total.value += 1
+    }
+    pushToast(on ? 'Отложено — в конце списка, в счётчик не входит' : 'Снова ждёт решения')
+  } catch (err) {
+    pushToast(errorText(err), 'error')
+    load()
+  } finally {
+    delete busy[a.id]
+    refreshPending()
+  }
+}
+
 async function decide(a, approve) {
   busy[a.id] = true
   try {
     const res = await aiApi.decide(a.id, approve, false, [])
     decided.add(a.id)
-    items.value = items.value.filter((x) => x.id !== a.id)
-    total.value = Math.max(0, total.value - 1)
+    drop(a)
     if (!approve) pushToast('Отклонено')
     else if (res.pending) {
       pushToast(`Одобрено. В чате «${a.chat.title}» ещё без решения: ${res.pending} — ИИ продолжит, когда решите все`)
@@ -179,6 +246,9 @@ watch(pendingCount, () => {
 .pend-h a:hover {
   text-decoration: underline;
   text-underline-offset: 3px;
+}
+.pend-h__toggle {
+  margin-left: auto;
 }
 .pend {
   align-items: flex-start;

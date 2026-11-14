@@ -221,6 +221,10 @@ export const aiApi = {
   /** exclude — id строк, с которых сняли галочки: их в действии не будет. */
   decide: (actionId, approve, remember = false, exclude = []) =>
     post(`/api/web/ai/actions/${actionId}/decide`, { approve, remember, exclude }),
+  /** «Позже» (on) или «Решить сейчас» → { action }. */
+  snooze: (actionId, on = true) => post(`/api/web/ai/actions/${actionId}/${on ? 'snooze' : 'unsnooze'}`, {}),
+  /** Перенос «Позже», сохранённых раньше в браузере → { ids }. */
+  snoozeMany: (ids) => post('/api/web/ai/actions/snooze', { ids }),
   /** exclude — { id действия: [id снятых строк] }. */
   decideAll: (chatId, approve, exclude = {}) => post(`/api/web/ai/chats/${chatId}/decide-all`, { approve, exclude }),
   /** Ответы в карточке вопросов ИИ: { answers: [{ n, selected, text }], comment } или { skip: true }. */
@@ -250,7 +254,10 @@ export const aiApi = {
   forgetFact: (workspaceId, key) => post(`${WS(workspaceId)}/ai-facts/forget`, { key }),
   /** Сколько предложений ИИ ждут решения во всех проектах: { count }. */
   pendingCount: () => request('/api/web/ai/pending/count'),
-  /** Неподтверждённые предложения ИИ по всем проектам: { items: [...] }; workspaceId — только одного проекта. */
+  /**
+   * Неподтверждённые предложения ИИ по всем проектам: { items, total, snoozed, snoozed_total } —
+   * snoozed — отложенные «Позже»; workspaceId — только одного проекта.
+   */
   pending: (workspaceId = null) => request(`/api/web/ai/pending${query({ workspace_id: workspaceId })}`),
 }
 

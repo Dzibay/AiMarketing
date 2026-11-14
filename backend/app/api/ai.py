@@ -57,6 +57,11 @@ class DecideAllBody(BaseModel):
     exclude: dict[str, list[str]] = {}
 
 
+class SnoozeBody(BaseModel):
+    # id ждущих предложений — перенос «Позже», сохранённых раньше в браузере.
+    ids: list[int] = []
+
+
 class AnswerBody(BaseModel):
     # [{n, selected: [вариант…], text}] — n — номер вопроса в карточке.
     answers: list[dict] = []
@@ -284,6 +289,24 @@ def action_decide(action_id: int, body: DecideBody, user_id: int = Depends(requi
     if body.approve:
         events.record(user_id, "action_applied", action_id=action_id)
     return out
+
+
+@router.post("/ai/actions/{action_id}/snooze")
+def action_snooze(action_id: int, user_id: int = Depends(require_web_user)) -> dict:
+    """«Позже»: предложение ждёт решения, но не в счётчике «Ждёт решения»."""
+    return _call(ai_agent.snooze_action, user_id, action_id, True)
+
+
+@router.post("/ai/actions/{action_id}/unsnooze")
+def action_unsnooze(action_id: int, user_id: int = Depends(require_web_user)) -> dict:
+    """«Решить сейчас»: вернуть отложенное предложение в «Ждёт решения»."""
+    return _call(ai_agent.snooze_action, user_id, action_id, False)
+
+
+@router.post("/ai/actions/snooze")
+def actions_snooze(body: SnoozeBody, user_id: int = Depends(require_web_user)) -> dict:
+    """«Позже» сразу для нескольких — один раз перенести номера, сохранённые в браузере → {ids}."""
+    return _call(ai_agent.snooze_actions, user_id, body.ids, True)
 
 
 @router.post("/ai/actions/{action_id}/answer")

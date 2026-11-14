@@ -5543,6 +5543,8 @@ def _action_out(row: dict) -> dict:
         "status": row["status"],
         # Отложено сообщением: ИИ продолжил без решения, карточка ждёт его отдельно.
         "detached": bool(row.get("detached_at")),
+        # «Позже»: ждёт решения, но не в счётчике «Ждёт решения».
+        "snoozed": bool(row.get("snoozed_at")),
         "auto": row["auto"],
         "result": row.get("result"),
         "error": row.get("error") or "",
@@ -7143,24 +7145,77 @@ def _pending_rows(user_id: int, workspace_id: int | None = None) -> list[tuple[d
 
 
 def pending_count(user_id: int) -> dict:
-    """Сколько карточек ИИ ждут решения — счётчик «Ждёт решения» в шапке."""
-    return {"count": len(_pending_rows(user_id))}
+    """Сколько карточек ИИ ждут решения — счётчик «Ждёт решения» в шапке. Отложенные «Позже» не в счёт."""
+    return {"count": sum(1 for row, _ in _pending_rows(user_id) if not row["snoozed_at"])}
+
+
+def _pending_item(row: dict, ws: dict | None) -> dict:
+    item = _action_out(row)
+    item["project"] = {"id": ws["id"], "name": ws["name"]} if ws else None
+    item["chat"] = {
+        "id": row["chat_id"],
+        "title": row["chat_title"] or "Новый чат",
+        "general": row["chat_workspace_id"] is None,
+    }
+    return item
 
 
 def pending_actions(user_id: int, workspace_id: int | None = None) -> dict:
-    """Очередь «Ждёт решения»: карточки ИИ из всех чатов с проектом и чатом каждой."""
+    """Очередь «Ждёт решения»: карточки ИИ из всех чатов с проектом и чатом каждой.
+
+    Отложенные «Позже» — отдельной группой snoozed (snoozed_total — сколько их всего).
+    """
     rows = _pending_rows(user_id, workspace_id)
-    items = []
-    for row, ws in rows[:PENDING_LIMIT]:
-        item = _action_out(row)
-        item["project"] = {"id": ws["id"], "name": ws["name"]} if ws else None
-        item["chat"] = {
-            "id": row["chat_id"],
-            "title": row["chat_title"] or "Новый чат",
-            "general": row["chat_workspace_id"] is None,
-        }
-        items.append(item)
-    return {"items": items, "total": len(rows)}
+    active = [(r, ws) for r, ws in rows if not r["snoozed_at"]]
+    snoozed = [(r, ws) for r, ws in rows if r["snoozed_at"]]
+    return {
+        "items": [_pending_item(r, ws) for r, ws in active[:PENDING_LIMIT]],
+        "total": len(active),
+        "snoozed": [_pending_item(r, ws) for r, ws in snoozed[:PENDING_LIMIT]],
+        "snoozed_total": len(snoozed),
+    }
+
+
+SNOOZE_LIMIT = 200
+
+
+def snooze_actions(user_id: int, action_ids: list[int], on: bool = True) -> dict:
+    """«Позже» (on) или «Решить сейчас» для ждущих предложений с изменениями.
+
+    Вопросы и планы не откладываются: ИИ ждёт ответа на них, чтобы продолжить. Чужие, решённые и
+    неизвестные номера пропускаем молча — так же переносятся номера, сохранённые раньше в браузере.
+    → {"ids": изменённые}.
+    """
+    ids = sorted({int(i) for i in action_ids})[:SNOOZE_LIMIT]
+    if not ids:
+        return {"ids": []}
+    with pool.connection() as conn:
+        rows = conn.execute(
+            f"""
+            UPDATE ai_actions SET snoozed_at = {"NOW()" if on else "NULL"}
+            WHERE user_id = %s AND id = ANY(%s) AND status = 'pending' AND tool <> ALL(%s)
+              AND (snoozed_at IS NULL) = %s
+            RETURNING id
+            """,
+            (user_id, ids, list(ASK_TOOLS), on),
+        ).fetchall()
+    return {"ids": sorted(r["id"] for r in rows)}
+
+
+def snooze_action(user_id: int, action_id: int, on: bool = True) -> dict:
+    """«Позже» для одной карточки → {"action": ...}. Решённую или вопрос отложить нельзя."""
+    with pool.connection() as conn:
+        row = conn.execute("SELECT * FROM ai_actions WHERE id = %s AND user_id = %s", (action_id, user_id)).fetchone()
+    if row is None:
+        raise YandexError("not-found")
+    if row["tool"] in ASK_TOOLS:
+        raise YandexError("args", "Вопросы, план и таблица не откладываются — ИИ ждёт ответа, чтобы продолжить")
+    if row["status"] != "pending":
+        raise YandexError("decided", "Решение по этому действию уже принято")
+    snooze_actions(user_id, [action_id], on)
+    with pool.connection() as conn:
+        row = conn.execute("SELECT * FROM ai_actions WHERE id = %s", (action_id,)).fetchone()
+    return {"action": _action_out(row)}
 
 
 def _decide(

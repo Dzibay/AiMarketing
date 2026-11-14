@@ -101,8 +101,8 @@
               <p v-if="projectName(a)" class="action-card__meta"><span>{{ projectName(a) }}</span></p>
               <p class="action-card__summary">{{ a.summary }}</p>
               <p class="hint">
-                Ничего не изменилось. Предложение ждёт на главной в «Ждут вашего решения»; новое сообщение в этом чате
-                его отклонит.
+                Ничего не изменилось. Предложение лежит в «Ждёт решения» среди отложенных и в счётчик не входит. Новое
+                сообщение в этом чате его отклонит, если не выбрать «Оставить и отправить».
               </p>
               <div class="action-card__buttons">
                 <button class="btn btn--ghost btn--sm" type="button" @click="setLater(a, false)">Решить сейчас</button>
@@ -166,7 +166,7 @@
                   </button>
                   <button class="btn btn--ghost" type="button" :disabled="deciding" @click="decide(a, false)">Отклонить</button>
                   <UiMenu v-if="phone" :disabled="deciding">
-                    <UiMenuItem :icon="Clock" hint="решить можно здесь или на главной" @click="setLater(a, true)">
+                    <UiMenuItem :icon="Clock" hint="решить можно здесь или в «Ждёт решения»" @click="setLater(a, true)">
                       Позже
                     </UiMenuItem>
                   </UiMenu>
@@ -175,7 +175,7 @@
                     class="btn btn--ghost"
                     type="button"
                     :disabled="deciding"
-                    v-tip="'Свернуть карточку: решить можно позже здесь или на главной'"
+                    v-tip="'Свернуть карточку: решить можно позже здесь или в «Ждёт решения»'"
                     @click="setLater(a, true)"
                   >
                     Позже

@@ -7,9 +7,6 @@ import { loadWorkspaces, useWorkspaces } from './useWorkspaces'
 
 const CHAT_KEY = Symbol('chat')
 const POLL_MS = 1500
-// «Позже»: карточка сворачивается только у вас в браузере, на сервере действие так и ждёт решения
-// (новое сообщение его отклонит, если не выбрать «Оставить и отправить»).
-const LATER_KEY = 'aimarketing-later'
 
 export const STATUS_LABELS = {
   pending: 'ждёт решения',
@@ -19,15 +16,6 @@ export const STATUS_LABELS = {
   error: 'ошибка',
 }
 const STATUS_TONES = { pending: 'tone-warn', done: 'tone-ok', error: 'tone-bad' }
-
-function readLater() {
-  try {
-    const ids = JSON.parse(localStorage.getItem(LATER_KEY) || '[]')
-    return Array.isArray(ids) ? ids : []
-  } catch {
-    return []
-  }
-}
 
 function parseToolResult(content) {
   try {
@@ -141,19 +129,24 @@ export function provideChat({ general, ws, basePath, reloadWs }) {
   // Отправка, ждущая ответа «что делать с предложениями»: { text } — текст подсказки или null (поле ввода).
   const pendingAsk = ref(null)
 
-  const later = ref(new Set(readLater()))
-  const activeWrites = computed(() => waitingWrites.value.filter((a) => !later.value.has(a.id)))
+  // «Позже»: карточка свёрнута и не в счётчике «Ждёт решения», но ждёт решения — новое сообщение её
+  // отклонит, если не выбрать «Оставить и отправить». Хранится на сервере, видно и на телефоне.
+  const isLater = (a) => a.status === 'pending' && !!a.id && !!a.snoozed
+  const activeWrites = computed(() => waitingWrites.value.filter((a) => !a.snoozed))
   const laterCount = computed(() => pendingWrites.value.length - activeWrites.value.length)
-  const isLater = (a) => a.status === 'pending' && !!a.id && later.value.has(a.id)
-  function setLater(a, on) {
-    const next = new Set(later.value)
-    if (on) next.add(a.id)
-    else next.delete(a.id)
-    later.value = next
+  async function setLater(a, on) {
+    // Карточка в ленте — копия действия: меняем исходное, иначе вид не обновится.
+    const mark = (value) => {
+      for (const x of [a, actions.value.find((y) => y.id === a.id)]) if (x) x.snoozed = value
+    }
+    // Сразу сворачиваем; сервер не принял — возвращаем как было.
+    mark(on)
     try {
-      localStorage.setItem(LATER_KEY, JSON.stringify([...next].slice(-200)))
-    } catch {
-      // хранилище недоступно — свёрнуто до перезагрузки
+      await aiApi.snooze(a.id, on)
+      refreshPending()
+    } catch (err) {
+      mark(!on)
+      pushToast(errorText(err), 'error')
     }
   }
   const pendingAsks = computed(() => pendingActions.value.filter((a) => a.kind === 'ask'))
@@ -511,7 +504,7 @@ export function provideChat({ general, ws, basePath, reloadWs }) {
     if (choice === 'keep' || choice === 'reject') return send(ask.text ?? undefined, choice)
     pendingAsk.value = null
     const first = waitingWrites.value[0]
-    if (later.value.has(first?.id)) setLater(first, false)
+    if (first?.snoozed) setLater(first, false)
     nextTick(() => {
       const card = first && document.querySelector(`[data-action="${first.id}"]`)
       card?.scrollIntoView({ behavior: 'smooth', block: 'center' })
