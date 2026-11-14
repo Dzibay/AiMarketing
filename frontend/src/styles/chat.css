@@ -1778,6 +1778,80 @@
   font-weight: 700;
 }
 
+/* Поиск по чатам */
+.chat-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--muted);
+}
+.chat-search:focus-within {
+  border-color: var(--ink);
+}
+.chat-search svg {
+  flex: none;
+  width: 16px;
+  height: 16px;
+}
+.chat-search input {
+  flex: 1;
+  min-width: 0;
+  min-height: 38px;
+  border: 0;
+  outline: 0;
+  background: none;
+  color: var(--ink);
+  font: inherit;
+  font-size: 14px;
+}
+@media (pointer: coarse) {
+  .chat-search input {
+    min-height: 44px;
+    font-size: 16px;
+  }
+}
+.chat__item mark {
+  border-radius: 3px;
+  background: var(--lime-soft);
+  color: inherit;
+  box-shadow: inset 0 -2px 0 var(--lime);
+}
+.chat__item-snippet {
+  display: -webkit-box;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.4;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+.chat__item-who {
+  margin-right: 4px;
+  color: var(--ink);
+  font-weight: 600;
+}
+
+/* Сообщение, к которому перешли из поиска: короткая подсветка. */
+.msg.is-found {
+  border-radius: 14px;
+  animation: msg-found 2.6s ease-out;
+}
+@keyframes msg-found {
+  0%,
+  45% {
+    background: color-mix(in srgb, var(--lime) 22%, transparent);
+    box-shadow: 0 0 0 8px color-mix(in srgb, var(--lime) 22%, transparent);
+  }
+  100% {
+    background: transparent;
+    box-shadow: 0 0 0 8px transparent;
+  }
+}
+
 .chat-backdrop {
   position: fixed;
   inset: 0;
@@ -1995,6 +2069,12 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .msg.is-found {
+    animation: none;
+    background: color-mix(in srgb, var(--lime) 22%, transparent);
+    box-shadow: 0 0 0 8px color-mix(in srgb, var(--lime) 22%, transparent);
+  }
+
   .chat__side.is-open,
   .composer__send,
   .msg__time {

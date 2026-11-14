@@ -205,6 +205,9 @@ export const aiApi = {
     post(`${WS(workspaceId)}/chats`, { title, model_class: modelClass }),
   /** Общие чаты по всем проектам: ИИ читает любой проект, правки — только после подтверждения. */
   generalChats: () => request('/api/web/ai/chats'),
+  /** Поиск по чатам раздела (null — общие): у каждого match { message_id, role, snippet }. */
+  searchChats: (workspaceId, q) =>
+    request(`${workspaceId ? `${WS(workspaceId)}/chats` : '/api/web/ai/chats'}?q=${encodeURIComponent(q)}`),
   createGeneralChat: (title = '', modelClass = '') => post('/api/web/ai/chats', { title, model_class: modelClass }),
   /** Проверка сайта с лендинга → чат с полным результатом: { status, chat_id, workspace_id }. */
   claimSiteCheck: (id) => post('/api/web/ai/site-check/claim', { id }),

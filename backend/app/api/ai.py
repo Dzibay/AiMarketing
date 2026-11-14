@@ -163,7 +163,10 @@ def ai_usage(user_id: int = Depends(require_web_user)) -> dict:
 
 
 @router.get("/workspaces/{workspace_id}/chats")
-def chats_list(workspace_id: int, user_id: int = Depends(require_web_user)) -> dict:
+def chats_list(workspace_id: int, q: str = "", user_id: int = Depends(require_web_user)) -> dict:
+    """Чаты проекта; q — поиск по названию и тексту сообщений."""
+    if q.strip():
+        return {"items": _call(ai_agent.search_chats, user_id, workspace_id, q)}
     return {"items": _call(ai_agent.list_chats, user_id, workspace_id)}
 
 
@@ -212,8 +215,10 @@ def workspace_forget_fact(workspace_id: int, body: ForgetFactBody, user_id: int 
 
 
 @router.get("/ai/chats")
-def general_chats_list(user_id: int = Depends(require_web_user)) -> dict:
-    """Общие чаты по всем проектам."""
+def general_chats_list(q: str = "", user_id: int = Depends(require_web_user)) -> dict:
+    """Общие чаты по всем проектам; q — поиск по названию и тексту сообщений."""
+    if q.strip():
+        return {"items": _call(ai_agent.search_chats, user_id, None, q)}
     return {"items": _call(ai_agent.list_chats, user_id, None)}
 
 

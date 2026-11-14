@@ -10,7 +10,7 @@
       </div>
 
       <template v-for="item in items" :key="item.key">
-        <div v-if="item.role === 'user'" class="msg msg--user">
+        <div v-if="item.role === 'user'" class="msg msg--user" :data-msg="item.id">
           <div class="msg__bubble"><template v-for="(part, i) in mentionParts(item)" :key="i"><RouterLink v-if="part.ref" class="mention" :to="`/w/${part.ref.id}/summary`">{{ part.text }}</RouterLink><template v-else>{{ part.text }}</template></template></div>
           <div v-if="item.created || item.content" class="msg__meta">
             <time v-if="item.created" class="msg__time" :datetime="item.created">{{ formatDateTime(item.created) }}</time>
@@ -37,7 +37,7 @@
           </template>
         </UiNotice>
 
-        <div v-else class="msg msg--ai">
+        <div v-else class="msg msg--ai" :data-msg="item.id">
           <div v-if="item.content" class="msg__text md" v-html="renderMarkdown(item.content)" />
 
           <details v-if="item.reads.length" class="chat-steps">

@@ -6657,6 +6657,88 @@ def list_chats(user_id: int, workspace_id: int | None) -> list[dict]:
     return [_chat_out(r) for r in rows]
 
 
+SEARCH_MIN = 2
+SEARCH_MAX = 100
+SEARCH_LIMIT = 50
+SNIPPET_LEN = 140
+
+
+def _like(q: str) -> str:
+    """Шаблон ILIKE «содержит q»: %, _ и \\ в запросе — обычные знаки."""
+    return "%" + q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+
+
+def _plain(text: str) -> str:
+    """Текст сообщения без разметки Markdown и лишних пробелов — для отрывка в выдаче поиска."""
+    text = re.sub(r"```.*?```", " ", text or "", flags=re.S)
+    text = re.sub(r"!?\[([^\]]*)\]\([^)]*\)", r"\1", text)
+    text = re.sub(r"[*_`#>|]+", " ", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _snippet(text: str, q: str) -> str:
+    """Отрывок вокруг первого вхождения q (без учёта регистра); не нашлось — начало текста."""
+    plain = _plain(text)
+    at = plain.lower().find(q.lower())
+    if at < 0:
+        return plain[:SNIPPET_LEN] + ("…" if len(plain) > SNIPPET_LEN else "")
+    start = max(0, at - (SNIPPET_LEN - len(q)) // 3)
+    if start:
+        # Отрывок начинаем с целого слова.
+        space = plain.find(" ", start)
+        start = space + 1 if 0 <= space < at else start
+    end = min(len(plain), start + SNIPPET_LEN)
+    return ("…" if start else "") + plain[start:end] + ("…" if end < len(plain) else "")
+
+
+def search_chats(user_id: int, workspace_id: int | None, q: str) -> list[dict]:
+    """
+    Поиск по чатам раздела: название и текст реплик пользователя и ответов ИИ (служебные ответы инструментов
+    не ищутся). У каждого чата — match: последнее найденное сообщение и отрывок вокруг слова; нашлось только
+    название — match без message_id. Подстрока через ILIKE: чатов у одного человека немного.
+    """
+    q = re.sub(r"\s+", " ", q or "").strip()
+    if len(q) < SEARCH_MIN:
+        return []
+    q = q[:SEARCH_MAX]
+    if workspace_id is not None:
+        require_workspace(user_id, workspace_id)
+    like = _like(q)
+    with pool.connection() as conn:
+        rows = conn.execute(
+            """
+            WITH hits AS (
+                SELECT DISTINCT ON (m.chat_id) m.chat_id, m.id AS hit_id, m.role AS hit_role, m.content AS hit_content
+                FROM ai_messages m JOIN ai_chats c ON c.id = m.chat_id
+                WHERE c.user_id = %(user)s AND c.workspace_id IS NOT DISTINCT FROM %(ws)s
+                  AND m.role IN ('user', 'assistant') AND m.content ILIKE %(like)s
+                ORDER BY m.chat_id, m.id DESC
+            )
+            SELECT ch.*, h.hit_id, h.hit_role, h.hit_content,
+                   (SELECT COUNT(*) FROM ai_actions a WHERE a.chat_id = ch.id AND a.status = 'pending') AS pending_actions
+            FROM ai_chats ch LEFT JOIN hits h ON h.chat_id = ch.id
+            WHERE ch.user_id = %(user)s AND ch.workspace_id IS NOT DISTINCT FROM %(ws)s
+              AND (ch.title ILIKE %(like)s OR h.chat_id IS NOT NULL)
+            ORDER BY ch.updated_at DESC, ch.id DESC
+            LIMIT %(limit)s
+            """,
+            {"user": user_id, "ws": workspace_id, "like": like, "limit": SEARCH_LIMIT},
+        ).fetchall()
+    out = []
+    for r in rows:
+        item = _chat_out(r)
+        if r["hit_id"] is not None:
+            item["match"] = {
+                "message_id": r["hit_id"],
+                "role": r["hit_role"],
+                "snippet": _snippet(r["hit_content"], q),
+            }
+        else:
+            item["match"] = {"message_id": None, "role": "", "snippet": ""}
+        out.append(item)
+    return out
+
+
 def create_chat(user_id: int, workspace_id: int | None, title: str = "", model_class: str = "") -> dict:
     """Новый чат проекта; workspace_id None — общий чат по всем проектам."""
     ws = require_workspace(user_id, workspace_id) if workspace_id is not None else None

@@ -233,7 +233,7 @@ export function provideChat({ general, ws, basePath, reloadWs }) {
     const out = []
     for (const m of data.value.messages) {
       if (m.role === 'user') {
-        out.push({ key: `m${m.id}`, role: 'user', content: m.content, refs: m.refs || [], created: m.created_at || '' })
+        out.push({ key: `m${m.id}`, id: m.id, role: 'user', content: m.content, refs: m.refs || [], created: m.created_at || '' })
       }
       if (m.role === 'error') out.push({ key: `m${m.id}`, role: 'error', content: m.content })
       if (m.role === 'assistant') {
@@ -415,6 +415,29 @@ export function provideChat({ general, ws, basePath, reloadWs }) {
     if (box && (force || stickToBottom)) box.scrollTop = box.scrollHeight
   }
 
+  // Переход из поиска по чатам: ?m=<id сообщения> — показать это сообщение и ненадолго подсветить.
+  const jumpId = computed(() => Number(route.query.m) || null)
+  let foundTimer = 0
+
+  async function revealMessage(id) {
+    await nextTick()
+    const el = document.querySelector(`[data-msg="${id}"]`)
+    if (el) {
+      stickToBottom = false
+      el.scrollIntoView({ block: 'center' })
+      document.querySelectorAll('.msg.is-found').forEach((m) => m.classList.remove('is-found'))
+      el.classList.add('is-found')
+      clearTimeout(foundTimer)
+      foundTimer = setTimeout(() => el.classList.remove('is-found'), 2600)
+    } else {
+      scrollDown(true)
+    }
+    // Метку убираем из адреса: обновление страницы не должно снова прыгать к сообщению.
+    const query = { ...route.query }
+    delete query.m
+    router.replace({ query })
+  }
+
   async function loadChat(id, quiet = false) {
     if (!quiet) loadError.value = ''
     const prevStatus = chat.value?.status
@@ -425,7 +448,8 @@ export function provideChat({ general, ws, basePath, reloadWs }) {
       data.value = res
       fillModels(res.ai)
       const count = res.messages.length + res.actions.length
-      if (!quiet || count !== prevCount) scrollDown(!quiet)
+      if (!quiet && jumpId.value) revealMessage(jumpId.value)
+      else if (!quiet || count !== prevCount) scrollDown(!quiet)
       if (prevStatus && prevStatus !== res.chat.status) loadChats()
       else if (!quiet) {
         const inList = chats.value.find((c) => c.id === id)
@@ -672,6 +696,11 @@ export function provideChat({ general, ws, basePath, reloadWs }) {
       stickToBottom = true
       loadChat(id)
     }
+  })
+
+  // Найденное сообщение в уже открытом чате: чат не перезагружается, только прокрутка.
+  watch(jumpId, (id) => {
+    if (id && data.value?.chat?.id === chatId.value) revealMessage(id)
   })
 
   onMounted(() => window.addEventListener('scroll', onScroll, { passive: true }))
