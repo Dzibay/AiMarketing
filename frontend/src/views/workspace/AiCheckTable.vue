@@ -28,8 +28,13 @@
             <th v-for="(c, i) in columns" :key="i" scope="col">{{ c }}</th>
           </tr>
         </thead>
-        <tbody v-for="sec in sections" :key="sec.name">
-          <tr v-if="sec.name" class="ai-check__section" :class="{ 'is-off': sec.group && isOff(sec.group) }">
+        <tbody v-for="{ sec, rows: secRows } in shown" :key="sec.name">
+          <tr
+            v-if="sec.name"
+            class="ai-check__section"
+            :class="{ 'is-off': sec.group && isOff(sec.group) }"
+            @click="onSection(sec, $event)"
+          >
             <th :colspan="span" scope="rowgroup">
               <UiCheckbox
                 v-if="!readonly"
@@ -46,7 +51,7 @@
             </th>
           </tr>
           <tr
-            v-for="row in sec.rows"
+            v-for="row in secRows"
             :key="row.id"
             class="ai-check__row"
             :class="{ 'is-off': !isOn(row), 'is-locked': isLocked(row) }"
@@ -62,7 +67,7 @@
               />
             </td>
             <td v-if="showKind" class="ai-check__kind">{{ KINDS[row.kind] || '' }}</td>
-            <td v-for="(c, i) in row.cells" :key="i">
+            <td v-for="(c, i) in row.cells" :key="i" :data-label="i ? columns[i] : undefined">
               {{ c }}
               <small v-if="i === 0 && LIMITS[row.kind]" class="ai-check__len" :class="{ 'tone-bad': c.length > LIMITS[row.kind] }">
                 {{ c.length }}/{{ LIMITS[row.kind] }}
@@ -73,6 +78,9 @@
         </tbody>
       </table>
     </div>
+    <button v-if="long" class="ai-fold" type="button" :aria-expanded="open" @click="open = !open">
+      {{ open ? 'Свернуть' : `Показать все ${rows.length}` }}
+    </button>
   </div>
 </template>
 
@@ -80,9 +88,12 @@
 /**
  * Строки с галочками для согласования с ИИ: разделы (обычно группы), «отметить всё», Shift+клик — диапазон.
  * v-model:off — id снятых строк. groups — {раздел: id строки «вся группа»}: снятая группа снимает и свои строки.
+ * На телефоне строка — блок с галочкой справа (нажимается вся строка), длинный список свёрнут до первых пяти строк.
  */
 import { computed, ref } from 'vue'
 import UiCheckbox from '../../components/ui/UiCheckbox.vue'
+import { useViewport } from '../../composables/useViewport'
+import { FOLD_ROWS, isLongList } from './foldRows'
 
 const props = defineProps({
   columns: { type: Array, default: () => [] },
@@ -124,6 +135,21 @@ const sections = computed(() => {
   return out
 })
 const flat = computed(() => sections.value.flatMap((s) => s.rows))
+
+const { phone } = useViewport()
+const open = ref(false)
+const long = computed(() => phone.value && isLongList(props.rows.length))
+// Свёрнутый список режет строки, а не разделы: счётчик и галочка раздела считают его целиком.
+const shown = computed(() => {
+  let left = long.value && !open.value ? FOLD_ROWS : Infinity
+  const out = []
+  for (const sec of sections.value) {
+    if (left <= 0) break
+    out.push({ sec, rows: sec.rows.slice(0, left) })
+    left -= sec.rows.length
+  }
+  return out
+})
 // Вид строки нужен, когда в одном разделе смешаны фразы, заголовки и тексты.
 const showKind = computed(() =>
   sections.value.some((s) => new Set(s.rows.map((r) => r.kind).filter((k) => KINDS[k])).size > 1),
@@ -180,6 +206,12 @@ function setSection(sec, on) {
   }
   // Возвращая группу, возвращаем и её строки: иначе она вернётся пустой.
   update(on && sec.rows.every((r) => isOff(r.id)) ? [sec.group, ...sec.rows.map((r) => r.id)] : [sec.group], on)
+}
+
+/** На телефоне раздел переключается нажатием на всю строку; галочка и её подпись срабатывают сами. */
+function onSection(sec, event) {
+  if (!phone.value || props.readonly || props.disabled || event.target.closest('label')) return
+  setSection(sec, !sectionOn(sec))
 }
 
 /** Shift — все строки между прошлым щелчком и этим получают то же состояние. */

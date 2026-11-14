@@ -2402,3 +2402,156 @@ body.has-sheet {
     white-space: nowrap;
   }
 }
+
+/* ---------- Касания ---------- */
+/* Подсказки v-tip на сенсорном экране не открываются. Что из них важно, повторено текстом с классом .touch-only —
+   он виден только там; .touch-hide — наоборот, короткий вариант, который на сенсорном экране заменяет полный. */
+@media not (pointer: coarse) {
+  .touch-only {
+    display: none !important;
+  }
+}
+
+/* На сенсорном экране палец попадает в 44 × 44 px, даже если сама кнопка меньше: вокруг неё невидимая область
+   нажатия (::after по центру), вид не меняется. Поля ввода — не мельче 16 px: иначе iOS увеличивает страницу,
+   когда в поле ставят курсор. */
+@media (pointer: coarse) {
+  :is(
+      .btn,
+      .dicon,
+      .icon-btn,
+      .ui-menu__btn,
+      .composer__icon,
+      .profile__toggle,
+      .loads-ind__toggle,
+      .hres,
+      .dbar__mark,
+      .seg > button,
+      .dtabs__tab,
+      .snav button,
+      .ui-select__btn,
+      .th-sort,
+      .dchip--btn,
+      .hask__chip,
+      .ui-more__toggle,
+      .link-btn,
+      .ai-check__link,
+      .start__skip,
+      .ws-loading__more,
+      .term-hint__btn,
+      .board__step,
+      .wizard-steps button,
+      .stepper button,
+      .cell-note,
+      label.ui-check,
+      label.ui-switch,
+      summary,
+      td > a,
+      .section-h a,
+      .ovt-name a,
+      .dhead__back a,
+      .ws-meta a,
+      .hrow__meta a
+    ):not(.ai-gallery__zoom) {
+    position: relative;
+  }
+
+  :is(
+      .btn,
+      .dicon,
+      .icon-btn,
+      .ui-menu__btn,
+      .composer__icon,
+      .profile__toggle,
+      .loads-ind__toggle,
+      .hres,
+      .ai-gallery__zoom,
+      .dbar__mark,
+      .seg > button,
+      .dtabs__tab,
+      .snav button,
+      .ui-select__btn,
+      .th-sort,
+      .dchip--btn,
+      .hask__chip,
+      .ui-more__toggle,
+      .link-btn,
+      .ai-check__link,
+      .start__skip,
+      .ws-loading__more,
+      .term-hint__btn,
+      .board__step,
+      .wizard-steps button,
+      .stepper button,
+      .cell-note,
+      label.ui-check,
+      label.ui-switch,
+      summary,
+      td > a,
+      .section-h a,
+      .ovt-name a,
+      .dhead__back a,
+      .ws-meta a,
+      .hrow__meta a
+    )::after {
+    content: '';
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: max(100%, 44px);
+    height: max(100%, 44px);
+    transform: translate(-50%, -50%);
+  }
+
+  /* Любая другая кнопка и ссылка — то же самое. Через :where у правила нулевой вес: элемент, которому
+     стили уже задали position (absolute, fixed, sticky), так и остаётся на месте — область отсчитывается от него.
+     У дня календаря и стрелки строки свой ::after. */
+  :where(button, a[href], [role='button'], [role='tab'], [role='switch']):where(:not(.ui-cal__day, .tc-more)) {
+    position: relative;
+  }
+
+  :where(button, a[href], [role='button'], [role='tab'], [role='switch']):where(:not(.ui-cal__day, .tc-more))::after {
+    content: '';
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: max(100%, 44px);
+    height: max(100%, 44px);
+    transform: translate(-50%, -50%);
+  }
+
+  /* Область нажатия вкладок выше полосы, которая листается вбок, — без запаса полоса листалась бы
+     и по вертикали. Отступ внутри и такой же снаружи: на экране ничего не сдвигается. */
+  .dtabs__scroll,
+  .ltools__tabs {
+    padding-block: 3px;
+    margin-block: -3px;
+  }
+
+  /* У таблицы, которая листается вбок, область нажатия ссылок в последней строке выступает вниз на пару
+     пикселей — вертикальной прокрутки от этого быть не должно. */
+  .table-scroll {
+    overflow-y: hidden;
+  }
+
+  .menu-item {
+    min-height: 44px;
+  }
+
+  /* Поле — тоже цель для пальца: у полей нет ::after, поэтому растёт сама высота. */
+  input:not([type='checkbox'], [type='radio'], [type='range'], [type='file'], [type='hidden']),
+  select,
+  textarea {
+    min-height: 44px;
+  }
+
+  .touch-hide {
+    display: none !important;
+  }
+
+  input:not([type='checkbox'], [type='radio'], [type='range'], [type='file']),
+  textarea,
+  [contenteditable='true'] {
+    font-size: 16px !important;
+  }
+}

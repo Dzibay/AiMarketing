@@ -30,6 +30,23 @@
   color: var(--muted);
 }
 
+/* Узкий экран: название чата — в верхней строке рядом со стрелкой (AppShell), здесь его не повторяем.
+   h1 остаётся для экранного диктора. */
+@media (max-width: 900px) {
+  .dpage:has(.chat) > .dhead h1 {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  .dpage:has(.chat) > .dhead .dhead__back {
+    display: none;
+  }
+}
+
 .chat {
   --chat-bg: var(--bg);
   position: relative;
@@ -718,6 +735,18 @@
   margin-top: 2px;
 }
 
+/* Кнопки решения стоят в общем ряду; на телефоне этот ряд — отдельная полоса у низа экрана (см. «Узкий экран»). */
+.action-card__acts {
+  display: contents;
+}
+
+.action-card__acts-note {
+  flex-basis: 100%;
+  margin: 0;
+  color: var(--muted);
+  font-size: 12.5px;
+}
+
 .action-card__buttons .check-row {
   color: var(--muted);
   font-size: 13px;
@@ -1119,6 +1148,18 @@
   font-size: 17px;
 }
 
+/* На сенсорном экране поле в одну строку — 44 px: верхний отступ рамки переезжает внутрь поля, текст стоит
+   там же, а палец, попавший в верх рамки, ставит курсор в поле. */
+@media (pointer: coarse) {
+  .composer:not(.composer--big) {
+    padding-top: 2px;
+  }
+
+  .composer:not(.composer--big) .composer__input {
+    padding-top: 12px;
+  }
+}
+
 .composer__input::placeholder {
   color: var(--faint);
 }
@@ -1487,11 +1528,43 @@
   }
 
   .starters {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: minmax(0, 1fr);
   }
 
-  .starter--main {
-    grid-column: 1 / -1;
+  /* Поле ввода — над клавиатурой: там, где она не сжимает окно (iOS), её высота в --kb. */
+  .chat__foot {
+    bottom: var(--kb, 0px);
+  }
+
+  /* Все чаты — шторка на весь экран. */
+  .chat__side {
+    width: 100%;
+    border-right: 0;
+    border-radius: 0;
+    padding-top: calc(12px + env(safe-area-inset-top));
+    padding-bottom: calc(16px + env(safe-area-inset-bottom));
+  }
+
+  .chat__side-x {
+    width: 44px;
+    height: 44px;
+  }
+
+  .chat__item {
+    padding-block: 11px;
+  }
+
+  /* Таблица в ответе листается вбок внутри рамки; столбцы не сжимаются до слога. */
+  .md-table table {
+    width: max-content;
+    min-width: 100%;
+  }
+
+  .md-table th,
+  .md-table td {
+    min-width: 6.5rem;
+    max-width: 15rem;
+    overflow-wrap: break-word;
   }
 
   .ai-gallery__grid {
@@ -1514,8 +1587,44 @@
     max-width: 90%;
   }
 
+  /* Карточка — столбцом: в сетке прилипший ряд не вышел бы за свою ячейку. */
   .action-card {
+    display: flex;
+    flex-direction: column;
     padding: 14px;
+  }
+
+  .action-card__buttons--split {
+    display: contents;
+  }
+
+  /* Кнопки карточки держатся у низа экрана (над полем ввода), пока карточка видна. */
+  .action-card.is-pending > .action-card__buttons:not(.action-card__buttons--split),
+  .action-card__acts {
+    position: sticky;
+    bottom: calc(var(--chat-foot-h, 0px) + var(--bbar-h));
+    z-index: 3;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    order: 1;
+    margin: 4px -14px -14px;
+    padding: 10px 14px 12px;
+    border-top: 1px solid var(--line);
+    border-radius: 0 0 calc(var(--r-card) - 1px) calc(var(--r-card) - 1px);
+    background: var(--lime-soft);
+  }
+
+  .action-card.is-pending > .action-card__buttons > .btn--accent,
+  .action-card__acts > .btn--accent {
+    flex: 1 1 auto;
+  }
+
+  /* Открыта клавиатура — места мало, кнопки возвращаются в конец карточки. */
+  html.is-typing .action-card.is-pending > .action-card__buttons,
+  html.is-typing .action-card__acts {
+    position: static;
   }
 
   .composer--big {

@@ -153,22 +153,34 @@
                 <pre>{{ pretty(a.result) }}</pre>
               </details>
               <p v-if="a.status === 'rejected' && a.error" class="hint">{{ a.error }}</p>
-              <div v-if="a.status === 'pending' && a.id" class="action-card__buttons">
-                <button class="btn btn--accent" type="button" :disabled="deciding || allOff(a)" @click="decide(a, true)">
-                  <Check aria-hidden="true" />
-                  {{ offCount(a) ? `Выполнить без снятых (${offCount(a)})` : 'Выполнить' }}
-                </button>
-                <button class="btn btn--ghost" type="button" :disabled="deciding" @click="decide(a, false)">Отклонить</button>
-                <button
-                  class="btn btn--ghost"
-                  type="button"
-                  :disabled="deciding"
-                  v-tip="'Свернуть карточку: решить можно позже здесь или на главной'"
-                  @click="setLater(a, true)"
-                >
-                  Позже
-                </button>
-                <span v-if="allOff(a)" class="hint">Сняты все строки — отклоните действие</span>
+              <div v-if="a.status === 'pending' && a.id" class="action-card__buttons action-card__buttons--split">
+                <!-- На телефоне этот ряд прилипает к низу экрана: «Выполнить» во всю ширину, «Позже» — в «⋯». -->
+                <div class="action-card__acts">
+                  <p v-if="phone && offCount(a)" class="action-card__acts-note">
+                    {{ allOff(a) ? 'Сняты все строки — отклоните действие' : `Снято строк: ${offCount(a)} — выполню без них` }}
+                  </p>
+                  <button class="btn btn--accent" type="button" :disabled="deciding || allOff(a)" @click="decide(a, true)">
+                    <Check aria-hidden="true" />
+                    {{ offCount(a) && !phone ? `Выполнить без снятых (${offCount(a)})` : 'Выполнить' }}
+                  </button>
+                  <button class="btn btn--ghost" type="button" :disabled="deciding" @click="decide(a, false)">Отклонить</button>
+                  <UiMenu v-if="phone" :disabled="deciding">
+                    <UiMenuItem :icon="Clock" hint="решить можно здесь или на главной" @click="setLater(a, true)">
+                      Позже
+                    </UiMenuItem>
+                  </UiMenu>
+                  <button
+                    v-else
+                    class="btn btn--ghost"
+                    type="button"
+                    :disabled="deciding"
+                    v-tip="'Свернуть карточку: решить можно позже здесь или на главной'"
+                    @click="setLater(a, true)"
+                  >
+                    Позже
+                  </button>
+                </div>
+                <span v-if="allOff(a) && !phone" class="hint">Сняты все строки — отклоните действие</span>
                 <UiCheckbox
                   v-if="!general && a.categories?.length && !a.categories.some((c) => c.id === 'destructive')"
                   v-model="remember[a.id]"
@@ -213,6 +225,7 @@ import { RouterLink } from 'vue-router'
 import { aiApi } from '../../api/web'
 import { STATUS_LABELS, mentionParts, useChat } from '../../composables/useChat'
 import { useExpert } from '../../composables/useExpert'
+import { useViewport } from '../../composables/useViewport'
 import { formatDateTime } from '../../utils/format'
 import { renderMarkdown } from '../../utils/markdown'
 import AiChanges from '../../views/workspace/AiChanges.vue'
@@ -221,6 +234,8 @@ import AiItemsCard from '../../views/workspace/AiItemsCard.vue'
 import AiPlanCard from '../../views/workspace/AiPlanCard.vue'
 import AiQuestionsCard from '../../views/workspace/AiQuestionsCard.vue'
 import UiCheckbox from '../ui/UiCheckbox.vue'
+import UiMenu from '../ui/UiMenu.vue'
+import UiMenuItem from '../ui/UiMenuItem.vue'
 import UiNotice from '../ui/UiNotice.vue'
 import UiStatus from '../ui/UiStatus.vue'
 
@@ -259,6 +274,7 @@ const {
   onScroll,
 } = useChat()
 const { expert } = useExpert()
+const { phone } = useViewport()
 
 function hasArgs(args) {
   return args && typeof args === 'object' && Object.keys(args).length > 0

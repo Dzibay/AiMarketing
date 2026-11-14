@@ -1293,6 +1293,13 @@ onMounted(() => {
     flex: none;
   }
 }
+/* Область нажатия кнопок (44 px, ui.css) выше полосы: без запаса полоса листалась бы и по вертикали. */
+@media (max-width: 760px) and (pointer: coarse) {
+  .snav {
+    padding-block: 4px;
+    margin-block: -3px;
+  }
+}
 .ai-simple .prow__main {
   display: flex;
   flex-direction: column;

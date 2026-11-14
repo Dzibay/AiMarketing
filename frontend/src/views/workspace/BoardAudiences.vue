@@ -31,6 +31,7 @@
             Похожие на {{ a.lookalike.source }} · похожесть {{ a.lookalike.similarity }} из 5
           </small>
           <small v-else-if="a.value" class="board-auds__what">{{ a.value }}</small>
+          <small v-if="a.lal && a.type !== 'lookalike'" class="board-auds__why touch-only">{{ LAL_HINT }}</small>
           <small v-if="a.note" class="board-auds__why">{{ a.note }}</small>
         </div>
         <button

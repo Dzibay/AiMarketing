@@ -183,7 +183,12 @@
           <TolkMark :size="28" />
         </RouterLink>
         <div class="dbar__scope">
-          <ProjectSwitcher v-if="accessOk && currentSection && (project || currentSection.all)" />
+          <!-- Чат на узком экране: рядом со стрелкой — название чата и проект, они видны при любой прокрутке. -->
+          <div v-if="narrow && inChat" class="dbar__chat">
+            <strong>{{ pageTitleOverride || title }}</strong>
+            <small v-if="project">{{ project.name }}</small>
+          </div>
+          <ProjectSwitcher v-else-if="accessOk && currentSection && (project || currentSection.all)" />
         </div>
         <!-- На узком экране счётчик решений — в нижней панели, тема — в «Ещё» и в меню профиля. -->
         <RouterLink

@@ -1,5 +1,11 @@
 <template>
-  <section class="cask" aria-label="Вопрос ИИ про кампании">
+  <!-- На телефоне — одна строка-кнопка: форма с подсказками заняла бы полэкрана поверх списка. -->
+  <button v-if="folded" class="cask-open" type="button" @click="unfold">
+    <Sparkles :size="17" aria-hidden="true" />
+    <span>{{ openText }}</span>
+    <ArrowUp :size="16" class="cask-open__go" aria-hidden="true" />
+  </button>
+  <section v-else class="cask" aria-label="Вопрос ИИ про кампании">
     <div class="cask__ctx">
       <Sparkles :size="15" aria-hidden="true" />
       <template v-if="picked.length">
@@ -17,6 +23,7 @@
     </div>
     <form class="hask__box cask__box" @submit.prevent="ask()">
       <textarea
+        ref="input"
         v-model="text"
         rows="1"
         maxlength="4000"
@@ -35,15 +42,18 @@
 </template>
 
 <script setup>
-import { computed, ref } from 'vue'
+import { computed, nextTick, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ArrowUp, Sparkles, X } from '@lucide/vue'
 import { putHomeQuestion } from '../composables/useHomeAsk'
+import { useViewport } from '../composables/useViewport'
 import { plural } from '../utils/format'
 
 /**
  * Вопрос ИИ про кампании списка (макет «Диалог»): про отмеченные галочкой или про все.
  * wsId — список одного проекта; без него кампании разных проектов (у строк есть project).
+ * На широком экране форма прилипает к низу; на телефоне — одна строка «Спросить про кампании»
+ * в конце списка, а поле и подсказки появляются после нажатия.
  */
 const props = defineProps({
   rows: { type: Array, required: true },
@@ -54,8 +64,22 @@ defineEmits(['unselect'])
 
 const router = useRouter()
 const text = ref('')
+const input = ref(null)
+const { phone } = useViewport()
+const opened = ref(false)
 
 const picked = computed(() => props.rows.filter((c) => props.selected.has(c.campaign_row_id)))
+const folded = computed(() => phone.value && !opened.value)
+const openText = computed(() => {
+  const n = picked.value.length
+  return n ? `Спросить про ${n} ${plural(n, 'выбранную', 'выбранные', 'выбранных')}` : 'Спросить про кампании'
+})
+
+async function unfold() {
+  opened.value = true
+  await nextTick()
+  input.value?.focus()
+}
 const allText = computed(() => {
   const n = props.rows.length
   return `${n === 1 ? 'эту' : 'все'} ${n} ${plural(n, 'кампанию', 'кампании', 'кампаний')}`
@@ -139,5 +163,55 @@ function ask(preset) {
 }
 .cask__box textarea {
   min-height: 28px;
+}
+/* Сенсорный экран: поле — 44 px за счёт отступа рамки, высота блока и место текста те же. */
+@media (pointer: coarse) {
+  .cask__box {
+    padding-block: 10px;
+  }
+  .cask__box textarea {
+    min-height: 44px;
+    padding-top: 13px;
+  }
+}
+.cask-open {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 52px;
+  margin-top: 20px;
+  padding: 0 8px 0 16px;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
+  color: var(--ink);
+  font: inherit;
+  font-size: 15px;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+.cask-open > span {
+  flex: 1;
+  min-width: 0;
+}
+.cask-open__go {
+  box-sizing: content-box;
+  flex: none;
+  padding: 9px;
+  border-radius: 50%;
+  background: var(--ink);
+  color: var(--bg);
+}
+/* Раскрытая на телефоне форма — на своём месте в конце списка: прилипшая закрыла бы полэкрана. */
+@media (max-width: 640px) {
+  .cask {
+    position: static;
+    margin-top: 20px;
+    padding: 0;
+    background: none;
+  }
 }
 </style>

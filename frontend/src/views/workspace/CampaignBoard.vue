@@ -15,6 +15,7 @@
           type="button"
           class="board__step"
           :class="`is-${s.status}`"
+          :data-section="s.section"
           v-tip="STATUS[s.status] || s.status"
           @click="show(s.section)"
         >
@@ -422,6 +423,12 @@ function show(section, smooth = true) {
   const el = section && box?.querySelector(`[data-section="${section}"]`)
   if (!el || !el.offsetParent) return
   const behavior = smooth ? 'smooth' : 'auto'
+  // На телефоне этапы — лента вбок: подвинуть её к этапу раздела (только по горизонтали).
+  const strip = box.querySelector('.board__steps')
+  const chip = strip?.querySelector(`[data-section="${section}"]`)
+  if (chip && strip.scrollWidth > strip.clientWidth + 1) {
+    strip.scrollTo({ left: chip.offsetLeft - strip.offsetLeft - parseFloat(getComputedStyle(strip).paddingLeft), behavior })
+  }
   if (box.scrollHeight > box.clientHeight + 1) {
     // Шапка доски с этапами закреплена сверху — раздел должен встать под неё.
     const head = box.querySelector('.board__head')?.offsetHeight || 0

@@ -195,7 +195,10 @@
                 {{ kw.keyword }}
                 <small class="cell-note">{{ kw.adgroup_name }}</small>
               </td>
-              <td v-tip="keywordState(kw).hint">{{ keywordState(kw).text }}</td>
+              <td v-tip="keywordState(kw).hint">
+                {{ keywordState(kw).text }}
+                <small v-if="keywordState(kw).hint" class="cell-note touch-only">{{ keywordState(kw).hint }}</small>
+              </td>
               <td class="num" v-tip="autoBids ? 'Автостратегия: ставки фраз назначает Директ' : ''">
                 {{ autoBids ? 'авто' : kw.bid_rub != null ? rubles(kw.bid_rub, 2) : '—' }}
               </td>

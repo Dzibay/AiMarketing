@@ -6,7 +6,9 @@
 //
 // Вход — токен демо-пользователя из DEMO_DIR/token.txt, номера проектов — из DEMO_DIR/stand.json (их пишет seed.py).
 // --audit   на каждой странице: горизонтальная прокрутка, элементы без подписи, контраст текста ниже WCAG AA,
-//           элементы без видимого фокуса при обходе Tab. Итог — <out>/audit-<темы>-<режимы>.json и сводка в консоли.
+//           элементы без видимого фокуса при обходе Tab. Уже 1024 px экран сенсорный, и добавляются проверки
+//           касаний: область нажатия меньше 44 px, элементы под нижней панелью, разрыв слова в ячейке, поля со
+//           шрифтом меньше 16 px. Итог — <out>/audit-<темы>-<режимы>.json и сводка в консоли.
 // --stable  для сравнения «до/после»: часы страницы стоят, анимации и переходы выключены.
 import { spawn } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
@@ -170,6 +172,8 @@ const report = {}
 for (const width of widths) {
   const height = width < 700 ? 812 : 900
   await send('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 1, mobile: width < 700 })
+  // Уже 1024 px — сенсорный экран: срабатывают правила @media (pointer: coarse) и проверки касаний.
+  await send('Emulation.setTouchEmulationEnabled', { enabled: width < 1024, maxTouchPoints: width < 1024 ? 5 : 1 })
   for (const theme of themes) {
     for (const mode of modes) {
       const dir = join(outDir, `${theme}-${mode}-${width}`)
@@ -203,6 +207,10 @@ for (const width of widths) {
           line = ` overflow ${res.overflow.length}, без подписи ${res.unlabeled.length}, контраст ${res.contrast.length}, фокус ${res.focus.length}`
           line += `, прокрутка ${res.nestedScroll.length}, системные ${res.native.length}, title ${res.titles.length}`
           line += `, курсор ${res.cursor.length}, лайм ${res.limeDisabled.length}`
+          if (res.touch) {
+            line += `, касание ${res.smallTargets.length}, под панелью ${res.underBar.length}`
+            line += `, разрыв слова ${res.wordBreak.length}, шрифт поля ${res.smallFont.length}`
+          }
           if (res.wide.length) line += `, ${res.wide[0]}`
           if (res.campaignScroll.length) line += `, таблица кампаний листается вбок`
         }
@@ -225,6 +233,8 @@ function summarize(rep) {
     nestedScroll: 'вложенная вертикальная прокрутка', native: 'системные поля', titles: 'атрибут title',
     cursor: 'кликабельное без руки', limeDisabled: 'лайм у неактивной кнопки', wide: 'узкая страница на 1920',
     campaignScroll: 'таблица кампаний листается вбок',
+    smallTargets: 'область нажатия меньше 44 px', underBar: 'под нижней панелью', wordBreak: 'разрыв слова в ячейке',
+    smallFont: 'шрифт поля меньше 16 px',
   }
   const all = Object.entries(rep)
   console.log(`\nИтог: ${all.length} снимков`)
@@ -339,6 +349,8 @@ function inspect() {
   const shown = (el) => {
     const r = el.getBoundingClientRect()
     if (r.width < 2 || r.height < 2) return false
+    // Содержимое закрытого <details> размеры имеет, но на экране его нет.
+    if (el.checkVisibility && !el.checkVisibility()) return false
     const s = cs(el)
     return s.visibility !== 'hidden' && s.display !== 'none' && !el.closest('[hidden], [inert]')
   }
@@ -463,7 +475,94 @@ function inspect() {
   const tableScroll = inPage
     .filter((el) => el.querySelector('table') && /auto|scroll/.test(cs(el).overflowX) && el.scrollWidth > el.clientWidth + 1)
     .map((el) => `${label(el)} ${el.clientWidth}/${el.scrollWidth}px`)
+  // 10–13. Сенсорный экран (прогоны уже 1024 px эмулируют касания).
+  const touch = matchMedia('(pointer: coarse)').matches
+  const smallTargets = []
+  const underBar = []
+  const wordBreak = []
+  const smallFont = []
+  if (touch) {
+    // 10. Область нажатия меньше 44 px. Невидимое расширение ::after (ui.css, «Касания») считается, если сам
+    //     элемент его не обрезает. Ссылка внутри строки текста — исключение WCAG 2.5.8.
+    const TARGETS = 'a[href], button, [role="button"], [role="tab"], [role="switch"], [role="menuitem"], [role="option"], '
+      + 'summary, label.ui-check, label.ui-switch, select, textarea, '
+      + 'input:not([type="hidden"], [type="checkbox"], [type="radio"])'
+    const inText = (el) => cs(el).display === 'inline' && [...(el.parentElement?.childNodes || [])]
+      .some((n) => n !== el && n.nodeType === 3 && n.textContent.trim())
+    const hitOf = (el) => {
+      const r = el.getBoundingClientRect()
+      let w = r.width
+      let h = r.height
+      const s = cs(el)
+      if (s.overflowX === 'visible' && s.overflowY === 'visible') {
+        const a = getComputedStyle(el, '::after')
+        if (a.content !== 'none' && a.position === 'absolute') {
+          w = Math.max(w, parseFloat(a.width) || 0)
+          h = Math.max(h, parseFloat(a.height) || 0)
+        }
+      }
+      return [w, h]
+    }
+    for (const el of document.querySelectorAll(TARGETS)) {
+      if (!shown(el) || el.closest('[aria-hidden="true"]') || inText(el)) continue
+      let [w, h] = hitOf(el)
+      // Поле внутри label: нажатие на подпись тоже ставит в него курсор (флажок, переключатель).
+      const host = ['INPUT', 'SELECT', 'TEXTAREA'].includes(el.tagName) && el.closest('label')
+      if (host && shown(host)) {
+        const [lw, lh] = hitOf(host)
+        w = Math.max(w, lw)
+        h = Math.max(h, lh)
+      }
+      if (w < 43.5 || h < 43.5) {
+        const text = (el.getAttribute('aria-label') || el.textContent || '').trim().slice(0, 30)
+        smallTargets.push(`${label(el)} «${text}» ${Math.round(w)}×${Math.round(h)}px`)
+      }
+    }
+    // 11. Шрифт поля меньше 16 px: iOS увеличивает страницу, когда в такое поле ставят курсор.
+    for (const el of document.querySelectorAll('input:not([type="hidden"], [type="checkbox"], [type="radio"], [type="range"], [type="file"]), textarea, select, [contenteditable="true"]')) {
+      if (shown(el) && parseFloat(cs(el).fontSize) < 16) smallFont.push(`${label(el)} ${cs(el).fontSize}`)
+    }
+    // 12. Слово, разорванное посреди строки в ячейке таблицы (перенос по дефису и косой черте — не разрыв).
+    const range = document.createRange()
+    for (const cell of document.querySelectorAll('td, th')) {
+      if (!shown(cell) || wordBreak.length >= 20) continue
+      const walker = document.createTreeWalker(cell, NodeFilter.SHOW_TEXT)
+      for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+        for (const m of node.textContent.matchAll(/[^\s\-‐–—/]{2,}/g)) {
+          range.setStart(node, m.index)
+          range.setEnd(node, m.index + m[0].length)
+          const tops = new Set([...range.getClientRects()].filter((q) => q.width > 0).map((q) => Math.round(q.top)))
+          if (tops.size > 1) wordBreak.push(`${label(cell)} «${m[0].slice(0, 30)}»`)
+        }
+      }
+    }
+    // 13. Под нижней панелью: долистываем до конца и ищем текст и кнопки, которые панель накрывает
+    //     (в том числе прилипшие к низу экрана — тосты, решения, кнопки форм).
+    const bar = [...document.querySelectorAll('.bbar')].find(shown)
+    if (bar) {
+      const y0 = scrollY
+      scrollTo(0, document.documentElement.scrollHeight)
+      const b = bar.getBoundingClientRect()
+      for (const el of document.querySelectorAll('#app *, body > *:not(#app) *')) {
+        if (bar.contains(el) || el.contains(bar) || !shown(el) || el.closest('[aria-hidden="true"]')) continue
+        const own = [...el.childNodes].some((n) => n.nodeType === 3 && n.textContent.trim())
+        if (!own && !el.matches(TARGETS)) continue
+        const r = el.getBoundingClientRect()
+        const top = Math.max(r.top, b.top)
+        const bottom = Math.min(r.bottom, b.bottom)
+        if (bottom - top < 2 || r.right <= b.left || r.left >= b.right) continue
+        const hit = document.elementFromPoint(Math.min(Math.max(r.left + r.width / 2, 1), W - 1), (top + bottom) / 2)
+        if (hit && bar.contains(hit)) underBar.push(`${label(el)} «${(el.textContent || '').trim().slice(0, 30)}»`)
+      }
+      scrollTo(0, y0)
+    }
+  }
   return {
+    touch,
+    smallTargets: [...new Set(smallTargets)],
+    underBar: [...new Set(underBar)],
+    wordBreak: [...new Set(wordBreak)],
+    smallFont: [...new Set(smallFont)],
     overflow: overflow.slice(0, 8).map((o) => `${label(o.el)} → ${o.right}px`),
     unlabeled: [...new Set(unlabeled)],
     contrast: [...contrast.values()],

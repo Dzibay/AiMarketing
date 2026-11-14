@@ -44,9 +44,11 @@
       <p class="hint">Изменения по согласованным шагам придут отдельными карточками «было → станет».</p>
       <div class="action-card__buttons">
         <button class="btn btn--accent" type="button" :disabled="disabled || !chosen.length" @click="approve">
-          Согласовать выбранные ({{ chosen.length }})
+          {{ phone ? 'Согласовать' : 'Согласовать выбранные' }} ({{ chosen.length }})
         </button>
-        <button class="btn btn--ghost" type="button" :disabled="disabled" @click="reject">Отклонить план</button>
+        <button class="btn btn--ghost" type="button" :disabled="disabled" @click="reject">
+          {{ phone ? 'Отклонить' : 'Отклонить план' }}
+        </button>
       </div>
     </template>
 
@@ -62,6 +64,7 @@
 import { computed, ref } from 'vue'
 import UiCheckbox from '../../components/ui/UiCheckbox.vue'
 import UiStatus from '../../components/ui/UiStatus.vue'
+import { useViewport } from '../../composables/useViewport'
 
 const props = defineProps({
   action: { type: Object, required: true },
@@ -73,6 +76,9 @@ const emit = defineEmits(['submit'])
 
 const STATUS = { pending: 'ждёт решения', done: 'согласован', rejected: 'не согласован' }
 const TONES = { pending: 'wait', done: 'ok', rejected: 'off', error: 'bad' }
+
+// На телефоне кнопки карточки стоят в один ряд у низа экрана — подписи короче.
+const { phone } = useViewport()
 
 const args = computed(() => props.action.args || {})
 const steps = computed(() => args.value.steps || [])

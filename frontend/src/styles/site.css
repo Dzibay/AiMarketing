@@ -3018,6 +3018,40 @@ body.has-modal {
   color: var(--on-solid);
 }
 
+@media (max-width: 640px) {
+  /* Шаги мастера — одна лента с прокруткой вбок: текущий шаг всегда виден. */
+  .wizard-steps {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scroll-snap-type: x proximity;
+    scrollbar-width: none;
+    margin-inline: -1rem;
+    padding-inline: 1rem;
+    scroll-padding-inline: 1rem;
+  }
+
+  .wizard-steps::-webkit-scrollbar {
+    display: none;
+  }
+
+  .wizard-steps li {
+    flex: none;
+    scroll-snap-align: start;
+  }
+
+  .wizard-steps button {
+    white-space: nowrap;
+  }
+
+  /* Сетка расписания уезжает вбок — столбец дней остаётся на месте. */
+  .schedule__day {
+    position: sticky;
+    left: 0;
+    z-index: 1;
+    background: var(--surface);
+  }
+}
+
 /* --- Расписание показов --- */
 
 .schedule {
@@ -3681,6 +3715,225 @@ body.has-modal {
   white-space: nowrap;
 }
 
+/* «Показать все N»: на телефоне длинный список в карточке ИИ свёрнут до первых строк. */
+.ai-fold {
+  appearance: none;
+  display: flex;
+  align-items: center;
+  align-self: flex-start;
+  justify-self: start;
+  width: fit-content;
+  min-height: 44px;
+  margin: -6px 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  font-size: 14px;
+  font-weight: 700;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+
+/* Согласование на телефоне: строка — блок, а не узкие столбцы, и слова не рвутся посреди. */
+@media (max-width: 640px) {
+  .ai-changes,
+  .ai-changes tbody,
+  .ai-changes td {
+    display: block;
+  }
+
+  .ai-changes thead {
+    display: none;
+  }
+
+  .ai-changes {
+    font-size: 14px;
+  }
+
+  .ai-changes tr {
+    display: grid;
+    gap: 3px;
+    padding: 10px 0;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .ai-changes tr:first-child {
+    padding-top: 0;
+  }
+
+  .ai-changes td {
+    padding: 0;
+    border-bottom: 0;
+    overflow-wrap: break-word;
+  }
+
+  .ai-changes td:first-child:not(.ai-changes__more) {
+    font-weight: 700;
+  }
+
+  /* «Было» и «Станет» — друг под другом, подпись слева от значения. */
+  .ai-changes td.ai-changes__before,
+  .ai-changes td.ai-changes__after {
+    display: grid;
+    grid-template-columns: 3.5rem minmax(0, 1fr);
+    gap: 8px;
+  }
+
+  .ai-changes td.ai-changes__before:empty,
+  .ai-changes td.ai-changes__after:empty {
+    display: none;
+  }
+
+  .ai-changes__before::before,
+  .ai-changes__after::before {
+    color: var(--muted);
+    font-size: 13px;
+    font-weight: 500;
+  }
+
+  .ai-changes__before::before {
+    content: 'Было';
+  }
+
+  .ai-changes__after::before {
+    content: 'Станет';
+  }
+
+  .ai-plan__title.ui-check {
+    flex-flow: row-reverse nowrap;
+    justify-content: space-between;
+    gap: 12px;
+    min-height: 44px;
+    margin: -6px 0 -4px;
+  }
+
+  .ai-plan__diff {
+    display: grid;
+    gap: 2px;
+  }
+
+  .ai-plan__diff > [aria-hidden] {
+    display: none;
+  }
+
+  .ai-option {
+    min-height: 44px;
+    padding: 0.5rem 0.95rem;
+  }
+
+  .ai-check__tip,
+  .ai-check thead {
+    display: none;
+  }
+
+  .ai-check__scroll {
+    max-height: none;
+    overflow: hidden;
+  }
+
+  .ai-check table,
+  .ai-check tbody,
+  .ai-check__section {
+    display: block;
+  }
+
+  .ai-check table {
+    font-size: 14px;
+  }
+
+  .ai-check th,
+  .ai-check td {
+    padding: 0;
+    border-bottom: 0;
+    overflow-wrap: break-word;
+  }
+
+  .ai-check tr {
+    border-bottom: 1px solid var(--line);
+  }
+
+  .ai-check tbody:last-child tr:last-child {
+    border-bottom: 0;
+  }
+
+  /* Раздел: название и счётчик слева, галочка справа — нажимается вся строка. */
+  .ai-check__section th {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-height: 44px;
+    padding: 6px 12px;
+  }
+
+  .ai-check__section th > .ai-check__section-label {
+    display: contents;
+  }
+
+  .ai-check__section th .ui-check__text {
+    order: 1;
+  }
+
+  .ai-check__section small {
+    flex: none;
+    order: 2;
+    margin: 0 auto 0 0;
+  }
+
+  .ai-check__section th input.ui-check__box {
+    order: 3;
+  }
+
+  /* Строка: текст слева, галочка справа в зоне 44 px — нажимается вся строка. */
+  .ai-check__row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 44px;
+    align-items: start;
+    min-height: 44px;
+    padding: 10px 0 10px 12px;
+  }
+
+  .ai-check--readonly .ai-check__row {
+    grid-template-columns: minmax(0, 1fr);
+    padding-right: 12px;
+  }
+
+  .ai-check__row > td {
+    grid-column: 1;
+  }
+
+  .ai-check__row > td.ai-check__box {
+    display: grid;
+    grid-row: 1 / span 6;
+    grid-column: 2;
+    place-items: center;
+    align-self: stretch;
+    width: auto;
+  }
+
+  .ai-check__row:hover td {
+    background: none;
+  }
+
+  .ai-check .ai-check__kind {
+    width: auto;
+    font-size: 12.5px;
+  }
+
+  /* Остальные столбцы — под строкой, с названием столбца. */
+  .ai-check__row > td[data-label] {
+    margin-top: 2px;
+    color: var(--muted);
+    font-size: 13px;
+  }
+
+  .ai-check__row > td[data-label]:not([data-label=''])::before {
+    content: attr(data-label) ': ';
+  }
+}
+
 /* Предпросмотр объявлений в таблице этапа «Объявления» */
 .ai-items__previews {
   display: grid;
@@ -3917,6 +4170,11 @@ body.has-modal {
     bottom: calc(5.5rem + env(safe-area-inset-bottom));
   }
 
+  /* В чате нижней панели нет — решение прижимается к низу экрана. */
+  .chat .board-decision {
+    bottom: calc(0.75rem + env(safe-area-inset-bottom));
+  }
+
   .board-section {
     scroll-margin-top: 1rem;
   }
@@ -3956,6 +4214,32 @@ body.has-modal {
   display: flex;
   flex-wrap: wrap;
   gap: 0.3rem;
+}
+
+@media (max-width: 640px) {
+  /* Этапы доски — лента с прокруткой вбок и остановкой на этапе. */
+  .board__steps {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scroll-snap-type: x mandatory;
+    scrollbar-width: none;
+    margin-inline: -1.2rem;
+    padding-inline: 1.2rem;
+    scroll-padding-inline: 1.2rem;
+  }
+
+  .board__steps::-webkit-scrollbar {
+    display: none;
+  }
+
+  .board__step {
+    flex: none;
+    scroll-snap-align: start;
+  }
+
+  .board-decision__buttons .btn {
+    flex: 1 1 auto;
+  }
 }
 
 .board__step {

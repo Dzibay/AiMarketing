@@ -55,9 +55,11 @@
       </p>
       <div class="action-card__buttons">
         <button class="btn btn--accent" type="button" :disabled="disabled || !chosen.length" @click="approve">
-          Согласовать выбранные ({{ chosen.length }})
+          {{ phone ? 'Согласовать' : 'Согласовать выбранные' }} ({{ chosen.length }})
         </button>
-        <button class="btn btn--ghost" type="button" :disabled="disabled" @click="reject">Отклонить этап</button>
+        <button class="btn btn--ghost" type="button" :disabled="disabled" @click="reject">
+          {{ phone ? 'Отклонить' : 'Отклонить этап' }}
+        </button>
       </div>
     </template>
 
@@ -75,6 +77,7 @@ import AdPreview from './AdPreview.vue'
 import AiCheckTable from './AiCheckTable.vue'
 import AiImageGallery from './AiImageGallery.vue'
 import UiStatus from '../../components/ui/UiStatus.vue'
+import { useViewport } from '../../composables/useViewport'
 
 const props = defineProps({
   action: { type: Object, required: true },
@@ -97,6 +100,9 @@ const STAGES = {
 }
 const STATUS = { pending: 'ждёт решения', done: 'согласовано', rejected: 'не согласовано' }
 const TONES = { pending: 'wait', done: 'ok', rejected: 'off', error: 'bad' }
+
+// На телефоне кнопки карточки стоят в один ряд у низа экрана — подписи короче.
+const { phone } = useViewport()
 
 const args = computed(() => props.action.args || {})
 const result = computed(() => props.action.result || {})

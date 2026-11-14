@@ -145,6 +145,9 @@
         </div>
       </div>
       <p v-if="aiNote" class="cell-note">{{ aiNote }}</p>
+      <p v-if="items.some((r) => !r.excludable)" class="cell-note touch-only">
+        Некоторые площадки Директ запретить не даёт — у них флажок неактивен.
+      </p>
 
       <div v-scroll-x class="table-scroll" :class="{ 'is-loading': busy === 'report' }">
         <table v-cards class="table tcards">

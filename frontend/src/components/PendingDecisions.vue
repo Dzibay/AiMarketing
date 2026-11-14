@@ -14,7 +14,7 @@
           <p v-if="a.summary">{{ a.summary }}</p>
           <p v-else-if="a.kind === 'ask'">ИИ ждёт вашего ответа в чате, чтобы продолжить.</p>
         </div>
-        <div class="prow__acts">
+        <div class="prow__acts prow__acts--decide">
           <template v-if="a.kind === 'write'">
             <button class="btn btn--accent" type="button" :disabled="!!busy[a.id]" @click="decide(a, true)">
               Выполнить
@@ -23,7 +23,11 @@
               Отклонить
             </button>
           </template>
-          <RouterLink class="btn" :class="a.kind === 'write' ? 'btn--ghost' : 'btn--accent'" :to="chatLink(a)">
+          <!-- На телефоне три кнопки в ряд не помещаются: чат — в «⋯». -->
+          <UiMenu v-if="phone && a.kind === 'write'">
+            <UiMenuItem :icon="MessageSquare" :to="chatLink(a)">Открыть чат</UiMenuItem>
+          </UiMenu>
+          <RouterLink v-else class="btn" :class="a.kind === 'write' ? 'btn--ghost' : 'btn--accent'" :to="chatLink(a)">
             {{ a.kind === 'write' ? 'Открыть чат' : 'Ответить в чате' }}
           </RouterLink>
         </div>
@@ -35,16 +39,22 @@
 <script setup>
 import { onMounted, reactive, ref } from 'vue'
 import { RouterLink } from 'vue-router'
+import { MessageSquare } from '@lucide/vue'
 import { aiApi, errorText } from '../api/web'
 import { refreshPending } from '../composables/usePending'
 import { pushToast } from '../composables/useToasts'
+import { useViewport } from '../composables/useViewport'
 import { niceQuotes } from '../utils/format'
+import UiMenu from './ui/UiMenu.vue'
+import UiMenuItem from './ui/UiMenuItem.vue'
 
 /** Главная простого режима: предложения ИИ без решения. Нет предложений — блока нет. */
 const props = defineProps({
   wsId: { type: Number, default: null },
   limit: { type: Number, default: 4 },
 })
+
+const { phone } = useViewport()
 
 const items = ref([])
 const total = ref(0)

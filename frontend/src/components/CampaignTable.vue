@@ -106,7 +106,7 @@
               />
             </td>
             <td class="ctab__name tc-name">
-              <RouterLink :to="linkOf(c)" v-tip.truncate="c.name">{{ c.name }}</RouterLink>
+              <RouterLink :to="linkOf(c)" v-tip.truncate="c.name"><span class="ctab__title">{{ c.name }}</span></RouterLink>
               <small class="ctab__meta">{{ metaOf(c) }}</small>
             </td>
             <td v-if="projectCol" class="ctab__project ctab__c-project" data-label="Проект">
@@ -459,11 +459,16 @@ function resetSheet() {
 }
 
 .ctab__name a {
-  display: -webkit-box;
-  overflow: hidden;
+  display: block;
   color: var(--ink);
   font-weight: 700;
   overflow-wrap: anywhere;
+}
+
+/* Обрезка — у текста внутри ссылки: сама ссылка не обрезает свою область нажатия на сенсорном экране. */
+.ctab__title {
+  display: -webkit-box;
+  overflow: hidden;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
 }

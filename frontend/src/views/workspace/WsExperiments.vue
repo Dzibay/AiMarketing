@@ -60,7 +60,9 @@
       <div class="meter exp__meter" v-tip="`День ${e.progress.day} из ${e.days}`">
         <span :style="{ width: `${dayPct(e)}%` }"></span>
       </div>
-      <p class="exp__reason" :class="REASON_TONES[e.progress.status]">{{ capitalize(e.progress.reason) }}</p>
+      <p class="exp__reason" :class="REASON_TONES[e.progress.status]">
+        <span class="touch-only">День {{ e.progress.day }} из {{ e.days }} · </span>{{ capitalize(e.progress.reason) }}
+      </p>
 
       <div v-scroll-x class="table-scroll">
         <table class="table exp__table tcards">

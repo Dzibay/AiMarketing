@@ -220,8 +220,14 @@
                   <span v-if="row.blocked" class="st st--off">{{ blockedLabel(row.blocked) }}</span>
                   <template v-else>{{ ACTION_LABELS[row.action] }}</template>
                 </td>
-                <td class="tc-wide" data-label="Добавим" v-tip="row.add.join(', ')">{{ phraseSample(row.add) }}</td>
-                <td class="tc-wide" data-label="Уберём" v-tip="row.remove.join(', ')">{{ phraseSample(row.remove) }}</td>
+                <td class="tc-wide" data-label="Добавим" v-tip="row.add.join(', ')">
+                  <span class="touch-hide">{{ phraseSample(row.add) }}</span>
+                  <span class="touch-only">{{ row.add.join(', ') || '—' }}</span>
+                </td>
+                <td class="tc-wide" data-label="Уберём" v-tip="row.remove.join(', ')">
+                  <span class="touch-hide">{{ phraseSample(row.remove) }}</span>
+                  <span class="touch-only">{{ row.remove.join(', ') || '—' }}</span>
+                </td>
                 <td class="num tc-row" data-label="Фраз было → станет">
                   {{ row.before }} → {{ row.after }}
                   <span class="cell-note">{{ row.chars.toLocaleString('ru-RU') }} симв.</span>

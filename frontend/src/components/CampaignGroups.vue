@@ -22,7 +22,7 @@
             @change="$emit('pick', c.campaign_row_id, $event.target.checked)"
           />
           <div class="crow__name">
-            <RouterLink :to="c.link">{{ c.name }}</RouterLink>
+            <RouterLink :to="c.link"><span class="crow__title">{{ c.name }}</span></RouterLink>
             <small>{{ c.where }}</small>
           </div>
           <div class="crow__health">{{ c.health.text }}</div>

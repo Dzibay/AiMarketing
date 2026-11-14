@@ -190,6 +190,9 @@
         </article>
       </div>
 
+      <p v-if="rows.some((r) => !r.rewritable)" class="cell-note touch-only">
+        Переписать можно только текстовые и комбинаторные объявления — у остальных флажка нет.
+      </p>
       <div v-scroll-x class="table-scroll" :class="{ 'is-loading': busy === 'report' }">
         <table v-cards class="table tcards">
           <thead>

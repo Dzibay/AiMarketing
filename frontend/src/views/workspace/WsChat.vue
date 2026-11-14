@@ -65,7 +65,7 @@
 
       <ChatThread v-else @to-board="toBoard" />
 
-      <div class="chat__foot">
+      <div ref="foot" class="chat__foot">
         <div v-if="activeWrites.length > 1" class="chat__pending">
           <span>
             Ждут решения: {{ activeWrites.length }}<template v-if="laterCount">, отложено: {{ laterCount }}</template>
@@ -174,6 +174,7 @@ import { niceQuotes, pct } from '../../utils/format'
 import CampaignBoard from './CampaignBoard.vue'
 import { useWs } from './context'
 import { useExpert } from '../../composables/useExpert'
+import { useViewport } from '../../composables/useViewport'
 import ChatComposer from '../../components/chat/ChatComposer.vue'
 import ChatList from '../../components/chat/ChatList.vue'
 import ChatThread from '../../components/chat/ChatThread.vue'
@@ -272,6 +273,7 @@ const signals = ref(null)
 const signalsError = ref('')
 const accessBusy = ref(false)
 const root = ref(null)
+const foot = ref(null)
 const composer = ref(null)
 const board = ref(null)
 // Список чатов выезжает слева по кнопке «Все чаты»; с доской на узком экране чат и доска — вкладками.
@@ -377,6 +379,26 @@ function onResize() {
   measureTop()
   composer.value?.autosize()
 }
+
+// Высота поля ввода — кнопкам карточек: на телефоне они прилипают к низу экрана сразу над ним.
+let footObserver = null
+function measureFoot() {
+  const height = `${foot.value?.offsetHeight || 0}px`
+  if (root.value && root.value.style.getPropertyValue('--chat-foot-h') !== height) {
+    root.value.style.setProperty('--chat-foot-h', height)
+  }
+}
+
+// Открылась клавиатура над полем ввода — лента встаёт к последнему сообщению: оно видно над полем.
+// Второй раз — когда клавиатура доедет: окно (или его видимая часть) к этому времени станет ниже.
+const { typing } = useViewport()
+let typingTimer = 0
+watch(typing, (on) => {
+  clearTimeout(typingTimer)
+  if (!on || !foot.value?.contains(document.activeElement)) return
+  chatCtx.scrollDown(true)
+  typingTimer = setTimeout(() => chatCtx.scrollDown(true), 350)
+})
 
 // --- Действия с чатом -------------------------------------------------------------------------
 
@@ -500,7 +522,12 @@ onMounted(async () => {
     topObserver = new ResizeObserver(measureTopLater)
     topObserver.observe(page)
   }
+  if (foot.value && typeof ResizeObserver !== 'undefined') {
+    footObserver = new ResizeObserver(measureFoot)
+    footObserver.observe(foot.value)
+  }
   measureTop()
+  measureFoot()
   // Поле ввода меряем после высоты страницы — как при изменении окна.
   composer.value?.autosize()
   loadChats()
@@ -517,7 +544,9 @@ onMounted(async () => {
 })
 
 onBeforeUnmount(() => {
+  clearTimeout(typingTimer)
   topObserver?.disconnect()
+  footObserver?.disconnect()
   cancelAnimationFrame(topFrame)
   window.removeEventListener('resize', onResize)
 })

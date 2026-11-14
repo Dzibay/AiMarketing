@@ -22,7 +22,7 @@
         <span v-else>Все сайты</span>
         <span class="cgroup__n">{{ g.items.length }}</span>
       </h2>
-      <div class="ccard">
+      <div class="ccard pend-list">
         <article v-for="a in g.items" :key="a.id" class="prow pend" :data-action="a.id">
           <div class="prow__main">
             <small>
@@ -40,7 +40,7 @@
               Отдельные строки снимаются только в чате — здесь действие выполнится целиком.
             </p>
           </div>
-          <div class="prow__acts">
+          <div class="prow__acts prow__acts--decide">
             <template v-if="a.kind === 'write'">
               <button class="btn btn--accent" type="button" :disabled="!!busy[a.id]" @click="decide(a, true)">
                 Выполнить
@@ -49,7 +49,11 @@
                 Отклонить
               </button>
             </template>
-            <RouterLink class="btn" :class="a.kind === 'ask' ? 'btn--accent' : 'btn--ghost'" :to="chatLink(a)">
+            <!-- На телефоне три кнопки в ряд не помещаются: чат — в «⋯». -->
+            <UiMenu v-if="phone && a.kind === 'write'">
+              <UiMenuItem :icon="MessageSquare" :to="chatLink(a)">Открыть чат</UiMenuItem>
+            </UiMenu>
+            <RouterLink v-else class="btn" :class="a.kind === 'ask' ? 'btn--accent' : 'btn--ghost'" :to="chatLink(a)">
               {{ a.kind === 'ask' ? 'Ответить в чате' : 'Открыть чат' }}
             </RouterLink>
           </div>
@@ -63,12 +67,15 @@
 <script setup>
 import { computed, reactive, ref, watch } from 'vue'
 import { RouterLink } from 'vue-router'
-import { Check } from '@lucide/vue'
+import { Check, MessageSquare } from '@lucide/vue'
 import EmptyState from '../components/ui/EmptyState.vue'
+import UiMenu from '../components/ui/UiMenu.vue'
+import UiMenuItem from '../components/ui/UiMenuItem.vue'
 import { aiApi, errorText } from '../api/web'
 import { refreshPending, usePending } from '../composables/usePending'
 import { useProjectFilter } from '../composables/useProjectFilter'
 import { pushToast } from '../composables/useToasts'
+import { useViewport } from '../composables/useViewport'
 import { formatDateTime, niceQuotes } from '../utils/format'
 import { useHead } from '../utils/useHead'
 import AiChanges from './workspace/AiChanges.vue'
@@ -83,6 +90,7 @@ const ASK_TEXT = {
 }
 
 const { projectId, project } = useProjectFilter()
+const { phone } = useViewport()
 
 const items = ref([])
 const total = ref(0)
@@ -178,7 +186,14 @@ watch(pendingCount, () => {
 .pend .prow__main {
   flex: 1;
 }
-.pend__changes {
+/* Таблице «Было → станет» нужно 360 px — иначе кнопки переносятся под текст (shell.css, .prow). */
+@media (min-width: 721px) {
+  .pend .prow__main {
+    flex-basis: 360px;
+  }
+}
+/* AiChanges — без общего корня (таблица и «Показать все»), поэтому через :deep. */
+.prow__main :deep(.pend__changes) {
   margin-top: 8px;
 }
 .prow__main .pend__why {
@@ -194,6 +209,27 @@ watch(pendingCount, () => {
   .pend .prow__acts {
     flex-wrap: wrap;
     gap: 8px;
+  }
+}
+/* Телефон: кнопки карточки держатся у низа экрана, пока карточка видна, — до «Выполнить» не нужно листать. */
+@media (max-width: 640px) {
+  /* clip, а не hidden: скругление остаётся, а кнопки прилипают к экрану, а не к списку. */
+  .pend-list {
+    overflow: clip;
+  }
+  .pend {
+    gap: 12px;
+    padding-bottom: 0;
+  }
+  .pend .prow__acts {
+    position: sticky;
+    bottom: var(--bbar-h);
+    z-index: 2;
+    flex-wrap: nowrap;
+    margin: 0 -18px;
+    padding: 10px 18px 12px;
+    border-top: 1px solid var(--line);
+    background: var(--surface);
   }
 }
 </style>

@@ -1,11 +1,11 @@
-import { computed, ref } from 'vue'
+import { computed, ref, watchEffect } from 'vue'
 
 /**
  * Размер экрана для компонентов — пороги те же, что в стилях.
  * phone — до 640 px: меню, списки и даты открываются шторкой снизу.
  * narrow — до 900 px: бокового меню нет, разделы — в нижней панели.
  * typing — открыта экранная клавиатура: нижняя панель прячется, шторка встаёт над клавиатурой
- * (её высота — в переменной --kb на <html>).
+ * (её высота — в переменной --kb на <html>, а сам признак — класс is-typing там же).
  */
 export const PHONE = '(max-width: 640px)'
 export const NARROW = '(max-width: 900px)'
@@ -54,6 +54,8 @@ document.addEventListener('focusout', () => (field.value = false))
 measure()
 
 const typing = computed(() => inset.value > 0 || (coarse.value && field.value))
+// Для стилей: пока открыта клавиатура, прилипшие к низу кнопки карточек возвращаются на своё место.
+watchEffect(() => document.documentElement.classList.toggle('is-typing', typing.value))
 
 export function useViewport() {
   return { phone, narrow, typing }

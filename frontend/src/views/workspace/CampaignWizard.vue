@@ -4,7 +4,7 @@
     <p v-else-if="!options" class="empty">Загружаем справочники…</p>
 
     <template v-else>
-      <ol class="wizard-steps">
+      <ol ref="stepsEl" class="wizard-steps">
         <li v-for="(s, i) in STEPS" :key="s" :class="{ active: i === step, done: i < step }">
           <button type="button" :disabled="i > maxStep" @click="step = i">{{ i + 1 }}. {{ s }}</button>
         </li>
@@ -229,13 +229,14 @@
           </dl>
           <p class="field-hint">Кампания появится в Директе черновиком и сразу добавится в этот проект.</p>
         </div>
-        <p v-if="formError" class="form-error">{{ formError }}</p>
+        <p v-if="formError" ref="errorEl" class="form-error">{{ formError }}</p>
       </form>
     </template>
 
     <template #footer>
       <button v-if="step > 0" class="btn btn--ghost" type="button" :disabled="saving" @click="step -= 1">Назад</button>
-      <button class="btn btn--ghost" type="button" :disabled="saving" @click="$emit('close')">Отмена</button>
+      <!-- На телефоне внизу остаются «Назад / Далее», закрыть можно крестиком. -->
+      <button v-if="!(phone && step > 0)" class="btn btn--ghost" type="button" :disabled="saving" @click="$emit('close')">Отмена</button>
       <button class="btn btn--accent" type="submit" form="campaign-wizard" :disabled="saving || !options">
         {{ step < STEPS.length - 1 ? 'Далее' : saving ? 'Создаём…' : 'Создать кампанию' }}
       </button>
@@ -244,7 +245,8 @@
 </template>
 
 <script setup>
-import { computed, reactive, ref, watch } from 'vue'
+import { computed, nextTick, reactive, ref, watch } from 'vue'
+import { useViewport } from '../../composables/useViewport'
 import UiCheckbox from '../../components/ui/UiCheckbox.vue'
 import UiDatePicker from '../../components/ui/UiDatePicker.vue'
 import UiSelect from '../../components/ui/UiSelect.vue'
@@ -285,6 +287,14 @@ const step = ref(0)
 const maxStep = ref(0)
 const saving = ref(false)
 const formError = ref('')
+const { phone } = useViewport()
+const stepsEl = ref(null)
+const errorEl = ref(null)
+
+// Лента шагов на телефоне прокручивается вбок — держать текущий шаг на виду.
+watch(step, () =>
+  nextTick(() => stepsEl.value?.children[step.value]?.scrollIntoView({ block: 'nearest', inline: 'nearest' })),
+)
 const today = isoDay(new Date())
 
 function blankForm() {
@@ -493,7 +503,7 @@ function buildSpec() {
 
 async function next() {
   formError.value = validate()
-  if (formError.value) return
+  if (formError.value) return showError()
   if (step.value < STEPS.length - 1) {
     step.value += 1
     maxStep.value = Math.max(maxStep.value, step.value)
@@ -505,8 +515,14 @@ async function next() {
     emit('created', result)
   } catch (err) {
     formError.value = errorText(err)
+    showError()
   } finally {
     saving.value = false
   }
+}
+
+/** Ошибка стоит в конце длинной формы — показать её, а не оставлять под сгибом. */
+function showError() {
+  nextTick(() => errorEl.value?.scrollIntoView({ block: 'nearest', behavior: 'smooth' }))
 }
 </script>

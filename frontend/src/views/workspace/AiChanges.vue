@@ -13,7 +13,7 @@
         <template v-else>
           <td>{{ row.what }}</td>
           <td class="ai-changes__before">{{ row.before }}</td>
-          <td class="ai-changes__after" :class="{ 'is-fail': row.after.startsWith('не выйдет') }">{{ row.after }}</td>
+          <td class="ai-changes__after" :class="{ 'is-fail': row.after?.startsWith('не выйдет') }">{{ row.after }}</td>
         </template>
       </tr>
     </tbody>

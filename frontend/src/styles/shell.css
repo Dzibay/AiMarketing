@@ -586,6 +586,30 @@
   container: dbar-scope / inline-size;
 }
 
+/* Чат на узком экране: название чата и проект второй строкой вместо переключателя проекта. */
+.dbar__chat {
+  display: grid;
+  min-width: 0;
+  line-height: 1.25;
+}
+
+.dbar__chat strong,
+.dbar__chat small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dbar__chat strong {
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.dbar__chat small {
+  color: var(--muted);
+  font-size: 12.5px;
+}
+
 .dchip {
   display: inline-flex;
   align-items: center;
@@ -1733,10 +1757,14 @@ html.has-bbar {
 }
 .crow__name a {
   display: block;
-  overflow: hidden;
   color: var(--ink);
   font-weight: 700;
   text-decoration: none;
+}
+/* Многоточие — у текста внутри ссылки: ссылка с overflow: hidden обрезала бы свою область нажатия. */
+.crow__title {
+  display: block;
+  overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -1818,6 +1846,26 @@ html.has-bbar {
   flex-shrink: 0;
   align-items: center;
   gap: 14px;
+}
+/* Тексту (и таблице «Было → станет») нужно хотя бы 360 px: не помещаются вместе с кнопками — кнопки
+   переносятся под текст. Уже 720 px строка и так в столбик. */
+@media (min-width: 721px) {
+  .prow {
+    flex-wrap: wrap;
+  }
+  .prow__main {
+    flex: 1 1 360px;
+  }
+}
+/* Решение по предложению ИИ на телефоне: «Выполнить» во всю ширину, рядом «Отклонить» и «⋯». */
+@media (max-width: 640px) {
+  .prow__acts--decide {
+    align-self: stretch;
+    gap: 8px;
+  }
+  .prow__acts--decide > .btn--accent {
+    flex: 1 1 auto;
+  }
 }
 .meta-note {
   margin: 12px 2px 0;

@@ -565,6 +565,13 @@ onBeforeUnmount(() => {
   .stepper span {
     display: none;
   }
+  /* Подпись видна только у текущего шага — ему и место под неё, остальные сжимаются до кружка. */
+  .stepper li {
+    flex: 0 0 34px;
+  }
+  .stepper li.cur {
+    flex: 1 1 auto;
+  }
   .stepper li.cur span {
     display: inline;
   }

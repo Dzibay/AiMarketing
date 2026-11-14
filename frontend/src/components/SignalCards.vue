@@ -18,7 +18,7 @@
       <h3>{{ s.title }}</h3>
       <p v-if="s.note">{{ s.note }}</p>
       <div class="sig__acts">
-        <RouterLink v-if="s.link" class="btn btn--accent" :to="s.link.to">{{ s.link.label }}</RouterLink>
+        <RouterLink v-if="s.link" class="btn btn--accent" :to="s.link.to"><span class="sig__label">{{ s.link.label }}</span></RouterLink>
         <button class="sig__ask" type="button" v-tip="'Спросить ИИ об этом'" aria-label="Спросить ИИ об этом" @click="ask(s)">
           <Sparkles :size="16" aria-hidden="true" />
         </button>
@@ -169,6 +169,10 @@ function ask(s) {
   padding-top: 14px;
 }
 .sig__acts .btn {
+  min-width: 0;
+}
+/* Многоточие — у подписи, а не у кнопки: кнопка с overflow: hidden обрезала бы свою область нажатия. */
+.sig__label {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;

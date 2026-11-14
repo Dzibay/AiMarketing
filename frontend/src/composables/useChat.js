@@ -688,6 +688,7 @@ export function provideChat({ general, ws, basePath, reloadWs }) {
     scroller,
     input,
     onScroll,
+    scrollDown,
     loadChats,
     loadChat,
     newChat,

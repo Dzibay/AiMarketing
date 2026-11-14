@@ -9,6 +9,12 @@
       <small v-if="detail(s)" class="load-stage__detail">{{ detail(s) }}</small>
     </li>
   </ul>
+  <!-- Подсказки этапов на сенсорном экране не открываются — что пошло не так, видно списком под этапами. -->
+  <ul v-if="stages.some(problem)" class="load-notes touch-only">
+    <li v-for="s in stages.filter(problem)" :key="s.key">
+      <b>{{ s.title }}:</b> {{ problem(s) }}
+    </li>
+  </ul>
 </template>
 
 <script setup>
@@ -50,6 +56,11 @@ function detail(s) {
   }
 }
 
+/** Что пошло не так — без счётчика записей: на сенсорном экране это видно строкой под этапом. */
+function problem(s) {
+  return hint({ ...s, count: 0 })
+}
+
 function hint(s) {
   const parts = []
   if (s.status === 'error' || s.status === 'stopped') parts.push(stageErrorText(s))
@@ -62,3 +73,15 @@ function hint(s) {
   return parts.filter(Boolean).join(' ')
 }
 </script>
+
+<style scoped>
+.load-notes {
+  display: grid;
+  gap: 0.2rem;
+  margin: 0.2rem 0 0.15rem;
+  padding: 0;
+  color: var(--muted);
+  font-size: 0.8rem;
+  list-style: none;
+}
+</style>
