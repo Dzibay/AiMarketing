@@ -200,6 +200,9 @@ class ModelClassBody(BaseModel):
     units_out: float | None = None
     cost_in: float | None = None
     cost_out: float | None = None
+    # Кэшированный вход; пусто — как обычный вход.
+    units_cache: float | None = None
+    cost_cache: float | None = None
     enabled: bool = True
 
 

@@ -46,7 +46,8 @@
       <h3>Классы моделей</h3>
       <p class="field-hint">
         Цена — единиц за 1 млн токенов: столько спишется с лимита пользователя. Себестоимость — ₽ за 1 млн токенов по
-        тарифу провайдера, для маржи в «Расходе». Выключенный класс в чате не показывается.
+        тарифу провайдера, для маржи в «Расходе». Кэш — повторяющийся вход (инструменты, промпт, история), который
+        провайдер берёт дешевле; пусто — кэш считается как обычный вход. Выключенный класс в чате не показывается.
       </p>
       <div v-scroll-x class="table-scroll">
         <table class="table admin-classes">
@@ -56,8 +57,10 @@
               <th>Название в чате</th>
               <th>Модель</th>
               <th class="num">Ед. · вход</th>
+              <th class="num">Ед. · кэш</th>
               <th class="num">Ед. · выход</th>
               <th class="num">₽ · вход</th>
+              <th class="num">₽ · кэш</th>
               <th class="num">₽ · выход</th>
             </tr>
           </thead>
@@ -257,7 +260,7 @@ const props = defineProps({
 })
 const emit = defineEmits(['changed'])
 
-const PRICE_FIELDS = ['units_in', 'units_out', 'cost_in', 'cost_out']
+const PRICE_FIELDS = ['units_in', 'units_cache', 'units_out', 'cost_in', 'cost_cache', 'cost_out']
 
 const ai = ref({ providers: [], tasks: [], classes: [], configured: false, has_key: false, key_hint: '', default_base_url: '' })
 const aiForm = reactive({

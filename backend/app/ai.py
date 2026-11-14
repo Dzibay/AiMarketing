@@ -120,6 +120,8 @@ def _class_public(row: dict) -> dict:
         "units_out": _num(row.get("units_out")),
         "cost_in": _num(row.get("cost_in")),
         "cost_out": _num(row.get("cost_out")),
+        "units_cache": _num(row.get("units_cache")),
+        "cost_cache": _num(row.get("cost_cache")),
         "enabled": bool(row.get("enabled")),
         "dots": CLASS_DOTS.get(row["id"], 2),
     }
@@ -238,6 +240,9 @@ def _save_classes(conn, classes: list[dict]) -> None:
         units_out = amount(item.get("units_out"), f"{name}: единиц за 1 млн токенов выхода")
         cost_in = amount(item.get("cost_in"), f"{name}: себестоимость входа, ₽", digits=2)
         cost_out = amount(item.get("cost_out"), f"{name}: себестоимость выхода, ₽", digits=2)
+        # Пусто — кэшированный вход стоит как обычный.
+        units_cache = amount(item.get("units_cache"), f"{name}: единиц за 1 млн токенов кэша")
+        cost_cache = amount(item.get("cost_cache"), f"{name}: себестоимость кэша, ₽", digits=2)
         enabled = bool(item.get("enabled"))
         for a, b, what in ((units_in, units_out, "цены в единицах"), (cost_in, cost_out, "себестоимости")):
             if (a is None) != (b is None):
@@ -247,10 +252,10 @@ def _save_classes(conn, classes: list[dict]) -> None:
         conn.execute(
             """
             UPDATE ai_model_classes SET name = %s, model = %s, units_in = %s, units_out = %s, cost_in = %s,
-                   cost_out = %s, enabled = %s, updated_at = NOW()
+                   cost_out = %s, units_cache = %s, cost_cache = %s, enabled = %s, updated_at = NOW()
             WHERE id = %s
             """,
-            (name, model, units_in, units_out, cost_in, cost_out, enabled, cid),
+            (name, model, units_in, units_out, cost_in, cost_out, units_cache, cost_cache, enabled, cid),
         )
 
 
@@ -365,6 +370,8 @@ def load_config(
         "units_out": cls["units_out"],
         "cost_in": cls["cost_in"],
         "cost_out": cls["cost_out"],
+        "units_cache": cls.get("units_cache"),
+        "cost_cache": cls.get("cost_cache"),
     }
 
 
@@ -395,18 +402,45 @@ def usage_out(acc: dict, user_id: int | None) -> dict | None:
     }
 
 
-def units_for(cfg: dict, tokens_in: float, tokens_out: float) -> float:
-    """Единиц за вызов по цене класса модели; цена не задана — 0."""
-    if cfg.get("units_in") is None or cfg.get("units_out") is None:
-        return 0.0
-    return (tokens_in * cfg["units_in"] + tokens_out * cfg["units_out"]) / 1_000_000
+def _priced(cfg: dict, prefix: str, tokens_in: float, tokens_out: float, cached: float) -> float | None:
+    """Цена вызова по ставкам {prefix}_in/_out/_cache за 1 млн токенов; ставки входа или выхода нет — None.
 
-
-def cost_rub(cfg: dict, tokens_in: float, tokens_out: float) -> float | None:
-    """Себестоимость вызова в рублях; None — не задана."""
-    if cfg.get("cost_in") is None or cfg.get("cost_out") is None:
+    tokens_in включает кэшированные: они идут по ставке кэша, а без неё — как обычный вход.
+    """
+    rate_in, rate_out = cfg.get(f"{prefix}_in"), cfg.get(f"{prefix}_out")
+    if rate_in is None or rate_out is None:
         return None
-    return (tokens_in * cfg["cost_in"] + tokens_out * cfg["cost_out"]) / 1_000_000
+    rate_cache = cfg.get(f"{prefix}_cache")
+    if rate_cache is None:
+        rate_cache = rate_in
+    cached = max(0.0, min(float(cached or 0), float(tokens_in)))
+    return ((tokens_in - cached) * rate_in + cached * rate_cache + tokens_out * rate_out) / 1_000_000
+
+
+def units_for(cfg: dict, tokens_in: float, tokens_out: float, cached: float = 0) -> float:
+    """Единиц за вызов по цене класса модели; цена не задана — 0."""
+    return _priced(cfg, "units", tokens_in, tokens_out, cached) or 0.0
+
+
+def cost_rub(cfg: dict, tokens_in: float, tokens_out: float, cached: float = 0) -> float | None:
+    """Себестоимость вызова в рублях; None — не задана."""
+    return _priced(cfg, "cost", tokens_in, tokens_out, cached)
+
+
+def cached_tokens(raw: dict) -> int:
+    """Сколько токенов входа провайдер взял из кэша.
+
+    OpenAI-совместимый ответ (OpenAI, OpenRouter, прокси) — usage.prompt_tokens_details.cached_tokens; они уже
+    входят в prompt_tokens. Поля нет или не число — 0: тогда весь вход идёт по полной цене.
+    """
+    details = raw.get("prompt_tokens_details") or raw.get("input_tokens_details") or {}
+    value = details.get("cached_tokens") if isinstance(details, dict) else None
+    if value is None:
+        value = raw.get("cached_tokens")
+    try:
+        return max(0, int(value or 0))
+    except (TypeError, ValueError):
+        return 0
 
 
 def budget_left(cfg: dict) -> float | None:
@@ -443,19 +477,22 @@ def _usage(cfg: dict, data: dict, messages: list[dict], tools, content: str, cal
     raw = data.get("usage") if isinstance(data, dict) else None
     try:
         tokens_in, tokens_out = int(raw["prompt_tokens"]), int(raw.get("completion_tokens") or 0)
+        cached = min(cached_tokens(raw), tokens_in)
         estimated = False
     except (TypeError, KeyError, ValueError, AttributeError):
         tokens_in = math.ceil(chars_in / CHARS_PER_TOKEN)
         tokens_out = math.ceil(chars_out / CHARS_PER_TOKEN)
+        cached = 0
         estimated = True
     return {
         "tokens_in": tokens_in,
         "tokens_out": tokens_out,
+        "tokens_cached": cached,
         "chars_in": chars_in,
         "chars_out": chars_out,
         "estimated": estimated,
-        "charged": units_for(cfg, tokens_in, tokens_out),
-        "cost_rub": cost_rub(cfg, tokens_in, tokens_out),
+        "charged": units_for(cfg, tokens_in, tokens_out, cached),
+        "cost_rub": cost_rub(cfg, tokens_in, tokens_out, cached),
     }
 
 
@@ -476,6 +513,7 @@ def _record(cfg: dict, usage: dict) -> None:
         model_class=cfg.get("model_class") or "",
         tokens_in=usage["tokens_in"],
         tokens_out=usage["tokens_out"],
+        tokens_cached=usage.get("tokens_cached", 0),
         chars_in=usage["chars_in"],
         chars_out=usage["chars_out"],
         units=int(cfg.get("units") or 0),

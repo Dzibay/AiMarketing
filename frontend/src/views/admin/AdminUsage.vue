@@ -40,7 +40,7 @@
               <tr>
                 <th>Вид</th>
                 <th class="num">Вызовов</th>
-                <th class="num">Токенов</th>
+                <th class="num" title="Вход (доля из кэша провайдера) / выход">Токенов</th>
                 <th class="num">Единиц</th>
                 <th class="num">₽</th>
               </tr>
@@ -49,7 +49,7 @@
               <tr v-for="row in data.by_kind" :key="`${row.kind}:${row.model_class}`">
                 <td>{{ row.label }}</td>
                 <td class="num">{{ num(row.calls) }}</td>
-                <td class="num">{{ row.kind === 'model' ? `${num(row.tokens_in)} / ${num(row.tokens_out)}` : '—' }}</td>
+                <td class="num">{{ row.kind === 'model' ? `${num(row.tokens_in)}${cacheShare(row)} / ${num(row.tokens_out)}` : '—' }}</td>
                 <td class="num">{{ num(row.units, 2) }}</td>
                 <td class="num">{{ rubAi(row.cost_rub) }}</td>
               </tr>
@@ -97,6 +97,12 @@ import { num, rubAi } from '../../utils/format'
 
 const data = ref(null)
 const busy = ref(false)
+
+// Доля входа из кэша провайдера: « (кэш 82%)»; кэша не было — пусто.
+function cacheShare(row) {
+  if (!row.tokens_cached || !row.tokens_in) return ''
+  return ` (кэш ${Math.round((row.tokens_cached * 100) / row.tokens_in)}%)`
+}
 
 function monthLabel(key) {
   const [y, m] = key.split('-').map(Number)

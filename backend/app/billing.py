@@ -111,6 +111,7 @@ def record(
     model_class: str = "",
     tokens_in: int = 0,
     tokens_out: int = 0,
+    tokens_cached: int = 0,
     chars_in: int = 0,
     chars_out: int = 0,
     units: int = 0,
@@ -126,8 +127,8 @@ def record(
             conn.execute(
                 """
                 INSERT INTO ai_usage (user_id, workspace_id, kind, task, model, model_class, tokens_in, tokens_out,
-                                      chars_in, chars_out, units, estimated, charged, cost_rub)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                                      tokens_cached, chars_in, chars_out, units, estimated, charged, cost_rub)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """,
                 (
                     user_id,
@@ -138,6 +139,7 @@ def record(
                     model_class,
                     int(tokens_in),
                     int(tokens_out),
+                    int(tokens_cached),
                     int(chars_in),
                     int(chars_out),
                     int(units),
@@ -320,7 +322,8 @@ def service_usage(month: str | None = None) -> dict:
         by_kind = conn.execute(
             """
             SELECT kind, model_class, COUNT(*) AS n, SUM(charged) AS charged, SUM(cost_rub) AS cost,
-                   SUM(tokens_in) AS tin, SUM(tokens_out) AS tout
+                   SUM(tokens_in) AS tin, SUM(tokens_out) AS tout,
+                   SUM(tokens_cached) AS tcached
             FROM ai_usage WHERE created_at >= %s AND created_at < %s
             GROUP BY kind, model_class ORDER BY SUM(charged) DESC
             """,
@@ -360,6 +363,7 @@ def service_usage(month: str | None = None) -> dict:
                 "cost_rub": money(r["cost"]),
                 "tokens_in": int(r["tin"] or 0),
                 "tokens_out": int(r["tout"] or 0),
+                "tokens_cached": int(r["tcached"] or 0),
             }
         )
     this_month = month_bounds(None)[0]
