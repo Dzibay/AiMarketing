@@ -7,7 +7,8 @@ import { loadWorkspaces, useWorkspaces } from './useWorkspaces'
 
 const CHAT_KEY = Symbol('chat')
 const POLL_MS = 1500
-// «Позже»: карточка сворачивается только у вас в браузере, на сервере действие так и ждёт решения.
+// «Позже»: карточка сворачивается только у вас в браузере, на сервере действие так и ждёт решения
+// (новое сообщение его отклонит, если не выбрать «Оставить и отправить»).
 const LATER_KEY = 'aimarketing-later'
 
 export const STATUS_LABELS = {
@@ -133,8 +134,15 @@ export function provideChat({ general, ws, basePath, reloadWs }) {
   // Вопросы, план и таблицы закрываются ответом в своей карточке, а не кнопками «Выполнить / Отклонить все».
   const pendingWrites = computed(() => pendingActions.value.filter((a) => a.kind !== 'ask'))
 
+  // Оставленные ждать при отправке сообщения: модель уже продолжила без них, решаются по одному в карточке.
+  const isDetached = (a) => a.status === 'pending' && !!a.detached
+  // Предложения, которые новое сообщение отклонит или оставит ждать — о них спрашиваем перед отправкой.
+  const waitingWrites = computed(() => pendingWrites.value.filter((a) => !a.detached))
+  // Отправка, ждущая ответа «что делать с предложениями»: { text } — текст подсказки или null (поле ввода).
+  const pendingAsk = ref(null)
+
   const later = ref(new Set(readLater()))
-  const activeWrites = computed(() => pendingWrites.value.filter((a) => !later.value.has(a.id)))
+  const activeWrites = computed(() => waitingWrites.value.filter((a) => !later.value.has(a.id)))
   const laterCount = computed(() => pendingWrites.value.length - activeWrites.value.length)
   const isLater = (a) => a.status === 'pending' && !!a.id && later.value.has(a.id)
   function setLater(a, on) {
@@ -454,10 +462,19 @@ export function provideChat({ general, ws, basePath, reloadWs }) {
     return [...found.values()]
   }
 
-  /** Без text — отправить черновик из поля ввода; с text — готовый запрос (подсказка, вопрос из другого раздела). */
-  async function send(text) {
+  /**
+   * Без text — отправить черновик из поля ввода; с text — готовый запрос (подсказка, вопрос из другого раздела).
+   * pending — что делать с ждущими предложениями ИИ ('keep' | 'reject'). Если они есть, а решения нет,
+   * отправка ждёт ответа в строке над полем ввода (answerPending).
+   */
+  async function send(text, pending) {
     const message = (text ?? draft.value).trim()
     if (!message || sending.value || status.value === 'running') return
+    if (!pending && waitingWrites.value.length) {
+      pendingAsk.value = { text: text ?? null }
+      return
+    }
+    pendingAsk.value = null
     sending.value = true
     try {
       let id = chatId.value
@@ -470,7 +487,7 @@ export function provideChat({ general, ws, basePath, reloadWs }) {
         await router.replace({ path: `${basePath.value}/${id}` })
       }
       // Подсказки-стартеры — готовый текст без упоминаний.
-      await aiApi.send(id, message, text == null ? usedMentions(message).map((m) => m.id) : [])
+      await aiApi.send(id, message, text == null ? usedMentions(message).map((m) => m.id) : [], pending || 'reject')
       if (text == null || text === draft.value) {
         draft.value = ''
         mentions.value = []
@@ -485,6 +502,22 @@ export function provideChat({ general, ws, basePath, reloadWs }) {
       sending.value = false
       nextTick(() => input.value?.focus())
     }
+  }
+
+  /** Ответ в строке над полем ввода: 'keep' / 'reject' — отправить; 'decide' — к первой ждущей карточке. */
+  function answerPending(choice) {
+    const ask = pendingAsk.value
+    if (!ask) return
+    if (choice === 'keep' || choice === 'reject') return send(ask.text ?? undefined, choice)
+    pendingAsk.value = null
+    const first = waitingWrites.value[0]
+    if (later.value.has(first?.id)) setLater(first, false)
+    nextTick(() => {
+      const card = first && document.querySelector(`[data-action="${first.id}"]`)
+      card?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      // Фокус — на «Выполнить»: первая кнопка карточки может быть «Отметить все» и выключена.
+      card?.querySelector('.action-card__acts button:not(:disabled)')?.focus({ preventScroll: true })
+    })
   }
 
   async function retryTurn() {
@@ -630,8 +663,17 @@ export function provideChat({ general, ws, basePath, reloadWs }) {
     () => refreshPending(),
   )
 
+  // Решать стало нечего (решили в карточке, сменился чат) — вопрос над полем ввода больше не нужен.
+  watch(
+    () => waitingWrites.value.length,
+    (n) => {
+      if (!n) pendingAsk.value = null
+    },
+  )
+
   watch(chatId, (id) => {
     stopPolling()
+    pendingAsk.value = null
     loadError.value = ''
     if (id) {
       stickToBottom = true
@@ -678,6 +720,10 @@ export function provideChat({ general, ws, basePath, reloadWs }) {
     deciding,
     isLater,
     setLater,
+    isDetached,
+    waitingWrites,
+    pendingAsk,
+    answerPending,
     projectName,
     offCount,
     allOff,

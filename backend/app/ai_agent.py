@@ -5541,6 +5541,8 @@ def _action_out(row: dict) -> dict:
         "summary": row["summary"],
         "categories": [{"id": c, "label": CATEGORY_LABELS.get(c, c)} for c in cats],
         "status": row["status"],
+        # Отложено сообщением: ИИ продолжил без решения, карточка ждёт его отдельно.
+        "detached": bool(row.get("detached_at")),
         "auto": row["auto"],
         "result": row.get("result"),
         "error": row.get("error") or "",
@@ -6834,13 +6836,14 @@ def _skip_open_actions(conn, chat_id: int, reason: str, *, by_message: bool = Fa
     """Незакрытые действия закрываются ответом инструмента — иначе история для модели некорректна.
 
     by_message — пользователь написал сообщение: вопросы и план закрываются им, а не «пропуском».
+    Отложенные не трогаем: модель на них уже получила ответ, они ждут решения в карточке.
     """
     ask_reason = "Ответ — в сообщении ниже" if by_message else reason
     rows = conn.execute(
         """
         UPDATE ai_actions SET status = 'rejected', decided_at = NOW(),
                error = CASE WHEN tool = ANY(%s) THEN %s ELSE %s END
-        WHERE chat_id = %s AND status IN ('pending', 'approved')
+        WHERE chat_id = %s AND status IN ('pending', 'approved') AND detached_at IS NULL
         RETURNING tool_call_id, tool, args
         """,
         (list(ASK_TOOLS), ask_reason, reason, chat_id),
@@ -6860,6 +6863,36 @@ def _skip_open_actions(conn, chat_id: int, reason: str, *, by_message: bool = Fa
             tool_call_id=r["tool_call_id"],
             tool_name=r["tool"],
         )
+
+
+_DETACHED_ANSWER = {
+    "ok": False,
+    "waiting": True,
+    "note": "Маркетолог пока не решил: предложение ждёт его решения в карточке и может быть выполнено позже. "
+    "Не предлагай его заново и не считай выполненным — итог придёт служебной заметкой",
+}
+
+
+def _detach_open_writes(conn, chat_id: int) -> None:
+    """«Оставить и отправить»: предложения с изменениями ждут решения дальше, а модель получает ответ
+    «пока не решено» — иначе история для неё некорректна. Одобренные, но не выполненные выполнит следующий ход."""
+    rows = conn.execute(
+        """
+        UPDATE ai_actions SET detached_at = NOW()
+        WHERE chat_id = %s AND status IN ('pending', 'approved') AND detached_at IS NULL AND tool <> ALL(%s)
+        RETURNING tool_call_id, tool
+        """,
+        (chat_id, list(ASK_TOOLS)),
+    ).fetchall()
+    for r in rows:
+        _insert_message(
+            conn, chat_id, "tool", _dump(_DETACHED_ANSWER), tool_call_id=r["tool_call_id"], tool_name=r["tool"]
+        )
+
+
+_DETACHED_NOTE = (
+    "[Служебная заметка: маркетолог решил по предложению «{label}», которое раньше отложил. Итог: {result}]"
+)
 
 
 def _submit(user_id: int, chat_id: int, marker: str) -> dict:
@@ -6909,10 +6942,16 @@ def _refs_note(refs, *, general: bool = False) -> str:
     )
 
 
-def post_message(user_id: int, chat_id: int, text: str, refs: list[int] | None = None) -> dict:
+def post_message(
+    user_id: int, chat_id: int, text: str, refs: list[int] | None = None, pending: str = "reject"
+) -> dict:
+    """Сообщение маркетолога. pending — что делать с ждущими предложениями ИИ: reject — отклонить,
+    keep — оставить ждать решения. Вопросы, план и таблицы закрываются сообщением всегда: текст и есть ответ."""
     from app.jobs import public_job
 
     text = (text or "").strip()
+    if pending not in ("keep", "reject"):
+        raise YandexError("pending", "pending — keep или reject")
     if not text:
         raise YandexError("empty", "Пустое сообщение")
     if len(text) > 8000:
@@ -6924,6 +6963,8 @@ def post_message(user_id: int, chat_id: int, text: str, refs: list[int] | None =
         if _chat_out(chat)["status"] == "running":
             raise YandexError("busy", "ИИ ещё отвечает — дождитесь ответа")
         cleaned = _clean_refs(conn, user_id, chat["workspace_id"], refs)
+        if pending == "keep":
+            _detach_open_writes(conn, chat_id)
         _skip_open_actions(conn, chat_id, "Пропущено: пользователь написал новое сообщение", by_message=True)
         message = _insert_message(conn, chat_id, "user", text, refs=cleaned)
         conn.execute(
@@ -7122,14 +7163,28 @@ def pending_actions(user_id: int, workspace_id: int | None = None) -> dict:
     return {"items": items, "total": len(rows)}
 
 
-def _decide(user_id: int, chat_id: int, action_ids: list[int] | None, approve: bool) -> tuple[list[dict], int]:
+def _decide(
+    user_id: int, chat_id: int, action_ids: list[int] | None, approve: bool
+) -> tuple[list[dict], int, bool]:
+    """Решение по ждущим действиям чата; без action_ids — по всем, кроме отложенных.
+
+    → (решённые строки, сколько неотложенных ещё ждёт, нужен ли ход). Ход нужен, когда решено последнее
+    из ждущих — модель продолжает, — или одобрено отложенное: его выполнит ход, модель он не позовёт.
+    """
     with pool.connection() as conn:
-        _require_chat(conn, user_id, chat_id, lock=True)
+        chat = _require_chat(conn, user_id, chat_id, lock=True)
         params: list = [chat_id, list(ASK_TOOLS)]
         where = "chat_id = %s AND status = 'pending' AND tool <> ALL(%s)"
         if action_ids is not None:
             where += " AND id = ANY(%s)"
             params.append(action_ids)
+        else:
+            where += " AND detached_at IS NULL"
+        # Отложенное выполняет ход чата: пока ИИ отвечает, второй ход запускать нельзя.
+        if _chat_out(chat)["status"] == "running" and conn.execute(
+            f"SELECT 1 FROM ai_actions WHERE {where} AND detached_at IS NOT NULL LIMIT 1", params
+        ).fetchone():
+            raise YandexError("busy", "ИИ ещё отвечает — дождитесь ответа")
         rows = conn.execute(
             f"""
             UPDATE ai_actions SET status = %s, decided_at = NOW()
@@ -7147,13 +7202,17 @@ def _decide(user_id: int, chat_id: int, action_ids: list[int] | None, approve: b
                     json.dumps({"ok": False, "error": "Пользователь отклонил действие"}, ensure_ascii=False),
                     tool_call_id=r["tool_call_id"],
                     tool_name=r["tool"],
+                    meta={"detached": True} if r["detached_at"] else None,
                 )
         left = conn.execute(
-            "SELECT COUNT(*) AS n FROM ai_actions WHERE chat_id = %s AND status = 'pending'", (chat_id,)
+            "SELECT COUNT(*) AS n FROM ai_actions WHERE chat_id = %s AND status = 'pending' AND detached_at IS NULL",
+            (chat_id,),
         ).fetchone()["n"]
-        if rows and not left:
+        current = any(r["detached_at"] is None for r in rows)
+        run = (current and not left) or (approve and any(r["detached_at"] for r in rows))
+        if run:
             conn.execute("UPDATE ai_chats SET status = 'running', error = '', updated_at = NOW() WHERE id = %s", (chat_id,))
-    return rows, int(left)
+    return rows, int(left), run
 
 
 def decide_action(user_id: int, action_id: int, *, approve: bool, remember: bool = False, exclude=None) -> dict:
@@ -7169,7 +7228,7 @@ def decide_action(user_id: int, action_id: int, *, approve: bool, remember: bool
         raise YandexError("args", "Ответьте в карточке вопросов, плана или таблицы")
     if approve and exclude and row["status"] == "pending":
         _exclude_rows(user_id, row, exclude)
-    rows, left = _decide(user_id, row["chat_id"], [action_id], approve)
+    rows, left, run = _decide(user_id, row["chat_id"], [action_id], approve)
     if not rows:
         raise YandexError("decided", "Решение по этому действию уже принято")
     if approve and remember:
@@ -7179,7 +7238,7 @@ def decide_action(user_id: int, action_id: int, *, approve: bool, remember: bool
         # В общем чате прав ИИ нет: там всё на согласовании.
         if cats and ws_id is not None:
             update_workspace(user_id, ws_id, ai_access={"categories": {c: True for c in cats}})
-    job = _submit(user_id, row["chat_id"], f"a{action_id}") if not left else None
+    job = _submit(user_id, row["chat_id"], f"a{action_id}") if run else None
     return {"action": _action_out(rows[0]), "pending": left, "job": public_job(job) if job else None}
 
 
@@ -7191,17 +7250,17 @@ def decide_all(user_id: int, chat_id: int, *, approve: bool, exclude: dict | Non
         with pool.connection() as conn:
             _require_chat(conn, user_id, chat_id)
             pending = conn.execute(
-                "SELECT * FROM ai_actions WHERE chat_id = %s AND status = 'pending' AND tool <> ALL(%s)",
+                "SELECT * FROM ai_actions WHERE chat_id = %s AND status = 'pending' AND tool <> ALL(%s) AND detached_at IS NULL",
                 (chat_id, list(ASK_TOOLS)),
             ).fetchall()
         for row in pending:
             paths = exclude.get(str(row["id"])) or exclude.get(row["id"])
             if paths:
                 _exclude_rows(user_id, row, paths)
-    rows, left = _decide(user_id, chat_id, None, approve)
+    rows, left, run = _decide(user_id, chat_id, None, approve)
     if not rows:
         raise YandexError("decided", "Нет действий, ждущих решения")
-    job = _submit(user_id, chat_id, f"all{rows[-1]['id']}") if not left else None
+    job = _submit(user_id, chat_id, f"all{rows[-1]['id']}") if run else None
     return {"decided": len(rows), "pending": left, "job": public_job(job) if job else None}
 
 
@@ -7252,7 +7311,8 @@ def _close_interactive(
             conn, row["chat_id"], "tool", _dump(reply), tool_call_id=row["tool_call_id"], tool_name=row["tool"]
         )
         left = conn.execute(
-            "SELECT COUNT(*) AS n FROM ai_actions WHERE chat_id = %s AND status = 'pending'", (row["chat_id"],)
+            "SELECT COUNT(*) AS n FROM ai_actions WHERE chat_id = %s AND status = 'pending' AND detached_at IS NULL",
+            (row["chat_id"],),
         ).fetchone()["n"]
         if not left:
             conn.execute(
@@ -7523,6 +7583,24 @@ def _shorten_result(content: str, limit: int = OLD_RESULT_CHARS) -> str:
     return f"{content[:limit]}… [сокращено: было {len(content)} символов; нужны данные — вызови инструмент снова]"
 
 
+def _is_detached(row: dict) -> bool:
+    """Итог отложенного предложения: модель видит его служебной заметкой, а не ответом инструмента."""
+    return row["role"] == "tool" and bool((row.get("meta") or {}).get("detached"))
+
+
+def _turn_over(chat_id: int) -> bool:
+    """Ход закончен: последнее, кроме итогов отложенных предложений, — ответ ИИ или сбой.
+
+    Решение по отложенному модель не зовёт: она увидит итог при следующем сообщении маркетолога.
+    """
+    with pool.connection() as conn:
+        rows = conn.execute(
+            "SELECT role, tool_calls, meta FROM ai_messages WHERE chat_id = %s ORDER BY id DESC LIMIT 50", (chat_id,)
+        ).fetchall()
+    last = next((r for r in rows if not _is_detached(r)), None)
+    return last is not None and (last["role"] == "error" or (last["role"] == "assistant" and not last["tool_calls"]))
+
+
 def _history(chat_id: int, *, general: bool = False) -> list[dict]:
     with pool.connection() as conn:
         rows = conn.execute(
@@ -7574,7 +7652,7 @@ def _history(chat_id: int, *, general: bool = False) -> list[dict]:
             )
             j = i + 1
             answered: dict[str, str] = {}
-            while j < len(rows) and rows[j]["role"] == "tool":
+            while j < len(rows) and rows[j]["role"] == "tool" and not _is_detached(rows[j]):
                 answered[rows[j]["tool_call_id"]] = rows[j]["content"]
                 j += 1
             for c in calls:
@@ -7585,7 +7663,10 @@ def _history(chat_id: int, *, general: bool = False) -> list[dict]:
             out += board_notes(rows[j - 1]["id"])
             i = j
             continue
-        if r["role"] in ("user", "assistant"):
+        if _is_detached(r):
+            label = TOOL_LABELS.get(r.get("tool_name") or "", r.get("tool_name") or "")
+            out.append({"role": "user", "content": _DETACHED_NOTE.format(label=label, result=r["content"])})
+        elif r["role"] in ("user", "assistant"):
             content = r["content"]
             if r["role"] == "user" and r.get("refs"):
                 content += _refs_note(r["refs"], general=general)
@@ -7650,8 +7731,15 @@ def _run_action(ctx: Context, action: dict) -> None:
             "UPDATE ai_actions SET status = %s, result = %s, error = %s WHERE id = %s",
             (status, Jsonb(_jsonable(_for_ai(result))) if result is not None else None, error, action["id"]),
         )
+        # Отложенное: модель на этот вызов уже получила ответ — итог уйдёт ей служебной заметкой.
         _insert_message(
-            conn, action["chat_id"], "tool", _dump(payload), tool_call_id=action["tool_call_id"], tool_name=action["tool"]
+            conn,
+            action["chat_id"],
+            "tool",
+            _dump(payload),
+            tool_call_id=action["tool_call_id"],
+            tool_name=action["tool"],
+            meta={"detached": True} if action.get("detached_at") else None,
         )
 
 
@@ -7887,11 +7975,15 @@ def run_chat(user_id: int, chat_id: int, progress=None) -> dict:
             _run_action(ctx, action)
         with pool.connection() as conn:
             pending = conn.execute(
-                "SELECT COUNT(*) AS n FROM ai_actions WHERE chat_id = %s AND status = 'pending'", (chat_id,)
+                "SELECT COUNT(*) AS n FROM ai_actions WHERE chat_id = %s AND status = 'pending' AND detached_at IS NULL",
+                (chat_id,),
             ).fetchone()["n"]
         if pending:
             _set_status(chat_id, "waiting")
             return {"status": "waiting"}
+        if approved and _turn_over(chat_id):
+            _set_status(chat_id, "idle")
+            return {"status": "idle"}
 
         system = {"role": "system", "content": _system_prompt(ctx)}
         tools = GENERAL_TOOLS if ctx.general else TOOLS

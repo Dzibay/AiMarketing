@@ -177,6 +177,86 @@ def test_action_waits_for_approval_then_runs(db, monkeypatch):
     assert final["messages"][-1]["followups"] == ai_agent.FOLLOWUPS_AFTER_DONE
 
 
+def _answers(history, call_id):
+    return [m for m in history if m["role"] == "tool" and m["tool_call_id"] == call_id]
+
+
+def test_message_keeps_pending_actions(db, monkeypatch):
+    s = _seed(db)
+    done = []
+    monkeypatch.setattr(actions, "bulk_campaign_action", lambda user_id, **kw: done.append(kw) or {"ok": 1})
+    pause = {"campaign_row_ids": [s["search"]], "action": "pause", "reason": "дорого"}
+    _fake, out = _start(s["user"], s["chat"], "Останови Поиск", monkeypatch, _call("campaigns_action", pause))
+    assert out["status"] == "waiting"
+    with pytest.raises(YandexError) as err:
+        ai_agent.post_message(s["user"], s["chat"], "Ну?", pending="maybe")
+    assert err.value.code == "pending"
+
+    # «Оставить и отправить»: модель получает «пока не решено», действие ждёт в карточке, ИИ отвечает на сообщение.
+    fake = FakeModel(_text("Расход 100 ₽."))
+    monkeypatch.setattr(ai, "complete", fake)
+    ai_agent.post_message(s["user"], s["chat"], "Сначала покажи расход", pending="keep")
+    assert ai_agent.run_chat(s["user"], s["chat"])["status"] == "idle"
+    history = fake.calls[0][1:]
+    [answer] = _answers(history, "c1")
+    assert json.loads(answer["content"])["waiting"] is True and history[-1]["content"] == "Сначала покажи расход"
+    chat = ai_agent.get_chat(s["user"], s["chat"])
+    action = chat["actions"][0]
+    assert action["status"] == "pending" and action["detached"] is True and chat["chat"]["status"] == "idle"
+    assert ai_agent.pending_count(s["user"])["count"] == 1
+
+    # Следующее сообщение отложенное не отклоняет: ответ модели на него уже есть.
+    _fake, out = _start(s["user"], s["chat"], "А по дням?", monkeypatch, _text("Ровно."))
+    assert out["status"] == "idle"
+    assert ai_agent.get_chat(s["user"], s["chat"])["actions"][0]["status"] == "pending"
+    with pytest.raises(YandexError) as err:
+        ai_agent.decide_all(s["user"], s["chat"], approve=True)  # «Выполнить все» — только не отложенные
+    assert err.value.code == "decided"
+
+    # Пока ИИ отвечает, отложенное не выполнить: его выполняет ход чата.
+    with db.connection() as conn:
+        conn.execute("UPDATE ai_chats SET status = 'running', updated_at = NOW() WHERE id = %s", (s["chat"],))
+    with pytest.raises(YandexError) as err:
+        ai_agent.decide_action(s["user"], action["id"], approve=True)
+    assert err.value.code == "busy"
+    with db.connection() as conn:
+        conn.execute("UPDATE ai_chats SET status = 'idle' WHERE id = %s", (s["chat"],))
+
+    # «Выполнить» позже: ход выполняет действие, а модель не зовёт — итог она увидит со следующим сообщением.
+    decided = ai_agent.decide_action(s["user"], action["id"], approve=True)
+    assert decided["pending"] == 0 and decided["job"]["kind"] == "ai_chat"
+    assert ai_agent.get_chat(s["user"], s["chat"])["chat"]["status"] == "running"
+    idle = FakeModel()
+    monkeypatch.setattr(ai, "complete", idle)
+    assert ai_agent.run_chat(s["user"], s["chat"])["status"] == "idle"
+    assert len(done) == 1 and not idle.calls
+    chat = ai_agent.get_chat(s["user"], s["chat"])
+    assert chat["actions"][0]["status"] == "done" and chat["chat"]["status"] == "idle"
+
+    # Следующий ход: итог — служебной заметкой, у вызова c1 по-прежнему один ответ; ИИ предлагает новое.
+    pause2 = {**pause, "campaign_row_ids": [s["network"]]}
+    fake, out = _start(s["user"], s["chat"], "Что дальше?", monkeypatch, _call("campaigns_action", pause2, "c2"))
+    assert out["status"] == "waiting"
+    history = fake.calls[0][1:]
+    assert len(_answers(history, "c1")) == 1
+    note = history[-2]
+    assert note["role"] == "user" and "Служебная заметка" in note["content"] and '"ok": true' in note["content"]
+    assert history[-1]["content"] == "Что дальше?"
+
+    # Отложить и отклонить позже: хода нет, заметка об отказе — в истории.
+    fake = FakeModel(_text("Хорошо."))
+    monkeypatch.setattr(ai, "complete", fake)
+    ai_agent.post_message(s["user"], s["chat"], "Подожди", pending="keep")
+    ai_agent.run_chat(s["user"], s["chat"])
+    second = next(a for a in ai_agent.get_chat(s["user"], s["chat"])["actions"] if a["tool_call_id"] == "c2")
+    decided = ai_agent.decide_action(s["user"], second["id"], approve=False)
+    assert decided["job"] is None and ai_agent.get_chat(s["user"], s["chat"])["chat"]["status"] == "idle"
+    fake, _out = _start(s["user"], s["chat"], "Ок", monkeypatch, _text("Понял."))
+    history = fake.calls[0][1:]
+    assert len(_answers(history, "c2")) == 1 and "отклонил" in history[-2]["content"]
+    assert ai_agent.pending_count(s["user"])["count"] == 0
+
+
 def _suggest(items, content="", call_id="s1"):
     args = json.dumps({"items": items}, ensure_ascii=False)
     return {"content": content, "tool_calls": [{"id": call_id, "name": "suggest_next", "arguments": args}]}

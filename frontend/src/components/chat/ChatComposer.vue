@@ -1,5 +1,19 @@
 <template>
   <form class="composer" :class="{ 'composer--big': showIntro, 'is-off': inputOff }" @submit.prevent="send()">
+    <div v-if="pendingAsk" class="composer__ask" role="group" aria-label="Ждущие предложения">
+      <p class="composer__ask-text" role="status">{{ askText }}</p>
+      <div class="composer__ask-btns">
+        <button class="btn btn--accent btn--sm" type="button" :disabled="sending" @click="answerPending('keep')">
+          Оставить и отправить
+        </button>
+        <button class="btn btn--ghost btn--sm" type="button" :disabled="sending" @click="answerPending('reject')">
+          Отклонить и отправить
+        </button>
+        <button class="btn btn--ghost btn--sm" type="button" :disabled="sending" @click="answerPending('decide')">
+          Сначала решить
+        </button>
+      </div>
+    </div>
     <div v-if="picker.open" id="mention-list" class="menu-pop mention-pop" role="listbox" aria-label="Проекты">
       <button
         v-for="(w, i) in picker.items"
@@ -78,7 +92,7 @@
 import { ArrowUp, AtSign } from '@lucide/vue'
 import { computed, nextTick, reactive, watch } from 'vue'
 import { useChat } from '../../composables/useChat'
-import { niceQuotes } from '../../utils/format'
+import { niceQuotes, plural } from '../../utils/format'
 import UiSelect from '../ui/UiSelect.vue'
 
 /** Поле ввода чата: текст, @-упоминание другого проекта, модель ответа и кнопка отправки. */
@@ -104,7 +118,9 @@ const {
   showIntro,
   pendingActions,
   pendingAsks,
-  pendingWrites,
+  waitingWrites,
+  pendingAsk,
+  answerPending,
   onBoard,
   modelItems,
   selectedClass,
@@ -112,6 +128,11 @@ const {
   chooseModel,
   send,
 } = useChat()
+
+const askText = computed(() => {
+  const n = waitingWrites.value.length
+  return `В чате ${plural(n, 'ждёт', 'ждут', 'ждут')} решения ${n} ${plural(n, 'предложение', 'предложения', 'предложений')}`
+})
 
 const picker = reactive({ open: false, index: 0, items: [], start: 0, end: 0 })
 
@@ -125,12 +146,8 @@ const placeholder = computed(() => {
   if (pendingActions.value.length && pendingActions.value.every((a) => onBoard.value.has(a.id))) {
     return 'Решите этап на доске или напишите своими словами'
   }
-  if (pendingAsks.value.length) {
-    return pendingWrites.value.length
-      ? 'Ответьте в карточке; сообщение отклонит предложения'
-      : 'Ответьте в карточке или напишите своими словами'
-  }
-  if (pendingWrites.value.length) return 'Новое сообщение отклонит ждущие предложения'
+  if (pendingAsks.value.length) return 'Ответьте в карточке или напишите своими словами'
+  if (waitingWrites.value.length) return 'Решите предложения в карточках или напишите что-то ещё'
   return showIntro.value ? 'Спросите или поручите задачу…' : 'Уточните или попросите что-то ещё…'
 })
 const composerTip = computed(
@@ -217,6 +234,11 @@ function onKeydown(e) {
     else if (e.key === 'Enter' || e.key === 'Tab') pickProject(picker.items[picker.index])
     else if (e.key === 'Escape') closePicker()
     else return
+    e.preventDefault()
+    return
+  }
+  if (e.key === 'Escape' && pendingAsk.value) {
+    pendingAsk.value = null
     e.preventDefault()
     return
   }

@@ -117,10 +117,11 @@
                 <strong class="action-card__title">{{ a.label }}</strong>
                 <UiStatus v-if="a.status !== 'pending'" :tone="STATUS_UI[a.status] || 'off'" :label="STATUS_LABELS[a.status] || a.status" />
               </div>
-              <p v-if="projectName(a) || a.plan_step || a.auto" class="action-card__meta">
+              <p v-if="projectName(a) || a.plan_step || a.auto || isDetached(a)" class="action-card__meta">
                 <span v-if="projectName(a)">{{ projectName(a) }}</span>
                 <span v-if="a.plan_step">шаг {{ a.plan_step }} плана</span>
                 <span v-if="a.auto">без согласования</span>
+                <span v-if="isDetached(a)">оставлено ждать: разговор продолжился без решения</span>
               </p>
               <p class="action-card__summary">{{ a.summary }}</p>
               <AiChanges v-if="a.changes?.length" :changes="a.changes" />
@@ -284,6 +285,7 @@ const {
   excluded,
   deciding,
   isLater,
+  isDetached,
   setLater,
   projectName,
   offCount,
