@@ -1,22 +1,43 @@
 <template>
   <div class="ctab">
-    <div class="ltools" role="search">
-      <label class="ltools__search">
-        <Search aria-hidden="true" />
-        <input v-model.trim="search" type="search" placeholder="Название или № кампании" aria-label="Поиск кампании" />
-      </label>
-      <div class="seg" role="group" aria-label="Состояние кампаний">
-        <button
-          v-for="v in VIEWS"
-          :key="v.id"
-          type="button"
-          :class="{ active: view === v.id }"
-          :aria-pressed="view === v.id"
-          @click="view = v.id"
-        >
-          {{ v.label }}<span class="seg__n">{{ counts[v.id] }}</span>
-        </button>
-      </div>
+    <UiListTools :active="sheetFilters" title="Фильтры и сортировка" @reset="resetSheet">
+      <template #search>
+        <label class="ltools__search">
+          <Search aria-hidden="true" />
+          <input v-model.trim="search" type="search" placeholder="Название или № кампании" aria-label="Поиск кампании" />
+        </label>
+      </template>
+      <template #tabs>
+        <div class="seg" role="group" aria-label="Состояние кампаний">
+          <button
+            v-for="v in VIEWS"
+            :key="v.id"
+            type="button"
+            :class="{ active: view === v.id }"
+            :aria-pressed="view === v.id"
+            @click="view = v.id"
+          >
+            {{ v.label }}<span class="seg__n">{{ counts[v.id] }}</span>
+          </button>
+        </div>
+      </template>
+      <!-- На телефоне заголовков таблицы нет — сортировка выбирается здесь. -->
+      <template #phone>
+        <p class="ltools__cap">Сортировка</p>
+        <div class="ltools__pair">
+          <UiSelect
+            :model-value="sort.key"
+            size="sm"
+            :options="columns.map((col) => ({ value: col.key, label: col.label }))"
+            aria-label="Сортировать по"
+            @update:model-value="sortTo"
+          />
+          <button class="btn btn--ghost" type="button" @click="sort.desc = !sort.desc">
+            <component :is="sort.desc ? ArrowDownWideNarrow : ArrowUpNarrowWide" aria-hidden="true" />
+            {{ sort.desc ? 'По убыванию' : 'По возрастанию' }}
+          </button>
+        </div>
+      </template>
       <UiSelect
         v-if="scope && scope.options.length > 1"
         v-model="scopeValue"
@@ -25,7 +46,7 @@
         :aria-label="scope.label"
       />
       <UiSwitch v-model="wasteOnly" class="ltools__switch">Без конверсий</UiSwitch>
-    </div>
+    </UiListTools>
 
     <slot name="notices" />
 
@@ -46,7 +67,7 @@
       </template>
     </EmptyState>
     <div v-else v-scroll-x class="table-scroll" :class="{ 'is-loading': loading }">
-      <table class="table ctab__t">
+      <table v-cards class="table ctab__t tcards">
         <thead>
           <tr>
             <th class="check-col">
@@ -84,30 +105,32 @@
                 @change="toggle(c.campaign_row_id, $event.target.checked)"
               />
             </td>
-            <td class="ctab__name">
+            <td class="ctab__name tc-name">
               <RouterLink :to="linkOf(c)" v-tip.truncate="c.name">{{ c.name }}</RouterLink>
               <small class="ctab__meta">{{ metaOf(c) }}</small>
             </td>
-            <td v-if="projectCol" class="ctab__project ctab__c-project">
+            <td v-if="projectCol" class="ctab__project ctab__c-project" data-label="Проект">
               <RouterLink :to="`/w/${c.project.id}/campaigns`" v-tip.truncate="niceQuotes(c.project.name)">
                 {{ niceQuotes(c.project.name) }}
               </RouterLink>
             </td>
-            <td>
+            <td class="tc-tag">
               <UiStatus v-bind="campaignStatus(c)" />
             </td>
-            <td class="num">
+            <td class="num" data-label="Бюджет">
               <template v-if="c.weekly_budget_rub">{{ rubles(c.weekly_budget_rub) }}/нед.</template>
               <template v-else-if="c.daily_budget_rub">{{ rubles(c.daily_budget_rub) }}/день</template>
               <template v-else>—</template>
               <small v-if="c.strategy_label" class="ctab__meta" v-tip.truncate="strategyText(c)">{{ strategyText(c) }}</small>
             </td>
-            <td class="num">{{ rub(c.cost_kopecks) }}</td>
-            <td class="num">{{ num(c.clicks) }}</td>
-            <td class="num ctab__c-ctr">{{ c.ctr != null ? pct(c.ctr, 2) : '—' }}</td>
-            <td class="num" :class="{ 'tone-bad': !c.conversions && c.cost_kopecks > 0 }">{{ num(c.conversions) }}</td>
-            <td class="num">{{ c.cpa_kopecks != null ? rub(c.cpa_kopecks) : '—' }}</td>
-            <td class="ctab__acts">
+            <td class="num tc-main" data-label="Расход">{{ rub(c.cost_kopecks) }}</td>
+            <td class="num" data-label="Клики">{{ num(c.clicks) }}</td>
+            <td class="num ctab__c-ctr" data-label="CTR">{{ c.ctr != null ? pct(c.ctr, 2) : '—' }}</td>
+            <td class="num tc-main" :class="{ 'tone-bad': !c.conversions && c.cost_kopecks > 0 }" data-label="Конв.">
+              {{ num(c.conversions) }}
+            </td>
+            <td class="num tc-main" data-label="CPA">{{ c.cpa_kopecks != null ? rub(c.cpa_kopecks) : '—' }}</td>
+            <td class="ctab__acts tc-acts">
               <UiMenu size="sm" :label="`Действия с «${c.name}»`">
                 <UiMenuItem
                   v-if="c.state !== 'ARCHIVED'"
@@ -142,12 +165,13 @@
                 </template>
               </UiMenu>
             </td>
+            <UiRowMore />
           </tr>
         </tbody>
         <tfoot v-if="rows.length > 1">
           <tr>
             <td class="check-col"></td>
-            <td>Итого: {{ rows.length }}</td>
+            <td class="tc-name">Итого: {{ rows.length }}</td>
             <td v-if="projectCol" class="ctab__c-project"></td>
             <td></td>
             <td class="num">
@@ -157,13 +181,13 @@
               </span>
               <template v-else>—</template>
             </td>
-            <td class="num">{{ rub(totals.cost) }}</td>
+            <td class="num tc-main" data-label="Расход">{{ rub(totals.cost) }}</td>
             <td class="num">{{ num(totals.clicks) }}</td>
             <td class="num ctab__c-ctr">
               {{ totals.impressions ? pct((totals.clicks / totals.impressions) * 100, 2) : '—' }}
             </td>
-            <td class="num">{{ num(totals.conversions) }}</td>
-            <td class="num">{{ totals.conversions ? rub(totals.cost / totals.conversions) : '—' }}</td>
+            <td class="num tc-main" data-label="Конв.">{{ num(totals.conversions) }}</td>
+            <td class="num tc-main" data-label="CPA">{{ totals.conversions ? rub(totals.cost / totals.conversions) : '—' }}</td>
             <td></td>
           </tr>
         </tfoot>
@@ -172,7 +196,7 @@
 
     <div v-if="selected.size" class="bulk-dock" role="region" aria-label="Действия с выбранными">
       <b>Выбрано: {{ selected.size }}</b>
-      <slot name="bulk" />
+      <div class="bulk-dock__acts"><slot name="bulk" /></div>
       <button class="btn btn--ghost btn--sm bulk-dock__end" type="button" @click="$emit('update:selected', new Set())">
         Снять выбор
       </button>
@@ -183,8 +207,20 @@
 <script setup>
 import { computed, reactive, ref } from 'vue'
 import { RouterLink, useRouter } from 'vue-router'
-import { Archive, ArchiveRestore, Copy, Pause, Play, Search, SearchX } from '@lucide/vue'
+import {
+  Archive,
+  ArchiveRestore,
+  ArrowDownWideNarrow,
+  ArrowUpNarrowWide,
+  Copy,
+  Pause,
+  Play,
+  Search,
+  SearchX,
+} from '@lucide/vue'
 import EmptyState from './ui/EmptyState.vue'
+import UiListTools from './ui/UiListTools.vue'
+import UiRowMore from './ui/UiRowMore.vue'
 import UiMenu from './ui/UiMenu.vue'
 import UiMenuItem from './ui/UiMenuItem.vue'
 import UiCheckbox from './ui/UiCheckbox.vue'
@@ -192,6 +228,7 @@ import UiSelect from './ui/UiSelect.vue'
 import UiStatus from './ui/UiStatus.vue'
 import UiSwitch from './ui/UiSwitch.vue'
 import TermHint from './TermHint.vue'
+import { isPhone } from '../composables/useViewport'
 import { campaignStatus, campaignTypeShort, niceQuotes, num, pct, rub, rubles } from '../utils/format'
 
 /**
@@ -199,6 +236,8 @@ import { campaignStatus, campaignTypeShort, niceQuotes, num, pct, rub, rubles } 
  * Строка инструментов (поиск, состояние, кабинет или проект, «Без конверсий»), сортировка по заголовку,
  * действия строки в «⋯», итоги. Выбор — v-model:selected (Set campaign_row_id); массовые действия
  * приходят слотом bulk и стоят в панели, закреплённой снизу.
+ * На телефоне строка — карточка (.tcards): название, состояние, расход, конверсии и CPA; остальное открывается
+ * нажатием, выбор — долгим нажатием, сортировка и фильтры — в шторке «Фильтры».
  */
 const props = defineProps({
   items: { type: Array, required: true },
@@ -254,6 +293,8 @@ const columns = computed(() =>
 )
 
 const filtered = computed(() => !!(search.value || wasteOnly.value || scopeValue.value || view.value !== 'all'))
+// Сколько включено фильтров, которые на телефоне спрятаны в шторке, — число на кнопке «Фильтры».
+const sheetFilters = computed(() => (wasteOnly.value ? 1 : 0) + (scopeValue.value ? 1 : 0))
 
 // Всё, кроме сегмента состояния: по этому списку считаются цифры у сегментов.
 const base = computed(() => {
@@ -333,10 +374,13 @@ function canToggle(c) {
 
 function sortBy(key) {
   if (sort.key === key) sort.desc = !sort.desc
-  else {
-    sort.key = key
-    sort.desc = !['name', 'project_name', 'state'].includes(key)
-  }
+  else sortTo(key)
+}
+
+// Новая колонка: текст — по алфавиту, числа — сначала большие.
+function sortTo(key) {
+  sort.key = key
+  sort.desc = !['name', 'project_name', 'state'].includes(key)
 }
 
 function sortMark(key) {
@@ -367,7 +411,9 @@ function toggleAll(on) {
 }
 
 // Клик по строке открывает кампанию; флажок, ссылки, меню и выделение текста — нет.
+// На телефоне нажатие на карточку раскрывает её (v-cards), кампанию открывает название.
 function openRow(event, c) {
+  if (isPhone()) return
   if (event.target.closest('a, button, input, label, [role="menu"]')) return
   if (window.getSelection()?.toString()) return
   router.push(props.linkOf(c))
@@ -376,6 +422,10 @@ function openRow(event, c) {
 function resetFilters() {
   search.value = ''
   view.value = 'all'
+  resetSheet()
+}
+
+function resetSheet() {
   wasteOnly.value = false
   scopeValue.value = ''
 }
@@ -477,9 +527,24 @@ function resetFilters() {
   }
 }
 
+/* Телефон: строка — карточка. Нажатие раскрывает её, а не открывает кампанию; фон наведения и выбора
+   на отдельных ячейках был бы пятнами. */
 @media (max-width: 640px) {
-  .ctab__name {
-    min-width: 170px;
+  .ctab__row {
+    cursor: default;
+  }
+
+  .ctab__row:hover td,
+  .ctab__row.is-sel td {
+    background: none;
+  }
+
+  .ctab__name a {
+    font-size: 15px;
+  }
+
+  .num .ctab__meta {
+    max-width: none;
   }
 }
 </style>

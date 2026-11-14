@@ -1027,12 +1027,36 @@
 }
 
 .dtabs {
+  margin-top: 16px;
+  border-bottom: 1px solid var(--line);
+}
+
+/* Вкладки не переносятся, а листаются вбок; линия под ними остаётся на месте. */
+.dtabs__scroll {
   display: flex;
   gap: 4px;
-  margin-top: 16px;
   overflow-x: auto;
-  border-bottom: 1px solid var(--line);
   scrollbar-width: none;
+}
+
+.dtabs__scroll::-webkit-scrollbar {
+  display: none;
+}
+
+/* Край, за которым есть ещё вкладки, уходит в прозрачность. */
+.dtabs.has-after .dtabs__scroll {
+  -webkit-mask-image: linear-gradient(to left, transparent, #000 36px);
+  mask-image: linear-gradient(to left, transparent, #000 36px);
+}
+
+.dtabs.has-before .dtabs__scroll {
+  -webkit-mask-image: linear-gradient(to right, transparent, #000 36px);
+  mask-image: linear-gradient(to right, transparent, #000 36px);
+}
+
+.dtabs.has-before.has-after .dtabs__scroll {
+  -webkit-mask-image: linear-gradient(to right, transparent, #000 36px, #000 calc(100% - 36px), transparent);
+  mask-image: linear-gradient(to right, transparent, #000 36px, #000 calc(100% - 36px), transparent);
 }
 
 .dtabs__tab {
@@ -1840,6 +1864,55 @@ html.has-bbar {
 }
 .bigstat small.is-warn {
   color: var(--warn);
+}
+
+/* Телефон: плитки по две и плотнее — подпись, число, пояснение. При нечётном числе последняя — во всю ширину
+   и строкой: подпись с пояснением слева, число справа. Три числа кампании видны на первом экране. */
+@media (max-width: 640px) {
+  .bigstats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+  }
+
+  .bigstat {
+    min-width: 0;
+    padding: 12px 14px;
+  }
+
+  .bigstat > span {
+    font-size: 12.5px;
+  }
+
+  .bigstat b {
+    margin-top: 4px;
+    font-size: 20px;
+  }
+
+  .bigstat small {
+    margin-top: 2px;
+  }
+
+  .bigstat:last-child:nth-child(odd) {
+    display: grid;
+    grid-column: 1 / -1;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    column-gap: 12px;
+  }
+
+  .bigstat:last-child:nth-child(odd) > span {
+    grid-area: 1 / 1;
+  }
+
+  .bigstat:last-child:nth-child(odd) small {
+    grid-area: 2 / 1;
+  }
+
+  .bigstat:last-child:nth-child(odd) b {
+    grid-area: 1 / 2 / 3 / 3;
+    margin-top: 0;
+    font-size: 22px;
+  }
 }
 .hbars {
   padding: 6px 18px 14px;

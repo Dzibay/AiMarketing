@@ -183,7 +183,7 @@
       <small><RouterLink :to="historyTo">Что изменили и как вернуть — в «Истории»</RouterLink></small>
     </h2>
     <div v-if="runs.length" v-scroll-x class="ccard table-scroll">
-      <table class="table">
+      <table class="table tcards">
         <thead>
           <tr>
             <th>Когда</th>
@@ -193,9 +193,9 @@
         </thead>
         <tbody>
           <tr v-for="item in runs.slice(0, 20)" :key="item.id">
-            <td class="rules-when">{{ formatDateTime(item.created_at) }}</td>
-            <td><b>{{ ruleName(item.rule_id) }}</b></td>
-            <td>
+            <td class="rules-when tc-tag">{{ formatDateTime(item.created_at) }}</td>
+            <td class="tc-name"><b>{{ ruleName(item.rule_id) }}</b></td>
+            <td class="tc-wide">
               {{ runSummary(item) }}
               <small v-if="item.error" class="form-error">Применилось не всё: {{ item.error }}</small>
             </td>

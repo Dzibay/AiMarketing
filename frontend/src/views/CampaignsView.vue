@@ -1,9 +1,7 @@
 <template>
-  <PageHeader>
-    <template v-if="data" #description>
-      {{ formatDate(data.date_from) }} — {{ formatDate(data.date_to) }} · конверсии каждого проекта — по его цели
-    </template>
-    <template #actions>
+  <PageHeader :description="headDesc">
+    <template #more="{ sheet }">
+      <p v-if="sheet" class="dhead__cap">Период статистики</p>
       <div class="seg" role="group" aria-label="Период статистики">
         <button
           v-for="d in [7, 14, 30]"
@@ -16,15 +14,15 @@
           {{ d }} дней
         </button>
       </div>
-      <template v-if="projects.length">
-        <RouterLink v-if="projects.length === 1" class="btn btn--accent" :to="newCampaignLink(projects[0].id)">
-          <Plus aria-hidden="true" />Новая кампания
-        </RouterLink>
-        <UiMenu v-else primary label="Новая кампания: в какой проект?">
-          <template #trigger><Plus aria-hidden="true" />Новая кампания<ChevronDown aria-hidden="true" /></template>
-          <UiMenuItem v-for="p in projects" :key="p.id" :to="newCampaignLink(p.id)">{{ niceQuotes(p.name) }}</UiMenuItem>
-        </UiMenu>
-      </template>
+    </template>
+    <template v-if="projects.length" #actions>
+      <RouterLink v-if="projects.length === 1" class="btn btn--accent" :to="newCampaignLink(projects[0].id)">
+        <Plus aria-hidden="true" />Новая кампания
+      </RouterLink>
+      <UiMenu v-else primary label="Новая кампания: в какой проект?">
+        <template #trigger><Plus aria-hidden="true" />Новая кампания<ChevronDown aria-hidden="true" /></template>
+        <UiMenuItem v-for="p in projects" :key="p.id" :to="newCampaignLink(p.id)">{{ niceQuotes(p.name) }}</UiMenuItem>
+      </UiMenu>
     </template>
   </PageHeader>
 
@@ -165,6 +163,11 @@ const duplicate = reactive({ open: false, campaign: null, workspace: null })
 let seq = 0
 
 const projects = computed(() => data.value?.projects || [])
+const headDesc = computed(() =>
+  data.value
+    ? `${formatDate(data.value.date_from)} — ${formatDate(data.value.date_to)} · конверсии каждого проекта — по его цели`
+    : '',
+)
 const kpiByProject = computed(() => new Map(projects.value.map((p) => [p.id, p.kpi])))
 const projectScope = computed(() => ({
   label: 'Проект',

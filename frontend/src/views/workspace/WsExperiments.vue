@@ -63,7 +63,7 @@
       <p class="exp__reason" :class="REASON_TONES[e.progress.status]">{{ capitalize(e.progress.reason) }}</p>
 
       <div v-scroll-x class="table-scroll">
-        <table class="table exp__table">
+        <table class="table exp__table tcards">
           <thead>
             <tr>
               <th>Кампания</th>
@@ -75,29 +75,34 @@
           </thead>
           <tbody>
             <tr v-for="c in e.progress.campaigns" :key="c.id">
-              <td>
+              <td class="tc-name">
                 <template v-if="c.missing">[{{ c.id }}] — нет в базе</template>
                 <template v-else>
                   <RouterLink :to="`/w/${ws.id}/campaigns/${c.id}`">{{ c.name }}</RouterLink>
                   <small>тестовая копия · {{ stateText(c) }}</small>
                 </template>
               </td>
-              <td class="num">{{ money(c.cost_kopecks) }}</td>
-              <td class="num">{{ conversionsText(c) }}</td>
-              <td class="num"><b>{{ money(cpaOf(c)) }}</b></td>
-              <td v-if="e.weekly_limit_rub != null" class="num" :class="{ 'tone-warn': c.limit_hit }">
+              <td class="num tc-main" data-label="Расход">{{ money(c.cost_kopecks) }}</td>
+              <td class="num tc-row" data-label="Конверсии">{{ conversionsText(c) }}</td>
+              <td class="num tc-main" data-label="Цена конверсии"><b>{{ money(cpaOf(c)) }}</b></td>
+              <td
+                v-if="e.weekly_limit_rub != null"
+                class="num tc-row"
+                :class="{ 'tone-warn': c.limit_hit }"
+                data-label="За неделю"
+              >
                 {{ weekText(c, e) }}
               </td>
             </tr>
             <tr v-if="e.progress.source && !e.progress.source.missing" class="exp__base">
-              <td>
+              <td class="tc-name">
                 <RouterLink :to="`/w/${ws.id}/campaigns/${e.progress.source.id}`">{{ e.progress.source.name }}</RouterLink>
                 <small>образец за время теста, без изменений</small>
               </td>
-              <td class="num">{{ money(e.progress.source.during?.cost_kopecks) }}</td>
-              <td class="num">{{ conversionsText(e.progress.source.during) }}</td>
-              <td class="num"><b>{{ money(cpaOf(e.progress.source.during)) }}</b></td>
-              <td v-if="e.weekly_limit_rub != null" class="num">—</td>
+              <td class="num tc-main" data-label="Расход">{{ money(e.progress.source.during?.cost_kopecks) }}</td>
+              <td class="num tc-row" data-label="Конверсии">{{ conversionsText(e.progress.source.during) }}</td>
+              <td class="num tc-main" data-label="Цена конверсии"><b>{{ money(cpaOf(e.progress.source.during)) }}</b></td>
+              <td v-if="e.weekly_limit_rub != null" class="num tc-row" data-label="За неделю">—</td>
             </tr>
           </tbody>
         </table>
@@ -109,7 +114,7 @@
       <details class="exp__more">
         <summary>Подробные цифры</summary>
         <div v-scroll-x class="table-scroll">
-          <table class="table">
+          <table class="table tcards">
             <thead>
               <tr>
                 <th>Что</th>
@@ -118,22 +123,26 @@
             </thead>
             <tbody>
               <tr>
-                <td><b>Тест, всего</b></td>
-                <td v-for="col in COLS" :key="col.label" class="num">
+                <td class="tc-name"><b>Тест, всего</b></td>
+                <td v-for="col in COLS" :key="col.label" class="num tc-row" :data-label="col.label">
                   <b>{{ col.value(e.progress.totals) }}</b>
                 </td>
               </tr>
               <template v-if="e.progress.source && !e.progress.source.missing">
                 <tr>
-                  <td>Образец за время теста</td>
-                  <td v-for="col in COLS" :key="col.label" class="num">{{ col.value(e.progress.source.during) }}</td>
+                  <td class="tc-name">Образец за время теста</td>
+                  <td v-for="col in COLS" :key="col.label" class="num tc-row" :data-label="col.label">
+                    {{ col.value(e.progress.source.during) }}
+                  </td>
                 </tr>
                 <tr>
-                  <td>
+                  <td class="tc-name">
                     Образец до теста,
                     {{ formatDate(e.progress.source.before_from) }} — {{ formatDate(e.progress.source.before_to) }}
                   </td>
-                  <td v-for="col in COLS" :key="col.label" class="num">{{ col.value(e.progress.source.before) }}</td>
+                  <td v-for="col in COLS" :key="col.label" class="num tc-row" :data-label="col.label">
+                    {{ col.value(e.progress.source.before) }}
+                  </td>
                 </tr>
               </template>
             </tbody>

@@ -147,7 +147,7 @@
       <p v-if="aiNote" class="cell-note">{{ aiNote }}</p>
 
       <div v-scroll-x class="table-scroll" :class="{ 'is-loading': busy === 'report' }">
-        <table class="table">
+        <table v-cards class="table tcards">
           <thead>
             <tr>
               <th class="check-col">
@@ -180,32 +180,51 @@
                   @change="toggle(r.key, $event.target.checked)"
                 />
               </td>
-              <td>
+              <td class="tc-name">
                 {{ r.label }}
                 <span v-if="KINDS[r.kind]" class="chip" :class="KIND_CHIPS[r.kind]">{{ KINDS[r.kind] }}</span>
                 <span v-if="excluded.has(r.key)" class="chip">запрещена</span>
                 <small v-if="r.campaigns.length > 1" class="cell-note">в {{ r.campaigns.length }} кампаниях</small>
               </td>
-              <td class="num">{{ num(r.impressions) }}</td>
-              <td class="num">{{ num(r.clicks) }}</td>
-              <td class="num">{{ r.ctr != null ? pct(r.ctr, 2) : '—' }}</td>
-              <td class="num">{{ rub(r.cost_kopecks) }}</td>
-              <td class="num" :class="{ 'tone-bad': !r.conversions && r.cost_kopecks > 0 }">{{ num(r.conversions) }}</td>
-              <td class="num">{{ r.cpa_kopecks != null ? rub(r.cpa_kopecks) : '—' }}</td>
-              <td class="num">{{ r.bounce_rate != null ? pct(r.bounce_rate) : '—' }}</td>
-              <td class="slice-why">
+              <td class="num" data-label="Показы">{{ num(r.impressions) }}</td>
+              <td class="num" data-label="Клики">{{ num(r.clicks) }}</td>
+              <td class="num" data-label="CTR">{{ r.ctr != null ? pct(r.ctr, 2) : '—' }}</td>
+              <td class="num tc-main" data-label="Расход">{{ rub(r.cost_kopecks) }}</td>
+              <td
+                class="num tc-main"
+                :class="{ 'tone-bad': !r.conversions && r.cost_kopecks > 0 }"
+                data-label="Конв."
+              >
+                {{ num(r.conversions) }}
+              </td>
+              <td class="num tc-main" data-label="CPA">{{ r.cpa_kopecks != null ? rub(r.cpa_kopecks) : '—' }}</td>
+              <td class="num" data-label="Отказы">{{ r.bounce_rate != null ? pct(r.bounce_rate) : '—' }}</td>
+              <td class="slice-why tc-wide">
                 <span v-if="ai[r.key]" class="chip" :class="VERDICT_CHIPS[ai[r.key].verdict]">
                   ИИ: {{ VERDICTS[ai[r.key].verdict] }}
                 </span>
                 <small v-if="ai[r.key]?.reason" class="cell-note">{{ ai[r.key].reason }}</small>
                 <small v-for="why in r.reasons" :key="why" class="cell-note tone-bad">{{ why }}</small>
               </td>
+              <UiRowMore />
             </tr>
             <tr v-if="!placementRows.length">
               <td colspan="10" class="empty">Площадок нет — в выбранных кампаниях не было показов в сетях.</td>
             </tr>
           </tbody>
         </table>
+      </div>
+      <!-- Телефон: площадки отмечают долгим нажатием — действие с выбранными рядом, над нижней панелью. -->
+      <div v-if="phone && selected.size" class="bulk-dock" role="region" aria-label="Действия с выбранными">
+        <b>Выбрано: {{ selected.size }}</b>
+        <div class="bulk-dock__acts">
+          <button class="btn btn--accent btn--sm" type="button" :disabled="!!busy" @click="excludeSelected">
+            Запретить выбранные
+          </button>
+        </div>
+        <button class="btn btn--ghost btn--sm bulk-dock__end" type="button" @click="selected = new Set()">
+          Снять выбор
+        </button>
       </div>
     </template>
 
@@ -231,7 +250,7 @@
       </div>
 
       <div v-scroll-x class="table-scroll" :class="{ 'is-loading': busy === 'report' }">
-        <table class="table">
+        <table v-cards class="table tcards">
           <thead>
             <tr>
               <th>{{ DIMENSIONS.find((d) => d.key === report.dimension).label }}</th>
@@ -251,26 +270,30 @@
           </thead>
           <tbody>
             <tr v-for="r in adjustRows" :key="r.key">
-              <td>
+              <td class="tc-name">
                 {{ r.label }}
                 <small v-if="!r.adjustable" class="cell-note">корректировку сюда не поставить</small>
               </td>
-              <td v-if="report.dimension === 'hour'" class="num">{{ num(r.visits) }}</td>
+              <td v-if="report.dimension === 'hour'" class="num" data-label="Визиты">{{ num(r.visits) }}</td>
               <template v-else>
-                <td class="num">{{ num(r.clicks) }}</td>
-                <td class="num">{{ rub(r.cost_kopecks) }}</td>
+                <td class="num" data-label="Клики">{{ num(r.clicks) }}</td>
+                <td class="num" data-label="Расход">{{ rub(r.cost_kopecks) }}</td>
               </template>
-              <td class="num">{{ num(r.conversions) }}</td>
-              <td class="num" :class="crTone(r)">{{ r.cr != null ? pct(r.cr, 2) : '—' }}</td>
-              <td v-if="report.dimension !== 'hour'" class="num">{{ r.cpa_kopecks != null ? rub(r.cpa_kopecks) : '—' }}</td>
-              <td class="num">{{ r.bounce_rate != null ? pct(r.bounce_rate) : '—' }}</td>
-              <td class="num">
+              <td class="num" data-label="Конв.">{{ num(r.conversions) }}</td>
+              <td class="num tc-main" :class="crTone(r)" data-label="CR">{{ r.cr != null ? pct(r.cr, 2) : '—' }}</td>
+              <td v-if="report.dimension !== 'hour'" class="num" data-label="CPA">
+                {{ r.cpa_kopecks != null ? rub(r.cpa_kopecks) : '—' }}
+              </td>
+              <td class="num" data-label="Отказы">{{ r.bounce_rate != null ? pct(r.bounce_rate) : '—' }}</td>
+              <td class="num tc-main" data-label="Сейчас">
                 <template v-if="r.current_mixed">разные</template>
                 <template v-else-if="r.current_pct != null">{{ changeText(r.current_pct) }}</template>
                 <template v-else>—</template>
               </td>
-              <td class="num">{{ r.suggested_pct != null ? changeText(r.suggested_pct) : '—' }}</td>
-              <td class="num">
+              <td class="num tc-main" data-label="Подсказка">
+                {{ r.suggested_pct != null ? changeText(r.suggested_pct) : '—' }}
+              </td>
+              <td class="num tc-wide" data-label="Новая корректировка, %">
                 <input
                   v-if="r.adjustable"
                   v-model="edits[r.key]"
@@ -283,6 +306,7 @@
                   placeholder="—"
                 />
               </td>
+              <UiRowMore />
             </tr>
           </tbody>
         </table>
@@ -294,11 +318,13 @@
 <script setup>
 import { computed, onMounted, reactive, ref } from 'vue'
 import UiCheckbox from '../../components/ui/UiCheckbox.vue'
+import UiRowMore from '../../components/ui/UiRowMore.vue'
 import { RouterLink } from 'vue-router'
 import { errorText, jobProgressText, wsApi } from '../../api/web'
 import { askConfirm } from '../../composables/useConfirm'
 import { pushToast } from '../../composables/useToasts'
 import { undoAction } from '../../composables/useUndo'
+import { useViewport } from '../../composables/useViewport'
 import { aiUsageText, delta, formatDate, num, pct, plural, rub } from '../../utils/format'
 import { useWs } from './context'
 import TermHint from '../../components/TermHint.vue'
@@ -342,6 +368,7 @@ const loadError = ref('')
 const done = ref('')
 const doneErrors = ref([])
 const selected = ref(new Set())
+const { phone } = useViewport()
 const excluded = ref(new Set())
 const ai = ref({})
 const aiNote = ref('')

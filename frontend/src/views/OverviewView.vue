@@ -2,7 +2,7 @@
   <HomeAsk />
 
   <PageHeader v-if="expert && rows.length">
-    <template #actions>
+    <template #more>
       <button class="btn btn--ghost" type="button" :disabled="refreshing || loading" @click="refresh">
         <RefreshCw aria-hidden="true" />
         {{ refreshing ? 'Обновляем…' : 'Обновить расход за сегодня' }}
@@ -64,7 +64,7 @@
     <template v-else>
       <p v-if="refreshing" class="sync-status overview-updated">{{ refreshText }}</p>
 
-      <div class="ktiles">
+      <UiRibbon class="ktiles" bleed>
         <KpiTile label="Сегодня" :value="rub(totals.spend_today)" :note="todayNote" />
         <KpiTile
           label="Вчера"
@@ -105,7 +105,7 @@
           :prev-points="prevWeek"
           value-key="cpa_kopecks"
         />
-      </div>
+      </UiRibbon>
 
       <section class="panel overview-spaces">
         <div class="panel__head">
@@ -305,6 +305,7 @@ import ProblemList from '../components/ProblemList.vue'
 import SignalCards from '../components/SignalCards.vue'
 import TermHint from '../components/TermHint.vue'
 import PageHeader from '../components/ui/PageHeader.vue'
+import UiRibbon from '../components/ui/UiRibbon.vue'
 import UiSelect from '../components/ui/UiSelect.vue'
 import UiSwitch from '../components/ui/UiSwitch.vue'
 import { errorText, jobProgressText, webApi } from '../api/web'

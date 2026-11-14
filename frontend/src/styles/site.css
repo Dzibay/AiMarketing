@@ -5021,6 +5021,56 @@ button.board-chips__text:disabled {
   box-shadow: var(--shadow);
 }
 
+/* Телефон: запрос — карточка (.tcards). «Минус» и «Целевой» — под большой палец; отмеченную строку
+   показывает флажок, заливка отдельных ячеек была бы пятнами. */
+@media (max-width: 640px) {
+  .queries-table.tcards tr.is-selected td {
+    background: none;
+  }
+
+  .tcards .query-cell strong {
+    font-size: 15px;
+    font-weight: 700;
+  }
+
+  .tcards .decision .seg--sm {
+    display: flex;
+    flex: 1 1 100%;
+  }
+
+  .tcards .decision .seg--sm button {
+    flex: 1 1 0;
+    min-height: 40px;
+    padding: 0 16px;
+    font-size: 13.5px;
+  }
+
+  .tcards .decision__neg {
+    flex-wrap: wrap;
+  }
+
+  .tcards .decision__neg input {
+    flex: 1 1 100%;
+    min-height: 40px;
+  }
+
+  /* Строка действий — как у кампаний: «Выбрано» и «Снять выбор», под ними лента, главная кнопка первой. */
+  .queries-applybar {
+    bottom: calc(8px + var(--bbar-h));
+    gap: 6px 8px;
+    padding: 8px 8px 8px 14px;
+  }
+
+  .queries-applybar > span:first-child {
+    flex: 1 1 auto;
+    font-weight: 700;
+  }
+
+  .queries-applybar .bulk-dock__acts > .btn--accent {
+    order: -1;
+  }
+}
+
 .queries-result__head {
   display: flex;
   flex-wrap: wrap;

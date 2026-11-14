@@ -209,22 +209,34 @@
           <div class="dhead__row">
             <div class="dhead__title">
               <p id="dhead-back" class="dhead__back"></p>
-              <h1>{{ pageTitleOverride || title }}</h1>
+              <div class="dhead__h">
+                <h1>{{ pageTitleOverride || title }}</h1>
+                <!-- Телефон: кнопка «⋯» с второстепенными действиями страницы (слот more в PageHeader). -->
+                <div id="dhead-more" class="dhead__more"></div>
+              </div>
               <div id="dhead-desc" class="dhead__desc"></div>
             </div>
             <div id="dhead-acts" class="dhead__acts"></div>
           </div>
-          <nav v-if="tabs.length > 1" class="dtabs" :aria-label="title">
-            <RouterLink
-              v-for="tab in tabs"
-              :key="tab.to"
-              class="dtabs__tab"
-              :class="{ active: pageMatches(tab, route.path) }"
-              :to="tab.to"
-            >
-              {{ tab.label }}
-              <Lock v-if="featureLocked(subscription, tab.feature)" class="dtabs__lock" aria-label="не входит в тариф" />
-            </RouterLink>
+          <!-- Вкладки не переносятся: лишние листаются вбок, край с продолжением затенён. -->
+          <nav
+            v-if="tabs.length > 1"
+            class="dtabs"
+            :class="{ 'has-before': tabStrip.before, 'has-after': tabStrip.after }"
+            :aria-label="title"
+          >
+            <div ref="tabsEl" class="dtabs__scroll">
+              <RouterLink
+                v-for="tab in tabs"
+                :key="tab.to"
+                class="dtabs__tab"
+                :class="{ active: pageMatches(tab, route.path) }"
+                :to="tab.to"
+              >
+                {{ tab.label }}
+                <Lock v-if="featureLocked(subscription, tab.feature)" class="dtabs__lock" aria-label="не входит в тариф" />
+              </RouterLink>
+            </div>
           </nav>
         </div>
 
@@ -330,6 +342,7 @@ import { resetProjectFilter, useProjectFilter } from '../composables/useProjectF
 import { clearSession, getSession } from '../composables/useSession'
 import { useTheme } from '../composables/useTheme'
 import { useViewport } from '../composables/useViewport'
+import { revealInStrip, useScrollStrip } from '../composables/useScrollStrip'
 import {
   loadWorkspaces,
   projectDotA11y as dotA11y,
@@ -489,6 +502,19 @@ const tabs = computed(() =>
   ),
 )
 const expertGate = computed(() => !!route.meta.expert && !expert.value)
+
+// Вкладки листаются вбок; открытая вкладка всегда на виду — в том числе после перехода по ссылке на телефоне.
+const tabsEl = ref(null)
+const { strip: tabStrip, measure: measureTabs } = useScrollStrip(tabsEl)
+
+watch(
+  [tabs, () => route.path, tabsEl],
+  () => {
+    revealInStrip(tabsEl.value, tabsEl.value?.querySelector('.dtabs__tab.active'))
+    measureTabs()
+  },
+  { flush: 'post' },
+)
 
 // Телефон, страница чата: «назад» — туда, откуда пришли; открыли чат по ссылке — на главную.
 const inChat = computed(() => route.meta.section === 'chat')

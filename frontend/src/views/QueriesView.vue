@@ -70,23 +70,27 @@
     </div>
 
     <section class="panel">
-      <div class="ltools" role="search">
-        <label class="ltools__search">
-          <Search aria-hidden="true" />
-          <input v-model.trim="filters.search" type="search" placeholder="Слово из запроса" aria-label="Поиск запроса" />
-        </label>
-        <div class="seg" role="group" aria-label="Очередь запросов">
-          <button
-            v-for="t in TABS"
-            :key="t.key"
-            type="button"
-            :class="{ active: tab === t.key }"
-            :aria-pressed="tab === t.key"
-            @click="setTab(t.key)"
-          >
-            {{ t.label }}<span v-if="data" class="seg__n">{{ num(data.counts[t.key]) }}</span>
-          </button>
-        </div>
+      <UiListTools :active="sheetFilters" @reset="resetSheet">
+        <template #search>
+          <label class="ltools__search">
+            <Search aria-hidden="true" />
+            <input v-model.trim="filters.search" type="search" placeholder="Слово из запроса" aria-label="Поиск запроса" />
+          </label>
+        </template>
+        <template #tabs>
+          <div class="seg" role="group" aria-label="Очередь запросов">
+            <button
+              v-for="t in TABS"
+              :key="t.key"
+              type="button"
+              :class="{ active: tab === t.key }"
+              :aria-pressed="tab === t.key"
+              @click="setTab(t.key)"
+            >
+              {{ t.label }}<span v-if="data" class="seg__n">{{ num(data.counts[t.key]) }}</span>
+            </button>
+          </div>
+        </template>
         <UiSelect
           v-if="projectOptions.length > 1"
           v-model="filters.project"
@@ -100,7 +104,7 @@
           ₽
         </label>
         <UiSwitch v-model="filters.noConv" class="ltools__switch">Без конверсий</UiSwitch>
-      </div>
+      </UiListTools>
 
       <p v-if="projectInfo" class="sync-status">
         {{ projectInfo.name }}:
@@ -134,7 +138,7 @@
       <EmptyState v-else-if="!data.items.length" :icon="SearchX" :text="EMPTY[tab]" plain />
       <template v-else>
         <div v-scroll-x class="table-scroll" :class="{ 'is-loading': loading }">
-          <table class="table queries-table">
+          <table v-cards class="table queries-table tcards">
             <thead>
               <tr>
                 <th v-if="canApply" class="check-col">
@@ -162,7 +166,7 @@
                     @change="toggle(key(q), $event.target.checked)"
                   />
                 </td>
-                <td class="query-cell">
+                <td class="query-cell tc-name">
                   <strong>{{ q.query }}</strong>
                   <small class="cell-note">
                     <RouterLink :to="`/w/${q.project.id}/queries`">{{ niceQuotes(q.project.name) }}</RouterLink> ·
@@ -170,10 +174,16 @@
                   </small>
                   <small v-if="q.blocked_by" class="cell-note tone-ok">Уже отсекается: {{ q.blocked_by }}</small>
                 </td>
-                <td class="num">{{ num(q.clicks) }}</td>
-                <td class="num">{{ rubles(q.cost_rub) }}</td>
-                <td class="num" :class="{ 'tone-bad': !q.conversions && q.cost_rub > 0 }">{{ num(q.conversions) }}</td>
-                <td class="decision">
+                <td class="num tc-main" data-label="Клики">{{ num(q.clicks) }}</td>
+                <td class="num tc-main" data-label="Расход">{{ rubles(q.cost_rub) }}</td>
+                <td
+                  class="num tc-main"
+                  :class="{ 'tone-bad': !q.conversions && q.cost_rub > 0 }"
+                  data-label="Конв."
+                >
+                  {{ num(q.conversions) }}
+                </td>
+                <td class="decision tc-wide">
                   <template v-if="q.label">
                     <div class="decision__top">
                       <span class="chip" :class="q.label.verdict === 'negative' ? 'chip--bad' : 'chip--ok'">
@@ -210,12 +220,14 @@
 
       <div v-if="canApply && selected.size" class="bulk-dock" role="region" aria-label="Действия с выбранными">
         <b>Выбрано: {{ selected.size }}</b>
-        <button v-if="tab === 'negative'" class="btn btn--accent btn--sm" type="button" :disabled="busy" @click="openPreview">
-          <ListX aria-hidden="true" />В минус-фразы…
-        </button>
-        <button v-else class="btn btn--accent btn--sm" type="button" :disabled="busy" @click="applySelected">
-          {{ busy ? busyText || 'Применяем…' : 'Подтвердить целевые' }}
-        </button>
+        <div class="bulk-dock__acts">
+          <button v-if="tab === 'negative'" class="btn btn--accent btn--sm" type="button" :disabled="busy" @click="openPreview">
+            <ListX aria-hidden="true" />В минус-фразы…
+          </button>
+          <button v-else class="btn btn--accent btn--sm" type="button" :disabled="busy" @click="applySelected">
+            {{ busy ? busyText || 'Применяем…' : 'Подтвердить целевые' }}
+          </button>
+        </div>
         <button class="btn btn--ghost btn--sm bulk-dock__end" type="button" :disabled="busy" @click="selected = new Set()">
           Снять выбор
         </button>
@@ -268,6 +280,7 @@ import PageHeader from '../components/ui/PageHeader.vue'
 import UiMore from '../components/ui/UiMore.vue'
 import UiNotice from '../components/ui/UiNotice.vue'
 import UiCheckbox from '../components/ui/UiCheckbox.vue'
+import UiListTools from '../components/ui/UiListTools.vue'
 import UiSelect from '../components/ui/UiSelect.vue'
 import UiSwitch from '../components/ui/UiSwitch.vue'
 import { CircleCheck, CloudOff, ListX, Search, SearchX, TriangleAlert } from '@lucide/vue'
@@ -338,6 +351,14 @@ let timer = null
 const preview = reactive({ open: false, groups: [] })
 
 const canApply = computed(() => tab.value === 'negative' || tab.value === 'target')
+// Телефон: сколько фильтров включено в шторке (поиск — не в ней) и их сброс.
+const sheetFilters = computed(() => (filters.project ? 1 : 0) + (filters.minCost ? 1 : 0) + (filters.noConv ? 1 : 0))
+
+function resetSheet() {
+  filters.project = ''
+  filters.minCost = ''
+  filters.noConv = false
+}
 const selectable = computed(() => (data.value?.items || []).filter(isSelectable))
 const allPicked = computed(() => selectable.value.length > 0 && selectable.value.every((q) => selected.value.has(key(q))))
 // Список проектов для фильтра не сужается, когда фильтр по проекту уже выбран.

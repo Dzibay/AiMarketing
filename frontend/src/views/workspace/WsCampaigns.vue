@@ -1,13 +1,7 @@
 <template>
-  <PageHeader>
-    <template #description>
-      <template v-if="syncing">{{ syncText }}</template>
-      <template v-else-if="data">
-        {{ formatDate(data.date_from) }} — {{ formatDate(data.date_to) }} ·
-        {{ data.conversions_source === 'goal' ? `конверсии по цели «${ws.goal_name}»` : 'конверсии Директа' }}
-      </template>
-    </template>
-    <template #actions>
+  <PageHeader :description="headDesc">
+    <template #more="{ sheet }">
+      <p v-if="sheet" class="dhead__cap">Период статистики</p>
       <div class="seg" role="group" aria-label="Период статистики">
         <button
           v-for="d in [7, 14, 30]"
@@ -33,6 +27,8 @@
           <small v-if="syncedAgo && !syncing">обновлено {{ syncedAgo }}</small>
         </span>
       </button>
+    </template>
+    <template #actions>
       <button class="btn btn--accent" type="button" @click="wizardOpen = true">
         <Plus aria-hidden="true" />Новая кампания
       </button>
@@ -267,6 +263,13 @@ const budgetDone = ref([])
 const budgetProgress = ref('')
 
 const accounts = computed(() => data.value?.accounts || [])
+const headDesc = computed(() => {
+  if (syncing.value) return syncText.value
+  if (!data.value) return ''
+  const source =
+    data.value.conversions_source === 'goal' ? `конверсии по цели «${ws.value.goal_name}»` : 'конверсии Директа'
+  return `${formatDate(data.value.date_from)} — ${formatDate(data.value.date_to)} · ${source}`
+})
 const accountScope = computed(() => ({
   label: 'Кабинет',
   all: 'Все кабинеты',

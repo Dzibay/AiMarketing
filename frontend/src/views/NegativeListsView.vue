@@ -200,7 +200,7 @@
         </div>
 
         <div v-if="previewRows.length" v-scroll-x class="ccard table-scroll neg-preview">
-          <table class="table">
+          <table class="table tcards">
             <thead>
               <tr>
                 <th>Кампания</th>
@@ -212,17 +212,17 @@
             </thead>
             <tbody>
               <tr v-for="row in previewRows" :key="row.campaign_row_id" :class="{ 'is-off': row.blocked }">
-                <td>
+                <td class="tc-name">
                   {{ row.campaign_name }}
                   <span class="cell-note">{{ niceQuotes(row.client_name) || row.client_login }}</span>
                 </td>
-                <td>
+                <td class="tc-tag">
                   <span v-if="row.blocked" class="st st--off">{{ blockedLabel(row.blocked) }}</span>
                   <template v-else>{{ ACTION_LABELS[row.action] }}</template>
                 </td>
-                <td v-tip="row.add.join(', ')">{{ phraseSample(row.add) }}</td>
-                <td v-tip="row.remove.join(', ')">{{ phraseSample(row.remove) }}</td>
-                <td class="num">
+                <td class="tc-wide" data-label="Добавим" v-tip="row.add.join(', ')">{{ phraseSample(row.add) }}</td>
+                <td class="tc-wide" data-label="Уберём" v-tip="row.remove.join(', ')">{{ phraseSample(row.remove) }}</td>
+                <td class="num tc-row" data-label="Фраз было → станет">
                   {{ row.before }} → {{ row.after }}
                   <span class="cell-note">{{ row.chars.toLocaleString('ru-RU') }} симв.</span>
                 </td>

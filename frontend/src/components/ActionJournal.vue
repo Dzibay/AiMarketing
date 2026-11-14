@@ -1,9 +1,10 @@
 <template>
   <PageHeader :description="description" />
 
-  <div class="ltools" role="search" aria-label="Фильтры истории">
+  <UiListTools label="Фильтры истории" :active="sheetFilters" @reset="resetFilters">
     <UiSelect v-if="showProjectFilter" v-model="project" size="sm" :options="projectOptions" aria-label="Проект" />
     <UiSelect v-model="kind" size="sm" :options="KINDS" aria-label="Тип действия" />
+    <p v-if="phone" class="ltools__cap">Кто менял</p>
     <div class="seg" role="group" aria-label="Кто менял">
       <button
         v-for="s in SOURCES"
@@ -16,8 +17,10 @@
         {{ s.label }}
       </button>
     </div>
-    <button v-if="filtered" class="btn btn--ghost btn--sm" type="button" @click="resetFilters">Сбросить</button>
-  </div>
+    <button v-if="filtered && !phone" class="btn btn--ghost btn--sm" type="button" @click="resetFilters">
+      Сбросить
+    </button>
+  </UiListTools>
 
   <UiNotice v-if="loadError" tone="error">
     Не удалось загрузить историю. {{ loadError }}
@@ -191,10 +194,12 @@ import ActionWho from './ActionWho.vue'
 import ExpertHint from './ExpertHint.vue'
 import EmptyState from './ui/EmptyState.vue'
 import PageHeader from './ui/PageHeader.vue'
+import UiListTools from './ui/UiListTools.vue'
 import UiNotice from './ui/UiNotice.vue'
 import UiSelect from './ui/UiSelect.vue'
 import UiStatus from './ui/UiStatus.vue'
 import { useExpert } from '../composables/useExpert'
+import { useViewport } from '../composables/useViewport'
 import UndoDialog from './UndoDialog.vue'
 import { errorText, webApi, wsApi } from '../api/web'
 import { useWorkspaces } from '../composables/useWorkspaces'
@@ -277,6 +282,9 @@ const undoId = ref(null)
 const open = ref(new Set())
 
 const filtered = computed(() => !!(source.value || kind.value || project.value))
+// Телефон: фильтры — в шторке за кнопкой «Фильтры», на ней — сколько включено.
+const { phone } = useViewport()
+const sheetFilters = computed(() => (source.value ? 1 : 0) + (kind.value ? 1 : 0) + (project.value ? 1 : 0))
 
 function dayKey(d) {
   return `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`

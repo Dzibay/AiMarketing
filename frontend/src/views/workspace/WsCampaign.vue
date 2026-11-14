@@ -166,7 +166,7 @@
         </div>
       </div>
 
-      <div v-if="row" class="metric-grid camp-metrics">
+      <UiRibbon v-if="row" class="metric-grid camp-metrics">
         <div class="metric-grid__item is-static">
           <small>Расход 7 дн.</small>
           <strong>{{ rub(row.cost_kopecks) }}</strong>
@@ -192,7 +192,7 @@
           <small>CPA</small>
           <strong>{{ row.cpa_kopecks != null ? rub(row.cpa_kopecks) : '—' }}</strong>
         </div>
-      </div>
+      </UiRibbon>
     </section>
 
     <nav class="seg seg--tabs" aria-label="Разделы кампании">
@@ -247,6 +247,7 @@ import TermHint from '../../components/TermHint.vue'
 import PageHeader from '../../components/ui/PageHeader.vue'
 import UiMenu from '../../components/ui/UiMenu.vue'
 import UiMenuItem from '../../components/ui/UiMenuItem.vue'
+import UiRibbon from '../../components/ui/UiRibbon.vue'
 import UiStatus from '../../components/ui/UiStatus.vue'
 import UiSwitch from '../../components/ui/UiSwitch.vue'
 import { confirmCampaignArchive, confirmCampaignToggle } from '../../utils/campaignConfirm'
@@ -498,18 +499,17 @@ watch(expert, (on) => {
 </script>
 
 <style scoped>
-/* Шесть показателей: одним рядом, 3 + 3 или 2 + 2 + 2 — без одинокой плитки внизу. */
-.camp-metrics {
-  grid-template-columns: repeat(6, minmax(0, 1fr));
-}
-@media (max-width: 1100px) {
-  .camp-metrics {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+/* Шесть показателей: одним рядом или 3 + 3 — без одинокой плитки внизу. На телефоне ряд — лента (UiRibbon),
+   колонки задаёт она, поэтому правила только для экрана шире телефона. Ряд — внутренний элемент ленты,
+   своей метки стиля у него нет: правила идут через :deep. */
+@media (min-width: 641px) {
+  .campaign-head :deep(.camp-metrics) {
+    grid-template-columns: repeat(6, minmax(0, 1fr));
   }
 }
-@media (max-width: 520px) {
-  .camp-metrics {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+@media (min-width: 641px) and (max-width: 1100px) {
+  .campaign-head :deep(.camp-metrics) {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 }
 .camp-switch {

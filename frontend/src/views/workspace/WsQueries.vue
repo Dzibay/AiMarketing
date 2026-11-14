@@ -158,7 +158,7 @@
 
   <template v-else>
   <div class="ws-toolbar">
-    <div class="seg" role="group" aria-label="Период загрузки из Директа">
+    <div v-if="!phone || tab === 'memory'" class="seg" role="group" aria-label="Период загрузки из Директа">
       <button
         v-for="d in PERIODS"
         :key="d"
@@ -274,23 +274,42 @@
   </div>
 
   <section v-if="tab !== 'memory'" class="panel">
-    <div class="ltools" role="search">
-      <label class="ltools__search">
-        <Search aria-hidden="true" />
-        <input v-model.trim="filters.search" type="search" placeholder="Слово из запроса" aria-label="Поиск по запросам" />
-      </label>
-      <div class="seg" role="group" aria-label="Очередь запросов">
-        <button
-          v-for="t in QUEUE_TABS"
-          :key="t.key"
-          type="button"
-          :class="{ active: tab === t.key }"
-          :aria-pressed="tab === t.key"
-          @click="setTab(t.key)"
-        >
-          {{ t.label }}<span v-if="data" class="seg__n">{{ num(counts[t.key]) }}</span>
-        </button>
-      </div>
+    <UiListTools :active="sheetFilters" title="Фильтры и период" @reset="resetSheet">
+      <template #search>
+        <label class="ltools__search">
+          <Search aria-hidden="true" />
+          <input v-model.trim="filters.search" type="search" placeholder="Слово из запроса" aria-label="Поиск по запросам" />
+        </label>
+      </template>
+      <template #tabs>
+        <div class="seg" role="group" aria-label="Очередь запросов">
+          <button
+            v-for="t in QUEUE_TABS"
+            :key="t.key"
+            type="button"
+            :class="{ active: tab === t.key }"
+            :aria-pressed="tab === t.key"
+            @click="setTab(t.key)"
+          >
+            {{ t.label }}<span v-if="data" class="seg__n">{{ num(counts[t.key]) }}</span>
+          </button>
+        </div>
+      </template>
+      <template #phone>
+        <p class="ltools__cap">Период загрузки из Директа</p>
+        <div class="seg" role="group" aria-label="Период загрузки из Директа">
+          <button
+            v-for="d in PERIODS"
+            :key="d"
+            type="button"
+            :class="{ active: days === d }"
+            :disabled="!!busy"
+            @click="pickDays(d)"
+          >
+            {{ d }} дней
+          </button>
+        </div>
+      </template>
       <UiSelect
         v-if="campaigns.length > 1"
         v-model="filters.campaign"
@@ -304,7 +323,7 @@
         ₽
       </label>
       <UiSwitch v-model="filters.noConv" class="ltools__switch">Без конверсий</UiSwitch>
-    </div>
+    </UiListTools>
 
     <p v-if="loading && !data" class="empty">Загружаем запросы…</p>
     <div v-else-if="!data" class="empty">
@@ -321,7 +340,7 @@
     <p v-else-if="!items.length" class="empty">{{ emptyText }}</p>
     <template v-else>
       <div v-scroll-x class="table-scroll" :class="{ 'is-loading': loading }">
-        <table class="table queries-table">
+        <table v-cards class="table queries-table tcards">
           <thead>
             <tr>
               <th class="check-col">
@@ -353,7 +372,7 @@
                   @change="toggle(q.query_norm, $event.target.checked)"
                 />
               </td>
-              <td class="query-cell">
+              <td class="query-cell tc-name">
                 <strong>{{ q.query }}</strong>
                 <small class="cell-note">{{ placeText(q) }}</small>
                 <small v-if="q.matched_keywords.length" class="cell-note">
@@ -361,11 +380,17 @@
                 </small>
                 <small v-if="q.blocked_by" class="cell-note tone-ok">Уже отсекается: {{ q.blocked_by }}</small>
               </td>
-              <td class="num">{{ num(q.impressions) }}</td>
-              <td class="num">{{ num(q.clicks) }}</td>
-              <td class="num">{{ rubles(q.cost_rub) }}</td>
-              <td class="num" :class="{ 'tone-bad': !q.conversions && q.cost_rub > 0 }">{{ num(q.conversions) }}</td>
-              <td class="decision">
+              <td class="num" data-label="Показы">{{ num(q.impressions) }}</td>
+              <td class="num tc-main" data-label="Клики">{{ num(q.clicks) }}</td>
+              <td class="num tc-main" data-label="Расход">{{ rubles(q.cost_rub) }}</td>
+              <td
+                class="num tc-main"
+                :class="{ 'tone-bad': !q.conversions && q.cost_rub > 0 }"
+                data-label="Конв."
+              >
+                {{ num(q.conversions) }}
+              </td>
+              <td class="decision tc-wide">
                 <div class="decision__top">
                   <div class="seg seg--sm" role="group" aria-label="Решение">
                     <button
@@ -442,6 +467,7 @@
                   {{ rowResults[q.query_norm].message || 'без подробностей' }}
                 </p>
               </td>
+              <UiRowMore />
             </tr>
           </tbody>
         </table>
@@ -456,19 +482,21 @@
 
     <div v-if="selected.size" class="bulk-bar queries-applybar">
       <span>Выбрано: {{ selected.size }}</span>
-      <button class="btn btn--ghost" type="button" :disabled="!!busy" @click="markSelected('negative')">В минус</button>
-      <button class="btn btn--ghost" type="button" :disabled="!!busy" @click="markSelected('target')">Целевые</button>
-      <UiSelect
-        :model-value="null"
-        :options="BULK_LEVELS"
-        placeholder="Уровень минус-фраз…"
-        aria-label="Уровень минус-фраз"
-        :disabled="!!busy"
-        @change="setLevelSelected"
-      />
-      <button class="btn btn--accent" type="button" :disabled="!!busy" @click="openApply">
-        {{ busy === 'apply' ? 'Применяем…' : `Применить (${readyCount})` }}
-      </button>
+      <div class="bulk-dock__acts">
+        <button class="btn btn--ghost" type="button" :disabled="!!busy" @click="markSelected('negative')">В минус</button>
+        <button class="btn btn--ghost" type="button" :disabled="!!busy" @click="markSelected('target')">Целевые</button>
+        <UiSelect
+          :model-value="null"
+          :options="BULK_LEVELS"
+          placeholder="Уровень минус-фраз…"
+          aria-label="Уровень минус-фраз"
+          :disabled="!!busy"
+          @change="setLevelSelected"
+        />
+        <button class="btn btn--accent" type="button" :disabled="!!busy" @click="openApply">
+          {{ busy === 'apply' ? 'Применяем…' : `Применить (${readyCount})` }}
+        </button>
+      </div>
       <button class="btn btn--ghost" type="button" @click="selected = new Set()">Снять выбор</button>
     </div>
   </section>
@@ -483,14 +511,16 @@
         </p>
       </div>
     </div>
-    <div class="ltools" role="search">
-      <label class="ltools__search">
-        <Search aria-hidden="true" />
-        <input v-model.trim="mem.search" type="search" placeholder="Запрос или минус-фраза" aria-label="Поиск по памяти" />
-      </label>
+    <UiListTools :active="mem.verdict ? 1 : 0" @reset="mem.verdict = ''">
+      <template #search>
+        <label class="ltools__search">
+          <Search aria-hidden="true" />
+          <input v-model.trim="mem.search" type="search" placeholder="Запрос или минус-фраза" aria-label="Поиск по памяти" />
+        </label>
+      </template>
       <UiSelect v-model="mem.verdict" size="sm" :options="VERDICTS" aria-label="Решение" />
-    </div>
-    <div v-if="mem.selected.size" class="bulk-bar">
+    </UiListTools>
+    <div v-if="mem.selected.size && !phone" class="bulk-bar">
       <span>Выбрано: {{ mem.selected.size }}</span>
       <button class="btn btn--ghost" type="button" :disabled="mem.busy" @click="forget">Забыть</button>
       <button class="btn btn--ghost" type="button" @click="mem.selected = new Set()">Снять выбор</button>
@@ -501,7 +531,7 @@
       {{ mem.search || mem.verdict ? 'Ничего не нашлось.' : 'Пока пусто: решения появятся после «Применить».' }}
     </p>
     <div v-else v-scroll-x class="table-scroll" :class="{ 'is-loading': mem.loading }">
-      <table class="table">
+      <table v-cards class="table tcards">
         <thead>
           <tr>
             <th class="check-col">
@@ -527,22 +557,25 @@
                 @change="memToggle(m.query_norm, $event.target.checked)"
               />
             </td>
-            <td>
+            <td class="tc-name">
               {{ m.query }}
               <small v-if="m.reason" class="cell-note">{{ m.reason }}</small>
             </td>
-            <td>
+            <td class="tc-tag">
               <span class="chip" :class="m.verdict === 'negative' ? 'chip--bad' : 'chip--ok'">
                 {{ m.verdict === 'negative' ? 'минус' : 'целевой' }}
               </span>
             </td>
-            <td>{{ m.verdict === 'negative' ? `${m.negative_phrase} · ${LEVELS[m.level] || m.level}` : '—' }}</td>
-            <td>
+            <td data-label="Минус-фраза">
+              {{ m.verdict === 'negative' ? `${m.negative_phrase} · ${LEVELS[m.level] || m.level}` : '—' }}
+            </td>
+            <td data-label="Когда">
               {{ formatDateTime(m.updated_at) }}
               <small v-if="m.applied_at" class="cell-note">
                 {{ m.verdict === 'negative' ? 'есть в Директе' : 'добавлено в ключи' }}
               </small>
             </td>
+            <UiRowMore />
           </tr>
         </tbody>
       </table>
@@ -550,6 +583,12 @@
     <div v-if="mem.items.length < mem.total" class="pager">
       <span class="sync-status">Показано {{ mem.items.length }} из {{ mem.total }}</span>
       <button class="btn btn--ghost" type="button" :disabled="mem.loading" @click="loadMemory(true)">Показать ещё</button>
+    </div>
+    <!-- Телефон: выбор начинается долгим нажатием на карточку, поэтому действия — внизу, над нижней панелью. -->
+    <div v-if="mem.selected.size && phone" class="bulk-bar queries-applybar">
+      <span>Выбрано: {{ mem.selected.size }}</span>
+      <button class="btn btn--ghost btn--sm" type="button" :disabled="mem.busy" @click="forget">Забыть</button>
+      <button class="btn btn--ghost btn--sm" type="button" @click="mem.selected = new Set()">Снять выбор</button>
     </div>
   </section>
   </template>
@@ -659,6 +698,8 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import UiCheckbox from '../../components/ui/UiCheckbox.vue'
+import UiListTools from '../../components/ui/UiListTools.vue'
+import UiRowMore from '../../components/ui/UiRowMore.vue'
 import UiSelect from '../../components/ui/UiSelect.vue'
 import UiNotice from '../../components/ui/UiNotice.vue'
 import UiSwitch from '../../components/ui/UiSwitch.vue'
@@ -667,6 +708,7 @@ import { CircleCheck, Search } from '@lucide/vue'
 import ExpertHint from '../../components/ExpertHint.vue'
 import Modal from '../../components/ui/Modal.vue'
 import { useExpert } from '../../composables/useExpert'
+import { useViewport } from '../../composables/useViewport'
 import TermHint from '../../components/TermHint.vue'
 import UndoDialog from '../../components/UndoDialog.vue'
 import { errorText, jobProgressText, wsApi } from '../../api/web'
@@ -760,6 +802,15 @@ function groupLabel(q, g) {
 }
 
 const hasFilters = computed(() => !!(filters.search || filters.campaign || filters.minCost || filters.noConv))
+const { phone } = useViewport()
+// Телефон: сколько фильтров включено в шторке (поиск — не в ней) и их сброс.
+const sheetFilters = computed(() => (filters.campaign ? 1 : 0) + (filters.minCost ? 1 : 0) + (filters.noConv ? 1 : 0))
+
+function resetSheet() {
+  filters.campaign = ''
+  filters.minCost = ''
+  filters.noConv = false
+}
 const canClassify = computed(() => counts.value.new > 0 || counts.value.negative + counts.value.target > 0)
 const briefFilled = computed(() => {
   const b = ws.value.brief || {}

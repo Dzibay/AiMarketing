@@ -2,7 +2,7 @@
   <div class="mgrid">
     <div v-for="row in ROWS" :key="row.label" class="mgrid__row" role="group" :aria-label="row.label">
       <h3 class="mgrid__cap">{{ row.label }}</h3>
-      <div class="mgrid__tiles">
+      <UiRibbon class="mgrid__tiles">
         <template v-for="m in row.metrics" :key="m.key">
           <!-- Без Метрики визиты всегда 0 — вместо нуля одна строка, что сделать. -->
           <p v-if="m.key === 'visits' && !metrika" class="mgrid__na">
@@ -30,19 +30,21 @@
             </small>
           </component>
         </template>
-      </div>
+      </UiRibbon>
     </div>
   </div>
 </template>
 
 <script setup>
 import DeltaChip from './DeltaChip.vue'
+import UiRibbon from './ui/UiRibbon.vue'
 import { pct } from '../utils/format'
 import { CHART_METRICS, METRIC_BY_KEY } from '../views/workspace/metrics'
 
 /**
  * Итоги периода двумя рядами по пять: «Реклама» — что купили, «Результат» — что получили. Плитка с графиком
  * по дням — кнопка: выбирает метрику графика (v-model). metrika=false — визитов нет, вместо плитки подсказка.
+ * На телефоне каждый ряд — лента (UiRibbon): две плитки и край третьей, остальные листаются вбок.
  */
 defineProps({
   totals: { type: Object, required: true },
@@ -77,7 +79,8 @@ const ROWS = [
   letter-spacing: 0.02em;
 }
 
-.mgrid__tiles {
+/* Ряд — внутренний элемент UiRibbon, своей метки стиля у него нет: правила про сам ряд идут через :deep. */
+.mgrid :deep(.mgrid__tiles) {
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 0.6rem;
@@ -134,14 +137,26 @@ const ROWS = [
 }
 
 @container (max-width: 760px) {
-  .mgrid__tiles {
+  .mgrid :deep(.mgrid__tiles) {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 }
 
 @container (max-width: 460px) {
-  .mgrid__tiles {
+  .mgrid :deep(.mgrid__tiles) {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+/* Телефон: ряд — лента, колонки задаёт она. */
+@media (max-width: 640px) {
+  .mgrid :deep(.mgrid__tiles) {
+    grid-template-columns: none;
+  }
+
+  /* В ленте плитка уже: «было» уходит на вторую строку целиком, а не обрезается до «был…». */
+  .mgrid__tiles .metric-grid__cmp {
+    flex-wrap: wrap;
   }
 }
 </style>

@@ -54,7 +54,7 @@
 
   <template v-else>
     <PageHeader>
-      <template #actions>
+      <template #more>
         <button class="btn btn--ghost" type="button" :disabled="refreshing" @click="refresh">
           <RefreshCw aria-hidden="true" />
           {{ refreshing ? 'Обновляем…' : 'Обновить расход и балансы' }}
@@ -63,7 +63,7 @@
     </PageHeader>
     <p v-if="refreshing" class="sync-status overview-updated">{{ refreshText }}</p>
 
-    <div class="ktiles ktiles--six">
+    <UiRibbon class="ktiles ktiles--six" bleed>
       <KpiTile label="Сегодня" :value="rub(row.spend_today)" :note="asOfNote(data.today_updated_at)" />
       <KpiTile
         label="Расход 7 дней"
@@ -118,7 +118,7 @@
         :note="row.days_on_balance != null ? `хватит ≈ на ${daysShort(row.days_on_balance)}` : 'нет данных о расходе'"
         :note-tone="balanceTone(row.days_on_balance)"
       />
-    </div>
+    </UiRibbon>
 
     <section class="panel">
       <div class="panel__head">
@@ -257,6 +257,7 @@ import SignalCards from '../../components/SignalCards.vue'
 import TermHint from '../../components/TermHint.vue'
 import TrendChart from '../../components/TrendChart.vue'
 import PageHeader from '../../components/ui/PageHeader.vue'
+import UiRibbon from '../../components/ui/UiRibbon.vue'
 import UiSelect from '../../components/ui/UiSelect.vue'
 import UiStatus from '../../components/ui/UiStatus.vue'
 import { useExpert } from '../../composables/useExpert'

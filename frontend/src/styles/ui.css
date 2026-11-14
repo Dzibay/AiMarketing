@@ -17,6 +17,62 @@
   min-width: 0;
 }
 
+/* Заголовок и, на телефоне, кнопка «⋯» со второстепенными действиями — в одну строку. */
+.dhead__h {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.dhead__h h1 {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.dhead__more {
+  flex: none;
+  /* Кнопка выше строки заголовка — лишнее убираем отступами, чтобы строка описания не съезжала. */
+  margin: -1px 0 -6px;
+}
+
+.dhead__dots {
+  width: 38px;
+  height: 38px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+  color: var(--ink);
+}
+
+/* Шторка «⋯»: второстепенные действия столбиком, во всю ширину. */
+.dhead__sheet {
+  display: grid;
+  gap: 10px;
+  padding: 2px 8px 8px;
+}
+
+.dhead__cap {
+  margin: 0 0 -4px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.dhead__sheet .seg {
+  display: flex;
+}
+
+.dhead__sheet .seg button {
+  flex: 1 1 0;
+  height: 40px;
+  font-size: 14px;
+}
+
+.dhead__sheet .btn {
+  width: 100%;
+  min-height: 46px;
+}
+
 /* «← Все кампании» над заголовком вложенной страницы (слот back в PageHeader). */
 .dhead__back {
   margin: 0;
@@ -50,6 +106,7 @@
 }
 
 .dhead__back:empty,
+.dhead__more:empty,
 .dhead__desc:empty,
 .dhead__acts:empty {
   display: none;
@@ -95,10 +152,32 @@
   transform: rotate(180deg);
 }
 
-/* Телефон: «Подробнее» открывает шторку, стрелка-раскрытие ни к чему. */
+/* Телефон: описание страницы — одна строка; не поместилось — многоточие и «Подробнее» в той же строке,
+   полный текст — в шторке. Стрелка-раскрытие ни к чему. */
 @media (max-width: 640px) {
   .ui-more__toggle svg {
     display: none;
+  }
+
+  .dhead__clip,
+  .dhead__desc .ui-more {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+  }
+
+  .dhead__clip-t,
+  .dhead__desc .ui-more__lead {
+    flex: 0 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .dhead__desc .ui-more__toggle {
+    flex: none;
+    margin: 0;
   }
 }
 
@@ -1536,6 +1615,44 @@ body.has-sheet {
   margin-left: auto;
 }
 
+/* Действия с выбранными: на широком экране обёртки как будто нет — кнопки стоят в общем ряду. */
+.bulk-dock__acts {
+  display: contents;
+}
+
+/* Телефон: две строки — «Выбрано» со «Снять выбор» и лента действий, которая листается вбок. */
+@media (max-width: 640px) {
+  .bulk-dock {
+    bottom: calc(8px + var(--bbar-h));
+    gap: 6px 8px;
+    padding: 8px 8px 8px 14px;
+  }
+
+  .bulk-dock > b {
+    flex: 1 1 auto;
+  }
+
+  .bulk-dock__acts {
+    display: flex;
+    flex: 1 0 100%;
+    order: 1;
+    gap: 6px;
+    min-width: 0;
+    margin-left: -6px;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    scrollbar-width: none;
+  }
+
+  .bulk-dock__acts::-webkit-scrollbar {
+    display: none;
+  }
+
+  .bulk-dock__acts > * {
+    flex: none;
+  }
+}
+
 @media (max-width: 640px) {
   .ltools__search {
     max-width: none;
@@ -1545,6 +1662,151 @@ body.has-sheet {
   .ltools__switch {
     margin-left: 0;
   }
+}
+
+/* На телефоне (UiListTools): поиск и кнопка «Фильтры» в одну строку, сегменты с цифрами — лентой под ними,
+   остальные фильтры — в шторке. */
+.ltools--phone {
+  gap: 8px;
+}
+
+.ltools--phone > .ltools__search {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+.ltools--phone > .ltools__search input {
+  height: 40px;
+}
+
+.ltools__open {
+  flex: none;
+  gap: 6px;
+  height: 40px;
+  padding: 0 12px;
+}
+
+.ltools__open svg {
+  width: 16px;
+  height: 16px;
+}
+
+.ltools__n {
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 9px;
+  background: var(--ink);
+  color: var(--surface);
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 18px;
+  text-align: center;
+}
+
+.ltools__tabs {
+  flex: 1 0 100%;
+  min-width: 0;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scrollbar-width: none;
+}
+
+.ltools__tabs::-webkit-scrollbar {
+  display: none;
+}
+
+.ltools__tabs > .seg {
+  display: flex;
+  flex-wrap: nowrap;
+  width: max-content;
+  min-width: 100%;
+}
+
+.ltools__tabs > .seg button {
+  flex: 1 0 auto;
+  height: 34px;
+  padding: 0 10px;
+  white-space: nowrap;
+}
+
+.ltools__tabs.has-after {
+  -webkit-mask-image: linear-gradient(to left, transparent, #000 28px);
+  mask-image: linear-gradient(to left, transparent, #000 28px);
+}
+
+.ltools__tabs.has-before {
+  -webkit-mask-image: linear-gradient(to right, transparent, #000 28px);
+  mask-image: linear-gradient(to right, transparent, #000 28px);
+}
+
+.ltools__tabs.has-before.has-after {
+  -webkit-mask-image: linear-gradient(to right, transparent, #000 28px, #000 calc(100% - 28px), transparent);
+  mask-image: linear-gradient(to right, transparent, #000 28px, #000 calc(100% - 28px), transparent);
+}
+
+/* Фильтры в шторке — столбиком, во всю ширину, под палец. */
+.ltools__sheet {
+  display: grid;
+  gap: 12px;
+  padding: 2px 8px 12px;
+}
+
+.ltools__cap {
+  margin: 0 0 -6px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.ltools__pair {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+}
+
+.ltools__sheet .seg {
+  display: flex;
+}
+
+.ltools__sheet .seg button {
+  flex: 1 1 0;
+  height: 40px;
+  font-size: 14px;
+}
+
+.ltools__sheet .ui-select {
+  display: flex;
+}
+
+.ltools__sheet .ui-select .ui-select__btn {
+  width: 100%;
+  height: 44px;
+  font-size: 14px;
+}
+
+.ltools__sheet .btn {
+  min-height: 44px;
+}
+
+.ltools__sheet .ltools__field {
+  display: flex;
+  height: 44px;
+  font-size: 14px;
+}
+
+.ltools__sheet .ltools__field input {
+  flex: 1 1 auto;
+  width: auto;
+  min-width: 0;
+}
+
+.ltools__sheet .ltools__switch {
+  flex-direction: row-reverse;
+  justify-content: space-between;
+  min-height: 44px;
+  margin: 0;
+  font-size: 14px;
 }
 
 /* ---------- Плитки KPI экспертной главной (KpiTile) ---------- */
@@ -1564,15 +1826,104 @@ body.has-sheet {
   grid-template-columns: repeat(auto-fit, minmax(max(180px, min(calc(25% + 1px), calc((1139px - 100%) * 1000))), 1fr));
 }
 
-/* На телефоне — по две; при нечётном числе первая плитка во всю ширину, чтобы последняя не осталась одна. */
+/* На телефоне — по две; при нечётном числе первая плитка во всю ширину, чтобы последняя не осталась одна.
+   Ряд, обёрнутый в UiRibbon, на телефоне — лента (ниже), эти правила не про него. */
 @media (max-width: 560px) {
   .ktiles,
   .ktiles--six {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .ktiles > .ktile:first-child:nth-last-child(odd) {
+  .ktiles:not(.ribbon__track) > .ktile:first-child:nth-last-child(odd) {
     grid-column: 1 / -1;
+  }
+}
+
+/* ---------- Лента плиток (UiRibbon) ----------
+   Широкий экран: обёртки нет (display: contents), ряд — сетка своего класса. Телефон: ряд в одну строку,
+   листается вбок с остановкой на плитке — видны две целиком и край третьей; под лентой точки. */
+
+.ribbon {
+  display: contents;
+}
+
+.ribbon__dots {
+  display: none;
+}
+
+@media (max-width: 640px) {
+  .ribbon {
+    display: block;
+  }
+
+  .ribbon > .ribbon__track {
+    display: grid;
+    grid-template-columns: none;
+    grid-auto-flow: column;
+    grid-auto-columns: calc((100% - 10px) / 2 - 14px);
+    gap: 10px;
+    /* Поля в 4 px — чтобы рамку фокуса у крайней плитки не срезала прокрутка. */
+    margin: -4px;
+    padding: 4px;
+    overflow-x: auto;
+    scroll-snap-type: x mandatory;
+    scroll-padding-inline: 4px;
+    scrollbar-width: none;
+  }
+
+  .ribbon > .ribbon__track::-webkit-scrollbar {
+    display: none;
+  }
+
+  .ribbon > .ribbon__track > * {
+    grid-column: auto;
+    scroll-snap-align: start;
+  }
+
+  /* Лента на странице уходит под край экрана: поля страницы — её собственные отступы. Отступ под лентой
+     нужен только ей: в карточке его даёт сама карточка. */
+  .ribbon--bleed {
+    margin-bottom: 20px;
+  }
+
+  .ribbon--bleed > .ribbon__track {
+    margin: -4px -16px;
+    padding: 4px 16px;
+    scroll-padding-inline: 16px;
+  }
+
+  /* Лента в карточке: край, за которым есть ещё плитки, уходит в прозрачность. */
+  .ribbon:not(.ribbon--bleed).has-after > .ribbon__track {
+    -webkit-mask-image: linear-gradient(to left, transparent, #000 28px);
+    mask-image: linear-gradient(to left, transparent, #000 28px);
+  }
+
+  .ribbon:not(.ribbon--bleed).has-before > .ribbon__track {
+    -webkit-mask-image: linear-gradient(to right, transparent, #000 28px);
+    mask-image: linear-gradient(to right, transparent, #000 28px);
+  }
+
+  .ribbon:not(.ribbon--bleed).has-before.has-after > .ribbon__track {
+    -webkit-mask-image: linear-gradient(to right, transparent, #000 28px, #000 calc(100% - 28px), transparent);
+    mask-image: linear-gradient(to right, transparent, #000 28px, #000 calc(100% - 28px), transparent);
+  }
+
+  .ribbon__dots {
+    display: flex;
+    justify-content: center;
+    gap: 6px;
+    margin-top: 10px;
+  }
+
+  .ribbon__dots i {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--line-2);
+  }
+
+  .ribbon__dots i.is-on {
+    background: var(--ink);
   }
 }
 
@@ -1783,4 +2134,271 @@ body.has-sheet {
 
 .sevdot.is-info {
   background: var(--faint);
+}
+
+/* ---------- Таблица на телефоне: строка — карточка (.tcards, v-cards, UiRowMore) ----------
+   Ячейкам строки раздаются роли:
+   .tc-name — заголовок карточки; .tc-tag — строка под ним (состояние);
+   .tc-main — две-три главные цифры в ряд, подпись берётся из data-label;
+   .tc-wide — блок во всю ширину, виден всегда («Решение» в запросах, «Почему» в срезах);
+   .tc-row — строка «подпись — значение», видна всегда (когда прятать нечего и стрелка не нужна);
+   .tc-acts — меню «⋯» в правом верхнем углу; <UiRowMore /> — стрелка в ряду цифр.
+   Ячейки без роли — «остальные столбцы»: скрыты, пока строка не открыта (data-open), потом идут строками
+   «подпись — значение», подпись тоже из data-label. Флажок выбора (.check-col) появляется после долгого
+   нажатия (data-picking на таблице). Шире 640 px ничего из этого не действует — таблица как таблица. */
+
+.tc-more {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+/* Попасть пальцем: область нажатия шире самой стрелки. Вправо не растёт — там край таблицы, и выступ
+   дал бы ей прокрутку вбок. */
+.tc-more::after {
+  content: '';
+  position: absolute;
+  inset: -6px 0 -6px -12px;
+}
+
+.tc-more svg {
+  width: 18px;
+  height: 18px;
+}
+
+.tc-more[aria-expanded='true'] svg {
+  transform: rotate(180deg);
+}
+
+@media (max-width: 640px) {
+  .table-scroll:has(> .tcards) {
+    overflow: visible;
+  }
+
+  .ccard.table-scroll:has(> .tcards) {
+    overflow: clip;
+  }
+
+  .table.tcards,
+  .table.tcards > tbody,
+  .table.tcards > tfoot {
+    display: block;
+  }
+
+  .table.tcards > thead {
+    display: none;
+  }
+
+  .table.tcards > :is(tbody, tfoot) > tr {
+    position: relative;
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr)) 32px;
+    gap: 8px 10px;
+    padding: 12px 0;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .table.tcards > :last-child > tr:last-child {
+    border-bottom: 0;
+  }
+
+  /* Таблица сама в карточке без полей — поля дают строки. */
+  .ccard.table-scroll > .table.tcards > :is(thead, tbody, tfoot) > tr {
+    padding-inline: 14px;
+  }
+
+  /* Ячейка без роли скрыта; у видимых сняты табличные поля, рамки, липкость и ширины колонок. */
+  .table.tcards > :is(tbody, tfoot) > tr > :is(td, th) {
+    position: static;
+    display: none;
+    width: auto;
+    min-width: 0;
+    max-width: none;
+    padding: 0;
+    border: 0;
+    background: none;
+    box-shadow: none;
+    text-align: left;
+    white-space: normal;
+  }
+
+  .table.tcards > :is(tbody, tfoot) > tr > :is(.tc-name, .tc-tag, .tc-wide, [colspan]) {
+    display: block;
+    grid-column: 1 / -1;
+  }
+
+  /* Название — первым, где бы ни стоял его столбец в таблице. */
+  .table.tcards > :is(tbody, tfoot) > tr > .tc-name {
+    order: -1;
+    overflow-wrap: anywhere;
+  }
+
+  /* Справа сверху стоит «⋯» — заголовок под него не заходит. */
+  .table.tcards > tbody > tr:has(> .tc-acts) > .tc-name {
+    padding-right: 40px;
+  }
+
+  .table.tcards > tbody > tr > .tc-acts {
+    position: absolute;
+    top: 6px;
+    right: 0;
+    display: block;
+  }
+
+  .ccard.table-scroll > .table.tcards > tbody > tr > .tc-acts {
+    right: 8px;
+  }
+
+  .table.tcards > :is(tbody, tfoot) > tr > .tc-main {
+    display: block;
+    order: 1;
+    overflow: hidden;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .table.tcards > :is(tbody, tfoot) > tr > .tc-main::before,
+  .table.tcards > :is(tbody, tfoot) > tr > .tc-wide[data-label]::before {
+    content: attr(data-label);
+    display: block;
+    margin-bottom: 2px;
+    color: var(--faint);
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.01em;
+    white-space: nowrap;
+  }
+
+  .table.tcards > tbody > tr > .tc-toggle {
+    display: block;
+    grid-column: 4;
+    order: 1;
+    align-self: center;
+  }
+
+  /* Цифр в карточке нет — стрелка встаёт в строку состояния, а без него — рядом с названием. */
+  .table.tcards > tbody > tr:not(:has(> .tc-main)) > .tc-toggle {
+    order: 0;
+    align-self: start;
+  }
+
+  .table.tcards > tbody > tr:has(> .tc-toggle):not(:has(> .tc-main)) > .tc-tag,
+  .table.tcards > tbody > tr:has(> .tc-toggle):not(:has(> .tc-main, > .tc-tag)) > .tc-name {
+    grid-column: 1 / 4;
+  }
+
+  /* Раскрывать нечего (стрелки нет) — цифры занимают всю ширину. */
+  .table.tcards > :is(tbody, tfoot) > tr:not(:has(> .tc-toggle)) {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  /* …а когда цифр всего две — пополам. */
+  .table.tcards > :is(tbody, tfoot) > tr:not(:has(> .tc-toggle, > .tc-main ~ .tc-main ~ .tc-main)) {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  /* Открытая строка: остальные столбцы — «подпись слева, значение справа». Так же выглядит .tc-row. */
+  .table.tcards > tbody > tr > .tc-row,
+  .table.tcards > tbody > tr[data-open] > td:not(.tc-name, .tc-tag, .tc-main, .tc-wide, .tc-row, .tc-acts, .tc-toggle, .check-col, [colspan]) {
+    display: flow-root;
+    grid-column: 1 / -1;
+    order: 2;
+    font-size: 13.5px;
+    text-align: right;
+    white-space: normal;
+  }
+
+  .table.tcards > tbody > tr > .tc-row::before,
+  .table.tcards > tbody > tr[data-open] > td:not(.tc-name, .tc-tag, .tc-main, .tc-wide, .tc-row, .tc-acts, .tc-toggle, .check-col, [colspan])::before {
+    content: attr(data-label);
+    float: left;
+    margin-right: 16px;
+    color: var(--muted);
+    font-weight: 500;
+  }
+
+  .table.tcards > :is(tbody, tfoot) > tr > .tc-wide {
+    order: 3;
+  }
+
+  /* Блоку нечего показать (нет причин, корректировку сюда не поставить) — он места не занимает. */
+  .table.tcards > :is(tbody, tfoot) > tr > .tc-wide:empty {
+    display: none;
+  }
+
+  /* Долгое нажатие выбирает строку — выделение текста и системное меню ему мешают. */
+  .table.tcards > tbody > tr:has(> .check-col) {
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-touch-callout: none;
+  }
+
+  .table.tcards[data-picking] > tbody > tr:has(> .check-col) {
+    padding-left: 34px;
+  }
+
+  .ccard.table-scroll > .table.tcards[data-picking] > tbody > tr:has(> .check-col) {
+    padding-left: 48px;
+  }
+
+  /* :is(.table-scroll, :root) — ради веса: правило липкой колонки у прокручиваемой таблицы тяжёлое, а флажок
+     карточки должен стоять в углу при любом состоянии обёртки. */
+  :is(.table-scroll, :root) .table.tcards[data-picking] > tbody > tr > td.check-col {
+    position: absolute;
+    top: 12px;
+    left: 0;
+    display: block;
+  }
+
+  :is(.table-scroll, :root) .ccard.table-scroll > .table.tcards[data-picking] > tbody > tr > td.check-col {
+    left: 14px;
+  }
+
+  /* Пока идёт выбор, над карточками — «Выбрать все» из заголовка таблицы. */
+  .table.tcards[data-picking] > thead:has(.check-col .ui-check) {
+    display: block;
+  }
+
+  .table.tcards[data-picking] > thead > tr {
+    display: block;
+    padding-bottom: 10px;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .table.tcards[data-picking] > thead > tr > th {
+    display: none;
+  }
+
+  .table.tcards[data-picking] > thead > tr > th.check-col {
+    position: static;
+    display: block;
+    width: auto;
+    padding: 0;
+    border: 0;
+    box-shadow: none;
+    text-align: left;
+  }
+
+  .table.tcards[data-picking] > thead .check-col .ui-check {
+    justify-content: flex-start;
+    gap: 10px;
+  }
+
+  .table.tcards[data-picking] > thead .check-col .ui-check::after {
+    content: 'Выбрать все';
+    color: var(--ink);
+    font-size: 13px;
+    font-weight: 700;
+    white-space: nowrap;
+  }
 }

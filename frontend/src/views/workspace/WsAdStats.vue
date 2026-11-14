@@ -191,7 +191,7 @@
       </div>
 
       <div v-scroll-x class="table-scroll" :class="{ 'is-loading': busy === 'report' }">
-        <table class="table">
+        <table v-cards class="table tcards">
           <thead>
             <tr>
               <th class="check-col">
@@ -226,7 +226,7 @@
                   @change="toggle(r.ad_row_id, $event.target.checked)"
                 />
               </td>
-              <td class="ad-cell">
+              <td class="ad-cell tc-name">
                 <b>{{ r.title || '—' }}</b>
                 <span v-if="r.titles.length > 1" class="chip">+{{ r.titles.length - 1 }} загол.</span>
                 <span v-if="STATES[r.state]" class="chip">{{ STATES[r.state] }}</span>
@@ -235,24 +235,43 @@
                 <small class="cell-note">{{ r.campaign_name }} · {{ r.adgroup_name }}</small>
               </td>
               <template v-for="net in ['search', 'network']" :key="net">
-                <td class="num">{{ r.nets[net] ? num(r.nets[net].impressions) : '—' }}</td>
-                <td class="num">{{ r.nets[net] ? num(r.nets[net].clicks) : '—' }}</td>
-                <td class="num" :class="{ 'tone-bad': r.nets[net]?.low }">
+                <td class="num" :data-label="`${NET_LABELS[net]}: показы`">
+                  {{ r.nets[net] ? num(r.nets[net].impressions) : '—' }}
+                </td>
+                <td class="num" :data-label="`${NET_LABELS[net]}: клики`">
+                  {{ r.nets[net] ? num(r.nets[net].clicks) : '—' }}
+                </td>
+                <td class="num" :class="{ 'tone-bad': r.nets[net]?.low }" :data-label="`${NET_LABELS[net]}: CTR`">
                   {{ r.nets[net]?.ctr != null ? pct(r.nets[net].ctr, 2) : '—' }}
                   <small v-if="r.nets[net]?.ref_ctr != null" class="cell-note">соседи {{ pct(r.nets[net].ref_ctr, 2) }}</small>
                 </td>
               </template>
-              <td class="num">{{ rub(r.total.cost_kopecks) }}</td>
-              <td class="num">{{ num(r.total.conversions) }}</td>
-              <td class="num">{{ r.total.cpa_kopecks != null ? rub(r.total.cpa_kopecks) : '—' }}</td>
-              <td class="slice-why">
+              <td class="num tc-main" data-label="Расход">{{ rub(r.total.cost_kopecks) }}</td>
+              <td class="num tc-main" data-label="Конв.">{{ num(r.total.conversions) }}</td>
+              <td class="num tc-main" data-label="CPA">
+                {{ r.total.cpa_kopecks != null ? rub(r.total.cpa_kopecks) : '—' }}
+              </td>
+              <td class="slice-why tc-wide">
                 <small v-for="(why, i) in reasons(r)" :key="i" class="cell-note">{{ why }}</small>
               </td>
+              <UiRowMore />
             </tr>
           </tbody>
         </table>
       </div>
       <div v-if="!shown.length" class="empty">Нет объявлений под фильтр.</div>
+      <!-- Телефон: объявления отмечают долгим нажатием — действие с выбранными рядом, над нижней панелью. -->
+      <div v-if="phone && selected.size" class="bulk-dock" role="region" aria-label="Действия с выбранными">
+        <b>Выбрано: {{ selected.size }}</b>
+        <div class="bulk-dock__acts">
+          <button class="btn btn--accent btn--sm" type="button" :disabled="!!busy" @click="askAi">
+            {{ busy === 'ai' ? 'ИИ пишет…' : `Переписать с ИИ (${Math.min(selected.size, AI_MAX)})` }}
+          </button>
+        </div>
+        <button class="btn btn--ghost btn--sm bulk-dock__end" type="button" @click="selected = new Set()">
+          Снять выбор
+        </button>
+      </div>
     </template>
   </section>
 
@@ -270,11 +289,13 @@ import PageHeader from '../../components/ui/PageHeader.vue'
 import UiCheckbox from '../../components/ui/UiCheckbox.vue'
 import UiMore from '../../components/ui/UiMore.vue'
 import UiNotice from '../../components/ui/UiNotice.vue'
+import UiRowMore from '../../components/ui/UiRowMore.vue'
 import { RouterLink } from 'vue-router'
 import { errorText, jobProgressText, wsApi } from '../../api/web'
 import { askConfirm } from '../../composables/useConfirm'
 import { pushToast } from '../../composables/useToasts'
 import { undoAction } from '../../composables/useUndo'
+import { useViewport } from '../../composables/useViewport'
 import { aiUsageText, formatDate, num, pct, plural, rub } from '../../utils/format'
 import { useWs } from './context'
 import HeadlinesPanel from './HeadlinesPanel.vue'
@@ -301,6 +322,9 @@ const loadError = ref('')
 const done = ref('')
 const doneErrors = ref([])
 const selected = ref(new Set())
+const { phone } = useViewport()
+// Подписи столбцов «Поиск» и «Сети» в карточке на телефоне.
+const NET_LABELS = { search: 'Поиск', network: 'Сети' }
 const created = ref(new Set())
 const filter = ref('weak')
 const search = ref('')
