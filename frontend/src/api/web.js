@@ -120,6 +120,8 @@ export const wsApi = {
   load: (id) => request(`${WS(id)}/load`),
   update: (id, payload) => patch(WS(id), payload),
   summary: (id) => request(`${WS(id)}/summary`),
+  /** Строка «как дела» и три числа проекта за 7 или 30 дней. */
+  headline: (id, period = 7) => request(`${WS(id)}/headline${query({ period })}`),
   analytics: (id, params = {}) => request(`${WS(id)}/analytics${query(params)}`),
   syncStats: (id, days, onProgress) => runJob(`${WS(id)}/analytics/sync`, { days }, onProgress),
   accounts: (id) => request(`${WS(id)}/accounts`),
@@ -458,6 +460,8 @@ export const webApi = {
   syncGoals: (counterRowId, onProgress) =>
     runJob(`/api/web/metrika/${counterRowId}/goals/sync`, undefined, onProgress),
   overview: () => request('/api/web/overview'),
+  /** Строка «как дела» и три числа по всем проектам за 7 или 30 дней. */
+  headline: (period = 7) => request(`/api/web/overview/headline${query({ period })}`),
   overviewRefresh: (onProgress) => runJob('/api/web/overview/refresh', undefined, onProgress),
   digestSettings: () => request('/api/web/digest'),
   updateDigest: (payload) => request('/api/web/digest', { method: 'PUT', body: JSON.stringify(payload) }),

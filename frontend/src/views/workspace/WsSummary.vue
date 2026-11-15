@@ -1,5 +1,7 @@
 <template>
-  <HomeAsk :ws-id="ws?.id" />
+  <HomeAsk :ws-id="ws?.id">
+    <HomeHeadline v-if="ws" ref="headline" :ws-id="ws.id" :compact="expert" />
+  </HomeAsk>
 
   <div v-if="loading && !data" class="panel"><p class="empty">Собираем сводку…</p></div>
   <div v-else-if="!data" class="panel">
@@ -11,21 +13,6 @@
   <template v-else-if="!expert">
     <PendingDecisions :ws-id="ws.id" />
     <SignalCards :problems="data.problems" :ws-id="ws.id" />
-
-    <h2 class="section-h">
-      За неделю
-      <small class="home-link"><RouterLink :to="`/w/${ws.id}/analytics`">Все отчёты</RouterLink></small>
-    </h2>
-    <div class="bigstats">
-      <div v-for="t in weekTiles" :key="t.label" class="bigstat">
-        <span>{{ t.label }}<TermHint v-if="t.term" :term="t.term" /></span>
-        <b>{{ t.value }}</b>
-        <small :class="t.tone">
-          <RouterLink v-if="t.settings" :to="`/w/${ws.id}/settings`">{{ t.note }}</RouterLink>
-          <template v-else>{{ t.note }}</template>
-        </small>
-      </div>
-    </div>
 
     <h2 class="section-h">
       Кампании проекта
@@ -249,12 +236,12 @@ import {
 import ActionWho from '../../components/ActionWho.vue'
 import ExpertHint from '../../components/ExpertHint.vue'
 import HomeAsk from '../../components/HomeAsk.vue'
+import HomeHeadline from '../../components/HomeHeadline.vue'
 import KpiTile from '../../components/KpiTile.vue'
 import MetricGrid from '../../components/MetricGrid.vue'
 import PendingDecisions from '../../components/PendingDecisions.vue'
 import ProblemList from '../../components/ProblemList.vue'
 import SignalCards from '../../components/SignalCards.vue'
-import TermHint from '../../components/TermHint.vue'
 import TrendChart from '../../components/TrendChart.vue'
 import PageHeader from '../../components/ui/PageHeader.vue'
 import UiRibbon from '../../components/ui/UiRibbon.vue'
@@ -270,7 +257,6 @@ import {
   KPI_TONES,
   asOfNote,
   balanceTone,
-  daysLong,
   daysShort,
   formatDate,
   formatDateTime,
@@ -278,7 +264,6 @@ import {
   kpiGoal,
   kpiValue,
   num,
-  pct,
   rub,
 } from '../../utils/format'
 import { CHART_METRICS, METRIC_BY_KEY } from './metrics'
@@ -300,6 +285,7 @@ const loadError = ref('')
 const refreshing = ref(false)
 const refreshText = ref('')
 const chartKey = ref('cost_kopecks')
+const headline = ref(null)
 
 const row = computed(() => data.value?.row || {})
 const week = computed(() => data.value?.week || {})
@@ -333,46 +319,6 @@ const HEALTH_BADGE = {
   off: { icon: CirclePause, text: 'Остановлена' },
 }
 
-/** «на 12% больше, чем неделей раньше»; inverse — рост это плохо (расход, цена). */
-function versus(value, more, less, inverse = false) {
-  if (value == null) return { note: 'неделей раньше не с чем сравнить', tone: '' }
-  const v = Math.round(value)
-  if (!v) return { note: 'как неделей раньше', tone: '' }
-  const bad = inverse ? v > 0 : v < 0
-  return { note: `на ${pct(Math.abs(v), 0)} ${v > 0 ? more : less}, чем неделей раньше`, tone: Math.abs(v) < 5 ? '' : bad ? 'is-warn' : 'is-ok' }
-}
-
-const weekTiles = computed(() => {
-  const w = week.value
-  const t = w.totals || {}
-  const c = w.compare || {}
-  const kpi = w.kpi?.type ? w.kpi : null
-  const third =
-    kpi?.type === 'drr'
-      ? { label: 'Доля расходов на рекламу', term: 'drr', value: t.drr != null ? pct(t.drr) : kpiValue(kpi), ...versus(c.drr, 'больше', 'меньше', true) }
-      : { label: 'Цена заявки', term: 'cpa', value: rub(t.cpa_kopecks), ...versus(c.cpa_kopecks, 'дороже', 'дешевле', true) }
-  if (kpi) {
-    third.note = kpiGoal(kpi)
-    third.tone = kpi.status === 'ok' ? 'is-ok' : kpi.status === 'none' ? '' : 'is-warn'
-  } else {
-    third.note = 'цель не задана — задать'
-    third.settings = true
-  }
-  const r = row.value
-  const days = r.days_on_balance
-  return [
-    { label: 'Потрачено', value: rub(t.cost_kopecks), ...versus(c.cost_kopecks, 'больше', 'меньше', true) },
-    { label: 'Заявки', term: 'leads', value: num(t.conversions || 0), ...versus(c.conversions, 'больше', 'меньше') },
-    third,
-    {
-      label: 'Деньги в Директе',
-      value: r.balance_kopecks != null ? rub(r.balance_kopecks) : '—',
-      note: days != null ? `хватит примерно на ${daysLong(days)}` : 'нет данных о расходе',
-      tone: days != null && days < 5 ? 'is-warn' : '',
-    },
-  ]
-})
-
 /** Три кампании с наибольшим расходом — со статусом против цели проекта. */
 const topCampaigns = computed(() => {
   // ДРР по кампаниям сводка не отдаёт, поэтому против цели сверяем только CPA.
@@ -399,7 +345,7 @@ async function refresh() {
     const result = await webApi.overviewRefresh((job) => {
       refreshText.value = `Обновляем: ${jobProgressText(job)}`
     })
-    await load()
+    await Promise.all([load(), headline.value?.load()])
     const errors = (result.direct?.errors || 0) + (result.balances?.errors || 0)
     pushToast(errors ? `Обновлено, но с ошибками: ${errors}` : 'Расход и балансы обновлены', errors ? 'error' : 'ok')
   } catch (err) {

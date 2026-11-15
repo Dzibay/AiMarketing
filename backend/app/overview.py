@@ -37,6 +37,13 @@ NO_CONV_COST_RATIO = 2.0
 NO_CONV_MIN_BASE_CONVERSIONS = 3
 
 _TOKEN_ERRORS = ("token-expired", "unauthorized")
+BALANCE_OUT_TITLE = "Деньги на счёте закончились"
+
+# Строка «как дела»: заметное изменение к прошлому периоду и минимальная база, чтобы 2 → 1 заявка не тревожила.
+HEADLINE_SHIFT_PCT = 30
+HEADLINE_MIN_CONVERSIONS = 5
+HEADLINE_MIN_COST = 100_000  # 1 000 ₽
+DIRECT_URL = "https://direct.yandex.ru/"
 
 
 def rub(kopecks: float | None) -> str:
@@ -394,6 +401,166 @@ def _budget_problems(budget: dict | None, where: dict, *, label: str = "") -> li
     return [_problem(severity, "budget", title, detail, **where)]
 
 
+# --- Строка «как дела» ----------------------------------------------------------------------
+
+
+def _int(n: float) -> str:
+    return f"{round(n):,}".replace(",", " ")
+
+
+def _plural(n: int, one: str, few: str, many: str) -> str:
+    n = abs(n) % 100
+    if 11 <= n <= 19:
+        return many
+    n %= 10
+    return one if n == 1 else few if 2 <= n <= 4 else many
+
+
+def _leads(n: int) -> str:
+    return f"{_int(n)} {_plural(n, 'заявка', 'заявки', 'заявок')}"
+
+
+def _dec(value: float) -> str:
+    return f"{value:g}".replace(".", ",")
+
+
+def _days(value: float) -> str:
+    word = _plural(int(value), "день", "дня", "дней") if float(value).is_integer() else "дня"
+    return f"{_dec(value)} {word}"
+
+
+def _quoted(name: str) -> str:
+    return f"«{name}»"
+
+
+def _names(items: list[dict]) -> str:
+    first = _quoted(items[0]["name"])
+    return first + (f" и ещё {len(items) - 1}" if len(items) > 1 else "")
+
+
+def _pct_change(cur: float, prev: float) -> float | None:
+    return (cur - prev) / prev * 100 if prev else None
+
+
+def headline(f: dict) -> dict:
+    """
+    Одна строка о том, как идут дела, — человеческим языком, без терминов. Считает код, не ИИ.
+
+    f — факты за период: days (7 или 30); accounts — подключено кабинетов; stats_loaded; token_lost;
+    money_out; money_days — на сколько дней хватит денег (money_project — чьих, на главной); rejected / stopped — [{name, to}] кампаний;
+    kpi — kpi_state за период или None; project — проект с плохим KPI (на главной); cost, conversions,
+    prev_cost, prev_conversions; worst — {name, to} самая дорогая кампания; all_in_goal — на главной
+    все проекты с целью укладываются в неё; goal_link — где задать цель; chat — путь чата;
+    campaigns — путь списка кампаний.
+
+    Правила по порядку, первое сработавшее побеждает: данные → реклама не идёт → цена заявки выше цели →
+    заметное изменение к прошлому периоду → всё по плану. Возвращает {tone: ok|warn|bad, text, link}.
+    """
+    days = f["days"]
+    period = f"за {days} дней"
+    before = f"за прошлые {days} дней"
+
+    def out(tone: str, text: str, link: dict | None = None) -> dict:
+        return {"tone": tone, "text": text, "link": link}
+
+    def ask(question: str) -> dict:
+        return {"label": "Что с этим делать", "to": f["chat"], "ask": question}
+
+    connections = {"label": "Открыть подключения", "to": "/cabinet/connections"}
+    top_up = {"label": "Пополнить в Директе", "to": DIRECT_URL, "external": True}
+
+    # 1. Данные.
+    if not f["accounts"]:
+        return out("warn", "Директ ещё не подключён — сводке пока не из чего считать", connections)
+    if f["token_lost"]:
+        return out("bad", "Нет доступа к Яндексу: цифры не обновляются, пока вы не переподключите логин", connections)
+    if not f["stats_loaded"]:
+        return out("ok", "Загружаем статистику из Директа — цифры появятся в течение нескольких минут")
+
+    # 2. Реклама не идёт.
+    if f["money_out"]:
+        return out("bad", "Реклама не показывается: на счёте закончились деньги", top_up)
+    money_days = f["money_days"]
+    if money_days is not None and money_days < BALANCE_CRITICAL_DAYS:
+        when = "меньше чем через день" if money_days < 1 else f"примерно через {_days(money_days)}"
+        whose = f"В {_quoted(f['money_project'])} деньги" if f.get("money_project") else "Деньги"
+        return out("bad", f"{whose} на счёте закончатся {when}", top_up)
+    if f["rejected"]:
+        what = "кампания" if len(f["rejected"]) == 1 else "кампании"
+        verb = "отклонена" if len(f["rejected"]) == 1 else "отклонены"
+        return out(
+            "bad",
+            f"Реклама не показывается: {what} {_names(f['rejected'])} {verb} модерацией",
+            {"label": "Открыть кампанию", "to": f["rejected"][0]["to"]},
+        )
+    if f["stopped"]:
+        one = len(f["stopped"]) == 1
+        return out(
+            "warn",
+            f"{'Кампания' if one else 'Кампании'} {_names(f['stopped'])} "
+            f"{'перестала' if one else 'перестали'} показываться",
+            {"label": "Открыть кампанию", "to": f["stopped"][0]["to"]},
+        )
+    cost, conv = f["cost"], f["conversions"]
+    if not cost:
+        return out("warn", f"Реклама не показывается: {period} расхода не было", {"label": "Открыть кампании", "to": f["campaigns"]})
+
+    # 3. Цена заявки выше цели.
+    kpi = f["kpi"]
+    where = f" в {_quoted(f['project'])}" if f.get("project") else ""
+    if kpi and kpi["status"] in ("warn", "bad"):
+        tone = "bad" if kpi["status"] == "bad" else "warn"
+        worst = f". Дороже всего — {_quoted(f['worst']['name'])}" if f.get("worst") else ""
+        if kpi["type"] == "cpa":
+            goal = rub(kpi["target"] * 100)
+            if kpi["value"] is not None:
+                text = f"Заявки{where} подорожали: {rub(kpi['value'])} при цели {goal}{worst}"
+            else:
+                text = f"{_sentence(period)}{where} потрачено {rub(cost)}, а заявок нет — при цели {goal} за заявку{worst}"
+        else:
+            text = f"Реклама{where} обходится дороже цели: {_dec(kpi['value'])}% от выручки при цели {_dec(kpi['target'])}%"
+        return out(tone, text, ask(f"{text}. Почему так и что сделать?"))
+
+    # 4. Заметное изменение к прошлому периоду.
+    prev_cost, prev_conv = f["prev_cost"], f["prev_conversions"]
+    conv_change = _pct_change(conv, prev_conv) if prev_conv >= HEADLINE_MIN_CONVERSIONS else None
+    if conv_change is not None and abs(conv_change) >= HEADLINE_SHIFT_PCT:
+        if conv_change < 0:
+            text = f"Заявок стало меньше: {_leads(conv)} {period} против {_int(prev_conv)} {before}"
+            return out("warn", text, ask(f"{text}. Почему так и что сделать?"))
+        return out("ok", f"Заявок стало больше: {_leads(conv)} {period} против {_int(prev_conv)} {before}")
+    cost_change = _pct_change(cost, prev_cost) if prev_cost >= HEADLINE_MIN_COST else None
+    if cost_change is not None and abs(cost_change) >= HEADLINE_SHIFT_PCT:
+        word = "вырос" if cost_change > 0 else "упал"
+        text = f"Расход {word}: {rub(cost)} {period} против {rub(prev_cost)} {before}"
+        return out("warn", text, ask(f"{text}. Почему так и что сделать?"))
+
+    # 5. Всё по плану.
+    if kpi and kpi["status"] == "ok":
+        if kpi["type"] == "cpa":
+            return out(
+                "ok",
+                f"Всё идёт по плану: {period} {_leads(conv)} по {rub(kpi['value'])}, цель — {rub(kpi['target'] * 100)}",
+            )
+        return out(
+            "ok",
+            f"Всё идёт по плану: {period} реклама обошлась в {_dec(kpi['value'])}% от выручки, цель — {_dec(kpi['target'])}%",
+        )
+    if not conv:
+        text = f"{_sentence(period)} потрачено {rub(cost)}, а заявок пока нет"
+        return out("warn", text, ask(f"{text}. Почему так и что сделать?"))
+    summary = f"{period} {_leads(conv)} по {rub(cost / conv)}"
+    if f.get("all_in_goal"):
+        return out("ok", f"Всё идёт по плану: {summary}, все проекты укладываются в цель")
+    if f.get("goal_link"):
+        return out(
+            "ok",
+            f"{_sentence(summary)}. Задайте цель — подскажем, когда заявки подорожают",
+            {"label": "Задать цель", "to": f["goal_link"]},
+        )
+    return out("ok", _sentence(summary))
+
+
 def build_overview(user_id: int, today: date | None = None, now: datetime | None = None) -> dict:
     """
     Строки по проектам (сайтам), папки-клиенты с общим бюджетом и список «где горит».
@@ -638,7 +805,7 @@ def build_overview(user_id: int, today: date | None = None, now: datetime | None
         if balance is not None and cost_7d > 0:
             balance_days = days_on_balance(balance, cost_7d)
             if balance <= 0:
-                problems.append(_problem("critical", "balance", "Деньги на счёте закончились", rub(balance), **where))
+                problems.append(_problem("critical", "balance", BALANCE_OUT_TITLE, rub(balance), **where))
             elif balance_days is not None and balance_days < BALANCE_WARNING_DAYS:
                 severity = "critical" if balance_days < BALANCE_CRITICAL_DAYS else "warning"
                 problems.append(

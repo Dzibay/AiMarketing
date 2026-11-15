@@ -1,6 +1,8 @@
 <template>
   <!-- Приветствие — заголовок страницы (h1 в шапке), пояснение — строка под ним. -->
   <PageHeader :title="greeting" :description="lead" />
+  <!-- Между приветствием и вопросом — сводка «как дела» (HomeHeadline): первое, что видно на главной. -->
+  <slot />
   <section class="hask" aria-label="Вопрос ИИ">
     <form class="hask__box" @submit.prevent="submit()">
       <textarea

@@ -319,3 +319,49 @@ def test_api(db, monkeypatch):
 
     monkeypatch.setattr("app.api.overview.notify_user", lambda user, text: False)
     assert client.post("/api/web/digest/send", headers=auth).status_code == 400
+
+
+def test_headline_api(db, monkeypatch):
+    s = _seed(db)
+    monkeypatch.setattr("app.overview.today_msk", lambda: TODAY)
+    client = TestClient(app)
+    auth = {"Authorization": f"Bearer {make_session(s['user'])}"}
+    assert client.get("/api/web/overview/headline").status_code == 401
+
+    # Логин без доступа — первое, что видно, и на главной, и в проекте.
+    home = client.get("/api/web/overview/headline", headers=auth).json()
+    assert home["headline"]["tone"] == "bad" and home["headline"]["text"].startswith("Нет доступа к Яндексу")
+    assert (home["numbers"]["period"], home["numbers"]["date_to"]) == (7, YESTERDAY.isoformat())
+
+    _sql(db, "UPDATE yandex_connections SET last_sync_status = 'ok', last_sync_error = '' WHERE user_id = %s", (s["user"],))
+    _sql(db, "UPDATE direct_accounts SET stats_synced_at = now() WHERE user_id = %s", (s["user"],))
+
+    # У Ромашки 6 000 ₽ при расходе ≈5 100 ₽ в день — деньги важнее отклонённой кампании.
+    home = client.get("/api/web/overview/headline", headers=auth).json()
+    assert home["headline"]["text"] == "В «Ромашка» деньги на счёте закончатся примерно через 1,2 дня"
+
+    # Пополнили — отклонённая кампания Вектора важнее остановленной у Ромашки.
+    _sql(db, "UPDATE direct_accounts SET balance_kopecks = 10000000 WHERE id = %s", (s["acc_r"],))
+    home = client.get("/api/web/overview/headline", headers=auth).json()
+    assert home["headline"]["text"] == "Реклама не показывается: кампания «Товары» отклонена модерацией"
+    assert home["headline"]["link"]["to"].startswith(f"/w/{s['ws_v']}/campaigns/")
+    assert home["goal"] is None and home["goal_link"] is None  # проектов два — у каждого своя цель
+
+    ws_r = client.get(f"/api/web/workspaces/{s['ws_r']}/headline?period=30", headers=auth).json()
+    assert ws_r["headline"] == {
+        "tone": "warn",
+        "text": "Кампания «РСЯ» перестала показываться",
+        "link": {"label": "Открыть кампанию", "to": ws_r["headline"]["link"]["to"]},
+    }
+    numbers = ws_r["numbers"]
+    assert numbers["period"] == 30
+    # 14 дней по 4000 ₽ + вчера 12 000 ₽ + 500 ₽ у РСЯ, 60 заявок.
+    assert (numbers["cost"], numbers["conversions"]) == ((14 * 4000 + 12000 + 500) * 100, 60)
+    assert ws_r["goal"]["type"] == "cpa" and ws_r["goal_link"] == f"/w/{s['ws_r']}/settings"
+
+    ws_v = client.get(f"/api/web/workspaces/{s['ws_v']}/headline", headers=auth).json()
+    assert ws_v["headline"]["tone"] == "bad"
+
+    stranger = make_user(db, "c@example.com")
+    other = {"Authorization": f"Bearer {make_session(stranger)}"}
+    assert client.get(f"/api/web/workspaces/{s['ws_r']}/headline", headers=other).status_code == 404

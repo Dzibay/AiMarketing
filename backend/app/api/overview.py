@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from app import plans
+from app.analytics import home_headline
 from app.api.web import _http, _start_job
 from app.digest import build_digest, get_digest_settings, update_digest_settings
 from app.onboarding import get_onboarding, set_onboarding_dismissed
@@ -23,6 +24,12 @@ class DigestBody(BaseModel):
 @router.get("/overview")
 def web_overview(user_id: int = Depends(require_web_user)) -> dict:
     return build_overview(user_id)
+
+
+@router.get("/overview/headline")
+def web_overview_headline(period: int = 7, user_id: int = Depends(require_web_user)) -> dict:
+    """Строка «как дела» и три числа за 7 или 30 дней — первый блок главной."""
+    return home_headline(user_id, period)
 
 
 @router.post("/overview/refresh")

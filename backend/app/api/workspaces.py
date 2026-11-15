@@ -14,7 +14,7 @@ from app.actions import (
 from app.account_load import load_overview
 from app.adgroups import list_adgroups
 from app.ads import list_ads
-from app.analytics import parse_range, workspace_analytics, workspace_summary
+from app.analytics import parse_range, workspace_analytics, workspace_headline, workspace_summary
 from app.api.web import _http, _start_job
 from app.db import pool
 from app.direct_sync import get_campaign
@@ -312,6 +312,12 @@ def ws_patch(workspace_id: int, body: WorkspacePatchBody, user_id: int = Depends
 def ws_summary(workspace_id: int, user_id: int = Depends(require_web_user)) -> dict:
     _ws(user_id, workspace_id)
     return workspace_summary(user_id, workspace_id)
+
+
+@router.get("/{workspace_id}/headline")
+def ws_headline(workspace_id: int, period: int = 7, user_id: int = Depends(require_web_user)) -> dict:
+    _ws(user_id, workspace_id)
+    return workspace_headline(user_id, workspace_id, period)
 
 
 @router.get("/{workspace_id}/analytics")

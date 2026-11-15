@@ -12,7 +12,7 @@ from datetime import date, timedelta
 from app.journal import list_action_logs
 from app.clock import today_msk
 from app.db import pool
-from app.overview import SEVERITY_ORDER, build_overview, kpi_state
+from app.overview import BALANCE_OUT_TITLE, SEVERITY_ORDER, build_overview, headline, kpi_state
 from app.stats import structure_tops
 from app.strategy_info import budget_brief
 from app.workspaces import list_workspaces, require_workspace
@@ -451,4 +451,153 @@ def workspace_summary(user_id: int, workspace_id: int) -> dict:
         },
         "top_campaigns": week["by_campaign"][:5],
         "recent_actions": list_action_logs(user_id, 10, workspace_id=workspace_id),
+    }
+
+
+# --- Сводка «как дела»: строка и три числа первым блоком главной и главной проекта -------------------
+
+HEADLINE_PERIODS = (7, 30)
+
+
+def _period(today: str, days: int) -> tuple[date, date]:
+    date_to = date.fromisoformat(today) - timedelta(days=1)
+    return date_to - timedelta(days=days - 1), date_to
+
+
+def _campaign_link(p: dict) -> str:
+    ws = p.get("workspace_id")
+    return f"/w/{ws}/campaigns/{p['campaign_row_id']}" if ws else "/cabinet/campaigns"
+
+
+def _campaign_problems(problems: list[dict], kind: str, severity: str | None = None) -> list[dict]:
+    return [
+        {"name": p["object_name"], "to": _campaign_link(p)}
+        for p in problems
+        if p["kind"] == kind and p.get("campaign_row_id") and (severity is None or p["severity"] == severity)
+    ]
+
+
+def _worst_campaign(campaigns: list[dict], workspace_id: int) -> dict | None:
+    """Самая дорогая заявка среди кампаний с расходом; без заявок «цена» — весь расход. Одна кампания — не с чем сравнить."""
+    spent = [c for c in campaigns if c["cost_kopecks"] > 0]
+    if len(spent) < 2:
+        return None
+    worst = max(spent, key=lambda c: c["cpa_kopecks"] if c["conversions"] else c["cost_kopecks"])
+    return {"name": worst["name"], "to": f"/w/{workspace_id}/campaigns/{worst['campaign_row_id']}"}
+
+
+def _base_facts(days: int, problems: list[dict]) -> dict:
+    return {
+        "days": days,
+        "token_lost": any(p["kind"] == "token" and p["severity"] == "critical" for p in problems),
+        "money_out": any(p["kind"] == "balance" and p["title"] == BALANCE_OUT_TITLE for p in problems),
+        "rejected": _campaign_problems(problems, "moderation", "critical"),
+        "stopped": _campaign_problems(problems, "stopped"),
+    }
+
+
+def _numbers(days: int, date_from: date, date_to: date, totals: dict, previous: dict, compare: dict) -> dict:
+    return {
+        "period": days,
+        "date_from": date_from.isoformat(),
+        "date_to": date_to.isoformat(),
+        "cost": totals["cost_kopecks"],
+        "conversions": totals["conversions"],
+        "cpa": totals["cpa_kopecks"],
+        "drr": totals["drr"],
+        "prev_cost": previous["cost_kopecks"],
+        "prev_conversions": previous["conversions"],
+        "change": {
+            "cost": compare["cost_kopecks"],
+            "conversions": compare["conversions"],
+            "cpa": compare["cpa_kopecks"],
+            "drr": compare["drr"],
+        },
+    }
+
+
+def workspace_headline(user_id: int, workspace_id: int, days: int = 7) -> dict:
+    """Строка «как дела» и три числа по проекту за 7 или 30 дней."""
+    require_workspace(user_id, workspace_id)
+    days = days if days in HEADLINE_PERIODS else HEADLINE_PERIODS[0]
+    overview = build_overview(user_id)
+    row = next((r for r in overview["workspaces"] if r["id"] == workspace_id), None) or {}
+    problems = [
+        p
+        for p in overview["problems"]
+        if p.get("workspace_id") == workspace_id or workspace_id in (p.get("workspace_ids") or [])
+    ]
+    date_from, date_to = _period(overview["today"], days)
+    a = workspace_analytics(user_id, workspace_id, date_from=date_from, date_to=date_to, with_tops=False)
+    kpi = a["kpi"] if a["kpi"] and a["kpi"]["status"] != "none" else None
+    base = f"/w/{workspace_id}"
+    numbers = _numbers(days, date_from, date_to, a["totals"], a["previous"], a["compare"])
+    facts = {
+        **_base_facts(days, problems),
+        "accounts": row.get("accounts", 0),
+        "stats_loaded": bool(row.get("stats_synced_at") or a["direct_updated_at"]),
+        "money_days": row.get("days_on_balance"),
+        "kpi": kpi,
+        "project": "",
+        "cost": numbers["cost"],
+        "conversions": numbers["conversions"],
+        "prev_cost": numbers["prev_cost"],
+        "prev_conversions": numbers["prev_conversions"],
+        "worst": _worst_campaign(a["by_campaign"], workspace_id),
+        "all_in_goal": False,
+        "goal_link": f"{base}/settings",
+        "chat": f"{base}/chat",
+        "campaigns": f"{base}/campaigns",
+    }
+    return {"headline": headline(facts), "numbers": numbers, "goal": kpi, "goal_link": f"{base}/settings"}
+
+
+def home_headline(user_id: int, days: int = 7) -> dict:
+    """Строка «как дела» и три числа по всем проектам. Проект один — как на его главной: с его целью."""
+    days = days if days in HEADLINE_PERIODS else HEADLINE_PERIODS[0]
+    overview = build_overview(user_id)
+    rows = overview["workspaces"]
+    date_from, date_to = _period(overview["today"], days)
+    p = portfolio_analytics(user_id, date_from=date_from, date_to=date_to)
+    projects = p["projects"]
+    numbers = _numbers(days, date_from, date_to, p["totals"], p["previous"], p["compare"])
+
+    def goal_of(pr: dict) -> dict | None:
+        return pr["kpi"] if pr["kpi"] and pr["kpi"]["status"] != "none" else None
+
+    with_goal = [pr for pr in projects if goal_of(pr)]
+    over = [pr for pr in with_goal if pr["kpi"]["status"] in ("warn", "bad")]
+    single = projects[0] if len(projects) == 1 else None
+    focus = single or (max(over, key=lambda pr: pr["kpi"]["ratio"] or 0) if over else None)
+    kpi = goal_of(focus) if focus else None
+    worst = None
+    if focus and kpi:
+        own = [c for c in p["campaigns"] if c["project"]["id"] == focus["id"]]
+        worst = _worst_campaign(own, focus["id"])
+    days_left = [r for r in rows if r["days_on_balance"] is not None]
+    shortest = min(days_left, key=lambda r: r["days_on_balance"]) if days_left else None
+    goal_link = f"/w/{single['id']}/settings" if single else None
+    facts = {
+        **_base_facts(days, overview["problems"]),
+        "accounts": sum(r["accounts"] for r in rows),
+        "stats_loaded": any(r["stats_synced_at"] for r in rows if r["accounts"]) or numbers["cost"] > 0,
+        "money_days": shortest["days_on_balance"] if shortest else None,
+        "money_project": shortest["name"] if shortest and len(rows) > 1 else "",
+        "kpi": kpi,
+        "project": focus["name"] if focus and not single else "",
+        "cost": numbers["cost"],
+        "conversions": numbers["conversions"],
+        "prev_cost": numbers["prev_cost"],
+        "prev_conversions": numbers["prev_conversions"],
+        "worst": worst,
+        "all_in_goal": bool(with_goal) and not over and not single,
+        "goal_link": goal_link,
+        "chat": f"/w/{focus['id']}/chat" if focus else "/cabinet/chat",
+        "campaigns": "/cabinet/campaigns",
+    }
+    return {
+        "headline": headline(facts),
+        "numbers": numbers,
+        "goal": goal_of(single) if single else None,
+        "goal_link": goal_link,
     }

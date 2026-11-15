@@ -1,5 +1,7 @@
 <template>
-  <HomeAsk />
+  <HomeAsk>
+    <HomeHeadline ref="headline" :compact="expert" />
+  </HomeAsk>
 
   <PageHeader v-if="expert && rows.length">
     <template #more>
@@ -25,18 +27,6 @@
     <template v-else>
       <PendingDecisions />
       <SignalCards :problems="data.problems" show-project />
-
-      <h2 class="section-h">
-        За неделю
-        <small class="home-link"><RouterLink to="/cabinet/analytics">Все отчёты</RouterLink></small>
-      </h2>
-      <div class="bigstats">
-        <div v-for="t in weekTiles" :key="t.label" class="bigstat">
-          <span>{{ t.label }}<TermHint v-if="t.term" :term="t.term" /></span>
-          <b>{{ t.value }}</b>
-          <small :class="t.tone">{{ t.note }}</small>
-        </div>
-      </div>
 
       <h2 class="section-h">Проекты <span class="cgroup__n">{{ projectCards.length }}</span></h2>
       <div class="pstrip">
@@ -298,6 +288,7 @@ import { RouterLink, useRouter } from 'vue-router'
 import { CircleCheck, Lock, RefreshCw, Search, TriangleAlert } from '@lucide/vue'
 import ExpertHint from '../components/ExpertHint.vue'
 import HomeAsk from '../components/HomeAsk.vue'
+import HomeHeadline from '../components/HomeHeadline.vue'
 import KpiTile from '../components/KpiTile.vue'
 import OnboardingChecklist from '../components/OnboardingChecklist.vue'
 import PendingDecisions from '../components/PendingDecisions.vue'
@@ -361,6 +352,7 @@ const severityFilter = ref('all')
 const wsFilter = ref('')
 const showAllProblems = ref(false)
 const problemsPanel = ref(null)
+const headline = ref(null)
 
 watch([severityFilter, wsFilter], () => {
   showAllProblems.value = false
@@ -390,30 +382,6 @@ const weekChange = computed(() => {
     conv: change(conv, prevConv),
     cpa: conv && prevConv ? change(cost / conv, prevCost / prevConv) : null,
   }
-})
-
-/** «на 12% больше, чем неделей раньше»; inverse — рост это плохо (расход, цена). */
-function versus(value, more, less, inverse = false) {
-  if (value == null) return { note: 'неделей раньше не с чем сравнить', tone: '' }
-  const v = Math.round(value)
-  if (!v) return { note: 'как неделей раньше', tone: '' }
-  const bad = inverse ? v > 0 : v < 0
-  return { note: `на ${pct(Math.abs(v), 0)} ${v > 0 ? more : less}, чем неделей раньше`, tone: Math.abs(v) < 5 ? '' : bad ? 'is-warn' : 'is-ok' }
-}
-
-const weekTiles = computed(() => {
-  const t = totals.value
-  const c = weekChange.value
-  return [
-    { label: 'Потрачено', value: rub(t.spend_7d), ...versus(c.cost, 'больше', 'меньше', true) },
-    { label: 'Заявки', term: 'leads', value: num(t.conversions_7d || 0), ...versus(c.conv, 'больше', 'меньше') },
-    {
-      label: 'Цена заявки',
-      term: 'cpa',
-      value: t.conversions_7d ? rub(t.spend_7d / t.conversions_7d) : '—',
-      ...versus(c.cpa, 'дороже', 'дешевле', true),
-    },
-  ]
 })
 
 const STATUS = {
@@ -638,7 +606,7 @@ async function refresh() {
     const result = await webApi.overviewRefresh((job) => {
       refreshText.value = `Обновляем: ${jobProgressText(job)}`
     })
-    await load()
+    await Promise.all([load(), headline.value?.load()])
     const errors = (result.direct?.errors || 0) + (result.balances?.errors || 0)
     pushToast(errors ? `Обновлено, но с ошибками: ${errors} — см. «Где горит»` : 'Расход за сегодня обновлён')
   } catch (err) {
