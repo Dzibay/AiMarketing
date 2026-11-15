@@ -19,8 +19,17 @@
       </ol>
 
       <section class="ccard start__card">
+        <!-- 0. Кто вы: от ответа зависят режим, быстрые вопросы, подсказки и тон ИИ -->
+        <template v-if="step.id === 'role'">
+          <h2>Кто вы?</h2>
+          <p class="start__muted">
+            Подстроим кабинет и то, как с вами говорит ИИ. Передумаете — поменяйте в «Настройки → Интерфейс».
+          </p>
+          <RoleChoice @chosen="load" />
+        </template>
+
         <!-- 1. Почта -->
-        <template v-if="step.id === 'email'">
+        <template v-else-if="step.id === 'email'">
           <h2>{{ step.done ? 'Почта подтверждена' : 'Подтвердите почту' }}</h2>
           <p v-if="step.done" class="start__muted">
             {{ user?.email }} — на неё придут сводки и ссылка, если забудете пароль.
@@ -211,6 +220,7 @@ import {
   Sparkles,
   TriangleAlert,
 } from '@lucide/vue'
+import RoleChoice from '../components/RoleChoice.vue'
 import SignalCards from '../components/SignalCards.vue'
 import YandexConnectButton from '../components/YandexConnectButton.vue'
 import { errorText, webApi, wsApi } from '../api/web'
@@ -224,7 +234,7 @@ useHead('Начало работы — Толк', true)
 
 const POLL_MS = 10000
 // Подписи степпера — короче заголовков шагов с сервера.
-const LABELS = { email: 'Почта', yandex: 'Яндекс', projects: 'Сайты', load: 'Загрузка', ai: 'Вопрос ИИ' }
+const LABELS = { role: 'Кто вы', email: 'Почта', yandex: 'Яндекс', projects: 'Сайты', load: 'Загрузка', ai: 'Вопрос ИИ' }
 const DETAIL_TONES = { error: 'is-bad', progress: 'is-wait', blocked: 'is-warn' }
 // Свободные — сверху, затем уже добавленные, архив, тариф выше и занятые в других аккаунтах.
 const ORDER = { available: 0, project: 1, archived: 2, locked: 3, taken: 4 }

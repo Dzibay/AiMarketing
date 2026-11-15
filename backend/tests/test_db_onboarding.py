@@ -21,6 +21,7 @@ def test_facts_come_from_existing_tables(db):
         "direct_loaded": 0,
         "load_errors": 0,
         "workspaces": [],
+        "role": "",
     }
 
     conn_id = make_connection(db, user)
@@ -82,7 +83,11 @@ def test_dismissal_is_stored_per_user(db):
 def test_first_login_leads_to_wizard_until_projects_exist(db):
     user = make_user(db)
     state = onboarding.get_onboarding(user)
-    assert state["start_wizard"] and state["wizard"]["current"] == "email"
+    assert state["start_wizard"] and state["wizard"]["current"] == "role"
+
+    with db.connection() as conn:
+        conn.execute("""UPDATE users SET ui = jsonb_build_object('role', 'pro') WHERE id = %s""", (user,))
+    assert onboarding.get_onboarding(user)["wizard"]["current"] == "email"
 
     with db.connection() as conn:
         conn.execute("UPDATE users SET email_verified_at = NOW() WHERE id = %s", (user,))
@@ -100,3 +105,15 @@ def test_first_login_leads_to_wizard_until_projects_exist(db):
 
     onboarding.set_onboarding_dismissed(user)
     assert not onboarding.get_onboarding(user)["start_wizard"]
+
+
+def test_chosen_role_reaches_the_agent_prompt(db):
+    from app import ai_agent
+
+    user = make_user(db)
+    assert ai_agent.Context(user, None).role == ""
+    with db.connection() as conn:
+        conn.execute("UPDATE users SET ui = jsonb_build_object('role', 'pro') WHERE id = %s", (user,))
+    ctx = ai_agent.Context(user, None)
+    assert ctx.role == "pro"
+    assert "специалист по контекстной рекламе" in ai_agent._role_rule(ctx)

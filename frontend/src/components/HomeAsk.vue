@@ -29,7 +29,7 @@
 <script setup>
 import { computed, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { ArrowUp, FlaskConical, Link2, ListChecks, SearchCheck, Sparkles, Target, TrendingUp } from '@lucide/vue'
+import { ArrowUp, FlaskConical, Link2, ListChecks, MessageCircle, SearchCheck, Sparkles, Target, TrendingUp } from '@lucide/vue'
 import PageHeader from './ui/PageHeader.vue'
 import { putHomeQuestion } from '../composables/useHomeAsk'
 import { useProfile } from '../composables/useProfile'
@@ -58,7 +58,7 @@ const lead = computed(() =>
 )
 
 // Быстрые вопросы — готовые задачи с пометкой home (backend/app/ai_prompts.py); чат берёт текст по ключу.
-const ICONS = { FlaskConical, Link2, ListChecks, SearchCheck, Sparkles, Target, TrendingUp }
+const ICONS = { FlaskConical, Link2, ListChecks, MessageCircle, SearchCheck, Sparkles, Target, TrendingUp }
 const { home } = usePrompts(computed(() => (props.wsId ? 'project' : 'general')))
 
 function submit() {

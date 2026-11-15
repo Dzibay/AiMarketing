@@ -1,10 +1,13 @@
 import { computed, ref } from 'vue'
 import { aiApi } from '../api/web'
+import { useRole } from './useRole'
 
 /**
  * Готовые задачи ИИ — один источник (backend/app/ai_prompts.py) для стартового экрана чата,
  * «Задач» и «/» в поле ввода, быстрых вопросов на главной и в списке кампаний.
  * Грузятся один раз за вход; свои задачи меняются здесь же, без перезагрузки.
+ *
+ * Роль (useRole): встроенная задача видна, если роль есть в её roles, и стоит на главной, если роль есть в home.
  *
  * Места (place): general — общий чат; project — чат проекта с кампаниями; first — проект без кампаний;
  * campaigns / campaigns_picked — вопрос про кампании списка (все / отмеченные).
@@ -57,14 +60,17 @@ export async function deleteOwnPrompt(id) {
 export function usePrompts(place) {
   loadPrompts().catch(() => {})
   const where = computed(() => (typeof place === 'string' ? place : place?.value))
-  const builtin = computed(() => (data.value?.builtin || []).filter((p) => p.places.includes(where.value)))
+  const { role } = useRole()
+  const builtin = computed(() =>
+    (data.value?.builtin || []).filter((p) => p.places.includes(where.value) && (p.roles || []).includes(role.value)),
+  )
   const groups = computed(() =>
     (data.value?.categories || [])
       .map((c) => ({ ...c, items: builtin.value.filter((p) => p.category === c.key) }))
       .filter((g) => g.items.length),
   )
   const own = computed(() => data.value?.own || [])
-  const home = computed(() => builtin.value.filter((p) => p.home))
+  const home = computed(() => builtin.value.filter((p) => (p.home || []).includes(role.value)))
   const ready = computed(() => !!data.value)
   return { builtin, groups, own, home, ready }
 }

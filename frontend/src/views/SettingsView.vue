@@ -123,6 +123,15 @@
 
     <template v-if="tab === 'interface'">
       <section class="panel">
+        <h2>Кто вы</h2>
+        <p class="hint">
+          От этого зависят быстрые вопросы на главной, готовые задачи, подсказки и то, как пишет ИИ: владельцу — простыми
+          словами, специалисту — с терминами и цифрами. Выбор включает подходящий режим; режим можно переключить и
+          отдельно.
+        </p>
+        <RoleChoice />
+      </section>
+      <section class="panel">
         <h2>Экспертный режим</h2>
         <UiSwitch :checked="expert" @change="setExpert($event.target.checked)">
           {{ expert ? 'Включён' : 'Выключен' }}
@@ -184,6 +193,7 @@
 import { onMounted, reactive, ref, watch, watchEffect } from 'vue'
 import { RouterLink } from 'vue-router'
 import FeatureLockNotice from '../components/FeatureLockNotice.vue'
+import RoleChoice from '../components/RoleChoice.vue'
 import UiSelect from '../components/ui/UiSelect.vue'
 import UiStatus from '../components/ui/UiStatus.vue'
 import UiSwitch from '../components/ui/UiSwitch.vue'

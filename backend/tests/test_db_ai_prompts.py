@@ -20,11 +20,20 @@ def test_builtin_set_is_consistent():
         assert p["category"] in cats and p["title"] and p["text"]
         assert p["places"] and set(p["places"]) <= places
         assert not p["home"] or p["icon"]
-    # Каждое место, где показываются задачи, не пустое; на главных — по 4 быстрых вопроса.
+        assert p["roles"] and set(p["roles"]) <= set(ai_prompts.ROLES)
+        # На главной задача стоит только у тех, кому она видна.
+        assert set(p["home"]) <= set(p["roles"])
+    # Каждое место, где показываются задачи, не пустое; на главных — по 4 быстрых вопроса у каждой роли.
     for place in places:
         assert any(place in p["places"] for p in items)
     for place in ("general", "project"):
-        assert sum(1 for p in items if p["home"] and place in p["places"]) == 4
+        for role in ai_prompts.ROLES:
+            assert sum(1 for p in items if role in p["home"] and place in p["places"]) == 4, (place, role)
+    # Владельцу на главной — простыми словами, без терминов.
+    jargon = ("CPA", "CTR", "ДРР", "KPI", "CR ")
+    for p in items:
+        if "owner" in p["home"]:
+            assert not any(word in p["title"] for word in jargon), p["title"]
 
 
 def test_own_prompts_crud(db):

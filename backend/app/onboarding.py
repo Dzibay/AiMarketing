@@ -2,7 +2,7 @@
 
 Факты собираются одним запросом из уже существующих таблиц (подключения, кабинеты, проекты,
 Telegram, чаты ИИ); шаги из них строят чистые функции build_wizard и build_onboarding — их и тестируем.
-Мастер: почта → Яндекс → проекты → загрузка → первый вопрос ИИ. Пока он не пройден и не скрыт,
+Мастер: кто вы → почта → Яндекс → проекты → загрузка → первый вопрос ИИ. Пока он не пройден и не скрыт,
 Сводка ведёт на него; после — остаются необязательные шаги (кампании, шаблон ссылки, цели, Telegram).
 """
 
@@ -16,6 +16,7 @@ SELECT
     u.onboarding_dismissed_at IS NOT NULL AS dismissed,
     u.telegram_chat_id <> '' AS telegram_linked,
     u.email_verified_at IS NOT NULL AS email_verified,
+    COALESCE(u.ui->>'role', '') AS role,
     (SELECT COUNT(*) FROM yandex_connections y WHERE y.user_id = u.id AND y.use_metrika) AS metrika_connections,
     EXISTS (SELECT 1 FROM ai_messages m JOIN ai_chats c ON c.id = m.chat_id
             WHERE c.user_id = u.id AND m.role = 'user') AS asked_ai,
@@ -52,6 +53,7 @@ def load_facts(user_id: int) -> dict:
         "telegram_linked": bool(row.get("telegram_linked")),
         "email_verified": bool(row.get("email_verified")),
         "asked_ai": bool(row.get("asked_ai")),
+        "role": row.get("role") or "",
     }
     for key in ("metrika_connections", "direct_connections", "direct_accounts", "direct_loaded", "load_errors"):
         facts[key] = int(row.get(key) or 0)
@@ -89,11 +91,23 @@ def _step(step_id: str, title: str, hint: str, done: bool, to: str | None, **ext
 
 
 def build_wizard(facts: dict) -> dict:
-    """Пять шагов мастера первого входа. current — первый несделанный шаг (None — мастер пройден)."""
+    """Шаги мастера первого входа. current — первый несделанный шаг (None — все сделаны).
+
+    Роль («Кто вы?») — первый шаг, но пройден ли мастер, от неё не зависит: кто прошёл мастер до появления
+    роли, не возвращается в него — им главная один раз покажет карточку «Как вам удобнее?».
+    """
     workspaces = facts.get("workspaces") or []
     metrika, direct = facts.get("metrika_connections", 0) > 0, facts["direct_connections"] > 0
     accounts, loaded = facts["direct_accounts"], facts["direct_loaded"]
-    steps = []
+    steps = [
+        _step(
+            "role",
+            "Кто вы?",
+            "Владельцу бизнеса — простые слова и главное, специалисту по рекламе — термины, цифры и все инструменты",
+            bool(facts.get("role")),
+            None,
+        )
+    ]
 
     # Без подтверждённой почты кабинет закрыт; шаг остаётся в списке, чтобы путь был виден целиком.
     steps.append(_step("email", "Почта", "Подтверждение почты — вход и восстановление пароля", facts.get("email_verified", True), None))
@@ -151,11 +165,12 @@ def build_wizard(facts: dict) -> dict:
         )
     )
 
-    current = next((s["id"] for s in steps if not s["done"]), None)
+    complete = all(s["done"] for s in steps if s["id"] != "role")
+    current = None if complete else next((s["id"] for s in steps if not s["done"]), None)
     return {
         "steps": steps,
         "current": current,
-        "complete": current is None,
+        "complete": complete,
         "done": sum(s["done"] for s in steps),
         "total": len(steps),
     }

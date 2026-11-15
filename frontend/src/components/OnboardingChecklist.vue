@@ -98,7 +98,7 @@
 </template>
 
 <script setup>
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { RouterLink, useRouter } from 'vue-router'
 import { Check, CircleAlert, LoaderCircle, X } from '@lucide/vue'
 import { errorText, webApi } from '../api/web'
@@ -109,7 +109,8 @@ const POLL_MS = 15000
 const DETAIL_TONES = { error: 'tone-bad', progress: 'tone-warn' }
 const OPEN_KEY = 'aimarketing-onboarding-open'
 
-const emit = defineEmits(['advanced'])
+// wizard — идёт ли мастер: пока идёт, роль спросит он, и карточка «Как вам удобнее?» на главной не нужна.
+const emit = defineEmits(['advanced', 'wizard'])
 const router = useRouter()
 // Первый вход (проектов нет): один раз за сессию ведём со Сводки в мастер.
 const WIZARD_SHOWN_KEY = 'aimarketing-wizard-shown'
@@ -122,6 +123,7 @@ const openChoice = ref(localStorage.getItem(OPEN_KEY))
 let timer = 0
 
 const wizardPending = computed(() => !!state.value?.wizard && !state.value.wizard.complete && !state.value.dismissed)
+watch(() => (state.value ? wizardPending.value : null), (on) => on !== null && emit('wizard', on), { immediate: true })
 const wizardStep = computed(() => state.value?.wizard?.steps.find((s) => s.id === state.value.wizard.current) || null)
 const required = computed(() => (state.value?.steps || []).filter((s) => !s.optional))
 const requiredDone = computed(() => required.value.filter((s) => s.done).length)

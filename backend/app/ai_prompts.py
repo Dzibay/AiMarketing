@@ -4,10 +4,10 @@
 на главной и в списке кампаний. Место задачи (places):
   general — общий чат по всем проектам; project — чат проекта с кампаниями; first — проект без кампаний;
   campaigns — вопрос про все кампании списка; campaigns_picked — про отмеченные галочкой.
-home — задача стоит быстрым вопросом на главной (общей или проекта), icon — значок @lucide/vue для неё.
+home — кому (ролям) задача стоит быстрым вопросом на главной (общей или проекта); icon — значок @lucide/vue.
+roles — кому задача видна вообще (по умолчанию всем). Роль — users.ui.role: owner — владелец бизнеса,
+pro — специалист по рекламе; фильтрует клиент, роль без ответа — как у владельца (простой режим по умолчанию).
 key — ещё и адрес «?ask=…» из других разделов: чат берёт текст отсюда.
-
-Роль пользователя (владелец / директолог) появится в 3.2: тогда у задач будет roles и фильтр в builtin().
 Свои задачи — таблица ai_prompts, видны во всех местах чата.
 """
 
@@ -29,19 +29,33 @@ NEW_CAMPAIGN = "Хочу собрать новую кампанию. Задай 
 BUILTIN: list[dict] = [
     # --- Чат проекта с кампаниями ---
     {
-        "key": "problems", "category": "review", "places": ["project"], "home": True, "icon": "Sparkles",
+        "key": "status", "category": "report", "places": ["project"], "roles": ["owner"], "home": ["owner"],
+        "icon": "MessageCircle",
+        "title": "Как дела у рекламы",
+        "text": "Расскажи простыми словами, как идёт реклама проекта последние 7 дней: сколько потрачено, сколько "
+                "заявок и почём, что идёт хорошо и что плохо. Что сделать в первую очередь?",
+    },
+    {
+        "key": "more_leads", "category": "growth", "places": ["project"], "roles": ["owner"], "home": ["owner"],
+        "icon": "TrendingUp",
+        "title": "Как получить больше заявок",
+        "text": "Как получить больше заявок за те же деньги? Посмотри, что в проекте уже приносит заявки, и предложи, "
+                "что повторить или усилить. Объясни простыми словами.",
+    },
+    {
+        "key": "problems", "category": "review", "places": ["project"], "home": ["owner", "pro"], "icon": "Sparkles",
         "title": "Что горит",
         "text": "Разбери проблемы проекта из сводки: где сливается бюджет, что с KPI и темпом расхода. "
                 "Дай конкретные действия по важности.",
     },
     {
-        "key": "audit", "category": "review", "places": ["project"], "home": True, "icon": "ListChecks",
+        "key": "audit", "category": "review", "places": ["project"], "home": ["pro"], "icon": "ListChecks",
         "title": "Аудит кампаний",
         "text": "Проведи аудит всех кампаний проекта: структура, стратегии и бюджеты, минус-фразы, объявления, "
                 "поисковые запросы, расход без конверсий. Дай список проблем по важности и план правок.",
     },
     {
-        "key": "waste", "category": "save", "places": ["project"],
+        "key": "waste", "category": "save", "places": ["project"], "home": ["owner"], "icon": "SearchCheck",
         "title": "Где сливается бюджет?",
         "text": "Где сливается бюджет? Найди кампании и фразы с расходом без конверсий",
     },
@@ -51,7 +65,7 @@ BUILTIN: list[dict] = [
         "text": "Почисти поисковые запросы: предложи минус-фразы",
     },
     {
-        "key": "experiment", "category": "growth", "places": ["project"], "home": True, "icon": "FlaskConical",
+        "key": "experiment", "category": "growth", "places": ["project"], "home": ["pro"], "icon": "FlaskConical",
         "title": "Предложить эксперимент",
         "text": "Предложи эксперимент: какую гипотезу стоит проверить в этом проекте — перезапуск копией, новое гео, "
                 "другие ключи или тип кампании, — на каких кампаниях и почему. Опирайся на то, что уже работает, "
@@ -69,7 +83,7 @@ BUILTIN: list[dict] = [
                 "Предложи новые варианты на согласование.",
     },
     {
-        "key": "links", "category": "ads", "places": ["project"], "home": True, "icon": "Link2",
+        "key": "links", "category": "ads", "places": ["project"], "home": ["pro"], "icon": "Link2",
         "title": "Проверить ссылки",
         "text": "Проверь ссылки кампаний по шаблону сайта и предложи исправить косяки.",
     },
@@ -97,7 +111,21 @@ BUILTIN: list[dict] = [
     },
     # --- Общий чат: ИИ сравнивает проекты и предлагает правки в любом из них ---
     {
-        "key": "first", "category": "review", "places": ["general"], "home": True, "icon": "Sparkles",
+        "key": "status_all", "category": "report", "places": ["general"], "roles": ["owner"], "home": ["owner"],
+        "icon": "MessageCircle",
+        "title": "Как дела у рекламы",
+        "text": "Расскажи простыми словами, как идёт реклама по всем проектам последние 7 дней: где всё хорошо, "
+                "где деньги уходят без заявок и что сделать в первую очередь.",
+    },
+    {
+        "key": "more_leads_all", "category": "growth", "places": ["general"], "roles": ["owner"], "home": ["owner"],
+        "icon": "TrendingUp",
+        "title": "Как получить больше заявок",
+        "text": "Как получить больше заявок за те же деньги? Посмотри по всем проектам, что уже приносит заявки, и "
+                "предложи, что повторить или усилить. Объясни простыми словами.",
+    },
+    {
+        "key": "first", "category": "review", "places": ["general"], "home": ["owner", "pro"], "icon": "Sparkles",
         "title": "С чего начать",
         "text": "Посмотри мои проекты и кампании и скажи, с чего начать: где теряются деньги, что настроено не так "
                 "и какие три действия дадут результат быстрее всего.",
@@ -108,18 +136,18 @@ BUILTIN: list[dict] = [
         "text": "Какие проекты выбиваются из KPI и почему?",
     },
     {
-        "key": "kpi", "category": "review", "places": ["general"], "home": True, "icon": "Target",
+        "key": "kpi", "category": "review", "places": ["general"], "home": ["pro"], "icon": "Target",
         "title": "Проверить цели проектов",
         "text": "Проверь, в каких проектах не выбрана цель Метрики, не задан KPI или месячный бюджет, "
                 "и предложи значения по данным за последний месяц.",
     },
     {
-        "key": "waste_all", "category": "save", "places": ["general"],
+        "key": "waste_all", "category": "save", "places": ["general"], "home": ["owner"], "icon": "SearchCheck",
         "title": "Где сливается бюджет?",
         "text": "Где во всех проектах сливается бюджет без конверсий?",
     },
     {
-        "key": "cleanup", "category": "save", "places": ["general"], "home": True, "icon": "SearchCheck",
+        "key": "cleanup", "category": "save", "places": ["general"], "home": ["pro"], "icon": "SearchCheck",
         "title": "Почистить запросы",
         "text": "Найди по всем проектам поисковые запросы, которые тратят деньги без конверсий, "
                 "и предложи минус-фразы для них.",
@@ -130,7 +158,7 @@ BUILTIN: list[dict] = [
         "text": "Найди кампании, которые стоит остановить, и те, что стоит масштабировать",
     },
     {
-        "key": "analytics", "category": "report", "places": ["general"], "home": True, "icon": "TrendingUp",
+        "key": "analytics", "category": "report", "places": ["general"], "home": ["pro"], "icon": "TrendingUp",
         "title": "Сравнить проекты",
         "text": "Сравни проекты за последнюю неделю: где растёт расход без конверсий, у кого CPA или ДРР хуже KPI, "
                 "какие кампании тянут результат вниз. Дай по каждому проекту главное действие.",
@@ -172,8 +200,12 @@ TEXT_LEN = 8000
 OWN_LIMIT = 100
 
 
+ROLES = ("owner", "pro")
+
+
 def builtin() -> list[dict]:
-    return [{"home": False, "icon": "", **p} for p in BUILTIN]
+    """Встроенный набор: roles — кому видна, home — кому стоит на главной (оба — списки ролей)."""
+    return [{"icon": "", **p, "roles": list(p.get("roles") or ROLES), "home": list(p.get("home") or [])} for p in BUILTIN]
 
 
 def _out(row: dict) -> dict:

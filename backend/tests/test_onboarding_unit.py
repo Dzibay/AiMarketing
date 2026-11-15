@@ -128,10 +128,12 @@ def _wizard(**over) -> dict:
     return {s["id"]: s for s in build_wizard(_facts(**over))["steps"]}
 
 
-def test_wizard_walks_email_yandex_projects_load_ai():
+def test_wizard_walks_role_email_yandex_projects_load_ai():
     result = build_wizard(_facts(email_verified=False))
-    assert [s["id"] for s in result["steps"]] == ["email", "yandex", "projects", "load", "ai"]
-    assert result["current"] == "email" and not result["complete"] and result["done"] == 0
+    assert [s["id"] for s in result["steps"]] == ["role", "email", "yandex", "projects", "load", "ai"]
+    assert result["current"] == "role" and not result["complete"] and result["done"] == 0
+    result = build_wizard(_facts(email_verified=False, role="pro"))
+    assert result["current"] == "email" and result["done"] == 1 and result["total"] == 6
 
     steps = _wizard(email_verified=True)
     assert steps["yandex"]["status"] == "todo"
@@ -149,9 +151,12 @@ def test_wizard_names_the_missing_yandex_role():
 
 def test_wizard_complete_after_first_question():
     facts = dict(_done_facts(), email_verified=True, metrika_connections=1)
-    assert build_wizard(facts)["current"] == "ai"
+    assert build_wizard(facts)["current"] == "role"  # мастер ещё идёт — спросим и роль
+    assert build_wizard(dict(facts, role="owner"))["current"] == "ai"
     result = build_wizard(dict(facts, asked_ai=True))
     assert result["complete"] and result["current"] is None and result["done"] == 5
+    # Роль на прохождение мастера не влияет: прошедших до её появления карточку покажет главная.
+    assert build_wizard(dict(facts, asked_ai=True, role="owner"))["done"] == 6
     onboarding = build_onboarding(dict(facts, asked_ai=True), telegram_available=True)
     assert onboarding["wizard"]["complete"] and not onboarding["start_wizard"]
 

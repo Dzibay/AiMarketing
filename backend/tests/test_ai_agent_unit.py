@@ -189,6 +189,19 @@ def test_prompt_for_first_campaign_has_no_history_hypothesis(no_memory):
     assert "ещё нет ни одной кампании" not in with_campaigns and f"key {SCHEME_FACT}" in with_campaigns
 
 
+def test_prompt_speaks_by_user_role(no_memory):
+    # Роль не выбрана — как с владельцем: простые слова без терминов.
+    plain = ai_agent._system_prompt(FakeContext())
+    assert "Как говорить с пользователем:\n- Пользователь — владелец бизнеса" in plain
+    pro_ctx = FakeContext()
+    pro_ctx.role = "pro"
+    pro = ai_agent._system_prompt(pro_ctx)
+    assert "специалист по контекстной рекламе" in pro and "владелец бизнеса" not in pro
+    odd_ctx = FakeContext()
+    odd_ctx.role = "boss"
+    assert "владелец бизнеса" in ai_agent._system_prompt(odd_ctx)
+
+
 def test_prompt_access_policy(no_memory):
     assert "Без согласования разрешено: ничего." in ai_agent._system_prompt(FakeContext())
     full = ai_agent._system_prompt(FakeContext({"ai_access": {"full_access": True}}))

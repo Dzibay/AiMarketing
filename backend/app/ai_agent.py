@@ -295,6 +295,15 @@ class Context:
     def general(self) -> bool:
         return self.ws_id is None
 
+    @property
+    def role(self) -> str:
+        """Роль пользователя из users.ui: owner — владелец бизнеса, pro — специалист по рекламе, "" — не выбрана."""
+        if not hasattr(self, "_role"):
+            with pool.connection() as conn:
+                row = conn.execute("SELECT ui->>'role' AS role FROM users WHERE id = %s", (self.user_id,)).fetchone()
+            self._role = (row or {}).get("role") or ""
+        return self._role
+
     def project(self, project_id: int) -> Context:
         """Контекст другого проекта пользователя — читать его данные; чужой или несуществующий — ошибка."""
         if project_id == self.ws_id:
@@ -5208,9 +5217,28 @@ def _general_prompt(ctx: Context) -> str:
     return "\n".join(lines)
 
 
+# Как говорить с пользователем — по роли, выбранной при первом входе. Не выбрана — как с владельцем:
+# по умолчанию у всех простой режим.
+ROLE_RULES = {
+    "owner": "Пользователь — владелец бизнеса, не специалист по рекламе. Объясняй простыми словами, без "
+    "профессиональных терминов (CPA, CTR, CR, ДРР, KPI); если без термина не обойтись — поясни его в скобках. "
+    "Говори, что цифры значат для бизнеса: сколько денег, сколько заявок, что сделать.",
+    "pro": "Пользователь — специалист по контекстной рекламе. Используй принятые термины (CPA, CTR, CR, ДРР, "
+    "KPI) и точные цифры, азы не объясняй.",
+}
+
+
+def _role_rule(ctx: Context) -> str:
+    role = getattr(ctx, "role", "") or "owner"
+    return "- " + ROLE_RULES.get(role, ROLE_RULES["owner"])
+
+
 def _system_prompt(ctx: Context) -> str:
-    if ctx.general:
-        return _general_prompt(ctx)
+    prompt = _general_prompt(ctx) if ctx.general else _project_prompt(ctx)
+    return prompt + "\n\nКак говорить с пользователем:\n" + _role_rule(ctx)
+
+
+def _project_prompt(ctx: Context) -> str:
     ws = ctx.ws
     access = ctx.access
     if access["full_access"]:

@@ -12,7 +12,8 @@
     </template>
   </PageHeader>
 
-  <OnboardingChecklist @advanced="load" />
+  <OnboardingChecklist @advanced="load" @wizard="wizardPending = $event" />
+  <RoleCard v-if="!wizardPending" />
 
   <div v-if="loading" class="panel"><p class="empty">Собираем обзор…</p></div>
 
@@ -293,6 +294,7 @@ import KpiTile from '../components/KpiTile.vue'
 import OnboardingChecklist from '../components/OnboardingChecklist.vue'
 import PendingDecisions from '../components/PendingDecisions.vue'
 import ProblemList from '../components/ProblemList.vue'
+import RoleCard from '../components/RoleCard.vue'
 import SignalCards from '../components/SignalCards.vue'
 import TermHint from '../components/TermHint.vue'
 import PageHeader from '../components/ui/PageHeader.vue'
@@ -339,6 +341,8 @@ const WEEKDAY_TO_LAST = [
 
 const router = useRouter()
 const { expert } = useExpert()
+// Мастер первого входа ещё идёт — роль спросит он; карточку «Как вам удобнее?» не показываем.
+const wizardPending = ref(true)
 const { loadWorkspaces, workspaces } = useWorkspaces()
 // Проекты сверх лимита тарифа: в обзоре видны, но открываются экраном «на тарифе выше».
 const lockedIds = computed(() => new Set(workspaces.value.filter((w) => w.locked).map((w) => w.id)))
