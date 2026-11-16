@@ -31,15 +31,22 @@
     <EmptyState v-else-if="!data" :icon="CloudOff" :text="loadError || 'Не удалось загрузить кампании.'">
       <template #action><button class="btn btn--ghost" type="button" @click="load">Повторить</button></template>
     </EmptyState>
-    <EmptyState v-else-if="!projects.length" :icon="Megaphone">
-      Проектов пока нет. Подключите Директ и Метрику в
-      <RouterLink to="/cabinet/connections">подключениях</RouterLink> — проекты появятся по счётчикам.
+    <EmptyState v-else-if="!projects.length" art="projects" text="Проектов пока нет. Подключите Директ и Метрику — проекты появятся по счётчикам.">
+      <template #action><RouterLink class="btn btn--accent" to="/cabinet/connections">Подключить Яндекс</RouterLink></template>
     </EmptyState>
     <EmptyState
       v-else-if="!simpleRows.length"
-      :icon="Megaphone"
-      text="В проектах нет кампаний. Нажмите «Новая кампания» — ИИ поможет собрать первую."
-    />
+      art="campaigns"
+      text="В проектах пока нет кампаний. ИИ поможет собрать первую: спросит о продукте, гео и бюджете и изучит спрос."
+    >
+      <template #action>
+        <RouterLink v-if="projects.length === 1" class="btn btn--accent" :to="aiCampaignLink(projects[0].id)">Собрать кампанию с ИИ</RouterLink>
+        <UiMenu v-else primary label="Новая кампания: в какой проект?">
+          <template #trigger>Собрать кампанию с ИИ<ChevronDown aria-hidden="true" /></template>
+          <UiMenuItem v-for="p in projects" :key="p.id" :to="aiCampaignLink(p.id)">{{ niceQuotes(p.name) }}</UiMenuItem>
+        </UiMenu>
+      </template>
+    </EmptyState>
     <CampaignGroups
       v-else
       :class="{ 'is-loading': loading }"
@@ -65,16 +72,23 @@
     <EmptyState v-else-if="!data" :icon="CloudOff" :text="loadError || 'Не удалось загрузить кампании.'" plain>
       <template #action><button class="btn btn--ghost" type="button" @click="load">Повторить</button></template>
     </EmptyState>
-    <EmptyState v-else-if="!projects.length" :icon="Megaphone" plain>
-      Проектов пока нет. Подключите Директ и Метрику в
-      <RouterLink to="/cabinet/connections">подключениях</RouterLink> — проекты появятся по счётчикам.
+    <EmptyState v-else-if="!projects.length" art="projects" plain text="Проектов пока нет. Подключите Директ и Метрику — проекты появятся по счётчикам.">
+      <template #action><RouterLink class="btn btn--accent" to="/cabinet/connections">Подключить Яндекс</RouterLink></template>
     </EmptyState>
     <EmptyState
       v-else-if="!data.campaigns.length"
-      :icon="Megaphone"
-      text="В проектах нет кампаний. Нажмите «Новая кампания» — ИИ поможет собрать первую."
+      art="campaigns"
+      text="В проектах пока нет кампаний. ИИ поможет собрать первую: спросит о продукте, гео и бюджете и изучит спрос."
       plain
-    />
+    >
+      <template #action>
+        <RouterLink v-if="projects.length === 1" class="btn btn--accent" :to="aiCampaignLink(projects[0].id)">Собрать кампанию с ИИ</RouterLink>
+        <UiMenu v-else primary label="Новая кампания: в какой проект?">
+          <template #trigger>Собрать кампанию с ИИ<ChevronDown aria-hidden="true" /></template>
+          <UiMenuItem v-for="p in projects" :key="p.id" :to="aiCampaignLink(p.id)">{{ niceQuotes(p.name) }}</UiMenuItem>
+        </UiMenu>
+      </template>
+    </EmptyState>
     <CampaignTable
       v-else
       v-model:selected="selected"
@@ -124,7 +138,7 @@
 <script setup>
 import { computed, onMounted, reactive, ref } from 'vue'
 import { RouterLink, useRouter } from 'vue-router'
-import { ChevronDown, CloudOff, Megaphone, Pause, Play, Plus } from '@lucide/vue'
+import { ChevronDown, CloudOff, Pause, Play, Plus } from '@lucide/vue'
 import { ERRORS, errorText, webApi, wsApi } from '../api/web'
 import { pushToast } from '../composables/useToasts'
 import { undoAction } from '../composables/useUndo'
@@ -195,6 +209,11 @@ const picked = computed(() => {
     canResume: items.some((c) => c.state !== 'ON' && c.state !== 'ARCHIVED' && c.status !== 'DRAFT'),
   }
 })
+
+/** Пустой экран: кампанию собирает ИИ в чате проекта — та же задача, что «Собрать первую кампанию» в чате. */
+function aiCampaignLink(projectId) {
+  return { path: `/w/${projectId}/chat`, query: { ask: 'new_campaign' } }
+}
 
 function newCampaignLink(projectId) {
   return { path: `/w/${projectId}/campaigns`, query: { new: 1 } }

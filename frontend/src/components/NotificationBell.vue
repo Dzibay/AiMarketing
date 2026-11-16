@@ -47,6 +47,7 @@ import { setNotifCount, usePending } from '../composables/usePending'
 import { openSupport } from '../composables/useSupport'
 import { useViewport } from '../composables/useViewport'
 import { plural, timeAgo } from '../utils/format'
+import EmptyArt from './ui/EmptyArt.vue'
 import UiSheet from './ui/UiSheet.vue'
 
 /**
@@ -160,7 +161,10 @@ const NotificationItems = defineComponent({
       if (p.error) return h('p', { class: 'nbell__empty is-error' }, p.error)
       if (!p.items.length) {
         if (p.loading) return h('p', { class: 'nbell__empty' }, h('span', { class: 'spinner', 'aria-hidden': 'true' }))
-        return h('p', { class: 'nbell__empty' }, 'Здесь появятся ответы ИИ из закрытых чатов, сигналы по рекламе и срабатывания правил.')
+        return h('div', { class: 'nbell__none' }, [
+          h(EmptyArt, { name: 'bell' }),
+          h('p', { class: 'nbell__empty' }, 'Здесь появятся ответы ИИ из закрытых чатов, сигналы по рекламе и срабатывания правил.'),
+        ])
       }
       return h(
         'ul',

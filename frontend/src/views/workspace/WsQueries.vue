@@ -330,14 +330,31 @@
       {{ loadError || 'Не удалось загрузить запросы.' }}
       <button class="btn btn--ghost" type="button" @click="load()">Повторить</button>
     </div>
-    <div v-else-if="!campaigns.length" class="empty">
-      В проекте нет поисковых кампаний — чистить нечего. Добавьте кампании в
-      <RouterLink :to="`/w/${ws.id}/settings`">настройках</RouterLink>.
-    </div>
-    <div v-else-if="!counts.all && !hasFilters" class="empty">
-      Запросов пока нет. Нажмите «Обновить из Директа» — загрузим отчёт по поисковым запросам за {{ days }} дней.
-    </div>
-    <p v-else-if="!items.length" class="empty">{{ emptyText }}</p>
+    <EmptyState
+      v-else-if="!campaigns.length"
+      art="campaigns"
+      text="В проекте нет поисковых кампаний — чистить нечего. Добавьте их в настройках проекта."
+      plain
+    >
+      <template #action><RouterLink class="btn btn--ghost" :to="`/w/${ws.id}/settings`">Открыть настройки</RouterLink></template>
+    </EmptyState>
+    <EmptyState
+      v-else-if="!counts.all && !hasFilters"
+      art="queries"
+      :text="`Запросов пока нет. Загрузим из Директа отчёт по поисковым запросам за ${days} дней — ИИ разметит мусор.`"
+      plain
+    >
+      <template #action>
+        <button class="btn btn--accent" type="button" :disabled="!!busy" @click="sync">
+          {{ busy === 'sync' ? 'Загружаем…' : 'Загрузить из Директа' }}
+        </button>
+      </template>
+    </EmptyState>
+    <EmptyState v-else-if="!items.length" :art="hasFilters ? 'search' : 'done'" :text="emptyText" plain>
+      <template v-if="hasFilters" #action>
+        <button class="btn btn--ghost" type="button" @click="resetFilters">Сбросить фильтры</button>
+      </template>
+    </EmptyState>
     <template v-else>
       <div v-scroll-x class="table-scroll" :class="{ 'is-loading': loading }">
         <table v-cards class="table queries-table tcards">
@@ -697,6 +714,7 @@
 
 <script setup>
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import EmptyState from '../../components/ui/EmptyState.vue'
 import UiCheckbox from '../../components/ui/UiCheckbox.vue'
 import UiListTools from '../../components/ui/UiListTools.vue'
 import UiRowMore from '../../components/ui/UiRowMore.vue'
@@ -805,6 +823,11 @@ const hasFilters = computed(() => !!(filters.search || filters.campaign || filte
 const { phone } = useViewport()
 // Телефон: сколько фильтров включено в шторке (поиск — не в ней) и их сброс.
 const sheetFilters = computed(() => (filters.campaign ? 1 : 0) + (filters.minCost ? 1 : 0) + (filters.noConv ? 1 : 0))
+
+function resetFilters() {
+  filters.search = ''
+  resetSheet()
+}
 
 function resetSheet() {
   filters.campaign = ''

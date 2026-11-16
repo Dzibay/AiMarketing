@@ -1,9 +1,12 @@
 <template>
   <template v-if="!expert">
-    <p v-if="data && !data.projects.length" class="empty">
-      Проектов пока нет. Подключите Директ и Метрику в
-      <RouterLink to="/cabinet/connections">подключениях</RouterLink> — проекты появятся по счётчикам.
-    </p>
+    <EmptyState
+      v-if="data && !data.projects.length"
+      art="projects"
+      text="Проектов пока нет. Подключите Директ и Метрику — здесь появятся расход, заявки и их цена по всем сайтам."
+    >
+      <template #action><RouterLink class="btn btn--accent" to="/cabinet/connections">Подключить Яндекс</RouterLink></template>
+    </EmptyState>
     <SimpleReport
       v-else
       :data="data"
@@ -26,12 +29,13 @@
 
   <div v-if="loading && !data" class="panel"><p class="empty">Считаем…</p></div>
   <div v-else-if="loadError" class="panel"><p class="empty">{{ loadError }}</p></div>
-  <div v-else-if="data && !data.projects.length" class="panel">
-    <p class="empty">
-      Проектов пока нет. Подключите Директ и Метрику в
-      <RouterLink to="/cabinet/connections">подключениях</RouterLink> — проекты появятся по счётчикам.
-    </p>
-  </div>
+  <EmptyState
+    v-else-if="data && !data.projects.length"
+    art="projects"
+    text="Проектов пока нет. Подключите Директ и Метрику — здесь появятся расход, заявки и их цена по всем сайтам."
+  >
+    <template #action><RouterLink class="btn btn--accent" to="/cabinet/connections">Подключить Яндекс</RouterLink></template>
+  </EmptyState>
 
   <template v-else-if="data">
     <section class="panel" :class="{ 'is-loading': loading }">
@@ -184,6 +188,7 @@ import Sparkline from '../components/Sparkline.vue'
 import TermHint from '../components/TermHint.vue'
 import TrendChart from '../components/TrendChart.vue'
 import SimpleReport from '../components/SimpleReport.vue'
+import EmptyState from '../components/ui/EmptyState.vue'
 import UiDateRange from '../components/ui/UiDateRange.vue'
 import { useExpert } from '../composables/useExpert'
 import { errorText, webApi } from '../api/web'

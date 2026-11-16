@@ -38,9 +38,10 @@
       </div>
     </div>
   </div>
-  <EmptyState v-else-if="!items.length && !loadError" :icon="History" :text="emptyText">
-    <template v-if="filtered" #action>
-      <button class="btn btn--ghost" type="button" @click="resetFilters">Показать всё</button>
+  <EmptyState v-else-if="!items.length && !loadError" :art="filtered ? 'search' : 'history'" :text="emptyText">
+    <template #action>
+      <button v-if="filtered" class="btn btn--ghost" type="button" @click="resetFilters">Показать всё</button>
+      <RouterLink v-else class="btn btn--accent" :to="chatLink">Спросить ИИ, что улучшить</RouterLink>
     </template>
   </EmptyState>
 
@@ -173,7 +174,6 @@ import {
   Copy,
   FilePlus,
   FolderTree,
-  History,
   KeyRound,
   Link2,
   ListX,
@@ -319,7 +319,12 @@ const days = computed(() => {
 
 const emptyText = computed(() => {
   if (source.value || kind.value) return 'Таких изменений пока нет.'
-  return props.workspaceId || project.value ? 'В этом проекте ещё ничего не меняли.' : 'Ещё ничего не меняли.'
+  const where = props.workspaceId || project.value ? 'В этом проекте ещё ничего не меняли' : 'Ещё ничего не меняли'
+  return `${where}. Здесь появятся все правки — ваши, ИИ и правил, — и любую можно будет вернуть.`
+})
+const chatLink = computed(() => {
+  const ws = props.workspaceId || project.value
+  return ws ? `/w/${ws}/chat` : '/cabinet/chat'
 })
 
 const isFailed = (a) => a.status === 'error' || a.status === 'failed'

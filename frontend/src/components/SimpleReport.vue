@@ -14,6 +14,16 @@
 
   <p v-if="loading && !data" class="empty">Считаем…</p>
   <p v-else-if="error" class="empty">{{ error }}</p>
+  <EmptyState
+    v-else-if="empty"
+    art="report"
+    :text="`С ${formatDate(data.date_from)} по ${formatDate(data.date_to)} реклама не тратила денег и заявок не было: кампании стояли или данные ещё загружаются.`"
+  >
+    <template #action>
+      <button v-if="period !== 30" class="btn btn--accent" type="button" @click="emit('period', 30)">Показать 30 дней</button>
+      <RouterLink class="btn btn--ghost" :to="chatLink">Спросить ИИ, почему</RouterLink>
+    </template>
+  </EmptyState>
   <template v-else-if="data">
     <p class="meta-note simple-report__dates">{{ formatDate(data.date_from) }} — {{ formatDate(data.date_to) }}</p>
     <div class="bigstats" :class="{ 'is-loading': loading }">
@@ -60,6 +70,7 @@ import { Sparkles } from '@lucide/vue'
 import TrendChart from './TrendChart.vue'
 import ExpertHint from './ExpertHint.vue'
 import TermHint from './TermHint.vue'
+import EmptyState from './ui/EmptyState.vue'
 import { formatDate, kpiGoal, num, pct, rub } from '../utils/format'
 import { leadWord } from '../utils/campaignHealth'
 
@@ -81,6 +92,12 @@ const props = defineProps({
   hint: { type: String, default: 'Все метрики, сравнение с прошлым периодом и подробные таблицы' },
 })
 const emit = defineEmits(['period'])
+
+/** За период ни расхода, ни заявок — вместо нулевых плиток и пустого графика рисунок и следующий шаг. */
+const empty = computed(() => {
+  const t = props.data?.totals
+  return !!t && !t.cost_kopecks && !t.conversions && !(props.data.by_day || []).some((d) => d.cost_kopecks)
+})
 
 /** «на 12% больше, чем в прошлом периоде»; рост расхода и цены — жёлтым, падение заявок — тоже. */
 function change(value, more, less, inverse = false) {

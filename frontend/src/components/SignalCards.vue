@@ -25,19 +25,29 @@
       </div>
     </article>
   </div>
-  <div v-else class="ccard ccard--note">
-    {{
+  <EmptyState
+    v-else
+    art="calm"
+    :plain="bare"
+    :text="
       hiddenCount
         ? 'Остальное вы скрыли до завтра — больше ничего не требует внимания.'
-        : 'Сегодня всё спокойно: сервис не нашёл ничего, что требует внимания.'
-    }}
-  </div>
+        : 'Сегодня всё спокойно: сервис не нашёл ничего, что требует внимания. Можно поискать, где вырасти.'
+    "
+  >
+    <template v-if="!hiddenCount && !bare" #action>
+      <RouterLink class="btn btn--ghost" :to="wsId ? `/w/${wsId}/chat` : '/cabinet/chat'">
+        <Sparkles :size="15" aria-hidden="true" />Спросить ИИ, что улучшить
+      </RouterLink>
+    </template>
+  </EmptyState>
 </template>
 
 <script setup>
 import { computed, ref } from 'vue'
 import { RouterLink, useRouter } from 'vue-router'
 import { Sparkles, TriangleAlert, X } from '@lucide/vue'
+import EmptyState from './ui/EmptyState.vue'
 import { errorDetail } from '../api/web'
 import { putHomeQuestion } from '../composables/useHomeAsk'
 import { isoDay, niceQuotes, problemLink } from '../utils/format'

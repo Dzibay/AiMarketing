@@ -2406,6 +2406,18 @@ html.has-bbar {
   text-align: center;
 }
 
+/* Пусто: маленький рисунок над подписью. */
+.nbell__none {
+  display: grid;
+  justify-items: center;
+  padding-top: 1.2rem;
+  --eart-w: 96px;
+}
+
+.nbell__none .nbell__empty {
+  padding-top: 0.6rem;
+}
+
 .nbell__empty.is-error {
   color: var(--danger);
 }

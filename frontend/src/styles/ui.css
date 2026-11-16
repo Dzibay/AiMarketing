@@ -1437,6 +1437,18 @@ body.has-sheet {
   height: 22px;
 }
 
+.ui-empty--art {
+  padding-top: 24px;
+}
+
+.ui-empty__art {
+  margin-bottom: 2px;
+}
+
+.ui-empty--plain {
+  --eart-w: 116px;
+}
+
 .ui-empty__text {
   max-width: 46ch;
   margin: 0;

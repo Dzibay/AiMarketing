@@ -59,6 +59,7 @@
       </UiNotice>
 
       <div v-if="showIntro" class="chat__hello">
+        <EmptyArt name="chat" class="chat__art" />
         <h2>{{ helloTitle }}</h2>
         <p>{{ helloText }}</p>
       </div>
@@ -191,6 +192,7 @@ import { useExpert } from '../../composables/useExpert'
 import { useViewport } from '../../composables/useViewport'
 import ChatComposer from '../../components/chat/ChatComposer.vue'
 import ChatList from '../../components/chat/ChatList.vue'
+import EmptyArt from '../../components/ui/EmptyArt.vue'
 import ChatThread from '../../components/chat/ChatThread.vue'
 import PageHeader from '../../components/ui/PageHeader.vue'
 import UiMenu from '../../components/ui/UiMenu.vue'

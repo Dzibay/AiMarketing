@@ -9,7 +9,7 @@
     <section v-if="current" class="panel help-page">
       <HelpArticle :article="current" />
     </section>
-    <EmptyState v-else :icon="FileQuestion" text="Такой статьи нет — возможно, её переименовали.">
+    <EmptyState v-else art="search" text="Такой статьи нет — возможно, её переименовали.">
       <template #action><RouterLink class="btn btn--accent" to="/cabinet/help">Все статьи</RouterLink></template>
     </EmptyState>
     <HelpAsk />
@@ -38,7 +38,7 @@
           </RouterLink>
         </li>
       </ul>
-      <EmptyState v-else :icon="SearchX" text="В справке такого нет. Спросите поддержку — ответим в кабинете.">
+      <EmptyState v-else art="search" text="В справке такого нет. Спросите поддержку — ответим в кабинете.">
         <template #action>
           <button class="btn btn--accent" type="button" @click="openSupport">Написать в поддержку</button>
         </template>
@@ -70,7 +70,7 @@
 <script setup>
 import { computed, defineComponent, h, ref, watch, watchEffect } from 'vue'
 import { RouterLink, useRoute } from 'vue-router'
-import { FileQuestion, LifeBuoy, Search, SearchX, Sparkles } from '@lucide/vue'
+import { LifeBuoy, Search, Sparkles } from '@lucide/vue'
 import HelpArticle from '../components/HelpArticle.vue'
 import EmptyState from '../components/ui/EmptyState.vue'
 import PageHeader from '../components/ui/PageHeader.vue'

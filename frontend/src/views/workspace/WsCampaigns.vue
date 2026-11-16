@@ -40,9 +40,15 @@
     <EmptyState v-else-if="!data" :icon="CloudOff" :text="loadError || 'Не удалось загрузить кампании.'">
       <template #action><button class="btn btn--ghost" type="button" @click="load">Повторить</button></template>
     </EmptyState>
-    <EmptyState v-else-if="!simpleRows.length" :icon="Megaphone">
-      В проекте нет кампаний. Нажмите «Новая кампания» или добавьте кабинет в
-      <RouterLink :to="`/w/${ws.id}/settings`">настройках</RouterLink>.
+    <EmptyState
+      v-else-if="!simpleRows.length"
+      art="campaigns"
+      text="В проекте пока нет кампаний. ИИ поможет собрать первую: спросит о продукте, гео и бюджете и изучит спрос."
+    >
+      <template #action>
+        <RouterLink class="btn btn--accent" :to="{ path: `/w/${ws.id}/chat`, query: { ask: 'new_campaign' } }">Собрать кампанию с ИИ</RouterLink>
+        <button class="btn btn--ghost" type="button" @click="wizardOpen = true">Заполнить вручную</button>
+      </template>
     </EmptyState>
     <CampaignGroups
       v-else
@@ -72,9 +78,13 @@
     <EmptyState v-else-if="!data" :icon="CloudOff" :text="loadError || 'Не удалось загрузить кампании.'" plain>
       <template #action><button class="btn btn--ghost" type="button" @click="load">Повторить</button></template>
     </EmptyState>
-    <EmptyState v-else-if="!data.items.length" :icon="Megaphone" plain>
-      В проекте нет кампаний. Добавьте кабинет и кампании в
-      <RouterLink :to="`/w/${ws.id}/settings`">настройках</RouterLink> или создайте новую.
+    <EmptyState v-else-if="!data.items.length" art="campaigns" plain>
+      В проекте нет кампаний. Создайте новую или добавьте кабинет и кампании в
+      <RouterLink :to="`/w/${ws.id}/settings`">настройках</RouterLink>.
+      <template #action>
+        <button class="btn btn--accent" type="button" @click="wizardOpen = true">Новая кампания</button>
+        <RouterLink class="btn btn--ghost" :to="{ path: `/w/${ws.id}/chat`, query: { ask: 'new_campaign' } }">Собрать с ИИ</RouterLink>
+      </template>
     </EmptyState>
     <CampaignTable
       v-else
@@ -196,7 +206,7 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
-import { Archive, ArchiveRestore, CloudOff, Copy, Megaphone, Pause, Play, Plus, RefreshCw, Trash2 } from '@lucide/vue'
+import { Archive, ArchiveRestore, CloudOff, Copy, Pause, Play, Plus, RefreshCw, Trash2 } from '@lucide/vue'
 import Modal from '../../components/ui/Modal.vue'
 import EmptyState from '../../components/ui/EmptyState.vue'
 import PageHeader from '../../components/ui/PageHeader.vue'

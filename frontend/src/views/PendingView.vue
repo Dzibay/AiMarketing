@@ -11,7 +11,7 @@
   <template v-else>
     <EmptyState
       v-if="!items.length"
-      :icon="Check"
+      art="done"
       :text="
         snoozed.length
           ? 'Сейчас решений ничего не ждёт — остались только отложенные, они ниже.'
@@ -98,7 +98,7 @@
 <script setup>
 import { computed, reactive, ref, watch } from 'vue'
 import { RouterLink } from 'vue-router'
-import { Check, Clock, MessageSquare, Undo2 } from '@lucide/vue'
+import { Clock, MessageSquare, Undo2 } from '@lucide/vue'
 import EmptyState from '../components/ui/EmptyState.vue'
 import UiMenu from '../components/ui/UiMenu.vue'
 import UiMenuItem from '../components/ui/UiMenuItem.vue'

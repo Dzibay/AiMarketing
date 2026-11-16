@@ -19,12 +19,13 @@
 
   <!-- Простой режим: решения, сигналы, неделя в трёх цифрах и карточки проектов. -->
   <template v-else-if="!expert">
-    <section v-if="!rows.length" class="panel">
-      <p class="empty">
-        Здесь появятся ваши сайты: сколько потрачено, сколько заявок и что требует внимания. Начните с подключения
-        Метрики и Директа в <RouterLink to="/cabinet/connections">подключениях</RouterLink>.
-      </p>
-    </section>
+    <EmptyState
+      v-if="!rows.length"
+      art="projects"
+      text="Здесь появятся ваши сайты: сколько потрачено, сколько заявок и что требует внимания. Начните с подключения Метрики и Директа."
+    >
+      <template #action><RouterLink class="btn btn--accent" to="/cabinet/connections">Подключить Яндекс</RouterLink></template>
+    </EmptyState>
     <template v-else>
       <PendingDecisions />
       <SignalCards :problems="data.problems" show-project />
@@ -45,12 +46,13 @@
   </template>
 
   <template v-else>
-    <section v-if="!rows.length" class="panel">
-      <p class="empty">
-        Здесь появятся все сайты клиентов: расход, KPI, бюджет и что горит. Начните с подключения Метрики и Директа в
-        <RouterLink to="/cabinet/connections">подключениях</RouterLink>.
-      </p>
-    </section>
+    <EmptyState
+      v-if="!rows.length"
+      art="projects"
+      text="Здесь появятся все сайты клиентов: расход, KPI, бюджет и что горит. Начните с подключения Метрики и Директа."
+    >
+      <template #action><RouterLink class="btn btn--accent" to="/cabinet/connections">Подключить Яндекс</RouterLink></template>
+    </EmptyState>
 
     <template v-else>
       <p v-if="refreshing" class="sync-status overview-updated">{{ refreshText }}</p>
@@ -297,6 +299,7 @@ import ProblemList from '../components/ProblemList.vue'
 import RoleCard from '../components/RoleCard.vue'
 import SignalCards from '../components/SignalCards.vue'
 import TermHint from '../components/TermHint.vue'
+import EmptyState from '../components/ui/EmptyState.vue'
 import PageHeader from '../components/ui/PageHeader.vue'
 import UiRibbon from '../components/ui/UiRibbon.vue'
 import UiSelect from '../components/ui/UiSelect.vue'

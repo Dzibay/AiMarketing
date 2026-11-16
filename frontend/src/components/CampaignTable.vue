@@ -61,7 +61,7 @@
         </tbody>
       </table>
     </div>
-    <EmptyState v-else-if="!rows.length" :icon="SearchX" text="Под фильтр ничего не подходит." plain>
+    <EmptyState v-else-if="!rows.length" art="search" text="Под фильтр ничего не подходит." plain>
       <template v-if="filtered" #action>
         <button class="btn btn--ghost btn--sm" type="button" @click="resetFilters">Сбросить фильтры</button>
       </template>
@@ -216,7 +216,6 @@ import {
   Pause,
   Play,
   Search,
-  SearchX,
 } from '@lucide/vue'
 import EmptyState from './ui/EmptyState.vue'
 import UiListTools from './ui/UiListTools.vue'

@@ -153,6 +153,17 @@
   text-align: center;
 }
 
+.chat__art {
+  --eart-w: 120px;
+  margin: 0 auto 10px;
+}
+
+@media (max-width: 640px) {
+  .chat__art {
+    --eart-w: 92px;
+  }
+}
+
 .chat__hello h2 {
   margin: 0;
   font-size: clamp(24px, 3vw, 30px);

@@ -16,10 +16,13 @@
       {{ loadError || 'Не удалось загрузить запросы.' }}
       <button class="btn btn--ghost" type="button" @click="load">Повторить</button>
     </div>
-    <p v-else-if="!data.projects.length" class="empty">
-      Проектов пока нет. Подключите Директ и Метрику в
-      <RouterLink to="/cabinet/connections">подключениях</RouterLink>.
-    </p>
+    <EmptyState
+      v-else-if="!data.projects.length"
+      art="projects"
+      text="Проектов пока нет. Подключите Директ и Метрику — здесь появятся запросы, по которым показывалась реклама."
+    >
+      <template #action><RouterLink class="btn btn--accent" to="/cabinet/connections">Подключить Яндекс</RouterLink></template>
+    </EmptyState>
     <template v-else>
       <div class="ccard">
         <div v-for="p in queue" :key="p.id" class="prow">
@@ -131,11 +134,15 @@
       <EmptyState v-else-if="!data" :icon="CloudOff" :text="loadError || 'Не удалось загрузить запросы.'" plain>
         <template #action><button class="btn btn--ghost" type="button" @click="load">Повторить</button></template>
       </EmptyState>
-      <EmptyState v-else-if="!data.projects.length && !filters.project" :icon="SearchX" plain>
-        Проектов пока нет. Подключите Директ и Метрику в
-        <RouterLink to="/cabinet/connections">подключениях</RouterLink>.
+      <EmptyState
+        v-else-if="!data.projects.length && !filters.project"
+        art="projects"
+        text="Проектов пока нет. Подключите Директ и Метрику — здесь появятся запросы, по которым показывалась реклама."
+        plain
+      >
+        <template #action><RouterLink class="btn btn--accent" to="/cabinet/connections">Подключить Яндекс</RouterLink></template>
       </EmptyState>
-      <EmptyState v-else-if="!data.items.length" :icon="SearchX" :text="EMPTY[tab]" plain />
+      <EmptyState v-else-if="!data.items.length" art="queries" :text="EMPTY[tab]" plain />
       <template v-else>
         <div v-scroll-x class="table-scroll" :class="{ 'is-loading': loading }">
           <table v-cards class="table queries-table tcards">
@@ -283,7 +290,7 @@ import UiCheckbox from '../components/ui/UiCheckbox.vue'
 import UiListTools from '../components/ui/UiListTools.vue'
 import UiSelect from '../components/ui/UiSelect.vue'
 import UiSwitch from '../components/ui/UiSwitch.vue'
-import { CircleCheck, CloudOff, ListX, Search, SearchX, TriangleAlert } from '@lucide/vue'
+import { CircleCheck, CloudOff, ListX, Search, TriangleAlert } from '@lucide/vue'
 import { useExpert } from '../composables/useExpert'
 
 useHead('Запросы — Толк', true)
