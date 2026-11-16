@@ -103,11 +103,15 @@ const props = defineProps({
   min: { type: String, default: '' },
   max: { type: String, default: () => todayIso() },
   disabled: { type: Boolean, default: false },
+  /** Свои подписи быстрых периодов: { ключ: 'Неделя' } — поверх встроенных. */
+  labels: { type: Object, default: null },
+  /** Свои даты быстрого периода: (ключ) => { date_from, date_to }; без него — встроенные правила. */
+  resolve: { type: Function, default: null },
 })
 const emit = defineEmits(['change'])
 
 const LABELS = { yesterday: 'Вчера', month: 'Этот месяц', prev_month: 'Прошлый месяц' }
-const labelOf = (p) => LABELS[p] ?? `${p} дней`
+const labelOf = (p) => props.labels?.[p] ?? LABELS[p] ?? `${p} дней`
 
 const trigger = ref(null)
 const panel = ref(null)
@@ -130,6 +134,7 @@ const hint = computed(() => {
 })
 
 function rangeOf(p) {
+  if (props.resolve) return props.resolve(p)
   if (p === 'yesterday') {
     const day = addDays(todayIso(), -1)
     return { date_from: day, date_to: day }

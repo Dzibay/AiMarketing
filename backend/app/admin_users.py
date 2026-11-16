@@ -13,7 +13,8 @@ from app.users import admin_user
 from app.yandex import YandexError
 
 PER_PAGE = 50
-SUBS = {"paying", "trial", "expired", "none"}
+SUBS = {"paying", "trial", "expired", "none", "ending", "ending_paid"}
+ENDING_DAYS = 7
 ACTIVITY = {"today", "week", "lost", "never"}
 # Сортировка: ключ → выражение; пустые значения всегда в конце.
 SORTS = {
@@ -86,6 +87,12 @@ def _where(f: dict, now: datetime) -> tuple[list[str], dict]:
         where.append("p.is_trial AND (s.ends_at IS NULL OR s.ends_at > %(now)s)")
     elif sub == "paying":
         where.append("s.plan_id IS NOT NULL AND NOT p.is_trial AND (s.ends_at IS NULL OR s.ends_at > %(now)s)")
+    elif sub in ("ending", "ending_paid"):
+        # Подписка кончается в ближайшие 7 дней (как карточка дашборда); «платный» — любой непробный тариф.
+        params["ending"] = now + timedelta(days=ENDING_DAYS)
+        where.append("s.plan_id IS NOT NULL AND s.ends_at > %(now)s AND s.ends_at <= %(ending)s")
+        if sub == "ending_paid":
+            where.append("NOT p.is_trial")
     today = _day_start(now.astimezone(MSK).date())
     params["today"] = today
     act = f.get("activity") or ""

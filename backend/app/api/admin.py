@@ -4,11 +4,12 @@
 кабинета сюда не пускают.
 """
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from pydantic import BaseModel
 
 from app import ai, ai_bridge, ai_feedback, auth, billing, events, image_gen, mailer, payments, plans, promos, referrals, site_check, site_extras, support, wordstat
 from app.api.web import _http
+from app import admin_dashboard as admin_dashboard_mod
 from app import admin_users as admin_users_mod
 from app.users import UsersError, count_users, mark_email_verified, set_user_blocked
 from app.yandex import YandexError, yandex_configured
@@ -65,6 +66,12 @@ def admin_me() -> dict:
         "payments_ready": payments.is_ready(),
         "payments": payments.month_revenue(),
     }
+
+
+@router.get("/dashboard")
+def admin_dashboard(p: str = "30d", date_from: str = Query("", alias="from"), date_to: str = Query("", alias="to"), step: str = "") -> dict:
+    """Дашборд: цифры за период с изменением к прошлому, ряды графиков, полоса состояния. Кэш — минута."""
+    return admin_dashboard_mod.build_cached(p[:8], date_from[:10] or None, date_to[:10] or None, step[:8])
 
 
 class BlockBody(BaseModel):

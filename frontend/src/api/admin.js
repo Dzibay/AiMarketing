@@ -42,6 +42,17 @@ export const adminApi = {
     for (const [k, v] of Object.entries(params)) if (v !== '' && v !== null && v !== undefined && v !== false) q.set(k, v)
     return call(`/users?${q}`)
   },
+  /**
+   * Дашборд. params: p (day|7d|30d|90d|180d|365d|all) или from/to («ГГГГ-ММ-ДД»), step (day|week|month).
+   * { period { preset, from, to, days, step, prev }, current, previous, changes (ключ → % или null), now (срез
+   *   на сейчас), series / prev_series (по корзинам шага), status { services, support_open, no_receipt },
+   *   conversion_window_days }. Сервер держит ответ минуту.
+   */
+  dashboard: (params = {}) => {
+    const q = new URLSearchParams()
+    for (const [k, v] of Object.entries(params)) if (v) q.set(k, v)
+    return call(`/dashboard?${q}`)
+  },
   /** Карточка для панели: { user (как строка списка), days, ai_days, ai_tasks, chats, project_list }. */
   userCard: (id) => call(`/users/${id}/card`),
   blockUser: (id, reason = '') => send('POST', `/users/${id}/block`, { reason }),

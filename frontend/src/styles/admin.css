@@ -197,40 +197,219 @@ a.adm-card:hover {
 
 /* ---- дашборд ---- */
 
-a.adm-stat {
-  color: inherit;
-  transition: border-color 0.15s;
+.adm-dash {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr); /* SVG графиков не распирает страницу */
+  gap: 16px;
+  transition: opacity 0.15s;
 }
 
-a.adm-stat:hover {
-  border-color: var(--faint);
+/* Новый период грузится — старые числа остаются, но приглушены. */
+.adm-dash.is-loading .adm-kpis,
+.adm-dash.is-loading .adm-charts {
+  opacity: 0.55;
 }
 
-.adm-health {
+.adm-dash__bar,
+.adm-period {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
+  align-items: center;
+  gap: 10px 12px;
 }
 
-.adm-health__item {
+.adm-dash__versus {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+/* Полоса состояния: точка на сервис; справа — то, что ждёт ответа. */
+.adm-status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 14px;
+  padding: 10px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-card);
+  background: var(--surface);
+  font-size: 13px;
+}
+
+.adm-status__item {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
-  padding: 8px 12px;
-  border: 1px solid var(--line);
-  border-radius: var(--pill);
+  gap: 6px;
+  min-height: 28px;
   color: var(--ink);
-  font-size: 14px;
   font-weight: 600;
 }
 
-.adm-health__item:hover {
-  border-color: var(--faint);
+a.adm-status__item:hover {
+  text-decoration: underline;
 }
 
-.adm-health__item small {
-  font-size: 12px;
+.adm-status__item b {
+  font-variant-numeric: tabular-nums;
+}
+
+.adm-status__item.is-warn b {
+  color: var(--warn);
+}
+
+.adm-status__gap {
+  flex: 1;
+}
+
+.adm-kpis {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+  gap: 12px;
+}
+
+.adm-kpi {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-card);
+  background: var(--surface);
+}
+
+.adm-kpi__label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 13px;
   font-weight: 700;
+}
+
+.adm-kpi__label a {
+  color: inherit;
+}
+
+.adm-kpi__label a:hover {
+  color: var(--ink);
+  text-decoration: underline;
+}
+
+.adm-kpi__hint {
+  display: inline-flex;
+  margin-left: auto;
+  color: var(--faint);
+  cursor: help;
+}
+
+.adm-kpi__hint svg {
+  width: 15px;
+  height: 15px;
+}
+
+.adm-kpi__value {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  margin: 2px 0;
+}
+
+.adm-kpi__value strong {
+  font-size: 24px;
+  font-weight: 800;
+  line-height: 1.15;
+  letter-spacing: -0.03em;
+  font-variant-numeric: tabular-nums;
+}
+
+.adm-kpi__note {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12.5px;
+}
+
+.adm-kpi__note a {
+  color: inherit;
+  text-decoration: underline;
+  text-decoration-color: var(--line-2);
+}
+
+.adm-kpi__rows {
+  display: grid;
+  gap: 2px;
+  margin: 6px 0 0;
+  padding: 6px 0 0;
+  border-top: 1px dashed var(--line);
+  list-style: none;
+  font-size: 13px;
+}
+
+.adm-kpi__rows li {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.adm-kpi__rows a,
+.adm-kpi__rows span {
+  overflow: hidden;
+  color: var(--muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.adm-kpi__rows a:hover {
+  color: var(--ink);
+}
+
+.adm-kpi__rows b {
+  font-variant-numeric: tabular-nums;
+}
+
+.adm-charts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.adm-charts__item {
+  min-width: 0;
+  margin: 0;
+}
+
+.adm-charts__item.is-wide {
+  grid-column: 1 / -1;
+}
+
+.adm-charts__total {
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+@media (max-width: 900px) {
+  .adm-charts {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.adm-chart__bar {
+  rx: 2px;
+}
+
+.adm-chart__band {
+  fill: var(--line);
+  opacity: 0.45;
+}
+
+.trend-chart__legend i.is-bar {
+  width: 10px;
+  height: 10px;
+  border: 0;
+  border-radius: 2px;
 }
 
 /* ---- части страниц ---- */

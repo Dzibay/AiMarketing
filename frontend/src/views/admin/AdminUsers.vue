@@ -158,6 +158,8 @@ const SUB_OPTIONS = [
   { value: '', label: 'Любая подписка' },
   { value: 'paying', label: 'Платит' },
   { value: 'trial', label: 'Пробный' },
+  { value: 'ending', label: 'Истекает за 7 дней' },
+  { value: 'ending_paid', label: 'Истекает за 7 дней, платный' },
   { value: 'expired', label: 'Истекла' },
   { value: 'none', label: 'Без тарифа' },
 ]
