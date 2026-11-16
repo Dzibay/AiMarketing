@@ -71,6 +71,15 @@
               <span v-else class="tone-ok">активен</span>
               <button class="btn btn--ghost btn--xs" type="button" @click="openEvents(u)">События</button>
               <button
+                v-if="u.support?.total"
+                class="btn btn--xs"
+                :class="u.support.unread ? 'btn--accent' : 'btn--ghost'"
+                type="button"
+                @click="openSupport(u)"
+              >
+                Обращения: {{ u.support.total }}<template v-if="u.support.unread"> · новых {{ u.support.unread }}</template>
+              </button>
+              <button
                 v-if="!u.blocked"
                 class="btn btn--ghost btn--xs"
                 type="button"
@@ -187,6 +196,43 @@
         </tbody>
       </table>
     </div>
+  </Modal>
+
+  <Modal :open="!!ticket" :title="ticket ? `Обращения ${ticket.user.email || `#${ticket.user.id}`}` : ''" wide @close="closeTicket">
+    <template v-if="ticket">
+      <p v-if="ticket.loading" class="empty">Загружаем…</p>
+      <p v-else-if="!ticket.messages.length" class="empty">Сообщений нет.</p>
+      <div v-else class="admin-sup">
+        <div v-for="m in ticket.messages" :key="m.id" class="sup-msg" :class="`is-${m.author}`">
+          <small class="sup-msg__who">{{ m.author === 'admin' ? 'Поддержка' : 'Пользователь' }}</small>
+          <a v-if="m.has_image && ticketImages[m.id]" :href="ticketImages[m.id]" target="_blank" rel="noopener" class="sup-msg__img">
+            <img :src="ticketImages[m.id]" alt="Скриншот" />
+          </a>
+          <span v-else-if="m.has_image" class="sup-msg__img is-loading">Скриншот…</span>
+          <p v-if="m.body">{{ m.body }}</p>
+          <small class="sup-msg__time">
+            {{ formatDateTime(m.created_at) }}<template v-if="contextText(m.context)"> · {{ contextText(m.context) }}</template>
+          </small>
+        </div>
+      </div>
+      <p class="hint">
+        Ответ придёт пользователю в виджет и колокольчик, в Telegram — если привязан, иначе письмом.<template
+          v-if="ticket.topic"
+        > Копия уйдёт в тему группы поддержки.</template>
+      </p>
+      <textarea v-model="ticket.reply" class="input" rows="3" maxlength="4000" placeholder="Ответ пользователю"></textarea>
+    </template>
+    <template #footer>
+      <button class="btn btn--ghost" type="button" @click="closeTicket">Закрыть</button>
+      <button
+        class="btn btn--accent"
+        type="button"
+        :disabled="!ticket || ticket.sending || !ticket.reply.trim()"
+        @click="sendReply"
+      >
+        Ответить
+      </button>
+    </template>
   </Modal>
 </template>
 
@@ -419,6 +465,68 @@ async function openEvents(u) {
     log.value = null
     pushToast(errorText(err), 'error')
   }
+}
+
+// --- Обращения в поддержку ---
+
+const ticket = ref(null)
+const ticketImages = ref({})
+
+function contextText(ctx) {
+  if (!ctx) return ''
+  return [
+    ctx.page,
+    ctx.workspace ? `проект «${ctx.workspace.name}» #${ctx.workspace.id}` : '',
+    ctx.plan ? `тариф ${ctx.plan}` : '',
+    ctx.browser,
+  ]
+    .filter(Boolean)
+    .join(' · ')
+}
+
+function showTicket(u, data) {
+  ticket.value = { ...(ticket.value || {}), user: u, messages: data.messages || [], topic: data.topic, loading: false }
+  for (const m of ticket.value.messages) {
+    if (!m.has_image || ticketImages.value[m.id] !== undefined) continue
+    ticketImages.value = { ...ticketImages.value, [m.id]: '' }
+    adminApi
+      .supportImage(m.id)
+      .then((url) => (ticketImages.value = { ...ticketImages.value, [m.id]: url }))
+      .catch(() => {})
+  }
+}
+
+async function openSupport(u) {
+  ticket.value = { user: u, messages: [], topic: null, loading: true, reply: '', sending: false }
+  try {
+    showTicket(u, await adminApi.support(u.id))
+    replace(u.id, { support: { ...u.support, unread: 0 } })
+  } catch (err) {
+    ticket.value = null
+    pushToast(errorText(err), 'error')
+  }
+}
+
+async function sendReply() {
+  const t = ticket.value
+  if (!t || !t.reply.trim()) return
+  t.sending = true
+  try {
+    const data = await adminApi.supportReply(t.user.id, t.reply.trim())
+    t.reply = ''
+    showTicket(t.user, data)
+    replace(t.user.id, { support: { total: data.messages.length, unread: 0 } })
+  } catch (err) {
+    pushToast(errorText(err), 'error')
+  } finally {
+    if (ticket.value) ticket.value.sending = false
+  }
+}
+
+function closeTicket() {
+  ticket.value = null
+  for (const url of Object.values(ticketImages.value)) if (url) URL.revokeObjectURL(url)
+  ticketImages.value = {}
 }
 
 // --- Блокировка ---

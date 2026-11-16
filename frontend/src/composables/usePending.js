@@ -1,5 +1,6 @@
 import { ref } from 'vue'
 import { aiApi, notifyApi } from '../api/web'
+import { setSupportUnread } from './useSupport'
 
 // «Ждёт решения»: неподтверждённые предложения ИИ по всем проектам — счётчик в шапке и общая страница.
 // Отложенные «Позже» хранятся на сервере (ai_actions.snoozed_at) и в счётчик не входят.
@@ -35,6 +36,7 @@ export function loadPending() {
       .then((data) => {
         pendingCount.value = Number(data?.pending || 0)
         notifCount.value = Number(data?.notifications || 0)
+        setSupportUnread(data?.support)
         return pendingCount.value
       })
       .catch(() => pendingCount.value)
@@ -53,6 +55,7 @@ export function refreshPending() {
 export function resetPending() {
   pendingCount.value = 0
   notifCount.value = 0
+  setSupportUnread(0)
 }
 
 /** Колокольчик сам знает точное число после прочтения — без лишнего запроса. */

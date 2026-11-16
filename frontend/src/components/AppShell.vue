@@ -312,6 +312,7 @@
     </Modal>
     <UndoHost />
     <UiCoach />
+    <SupportWidget />
   </div>
 </template>
 
@@ -341,6 +342,7 @@ import NotificationBell from './NotificationBell.vue'
 import PlanOffers from './PlanOffers.vue'
 import ProfileMenu from './ProfileMenu.vue'
 import ProjectSwitcher from './ProjectSwitcher.vue'
+import SupportWidget from './SupportWidget.vue'
 import Modal from './ui/Modal.vue'
 import { SECTIONS, pageMatches, sectionTabs, sectionTo } from './shellNav'
 import { useExpert } from '../composables/useExpert'
@@ -352,6 +354,7 @@ import { loadPlan, resetPlan, usePlan } from '../composables/usePlan'
 import { featureLocked, loadProfile, resetProfile, useProfile } from '../composables/useProfile'
 import { resetProjectFilter, useProjectFilter } from '../composables/useProjectFilter'
 import { clearSession, getSession } from '../composables/useSession'
+import { closeSupport, openSupport } from '../composables/useSupport'
 import { useTheme } from '../composables/useTheme'
 import { useViewport } from '../composables/useViewport'
 import { revealInStrip, useScrollStrip } from '../composables/useScrollStrip'
@@ -551,7 +554,20 @@ const limitChip = computed(() => {
   return { percent: null, text }
 })
 
+// Ссылка «…?support=1» (колокольчик, письмо, Telegram) открывает поддержку; параметр из адреса убираем.
+watch(
+  () => route.query.support,
+  (value) => {
+    if (!value) return
+    openSupport()
+    const { support: _drop, ...query } = route.query
+    router.replace({ path: route.path, query, hash: route.hash })
+  },
+  { immediate: true },
+)
+
 function logout() {
+  closeSupport()
   clearSession()
   resetWorkspaces()
   resetLoads()

@@ -63,6 +63,9 @@ class Settings(BaseSettings):
     telegram_bot_username: str = ""
     # Секрет для setWebhook (заголовок X-Telegram-Bot-Api-Secret-Token).
     telegram_webhook_secret: str = ""
+    # Группа поддержки с темами (форум): id чата вида -100…; бот — админ группы с правом управлять темами.
+    # Пусто — обращения видны только в админке.
+    telegram_support_chat_id: str = ""
 
     # Фоновые циклы внутри процесса API (для локального запуска).
     # В Docker API ставит false, отдельный сервис worker запускает циклы сам.

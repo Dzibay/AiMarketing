@@ -39,9 +39,10 @@
 <script setup>
 import { computed, defineComponent, h, onBeforeUnmount, onMounted, ref } from 'vue'
 import { RouterLink, useRouter } from 'vue-router'
-import { Bell, CloudOff, CreditCard, Gauge, MessageSquare, TrendingDown, Zap } from '@lucide/vue'
+import { Bell, CloudOff, CreditCard, Gauge, LifeBuoy, MessageSquare, TrendingDown, Zap } from '@lucide/vue'
 import { errorText, notifyApi } from '../api/web'
 import { setNotifCount, usePending } from '../composables/usePending'
+import { openSupport } from '../composables/useSupport'
 import { useViewport } from '../composables/useViewport'
 import { plural, timeAgo } from '../utils/format'
 import UiSheet from './ui/UiSheet.vue'
@@ -104,7 +105,9 @@ function toggle() {
 
 function pick(item) {
   open.value = false
-  if (item.link) router.push(item.link)
+  // Ответ поддержки открывает переписку поверх текущей страницы — уходить с неё незачем.
+  if (item.kind === 'support') openSupport()
+  else if (item.link) router.push(item.link)
 }
 
 function onDocClick(event) {
@@ -123,6 +126,7 @@ const ICONS = {
   load_error: CloudOff,
   limit: Gauge,
   plan: CreditCard,
+  support: LifeBuoy,
 }
 
 /** Список записей — общий для выпадающего окна и шторки. */

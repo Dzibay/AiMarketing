@@ -62,6 +62,79 @@ def send_message(chat_id: str | int, text: str) -> bool:
         return False
 
 
+# --- Группа поддержки с темами ----------------------------------------------------------------------------
+
+
+def support_chat_id() -> str:
+    return (settings.telegram_support_chat_id or "").strip()
+
+
+def support_configured() -> bool:
+    return telegram_configured() and bool(support_chat_id())
+
+
+def _api(method: str, *, payload: dict | None = None, files: dict | None = None) -> dict | None:
+    """Вызов Bot API: result или None (не настроено, сеть, ошибка Telegram — в лог)."""
+    if not telegram_configured():
+        return None
+    url = f"{API}/bot{settings.telegram_bot_token}/{method}"
+    try:
+        with httpx.Client(timeout=30.0) as client:
+            if files:
+                response = client.post(url, data={k: str(v) for k, v in (payload or {}).items()}, files=files)
+            else:
+                response = client.post(url, json=payload or {})
+    except httpx.HTTPError:
+        log.exception("telegram %s", method)
+        return None
+    if response.status_code >= 400:
+        log.warning("telegram %s %s %s", method, response.status_code, response.text[:300])
+        return None
+    return (response.json() or {}).get("result")
+
+
+def create_support_topic(name: str) -> int | None:
+    """Новая тема в группе поддержки → её message_thread_id."""
+    if not support_configured():
+        return None
+    result = _api("createForumTopic", payload={"chat_id": support_chat_id(), "name": name[:128]})
+    return int(result["message_thread_id"]) if result and result.get("message_thread_id") else None
+
+
+def send_to_support_topic(topic_id: int, text: str, *, image: bytes | None = None, image_type: str = "") -> int | None:
+    """Сообщение (или скриншот с подписью) в тему поддержки → message_id."""
+    if not support_configured() or not topic_id:
+        return None
+    payload = {"chat_id": support_chat_id(), "message_thread_id": int(topic_id)}
+    if image:
+        ext = "png" if image_type == "image/png" else "jpg"
+        result = _api(
+            "sendPhoto",
+            payload={**payload, "caption": text[:1000]},
+            files={"photo": (f"screenshot.{ext}", image, image_type or "image/jpeg")},
+        )
+    else:
+        result = _api("sendMessage", payload={**payload, "text": text[:4000], "disable_web_page_preview": True})
+    return int(result["message_id"]) if result and result.get("message_id") else None
+
+
+def download_file(file_id: str, max_bytes: int = 5_000_000) -> bytes | None:
+    """Файл из сообщения (фото из ответа поддержки)."""
+    info = _api("getFile", payload={"file_id": file_id})
+    path = (info or {}).get("file_path")
+    if not path or int((info or {}).get("file_size") or 0) > max_bytes:
+        return None
+    try:
+        with httpx.Client(timeout=30.0) as client:
+            response = client.get(f"{API}/file/bot{settings.telegram_bot_token}/{path}")
+    except httpx.HTTPError:
+        log.exception("telegram file")
+        return None
+    if response.status_code >= 400 or len(response.content) > max_bytes:
+        return None
+    return response.content
+
+
 def notify_user(user_id: int, text: str) -> bool:
     with pool.connection() as conn:
         row = conn.execute(
@@ -154,6 +227,12 @@ def handle_update(update: dict) -> None:
     chat = message.get("chat") or {}
     chat_id = chat.get("id")
     if chat_id is None:
+        return
+    if support_chat_id() and str(chat_id) == support_chat_id():
+        # Ответ поддержки в теме группы — в виджет пользователя.
+        from app.support import handle_group_message
+
+        handle_group_message(message)
         return
     if text.startswith("/start"):
         parts = text.split(maxsplit=1)

@@ -203,6 +203,27 @@ export const notifyApi = {
     request('/api/web/notifications/settings', { method: 'PATCH', body: JSON.stringify(changes) }),
 }
 
+/**
+ * Картинка с авторизацией (скриншоты поддержки): ссылка blob: для <img>. Освобождать — URL.revokeObjectURL.
+ * token — как в request: свой токен вместо сессии кабинета (админка).
+ */
+export async function blobUrl(path, { token } = {}) {
+  const session = token === undefined ? getSession() : token
+  const response = await fetch(path, { headers: session ? { Authorization: `Bearer ${session}` } : {} })
+  if (!response.ok) throw new ApiError('not-found', response.status)
+  return URL.createObjectURL(await response.blob())
+}
+
+/** Поддержка: одна переписка пользователя с командой; доступна и без действующего тарифа. */
+export const supportApi = {
+  /** { messages: [{ id, author: 'user'|'admin', body, has_image, created_at }], unread, telegram }. */
+  thread: () => request('/api/web/support/thread'),
+  /** { text, image (data URL, уже уменьшенный), context { page, workspace_id, browser } } → переписка. */
+  send: (payload) => request('/api/web/support/messages', { method: 'POST', body: JSON.stringify(payload) }),
+  read: () => request('/api/web/support/read', { method: 'POST' }),
+  imageUrl: (id) => blobUrl(`/api/web/support/images/${id}`),
+}
+
 /** Откат действия из журнала: предпросмотр шагов и запуск задачей. */
 export const undoApi = {
   preview: (logId) => request(`/api/web/actions/${logId}/undo`),

@@ -2449,3 +2449,290 @@ html.has-bbar {
 .notify-prefs td:not(:first-child) .ui-switch {
   justify-content: center;
 }
+
+/* Поддержка: кнопка «?» в углу, панель справа на компьютере, шторка на телефоне (SupportWidget). */
+.sup-fab {
+  position: fixed;
+  right: 1.25rem;
+  bottom: 1.25rem;
+  z-index: 35;
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  background: var(--surface);
+  color: var(--ink);
+  box-shadow: var(--shadow);
+  cursor: pointer;
+}
+
+.sup-fab:hover {
+  background: var(--surface-2);
+}
+
+.sup-fab svg {
+  width: 22px;
+  height: 22px;
+}
+
+.sup-fab__n {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: var(--pill);
+  background: var(--lime);
+  color: var(--on-lime);
+  font-size: 0.7rem;
+  font-weight: 700;
+  line-height: 18px;
+  text-align: center;
+}
+
+.sup-panel {
+  position: fixed;
+  top: 0.75rem;
+  right: 0.75rem;
+  bottom: 0.75rem;
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  width: min(400px, calc(100vw - 1.5rem));
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  background: var(--surface);
+  box-shadow: var(--shadow-pop);
+  animation: rise-in 0.18s ease both;
+}
+
+.sup-panel:focus {
+  outline: none;
+}
+
+.sup-panel__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.85rem 0.75rem 0.7rem 1rem;
+  border-bottom: 1px solid var(--line);
+}
+
+.sup-panel__head strong,
+.sup-panel__head small {
+  display: block;
+}
+
+.sup-panel__head strong {
+  font-weight: 600;
+}
+
+.sup-panel__head small,
+.sup-note {
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.sup-note {
+  margin: 0 0 0.6rem;
+}
+
+.sup {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.sup-list {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 0.6rem;
+  min-height: 0;
+  padding: 1rem;
+  overflow-y: auto;
+}
+
+.ui-sheet .sup-list {
+  max-height: 46vh;
+  padding: 0 0 0.75rem;
+}
+
+.sup-empty {
+  margin: auto 0;
+  color: var(--muted);
+  font-size: 0.88rem;
+  text-align: center;
+}
+
+.sup-empty strong {
+  display: block;
+  margin-bottom: 0.3rem;
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.sup-empty p {
+  margin: 0;
+}
+
+.sup-empty.is-error,
+.sup-error {
+  color: var(--danger);
+}
+
+.sup-msg {
+  max-width: 85%;
+  padding: 0.55rem 0.75rem;
+  border-radius: 14px;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+}
+
+.sup-msg.is-user {
+  align-self: flex-end;
+  background: var(--lime-soft);
+  border-color: transparent;
+}
+
+.sup-msg p {
+  margin: 0;
+  font-size: 0.9rem;
+  line-height: 1.4;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.sup-msg__who {
+  display: block;
+  margin-bottom: 0.15rem;
+  font-size: 0.75rem;
+  font-weight: 650;
+}
+
+.sup-msg__time {
+  display: block;
+  margin-top: 0.2rem;
+  color: var(--muted);
+  font-size: 0.72rem;
+}
+
+.sup-msg__img {
+  display: block;
+  margin-bottom: 0.35rem;
+}
+
+.sup-msg__img img {
+  display: block;
+  max-width: 100%;
+  max-height: 220px;
+  border-radius: 9px;
+}
+
+.sup-msg__img.is-loading {
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.sup-form {
+  display: grid;
+  gap: 0.5rem;
+  padding: 0.75rem 1rem 1rem;
+  border-top: 1px solid var(--line);
+}
+
+.ui-sheet .sup-form {
+  padding: 0.75rem 0 0;
+}
+
+.sup-form textarea {
+  width: 100%;
+  min-height: 72px;
+  max-height: 200px;
+  padding: 0.6rem 0.7rem;
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+  font-size: 0.9rem;
+  resize: vertical;
+}
+
+.sup-form__row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.sup-attach {
+  flex: 1;
+  min-width: 0;
+  color: var(--muted);
+  font-size: 0.78rem;
+  line-height: 1.3;
+}
+
+.sup-error {
+  margin: 0;
+  font-size: 0.82rem;
+}
+
+.sup-shot {
+  position: relative;
+  justify-self: start;
+}
+
+.sup-shot img {
+  display: block;
+  max-width: 160px;
+  max-height: 100px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+}
+
+.sup-shot__x {
+  position: absolute;
+  top: -8px;
+  right: -8px;
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  background: var(--surface);
+  color: var(--ink);
+  cursor: pointer;
+}
+
+.sup-shot__x svg {
+  width: 14px;
+  height: 14px;
+}
+
+.sup-spin {
+  animation: sup-spin 0.8s linear infinite;
+}
+
+@keyframes sup-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.admin-sup {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  max-height: 50vh;
+  margin-bottom: 0.75rem;
+  overflow-y: auto;
+}

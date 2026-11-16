@@ -4,10 +4,10 @@
 кабинета сюда не пускают.
 """
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel
 
-from app import ai, ai_bridge, ai_feedback, auth, billing, events, image_gen, mailer, payments, plans, promos, referrals, site_check, site_extras, wordstat
+from app import ai, ai_bridge, ai_feedback, auth, billing, events, image_gen, mailer, payments, plans, promos, referrals, site_check, site_extras, support, wordstat
 from app.api.web import _http
 from app.users import UsersError, count_users, list_users, mark_email_verified, set_user_blocked
 from app.yandex import YandexError, yandex_configured
@@ -87,9 +87,16 @@ def admin_users(limit: int = 100, offset: int = 0) -> dict:
     offset = max(0, offset)
     items = list_users(limit=limit, offset=offset)
     usage = billing.users_usage([u["id"] for u in items])
+    tickets = support.admin_counts()
     return {
         "items": [
-            {**u, "usage": usage.get(u["id"]), "subscription": plans.admin_view(u["id"])} for u in items
+            {
+                **u,
+                "usage": usage.get(u["id"]),
+                "subscription": plans.admin_view(u["id"]),
+                "support": tickets.get(u["id"], {"total": 0, "unread": 0}),
+            }
+            for u in items
         ],
         "total": count_users(),
     }
@@ -134,6 +141,32 @@ def admin_user_verify_email(user_id: int) -> dict:
 @router.get("/users/{user_id}/events")
 def admin_user_events(user_id: int, limit: int = 50) -> dict:
     return {"items": events.list_events(user_id, max(1, min(limit, 200))), "kinds": events.KINDS}
+
+
+class SupportReplyBody(BaseModel):
+    text: str = ""
+
+
+@router.get("/users/{user_id}/support")
+def admin_user_support(user_id: int) -> dict:
+    """Обращения пользователя: вся переписка с контекстом (страница, проект, тариф, браузер)."""
+    return support.admin_thread(user_id)
+
+
+@router.post("/users/{user_id}/support")
+def admin_user_support_reply(user_id: int, body: SupportReplyBody) -> dict:
+    try:
+        return support.admin_reply(user_id, body.text)
+    except support.SupportError as exc:
+        raise HTTPException(status_code=404 if exc.code == "not-found" else 400, detail=str(exc)) from exc
+
+
+@router.get("/support/images/{message_id}")
+def admin_support_image(message_id: int) -> Response:
+    found = support.image(message_id)
+    if found is None:
+        raise HTTPException(status_code=404, detail="Картинка не найдена")
+    return Response(content=found[0], media_type=found[1], headers={"Cache-Control": "private, max-age=86400"})
 
 
 # --- Тарифы --------------------------------------------------------------------------------------

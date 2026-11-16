@@ -1,4 +1,4 @@
-import { request } from './web'
+import { blobUrl, request } from './web'
 import { clearAdminSession, getAdminSession } from '../composables/useAdminSession'
 
 /**
@@ -45,6 +45,10 @@ export const adminApi = {
   verifyEmail: (id) => send('POST', `/users/${id}/verify-email`),
   /** Журнал пользователя: { items: [{ kind, label, meta, created_at }], kinds }. */
   events: (id, limit = 100) => call(`/users/${id}/events?limit=${limit}`),
+  /** Обращения: { messages: [{ id, author, body, has_image, context, created_at }], topic }. */
+  support: (id) => call(`/users/${id}/support`),
+  supportReply: (id, text) => send('POST', `/users/${id}/support`, { text }),
+  supportImage: (messageId) => blobUrl(`${A}/support/images/${messageId}`, { token: getAdminSession() }),
 
   /** { items: [тариф + users], upgrades: [{ from_plan_id, to_plan_id, discount_pct }], features: { ключ: название } }. */
   plans: () => call('/plans'),

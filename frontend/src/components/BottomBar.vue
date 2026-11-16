@@ -34,7 +34,10 @@
       :aria-expanded="more"
       @click="more = true"
     >
-      <Ellipsis aria-hidden="true" />
+      <span class="bbar__ico" aria-hidden="true">
+        <Ellipsis />
+        <b v-if="supportUnread" class="bbar__n">{{ supportUnread > 9 ? '9+' : supportUnread }}</b>
+      </span>
       <span>Ещё</span>
     </button>
   </nav>
@@ -71,6 +74,14 @@
         </span>
         <ChevronRight class="more__go" aria-hidden="true" />
       </RouterLink>
+      <button class="more__row" type="button" @click="support">
+        <LifeBuoy aria-hidden="true" />
+        <span class="more__t">
+          <b>Поддержка</b>
+          <small>{{ supportUnread ? 'Новый ответ — откройте переписку' : 'Напишите, если что-то не работает или непонятно' }}</small>
+        </span>
+        <ChevronRight class="more__go" aria-hidden="true" />
+      </button>
       <hr />
       <button class="more__row" type="button" role="switch" :aria-checked="isDark" @click="toggleTheme">
         <Moon aria-hidden="true" />
@@ -94,7 +105,7 @@
 <script setup>
 import { computed, onBeforeUnmount, ref, watch, watchEffect } from 'vue'
 import { RouterLink, useRoute } from 'vue-router'
-import { ChevronRight, Ellipsis, House, ListChecks, LogOut, Megaphone, Moon, Sparkles } from '@lucide/vue'
+import { ChevronRight, Ellipsis, House, LifeBuoy, ListChecks, LogOut, Megaphone, Moon, Sparkles } from '@lucide/vue'
 import ProjectSwitcher from './ProjectSwitcher.vue'
 import UiSheet from './ui/UiSheet.vue'
 import { SECTIONS, SERVICE, pageMatches, sectionTo } from './shellNav'
@@ -102,6 +113,7 @@ import { useExpert } from '../composables/useExpert'
 import { usePending } from '../composables/usePending'
 import { useProfile } from '../composables/useProfile'
 import { useProjectFilter } from '../composables/useProjectFilter'
+import { openSupport, useSupport } from '../composables/useSupport'
 import { useTheme } from '../composables/useTheme'
 import { useViewport } from '../composables/useViewport'
 
@@ -184,6 +196,13 @@ watch(
 // Ссылка на уже открытую страницу адрес не меняет — закрываем по самому нажатию.
 function closeOnLink(event) {
   if (event.target.closest('a')) more.value = false
+}
+
+const { supportUnread } = useSupport()
+
+function support() {
+  more.value = false
+  openSupport()
 }
 
 function signOut() {

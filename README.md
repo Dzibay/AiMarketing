@@ -254,6 +254,9 @@ API: `GET .../{id}/queries`, `POST .../{id}/queries/sync|classify|check|apply|fo
 2. В кабинете → «Получить ссылку» → Start в боте
 3. Опционально webhook: `{PUBLIC_BASE_URL}/api/web/telegram/webhook`
    (задайте `TELEGRAM_WEBHOOK_SECRET` и тот же `secret_token` в `setWebhook`; иначе polling воркера)
+   Поддержка: группа с включёнными темами, бот в ней админ с правом управлять темами, privacy mode у бота
+   выключен (`/setprivacy` → Disable в @BotFather), id группы — в `TELEGRAM_SUPPORT_CHAT_ID`. Каждое новое
+   обращение открывает тему «ID · почта · тариф»; ответ в теме приходит пользователю в виджет поддержки.
 4. Утренний дайджест включён по умолчанию в 9:00 МСК; час и отключение — в блоке Telegram
    на главной кабинета. Перед отправкой воркер догружает вчерашнюю статистику и балансы;
    если воркер лежал, дайджест догоняет в течение трёх часов. API: `GET/PUT /api/web/digest`,

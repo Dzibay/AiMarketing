@@ -3,12 +3,12 @@ from datetime import date, timedelta
 from urllib.parse import urlencode
 
 from fastapi import APIRouter, Depends, Header, HTTPException
-from fastapi.responses import RedirectResponse
+from fastapi.responses import RedirectResponse, Response
 from pydantic import BaseModel, Field
 
 log = logging.getLogger("app.api.web")
 
-from app import ad_extras, billing, email_verify, events, notifications, payments, plans, promos, referrals
+from app import ad_extras, billing, email_verify, events, notifications, payments, plans, promos, referrals, support
 from app.actions import (
     _account_creds,
     bulk_campaign_action,
@@ -541,6 +541,47 @@ def web_notification_settings_save(body: dict, user_id: int = Depends(require_we
         return notifications.set_prefs(user_id, body)
     except notifications.NotificationsError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+class SupportMessageBody(BaseModel):
+    text: str = Field(default="", max_length=support.MAX_TEXT + 100)
+    # Скриншот data URL, уже уменьшенный в браузере.
+    image: str = Field(default="", max_length=support.MAX_IMAGE * 4 // 3 + 100)
+    context: dict = Field(default_factory=dict)
+
+
+def _support_http(exc: support.SupportError) -> HTTPException:
+    status = {"rate": 429, "not-found": 404, "image-size": 413}.get(exc.code, 400)
+    return HTTPException(status_code=status, detail=str(exc))
+
+
+# Поддержка доступна и без действующего тарифа: написать «не могу оплатить» должен уметь каждый.
+@router.get("/support/thread")
+def web_support_thread(user_id: int = Depends(require_web_identity)) -> dict:
+    return support.get_thread(user_id)
+
+
+@router.post("/support/messages")
+def web_support_message(body: SupportMessageBody, user_id: int = Depends(require_web_identity)) -> dict:
+    """Сообщение в поддержку: текст и/или скриншот; context — страница, проект, браузер."""
+    try:
+        return support.post_message(user_id, body.text, image_data=body.image or None, context=body.context)
+    except support.SupportError as exc:
+        raise _support_http(exc) from exc
+
+
+@router.post("/support/read")
+def web_support_read(user_id: int = Depends(require_web_identity)) -> dict:
+    return support.mark_read(user_id)
+
+
+@router.get("/support/images/{message_id}")
+def web_support_image(message_id: int, user_id: int = Depends(require_web_identity)) -> Response:
+    found = support.image(message_id, user_id=user_id)
+    if found is None:
+        raise HTTPException(status_code=404, detail="Картинка не найдена")
+    data, kind = found
+    return Response(content=data, media_type=kind, headers={"Cache-Control": "private, max-age=86400"})
 
 
 @router.get("/me")

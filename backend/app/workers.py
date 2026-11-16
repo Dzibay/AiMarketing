@@ -110,6 +110,14 @@ def _purge_jobs() -> None:
         log.info("Удалено старых уведомлений: %d", n)
 
 
+def _support_emails() -> None:
+    from app.support import email_unread_replies
+
+    n = email_unread_replies()
+    if n:
+        log.info("Ответы поддержки письмом: %d", n)
+
+
 # Имя → (период в секундах, постановка задач). Время последнего запуска — в job_schedules,
 # поэтому рестарт процесса не сбрасывает расписание, а несколько воркеров не дублируют запуск.
 SCHEDULES: dict[str, tuple[int, Callable[[], None]]] = {
@@ -125,6 +133,7 @@ SCHEDULES: dict[str, tuple[int, Callable[[], None]]] = {
     "plan_reminders": (3600, _enqueue_reminders),
     "signals": (6 * 3600, _enqueue_signals),
     "payments": (600, _sync_payments),
+    "support_emails": (300, _support_emails),
 }
 
 

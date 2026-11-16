@@ -72,6 +72,7 @@ def test_handlers_cover_web_and_scheduler_kinds():
         "plan_reminders",
         "payments",
         "signals",
+        "support_emails",
     }
     assert all(interval >= 60 for interval, _ in SCHEDULES.values())
 

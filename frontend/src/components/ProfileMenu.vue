@@ -36,6 +36,10 @@
           <CreditCard aria-hidden="true" />
           Тариф и лимит<small v-if="planName" class="menu-item__note">{{ planName }}</small>
         </RouterLink>
+        <button class="menu-item" type="button" role="menuitem" @click="support">
+          <LifeBuoy aria-hidden="true" />
+          Поддержка<small v-if="supportUnread" class="menu-item__note">новый ответ</small>
+        </button>
         <hr />
         <button
           class="menu-item menu-item--switch"
@@ -75,10 +79,11 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { RouterLink } from 'vue-router'
-import { ChevronDown, CreditCard, LogOut, Moon, PlugZap, Settings, SlidersHorizontal } from '@lucide/vue'
+import { ChevronDown, CreditCard, LifeBuoy, LogOut, Moon, PlugZap, Settings, SlidersHorizontal } from '@lucide/vue'
 import UiSheet from './ui/UiSheet.vue'
 import { useExpert } from '../composables/useExpert'
 import { useProfile } from '../composables/useProfile'
+import { openSupport, useSupport } from '../composables/useSupport'
 import { useTheme } from '../composables/useTheme'
 import { useViewport } from '../composables/useViewport'
 
@@ -103,6 +108,13 @@ const initials = computed(() => {
   const letters = words.length > 1 ? words[0][0] + words[1][0] : words[0].slice(0, 2)
   return letters.toUpperCase()
 })
+
+const { supportUnread } = useSupport()
+
+function support() {
+  open.value = false
+  openSupport()
+}
 
 function signOut() {
   open.value = false

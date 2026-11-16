@@ -59,6 +59,12 @@ KINDS: dict[str, dict] = {
         "telegram": True,
         "window_days": 30,
     },
+    "support": {
+        "label": "Поддержка ответила на ваше сообщение",
+        "cabinet": True,
+        "telegram": True,
+        "window_days": 0,
+    },
 }
 SEVERITIES = ("info", "warn", "error", "ok")
 KEEP_DAYS = 90
@@ -280,10 +286,15 @@ def purge(days: int = KEEP_DAYS) -> int:
 
 
 def badges(user_id: int) -> dict:
-    """Счётчики шапки одним запросом: решения, уведомления, поддержка (появится в 4.1)."""
+    """Счётчики шапки одним запросом: решения, уведомления, непрочитанные ответы поддержки."""
+    from app import support
     from app.ai_agent import pending_count
 
-    return {"pending": pending_count(user_id)["count"], "notifications": unread_count(user_id), "support": 0}
+    return {
+        "pending": pending_count(user_id)["count"],
+        "notifications": unread_count(user_id),
+        "support": support.unread_count(user_id),
+    }
 
 
 # --- Источники ---------------------------------------------------------------------------------------------
