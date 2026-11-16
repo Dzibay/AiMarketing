@@ -7,7 +7,7 @@
       </template>
     </UiNotice>
 
-    <p v-if="loading && !data" class="ccard ccard--note">Загружаем запросы…</p>
+    <UiSkeleton v-if="loading && !data" variant="rows" :count="3" actions label="Загружаем запросы" />
     <div v-else-if="!data" class="ccard ccard--note">
       {{ loadError || 'Не удалось загрузить запросы.' }}
       <button class="btn btn--ghost" type="button" @click="load()">Повторить</button>
@@ -325,7 +325,7 @@
       <UiSwitch v-model="filters.noConv" class="ltools__switch">Без конверсий</UiSwitch>
     </UiListTools>
 
-    <p v-if="loading && !data" class="empty">Загружаем запросы…</p>
+    <UiSkeleton v-if="loading && !data" variant="table" :count="5" label="Загружаем запросы" />
     <div v-else-if="!data" class="empty">
       {{ loadError || 'Не удалось загрузить запросы.' }}
       <button class="btn btn--ghost" type="button" @click="load()">Повторить</button>
@@ -542,7 +542,7 @@
       <button class="btn btn--ghost" type="button" :disabled="mem.busy" @click="forget">Забыть</button>
       <button class="btn btn--ghost" type="button" @click="mem.selected = new Set()">Снять выбор</button>
     </div>
-    <p v-if="mem.loading && !mem.items.length" class="empty">Загружаем…</p>
+    <UiSkeleton v-if="mem.loading && !mem.items.length" variant="text" :count="3" label="Загружаем" />
     <p v-else-if="mem.error" class="form-error">{{ mem.error }}</p>
     <p v-else-if="!mem.items.length" class="empty">
       {{ mem.search || mem.verdict ? 'Ничего не нашлось.' : 'Пока пусто: решения появятся после «Применить».' }}
@@ -713,6 +713,7 @@
 </template>
 
 <script setup>
+import UiSkeleton from '../../components/ui/UiSkeleton.vue'
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import EmptyState from '../../components/ui/EmptyState.vue'
 import UiCheckbox from '../../components/ui/UiCheckbox.vue'

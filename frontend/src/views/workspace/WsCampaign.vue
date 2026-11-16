@@ -31,7 +31,7 @@
     </template>
 
     <template v-else>
-      <p v-if="!row" class="empty">Загружаем кампанию…</p>
+      <UiSkeleton v-if="!row" variant="tiles" :count="3" label="Загружаем кампанию" />
       <template v-else>
         <p class="camp-lead">
           <span class="st" :class="`st--${health.id}`">
@@ -90,7 +90,7 @@
 
         <h3 class="section-h">Что внутри <span class="cgroup__n">группы объявлений и их доля расхода</span></h3>
         <div class="ccard">
-          <p v-if="structLoading" class="ccard--note">Загружаем группы…</p>
+          <UiSkeleton v-if="structLoading" variant="table" :count="3" label="Загружаем группы" />
           <p v-else-if="structError" class="ccard--note">{{ structError }}</p>
           <p v-else-if="!groups.length" class="ccard--note">В кампании нет групп объявлений.</p>
           <div v-else class="hbars">
@@ -230,6 +230,7 @@
 </template>
 
 <script setup>
+import UiSkeleton from '../../components/ui/UiSkeleton.vue'
 import { askConfirm } from '../../composables/useConfirm'
 import { computed, ref, watch } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'

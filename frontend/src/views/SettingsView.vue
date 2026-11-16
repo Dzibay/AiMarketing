@@ -1,5 +1,5 @@
 <template>
-  <div v-if="loading" class="panel"><p class="empty">Загружаем настройки…</p></div>
+  <UiSkeleton v-if="loading" variant="rows" :count="4" label="Загружаем настройки" />
 
   <template v-else>
     <template v-if="tab === 'profile'">
@@ -234,6 +234,7 @@
 </template>
 
 <script setup>
+import UiSkeleton from '../components/ui/UiSkeleton.vue'
 import { computed, onMounted, reactive, ref, watch, watchEffect } from 'vue'
 import { RouterLink } from 'vue-router'
 import FeatureLockNotice from '../components/FeatureLockNotice.vue'

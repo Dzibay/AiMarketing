@@ -19,7 +19,7 @@
     </template>
   </PageHeader>
 
-  <div v-if="loading" class="ccard ccard--note">Загружаем списки…</div>
+  <UiSkeleton v-if="loading" variant="rows" :count="3" actions label="Загружаем списки" />
 
   <div v-else class="neg-layout">
     <aside class="neg-side" aria-label="Списки минус-фраз">
@@ -263,6 +263,7 @@
 </template>
 
 <script setup>
+import UiSkeleton from '../components/ui/UiSkeleton.vue'
 import { askConfirm } from '../composables/useConfirm'
 import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
 import { ChevronDown, FilePlus, ListPlus, ListX, Plus, Trash2 } from '@lucide/vue'

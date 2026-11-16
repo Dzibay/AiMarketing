@@ -29,7 +29,7 @@
     <div class="bigstats" :class="{ 'is-loading': loading }">
       <div v-for="t in tiles" :key="t.label" class="bigstat">
         <span>{{ t.label }}<TermHint v-if="t.term" :term="t.term" /></span>
-        <b>{{ t.value }}</b>
+        <b><CountUp :value="t.value" /></b>
         <small :class="t.tone">{{ t.note }}</small>
       </div>
     </div>
@@ -70,6 +70,7 @@ import { Sparkles } from '@lucide/vue'
 import TrendChart from './TrendChart.vue'
 import ExpertHint from './ExpertHint.vue'
 import TermHint from './TermHint.vue'
+import CountUp from './ui/CountUp.vue'
 import EmptyState from './ui/EmptyState.vue'
 import { formatDate, kpiGoal, num, pct, rub } from '../utils/format'
 import { leadWord } from '../utils/campaignHealth'

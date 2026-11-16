@@ -115,6 +115,20 @@
                 <button class="btn btn--ghost btn--sm" type="button" @click="setLater(a, false)">Решить сейчас</button>
               </div>
             </div>
+            <!-- Выполнено или выполняется: строка с галочкой, подробности — по кнопке. -->
+            <div
+              v-else-if="folded(a)"
+              class="action-card action-card--done"
+              :class="{ 'is-fresh': fresh[a.id] }"
+              :data-action="a.id"
+            >
+              <span class="done-check"><Check aria-hidden="true" /></span>
+              <strong class="action-card__title">{{ a.label }}</strong>
+              <span class="action-card__state">{{ a.status === 'done' ? 'выполнено' : 'выполняется…' }}</span>
+              <button class="action-card__fold" type="button" :aria-expanded="false" @click="unfolded[a.id] = true">
+                Подробнее
+              </button>
+            </div>
             <div v-else class="action-card" :class="`is-${a.status}`" :data-action="a.id">
               <div class="action-card__head">
                 <span v-if="a.status === 'pending'" class="action-card__tag">
@@ -123,6 +137,15 @@
                 </span>
                 <strong class="action-card__title">{{ a.label }}</strong>
                 <UiStatus v-if="a.status !== 'pending'" :tone="STATUS_UI[a.status] || 'off'" :label="STATUS_LABELS[a.status] || a.status" />
+                <button
+                  v-if="FOLDABLE.has(a.status)"
+                  class="action-card__fold"
+                  type="button"
+                  :aria-expanded="true"
+                  @click="unfolded[a.id] = false"
+                >
+                  Свернуть
+                </button>
               </div>
               <p v-if="projectName(a) || a.plan_step || a.auto || isDetached(a)" class="action-card__meta">
                 <span v-if="projectName(a)">{{ projectName(a) }}</span>
@@ -263,7 +286,7 @@
 
 <script setup>
 import { BookmarkPlus, Check, Clock, CornerDownRight, LifeBuoy, PencilLine, RotateCcw, Sparkles } from '@lucide/vue'
-import { onBeforeUnmount, ref, watch } from 'vue'
+import { nextTick, onBeforeUnmount, reactive, ref, watch } from 'vue'
 import { RouterLink, useRouter } from 'vue-router'
 import { openSupport } from '../../composables/useSupport'
 import { aiApi, errorText } from '../../api/web'
@@ -274,6 +297,7 @@ import { STATUS_LABELS, mentionParts, useChat } from '../../composables/useChat'
 import { useExpert } from '../../composables/useExpert'
 import { useViewport } from '../../composables/useViewport'
 import { formatDateTime } from '../../utils/format'
+import { foldFrom, heightOf } from '../../utils/foldAnim'
 import { renderMarkdown } from '../../utils/markdown'
 import AiChanges from '../../views/workspace/AiChanges.vue'
 import AiCheckTable from '../../views/workspace/AiCheckTable.vue'
@@ -351,6 +375,39 @@ onBeforeUnmount(() => clearTimeout(longTimer))
 
 const { expert } = useExpert()
 const { phone } = useViewport()
+
+// После «Выполнить» карточка сворачивается в строку с галочкой — главный момент продукта, он должен ощущаться.
+// Раскрыть подробности можно кнопкой; ошибка и отказ не сворачиваются — там есть что прочитать.
+const FOLDABLE = new Set(['approved', 'done'])
+const unfolded = reactive({})
+const fresh = reactive({})
+const seenStatus = new Map()
+
+function folded(a) {
+  return FOLDABLE.has(a.status) && !!a.id && !unfolded[a.id]
+}
+
+// Ловим переход «ждёт решения» → «выполняется/выполнено» в открытом чате: меряем карточку до перерисовки
+// (watch срабатывает раньше неё) и сжимаем на месте строки после.
+watch(
+  items,
+  (list) => {
+    for (const item of list || []) {
+      for (const a of item.writes || []) {
+        if (!a.id) continue
+        if (seenStatus.get(a.id) === 'pending' && FOLDABLE.has(a.status) && !unfolded[a.id]) {
+          const selector = `.action-card[data-action="${a.id}"]`
+          const from = heightOf(selector)
+          fresh[a.id] = true
+          nextTick(() => foldFrom(selector, from))
+          setTimeout(() => delete fresh[a.id], 1500)
+        }
+        seenStatus.set(a.id, a.status)
+      }
+    }
+  },
+  { immediate: true },
+)
 
 function hasArgs(args) {
   return args && typeof args === 'object' && Object.keys(args).length > 0

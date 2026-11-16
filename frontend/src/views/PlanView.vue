@@ -12,7 +12,7 @@
     </button>
   </div>
 
-  <div v-if="loading" class="panel"><p class="empty">Загружаем…</p></div>
+  <UiSkeleton v-if="loading" variant="tiles" :count="3" label="Загружаем тариф" />
 
   <div v-else-if="loadError" class="panel">
     <p class="empty">{{ loadError }}</p>
@@ -301,6 +301,7 @@
 </template>
 
 <script setup>
+import UiSkeleton from '../components/ui/UiSkeleton.vue'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { Check, Copy, Lock, X } from '@lucide/vue'

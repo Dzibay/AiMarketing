@@ -7,7 +7,16 @@
       </small>
     </h2>
     <div class="ccard">
-      <div v-for="a in items" :key="a.id" class="prow">
+      <template v-for="a in items" :key="a.id">
+      <!-- Только что выполнено: строка с галочкой на несколько секунд, потом уходит. -->
+      <div v-if="doneIds[a.id]" class="prow pdec pdec--done is-fresh" :data-action="a.id" role="status">
+        <span class="done-check"><Check aria-hidden="true" /></span>
+        <div class="prow__main">
+          <b>{{ a.label }}</b>
+          <p>{{ doneIds[a.id] }} <RouterLink :to="chatLink(a)">«{{ a.chat.title }}»</RouterLink></p>
+        </div>
+      </div>
+      <div v-else class="prow pdec" :data-action="a.id">
         <div class="prow__main">
           <small>{{ niceQuotes(a.project?.name) || 'Все проекты' }}</small>
           <b>{{ a.label }}</b>
@@ -32,18 +41,20 @@
           </RouterLink>
         </div>
       </div>
+      </template>
     </div>
   </template>
 </template>
 
 <script setup>
-import { onMounted, reactive, ref } from 'vue'
+import { nextTick, onMounted, reactive, ref } from 'vue'
 import { RouterLink } from 'vue-router'
-import { MessageSquare } from '@lucide/vue'
+import { Check, MessageSquare } from '@lucide/vue'
 import { aiApi, errorText } from '../api/web'
 import { refreshPending } from '../composables/usePending'
 import { pushToast } from '../composables/useToasts'
 import { useViewport } from '../composables/useViewport'
+import { foldFrom, heightOf } from '../utils/foldAnim'
 import { niceQuotes } from '../utils/format'
 import UiMenu from './ui/UiMenu.vue'
 import UiMenuItem from './ui/UiMenuItem.vue'
@@ -59,6 +70,9 @@ const { phone } = useViewport()
 const items = ref([])
 const total = ref(0)
 const busy = reactive({})
+// Выполненные: id → подпись строки с галочкой; строка держится DONE_MS, потом список перечитывается.
+const doneIds = reactive({})
+const DONE_MS = 4000
 
 function chatLink(a) {
   const base = a.chat.general || !a.project ? '/cabinet/chat' : `/w/${a.project.id}/chat`
@@ -81,11 +95,22 @@ async function decide(a, approve) {
   busy[a.id] = true
   try {
     const res = await aiApi.decide(a.id, approve, false, [])
-    if (!approve) pushToast('Отклонено')
-    else if (res.pending) pushToast(`Одобрено. В чате «${a.chat.title}» ещё без решения: ${res.pending}`)
-    else pushToast(`Выполняем — ход ИИ продолжится в чате «${a.chat.title}»`)
-    await load()
     refreshPending()
+    if (!approve) {
+      pushToast('Отклонено')
+      await load()
+      return
+    }
+    // «Выполнить» — карточка сворачивается в строку с галочкой на месте, а не пропадает молча.
+    const selector = `.pdec[data-action="${a.id}"]`
+    const from = heightOf(selector)
+    doneIds[a.id] = res.pending ? `Одобрено. ИИ продолжит, когда решите остальное (${res.pending}) в чате` : 'Выполняем — ход ИИ продолжится в чате'
+    total.value = Math.max(0, total.value - 1)
+    nextTick(() => foldFrom(selector, from))
+    setTimeout(async () => {
+      await load()
+      delete doneIds[a.id]
+    }, DONE_MS)
   } catch (err) {
     pushToast(errorText(err), 'error')
   } finally {
@@ -96,3 +121,20 @@ async function decide(a, approve) {
 onMounted(load)
 </script>
 
+<style scoped>
+.pdec.pdec--done {
+  justify-content: flex-start;
+  gap: 12px;
+  animation: pdec-done-flash 1.2s var(--ease-out);
+}
+.pdec--done .prow__main p {
+  margin: 2px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+@keyframes pdec-done-flash {
+  from {
+    background: var(--lime-soft);
+  }
+}
+</style>

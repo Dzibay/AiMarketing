@@ -22,7 +22,7 @@
   <h2 class="section-h exp-h">
     Эксперименты <span class="exp-h__n">{{ running.length }}</span>
   </h2>
-  <p v-if="loading && !items.length" class="ccard ccard--note">Загружаем эксперименты…</p>
+  <UiSkeleton v-if="loading && !items.length" variant="rows" :count="3" label="Загружаем эксперименты" />
   <p v-else-if="loadError" class="ccard ccard--note">{{ loadError }}</p>
   <div v-else-if="!running.length" class="ccard exp-empty">
     <Sparkles :size="22" aria-hidden="true" />
@@ -258,6 +258,7 @@
 </template>
 
 <script setup>
+import UiSkeleton from '../../components/ui/UiSkeleton.vue'
 import { computed, onMounted, ref } from 'vue'
 import { RouterLink, useRouter } from 'vue-router'
 import { Check, CircleX, Sparkles } from '@lucide/vue'

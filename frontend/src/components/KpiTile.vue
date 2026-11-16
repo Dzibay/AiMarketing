@@ -2,7 +2,7 @@
   <div class="ktile">
     <span class="ktile__label" v-tip.truncate="label">{{ label }}</span>
     <div class="ktile__value">
-      <strong>{{ value }}</strong>
+      <strong><CountUp :value="value" /></strong>
       <DeltaChip v-if="change != null" :value="change" :good="good" :versus="versus" />
     </div>
     <!-- Строка пояснения есть всегда (пустая — неразрывный пробел), чтобы плитки в ряду совпадали построчно. -->
@@ -15,6 +15,7 @@
 </template>
 
 <script setup>
+import CountUp from './ui/CountUp.vue'
 import DeltaChip from './DeltaChip.vue'
 import Sparkline from './Sparkline.vue'
 

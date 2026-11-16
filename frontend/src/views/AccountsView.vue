@@ -109,7 +109,7 @@
     </div>
   </section>
 
-  <div v-if="loading" class="panel"><p class="empty">Загружаем подключения…</p></div>
+  <UiSkeleton v-if="loading" variant="rows" :count="2" actions label="Загружаем подключения" />
 
   <template v-else>
     <SitesPanel ref="sitesPanel" @changed="onSitesChanged" />
@@ -384,6 +384,7 @@
 </template>
 
 <script setup>
+import UiSkeleton from '../components/ui/UiSkeleton.vue'
 import { askConfirm } from '../composables/useConfirm'
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { RouterLink } from 'vue-router'

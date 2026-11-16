@@ -36,7 +36,7 @@
   </PageHeader>
 
   <template v-if="!expert">
-    <p v-if="loading && !data" class="empty">Загружаем кампании…</p>
+    <UiSkeleton v-if="loading && !data" variant="table" :count="5" label="Загружаем кампании" />
     <EmptyState v-else-if="!data" :icon="CloudOff" :text="loadError || 'Не удалось загрузить кампании.'">
       <template #action><button class="btn btn--ghost" type="button" @click="load">Повторить</button></template>
     </EmptyState>
@@ -74,7 +74,7 @@
   </template>
 
   <section v-else class="panel">
-    <p v-if="loading && !data" class="empty">Загружаем кампании…</p>
+    <UiSkeleton v-if="loading && !data" variant="table" :count="5" label="Загружаем кампании" />
     <EmptyState v-else-if="!data" :icon="CloudOff" :text="loadError || 'Не удалось загрузить кампании.'" plain>
       <template #action><button class="btn btn--ghost" type="button" @click="load">Повторить</button></template>
     </EmptyState>
@@ -204,6 +204,7 @@
 </template>
 
 <script setup>
+import UiSkeleton from '../../components/ui/UiSkeleton.vue'
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
 import { Archive, ArchiveRestore, CloudOff, Copy, Pause, Play, Plus, RefreshCw, Trash2 } from '@lucide/vue'

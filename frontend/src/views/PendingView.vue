@@ -6,7 +6,7 @@
     </p>
   </div>
 
-  <div v-if="loading && !items.length && !snoozed.length" class="ccard ccard--note">Загружаем…</div>
+  <UiSkeleton v-if="loading && !items.length && !snoozed.length" variant="rows" :count="3" actions label="Загружаем предложения" />
   <div v-else-if="loadError" class="ccard ccard--note tone-bad">{{ loadError }}</div>
   <template v-else>
     <EmptyState
@@ -32,14 +32,26 @@
         <template v-else>
           <RouterLink v-if="g.project" :to="`/w/${g.project.id}/summary`">{{ niceQuotes(g.project.name) }}</RouterLink>
           <span v-else>Все сайты</span>
-          <span class="cgroup__n">{{ g.items.length }}</span>
+          <span class="cgroup__n">{{ g.items.filter((a) => !doneIds[a.id]).length }}</span>
         </template>
       </h2>
       <p v-if="g.snoozed && !showSnoozed" class="meta-note">
         Вы отложили их кнопкой «Позже». В счётчик «Ждёт решения» они не входят, но ничего не выполнено.
       </p>
       <div v-if="!g.snoozed || showSnoozed" class="ccard pend-list">
-        <article v-for="a in g.items" :key="a.id" class="prow pend" :data-action="a.id">
+        <template v-for="a in g.items" :key="a.id">
+        <!-- Только что выполнено: строка с галочкой на несколько секунд, потом уходит из списка. -->
+        <article v-if="doneIds[a.id]" class="prow pend pend--done is-fresh" :data-action="a.id" role="status">
+          <span class="done-check"><Check aria-hidden="true" /></span>
+          <div class="prow__main">
+            <b>{{ a.label }}</b>
+            <p>
+              {{ doneIds[a.id] }}
+              <RouterLink :to="chatLink(a)">«{{ a.chat.title }}»</RouterLink>
+            </p>
+          </div>
+        </article>
+        <article v-else class="prow pend" :data-action="a.id">
           <div class="prow__main">
             <small>
               <template v-if="g.snoozed">{{ a.project ? niceQuotes(a.project.name) : 'Все сайты' }} · </template>
@@ -89,6 +101,7 @@
             </template>
           </div>
         </article>
+        </template>
       </div>
     </section>
     <p v-if="total > items.length" class="meta-note">Показаны первые {{ items.length }} из {{ total }}.</p>
@@ -96,9 +109,10 @@
 </template>
 
 <script setup>
-import { computed, reactive, ref, watch } from 'vue'
+import UiSkeleton from '../components/ui/UiSkeleton.vue'
+import { computed, nextTick, reactive, ref, watch } from 'vue'
 import { RouterLink } from 'vue-router'
-import { Clock, MessageSquare, Undo2 } from '@lucide/vue'
+import { Check, Clock, MessageSquare, Undo2 } from '@lucide/vue'
 import EmptyState from '../components/ui/EmptyState.vue'
 import UiMenu from '../components/ui/UiMenu.vue'
 import UiMenuItem from '../components/ui/UiMenuItem.vue'
@@ -107,6 +121,7 @@ import { refreshPending, usePending } from '../composables/usePending'
 import { useProjectFilter } from '../composables/useProjectFilter'
 import { pushToast } from '../composables/useToasts'
 import { useViewport } from '../composables/useViewport'
+import { foldFrom, heightOf } from '../utils/foldAnim'
 import { formatDateTime, niceQuotes } from '../utils/format'
 import { useHead } from '../utils/useHead'
 import AiChanges from './workspace/AiChanges.vue'
@@ -132,6 +147,9 @@ const showSnoozed = ref(false)
 const loading = ref(false)
 const loadError = ref('')
 const busy = reactive({})
+// Выполненные здесь: id → подпись строки с галочкой. Строка держится DONE_MS, потом карточка уходит.
+const doneIds = reactive({})
+const DONE_MS = 4000
 // Решённые здесь: запрос списка, ушедший до решения, не должен вернуть карточку обратно.
 const decided = new Set()
 
@@ -163,10 +181,12 @@ async function load() {
   try {
     const res = await aiApi.pending(projectId.value)
     if (n !== seq) return
-    items.value = (res.items || []).filter((a) => !decided.has(a.id))
-    total.value = Math.max(items.value.length, (res.total || 0) - (res.items || []).length + items.value.length)
-    snoozed.value = (res.snoozed || []).filter((a) => !decided.has(a.id))
-    snoozedTotal.value = Math.max(snoozed.value.length, (res.snoozed_total || 0) - (res.snoozed || []).length + snoozed.value.length)
+    const open = (res.items || []).filter((a) => !decided.has(a.id))
+    const later = (res.snoozed || []).filter((a) => !decided.has(a.id))
+    total.value = Math.max(open.length, (res.total || 0) - (res.items || []).length + open.length)
+    snoozedTotal.value = Math.max(later.length, (res.snoozed_total || 0) - (res.snoozed || []).length + later.length)
+    items.value = keepDone(open, items.value)
+    snoozed.value = keepDone(later, snoozed.value)
   } catch (err) {
     if (n === seq) loadError.value = errorText(err)
   } finally {
@@ -175,14 +195,20 @@ async function load() {
   refreshPending()
 }
 
-/** Убрать карточку из её списка: из ждущих или из отложенных. */
-function drop(a) {
+/** Свежий список с сервера плюс строки «выполнено», которые ещё не досветились: сервер их уже не отдаёт. */
+function keepDone(list, before) {
+  const done = before.filter((a) => doneIds[a.id] && !list.some((x) => x.id === a.id))
+  return done.length ? [...list, ...done].sort((x, y) => y.id - x.id) : list
+}
+
+/** Убрать карточку из её списка: из ждущих или из отложенных. count=false — счётчик уже уменьшен. */
+function drop(a, count = true) {
   if (a.snoozed) {
     snoozed.value = snoozed.value.filter((x) => x.id !== a.id)
-    snoozedTotal.value = Math.max(0, snoozedTotal.value - 1)
+    if (count) snoozedTotal.value = Math.max(0, snoozedTotal.value - 1)
   } else {
     items.value = items.value.filter((x) => x.id !== a.id)
-    total.value = Math.max(0, total.value - 1)
+    if (count) total.value = Math.max(0, total.value - 1)
   }
 }
 
@@ -215,11 +241,24 @@ async function decide(a, approve) {
   try {
     const res = await aiApi.decide(a.id, approve, false, [])
     decided.add(a.id)
-    drop(a)
-    if (!approve) pushToast('Отклонено')
-    else if (res.pending) {
-      pushToast(`Одобрено. В чате «${a.chat.title}» ещё без решения: ${res.pending} — ИИ продолжит, когда решите все`)
-    } else pushToast(`Выполняем — ход ИИ продолжится в чате «${a.chat.title}»`)
+    if (!approve) {
+      drop(a)
+      pushToast('Отклонено')
+      return
+    }
+    // «Выполнить» — карточка сворачивается в строку с галочкой на месте, а не пропадает молча.
+    const selector = `.pend[data-action="${a.id}"]`
+    const from = heightOf(selector)
+    doneIds[a.id] = res.pending
+      ? `Одобрено. ИИ продолжит, когда решите остальное (${res.pending}) в чате`
+      : 'Выполняем — ход ИИ продолжится в чате'
+    if (a.snoozed) snoozedTotal.value = Math.max(0, snoozedTotal.value - 1)
+    else total.value = Math.max(0, total.value - 1)
+    nextTick(() => foldFrom(selector, from))
+    setTimeout(() => {
+      delete doneIds[a.id]
+      drop(a, false)
+    }, DONE_MS)
   } catch (err) {
     pushToast(errorText(err), 'error')
     load()
@@ -261,6 +300,22 @@ watch(pendingCount, () => {
 }
 .pend .prow__main {
   flex: 1;
+}
+.pend.pend--done {
+  align-items: center;
+  justify-content: flex-start;
+  gap: 12px;
+  animation: pend-done-flash 1.2s var(--ease-out);
+}
+.pend--done .prow__main p {
+  margin: 2px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+@keyframes pend-done-flash {
+  from {
+    background: var(--lime-soft);
+  }
 }
 /* Таблице «Было → станет» нужно 360 px — иначе кнопки переносятся под текст (shell.css, .prow). */
 @media (min-width: 721px) {

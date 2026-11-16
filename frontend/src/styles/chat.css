@@ -1076,6 +1076,69 @@
   margin: 0;
 }
 
+/* Выполнено: карточка свёрнута в строку с галочкой (ChatThread, foldAnim.js). */
+.action-card.action-card--done {
+  display: flex;
+  flex-direction: row; /* на телефоне карточки — столбцом (ниже), строка «выполнено» — нет */
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+}
+
+.action-card--done .action-card__title {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.action-card__state {
+  flex: none;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.action-card__fold {
+  flex: none;
+  padding: 2px 4px;
+  border: 0;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.action-card__fold:hover {
+  color: var(--ink);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.action-card__head > .action-card__fold {
+  margin-left: auto;
+}
+
+/* Только что выполнено: лаймовая подсветка гаснет, пока карточка сжимается. */
+.action-card--done.is-fresh {
+  animation: act-done-flash 1.2s var(--ease-out);
+}
+
+@keyframes act-done-flash {
+  from {
+    background: var(--lime-soft);
+  }
+}
+
+@media (max-width: 640px) {
+  .action-card--done .action-card__state {
+    display: none;
+  }
+}
+
 /* Этап или черновик, которые решаются на доске, — плашкой со ссылкой «К доске». */
 .board-plaque {
   display: flex;

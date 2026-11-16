@@ -72,7 +72,26 @@
 
   --font: 'Manrope Variable', 'Manrope', system-ui, -apple-system, 'Segoe UI', sans-serif;
   --display: var(--font);
+
+  /* Движение: короткое — отклик (наведение, нажатие), среднее — появление, длинное — свёртка карточки. */
+  --dur-1: 120ms;
+  --dur-2: 160ms;
+  --dur-3: 200ms;
+  --dur-4: 320ms;
+  --ease-out: cubic-bezier(0.2, 0.7, 0.2, 1);
+  --ease-in-out: cubic-bezier(0.45, 0, 0.25, 1);
+  --ease-pop: cubic-bezier(0.3, 1.5, 0.5, 1);
   color-scheme: light;
+}
+
+/* Кто попросил систему меньше двигать — длительности нулевые (а site.css гасит и остальные анимации). */
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --dur-1: 0ms;
+    --dur-2: 0ms;
+    --dur-3: 0ms;
+    --dur-4: 0ms;
+  }
 }
 
 [data-theme='dark'] {

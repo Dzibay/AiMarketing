@@ -11,7 +11,7 @@
       </template>
     </PageHeader>
 
-    <p v-if="loading && !data" class="empty">Загружаем запросы…</p>
+    <UiSkeleton v-if="loading && !data" variant="table" :count="5" label="Загружаем запросы" />
     <div v-else-if="!data" class="empty">
       {{ loadError || 'Не удалось загрузить запросы.' }}
       <button class="btn btn--ghost" type="button" @click="load">Повторить</button>
@@ -130,7 +130,7 @@
         Эти запросы ещё не размечены — откройте проект и нажмите «Разметить с ИИ».
       </p>
 
-      <p v-if="loading && !data" class="empty">Загружаем запросы…</p>
+      <UiSkeleton v-if="loading && !data" variant="table" :count="5" label="Загружаем запросы" />
       <EmptyState v-else-if="!data" :icon="CloudOff" :text="loadError || 'Не удалось загрузить запросы.'" plain>
         <template #action><button class="btn btn--ghost" type="button" @click="load">Повторить</button></template>
       </EmptyState>
@@ -272,6 +272,7 @@
 </template>
 
 <script setup>
+import UiSkeleton from '../components/ui/UiSkeleton.vue'
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { RouterLink } from 'vue-router'
 import { errorText, jobProgressText, webApi, wsApi } from '../api/web'

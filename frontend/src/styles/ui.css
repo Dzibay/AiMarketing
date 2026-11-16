@@ -1487,8 +1487,171 @@ body.has-sheet {
   }
 }
 
+/* UiSkeleton: заглушки по форме содержимого. */
+.ui-skeleton {
+  display: grid;
+  gap: 10px;
+}
+
+.ui-skeleton--tiles {
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+}
+
+.ui-skeleton__tile {
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-card);
+  background: var(--surface);
+}
+
+.ui-skeleton__card {
+  border: 1px solid var(--line);
+  border-radius: var(--r-card);
+  background: var(--surface);
+  overflow: hidden;
+}
+
+.ui-skeleton__row,
+.ui-skeleton__trow {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 16px 18px;
+}
+
+.ui-skeleton__row + .ui-skeleton__row,
+.ui-skeleton__trow + .ui-skeleton__trow {
+  border-top: 1px solid var(--line);
+}
+
+.ui-skeleton__trow > .ui-skel:first-child {
+  margin-right: auto;
+}
+
+.ui-skeleton__main {
+  display: grid;
+  flex: 1;
+  gap: 9px;
+  min-width: 0;
+}
+
+.ui-skeleton .ui-skeleton__big {
+  height: 26px;
+  border-radius: 8px;
+}
+
+.ui-skeleton .ui-skeleton__title {
+  height: 15px;
+}
+
+.ui-skeleton .ui-skeleton__sub {
+  height: 10px;
+}
+
+.ui-skeleton .ui-skeleton__btn {
+  flex: none;
+  width: 104px;
+  height: 36px;
+  border-radius: var(--radius);
+}
+
+@media (max-width: 640px) {
+  .ui-skeleton .ui-skeleton__btn {
+    display: none;
+  }
+}
+
+/* ---------- Движение: страница и карточки проявляются, а не возникают ---------- */
+/* fill-mode backwards: после анимации transform не остаётся — sticky и fixed внутри работают как обычно. */
+
+.app__content > *,
+.ccard,
+.panel,
+.ktile,
+.ui-empty {
+  animation: ui-rise var(--dur-3) var(--ease-out) backwards;
+}
+
+/* Карточки внутри страницы — чуть позже и короче её самой: вместе читается как одно движение. */
+.app__content > * :is(.ccard, .panel, .ktile, .ui-empty) {
+  animation-delay: 40ms;
+  animation-duration: var(--dur-2);
+}
+
+.ui-skeleton {
+  animation: ui-fade var(--dur-2) var(--ease-out) backwards;
+}
+
+/* Галочка «выполнено»: лаймовый кружок; у только что выполненного (.is-fresh) — с отскоком. */
+.done-check {
+  display: inline-grid;
+  flex: none;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: var(--lime);
+  color: var(--on-lime);
+}
+
+.done-check svg {
+  width: 15px;
+  height: 15px;
+  stroke-width: 3;
+}
+
+.is-fresh .done-check {
+  animation: ui-pop var(--dur-4) var(--ease-pop) 120ms backwards;
+}
+
+.is-fresh .done-check svg {
+  stroke-dasharray: 24;
+  animation: ui-draw var(--dur-4) var(--ease-out) 260ms backwards;
+}
+
+@keyframes ui-pop {
+  from {
+    transform: scale(0.4);
+    opacity: 0;
+  }
+}
+
+@keyframes ui-draw {
+  from {
+    stroke-dashoffset: 24;
+  }
+}
+
+@keyframes ui-rise {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+}
+
+@keyframes ui-fade {
+  from {
+    opacity: 0;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .ui-skel {
+    animation: none;
+  }
+
+  .app__content > *,
+  .ccard,
+  .panel,
+  .ktile,
+  .ui-empty,
+  .ui-skeleton,
+  .is-fresh,
+  .is-fresh .done-check,
+  .is-fresh .done-check svg {
     animation: none;
   }
 

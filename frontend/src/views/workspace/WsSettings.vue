@@ -376,7 +376,7 @@
             <UiSwitch v-model="showArchived">Показывать архивные</UiSwitch>
           </div>
 
-          <p v-if="candidatesLoading && !groups.length" class="empty">Загружаем кампании…</p>
+          <UiSkeleton v-if="candidatesLoading && !groups.length" variant="text" :count="3" label="Загружаем кампании" />
           <p v-else-if="candidatesError" class="empty">{{ candidatesError }}</p>
           <p v-else-if="!groups.length" class="empty">
             В подключённых логинах нет кампаний Директа. Обновите кабинеты в
@@ -534,6 +534,7 @@
 </template>
 
 <script setup>
+import UiSkeleton from '../../components/ui/UiSkeleton.vue'
 import { askConfirm } from '../../composables/useConfirm'
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'

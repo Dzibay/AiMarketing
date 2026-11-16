@@ -11,7 +11,7 @@
             <p v-else>{{ paragraph }}</p>
           </template>
         </article>
-        <p v-else class="empty">Загружаем документ…</p>
+        <UiSkeleton v-else variant="text" :count="8" label="Загружаем документ" />
       </div>
     </main>
     <SiteFooter />
@@ -19,6 +19,7 @@
 </template>
 
 <script setup>
+import UiSkeleton from '../components/ui/UiSkeleton.vue'
 import { onMounted, ref, watch } from 'vue'
 import SiteFooter from '../components/SiteFooter.vue'
 import SiteHeader from '../components/SiteHeader.vue'

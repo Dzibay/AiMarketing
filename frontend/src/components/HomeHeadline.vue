@@ -34,7 +34,7 @@
       <div class="bigstats hl__stats" :class="{ 'is-loading': loading }">
         <div v-for="t in tiles" :key="t.label" class="bigstat">
           <span>{{ t.label }}<TermHint v-if="t.term" :term="t.term" /></span>
-          <b>{{ t.value }}</b>
+          <b><CountUp :value="t.value" /></b>
           <small v-if="t.goal" :class="t.goal.tone">{{ t.goal.text }}</small>
           <small v-else-if="t.goalLink"><RouterLink :to="t.goalLink">Задать цель</RouterLink></small>
           <small :class="t.tone">{{ t.note }}</small>
@@ -49,6 +49,7 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { RouterLink, useRouter } from 'vue-router'
 import { ArrowRight, CircleCheck, ExternalLink, LoaderCircle, OctagonAlert, TriangleAlert } from '@lucide/vue'
 import TermHint from './TermHint.vue'
+import CountUp from './ui/CountUp.vue'
 import { errorText, webApi, wsApi } from '../api/web'
 import { putHomeQuestion } from '../composables/useHomeAsk'
 import { num, pct, rub } from '../utils/format'

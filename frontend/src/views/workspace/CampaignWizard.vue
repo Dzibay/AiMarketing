@@ -1,7 +1,7 @@
 <template>
   <Modal :open="open" title="Новая кампания" wide :locked="saving" @close="$emit('close')">
     <p v-if="loadError" class="form-error">{{ loadError }}</p>
-    <p v-else-if="!options" class="empty">Загружаем справочники…</p>
+    <UiSkeleton v-else-if="!options" variant="text" :count="4" label="Загружаем справочники" />
 
     <template v-else>
       <ol ref="stepsEl" class="wizard-steps">
@@ -245,6 +245,7 @@
 </template>
 
 <script setup>
+import UiSkeleton from '../../components/ui/UiSkeleton.vue'
 import { computed, nextTick, reactive, ref, watch } from 'vue'
 import { useViewport } from '../../composables/useViewport'
 import UiCheckbox from '../../components/ui/UiCheckbox.vue'
