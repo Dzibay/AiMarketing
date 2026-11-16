@@ -2,10 +2,10 @@
 
 Ключи ИИ, Вордстата и картинок общие — их настраивает администратор (api/admin.py)."""
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel
 
-from app import ai, ai_agent, ai_feedback, ai_prompts, billing, events, experiments, insights, site_check, workspaces
+from app import ai, ai_agent, ai_attachments, ai_feedback, ai_prompts, billing, events, experiments, insights, site_check, workspaces
 from app.api.web import _http
 from app.web_auth import require_web_user
 from app.yandex import YandexError
@@ -27,11 +27,26 @@ class ChatModelBody(BaseModel):
 class MessageBody(BaseModel):
     text: str
     # id других проектов пользователя, упомянутых через @: ИИ получит их на чтение.
-    refs: list[int] = []
+    # Проект — число (как раньше) или {type: project|campaign|group, id}; период — {type: period, from, to, name}.
+    refs: list[int | dict] = []
     # Что делать с ждущими предложениями ИИ: reject — отклонить, keep — оставить ждать решения.
     pending: str = "reject"
     # Что открыто в кабинете, когда пишут из панели ИИ: {view, label, object, period, filter, selected}.
     context: dict | None = None
+    # Картинки из поля ввода (POST /ai/attachments), до четырёх.
+    attachments: list[int] = []
+
+
+class AttachmentBody(BaseModel):
+    # data URL картинки, уменьшенной в браузере до 2000 px.
+    data: str
+    name: str = ""
+    # ai — показать ИИ, ads — для объявлений (проверяется по требованиям Директа).
+    purpose: str = "ai"
+
+
+class AttachmentPatchBody(BaseModel):
+    purpose: str
 
 
 class FeedbackBody(BaseModel):
@@ -247,6 +262,34 @@ def pending_list(workspace_id: int | None = None, user_id: int = Depends(require
     return _call(ai_agent.pending_actions, user_id, workspace_id)
 
 
+@router.get("/ai/mentions")
+def mentions(workspace_id: int | None = None, user_id: int = Depends(require_web_user)) -> dict:
+    """Кампании и группы для @ в поле ввода: проекта чата или, без workspace_id, всех проектов."""
+    return _call(ai_agent.mention_options, user_id, workspace_id)
+
+
+@router.post("/ai/attachments")
+def upload_attachment(body: AttachmentBody, user_id: int = Depends(require_web_user)) -> dict:
+    """Картинка из поля ввода, ещё без сообщения → {id, purpose, name, width, height, url, direct_problem}."""
+    return _call(ai_attachments.upload, user_id, body.data, purpose=body.purpose, name=body.name)
+
+
+@router.patch("/ai/attachments/{attachment_id}")
+def patch_attachment(attachment_id: int, body: AttachmentPatchBody, user_id: int = Depends(require_web_user)) -> dict:
+    """«Показать ИИ» ↔ «В объявления», пока сообщение не отправлено."""
+    return _call(ai_attachments.set_purpose, user_id, attachment_id, body.purpose)
+
+
+@router.get("/ai/attachments/{attachment_id}/{signature}")
+def attachment_image(attachment_id: int, signature: str) -> Response:
+    """Картинка из чата по подписанной ссылке (ai_attachments.url): открывается обычным <img>."""
+    found = ai_attachments.image(attachment_id, signature)
+    if found is None:
+        raise HTTPException(status_code=404, detail="Картинка не найдена")
+    data, kind = found
+    return Response(content=data, media_type=kind, headers={"Cache-Control": "private, max-age=86400"})
+
+
 @router.get("/ai/chats/{chat_id}")
 def chat_get(chat_id: int, user_id: int = Depends(require_web_user)) -> dict:
     return _call(ai_agent.get_chat, user_id, chat_id)
@@ -271,7 +314,8 @@ def chat_delete(chat_id: int, user_id: int = Depends(require_web_user)) -> dict:
 @router.post("/ai/chats/{chat_id}/messages")
 def chat_message(chat_id: int, body: MessageBody, user_id: int = Depends(require_web_user)) -> dict:
     out = _call(
-        ai_agent.post_message, user_id, chat_id, body.text, refs=body.refs, pending=body.pending, context=body.context
+        ai_agent.post_message, user_id, chat_id, body.text, refs=body.refs, pending=body.pending, context=body.context,
+        attachments=body.attachments,
     )
     events.record(user_id, "ai_question", chat_id=chat_id)
     return out

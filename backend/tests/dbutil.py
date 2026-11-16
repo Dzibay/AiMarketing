@@ -158,10 +158,11 @@ def setup_ai(
     folder_id: str = "",
     base_url: str = "",
     prices: dict | None = None,
+    vision: tuple[str, ...] = (),
 ) -> dict:
     """Общий ключ ИИ сервиса (админка): стандартная модель model, быстрая и думающая — если заданы.
 
-    prices — {класс: {"units_in", "units_out", "cost_in", "cost_out"}}.
+    prices — {класс: {"units_in", "units_out", "cost_in", "cost_out"}}; vision — классы, которые видят картинки.
     """
     from app import ai
 
@@ -170,6 +171,8 @@ def setup_ai(
         {"id": "standard", "name": "Стандартная", "model": model, "enabled": bool(model)},
         {"id": "thinking", "name": "Думающая", "model": thinking, "enabled": bool(thinking)},
     ]
+    for item in classes:
+        item["vision"] = item["id"] in vision
     for item in classes:
         item.update((prices or {}).get(item["id"], {}))
     return ai.save_service_settings(

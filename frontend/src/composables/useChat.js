@@ -54,7 +54,28 @@ const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 // @Название в начале строки или после пробела: «me@site.ru» не упоминание.
 const hasMention = (message, name) => new RegExp(`(^|\\s)@${escapeRe(name)}`).test(message)
 
-/** Текст сообщения кусками: @Проект — ссылкой-чипом на проект, остальное — как есть. */
+/**
+ * Куда ведёт чип упоминания: проект — на сводку, кампания — на её страницу, группа — на кампанию группы.
+ * Период — без ссылки (null).
+ */
+export function mentionLink(ref) {
+  const type = ref.type || 'project'
+  if (type === 'project') return `/w/${ref.id}/summary`
+  if (!ref.project_id) return null
+  if (type === 'campaign') return `/w/${ref.project_id}/campaigns/${ref.id}`
+  if (type === 'group') return `/w/${ref.project_id}/campaigns/${ref.campaign_row_id}`
+  return null
+}
+
+/** Что уходит на сервер: проект — числом (как раньше), остальное — с типом. */
+function refPayload(m) {
+  const type = m.type || 'project'
+  if (type === 'project') return m.id
+  if (type === 'period') return { type, from: m.from, to: m.to, name: m.name }
+  return { type, id: m.id }
+}
+
+/** Текст сообщения кусками: @упоминание — чипом, остальное — как есть. */
 export function mentionParts(item) {
   const refs = item.refs || []
   if (!refs.length) return [{ text: item.content }]
@@ -174,8 +195,8 @@ export function provideChat({ general, ws, basePath, reloadWs, panel = false, pa
   const onBoard = computed(() => new Set(build.value?.action_ids || []))
   const boardWaiting = computed(() => pendingActions.value.filter((a) => onBoard.value.has(a.id)).length)
 
-  // @-упоминания других проектов: ИИ получает их на чтение. Подставленные из списка помним по id,
-  // набранные руками находим по названию в тексте при отправке.
+  // @-упоминания: кампании, группы, периоды и другие проекты (их ИИ получает на чтение). Выбранные
+  // в окне «@» помним с типом и id; проекты, набранные руками, находим по названию в тексте при отправке.
   const mentions = ref([])
   const otherProjects = computed(() => workspaces.value.filter((w) => w.id !== ws.value.id && !w.archived && !w.locked))
   loadWorkspaces().catch(() => null)
@@ -184,6 +205,14 @@ export function provideChat({ general, ws, basePath, reloadWs, panel = false, pa
   const pickedClass = ref('')
   const modelBusy = ref(false)
   const modelItems = computed(() => aiModels.value?.items || [])
+  // Видит ли картинки хоть одна модель сервиса: нет — у картинки только «В объявления».
+  const modelsSeeImages = computed(() => !!aiModels.value?.vision)
+
+  // Картинки в поле ввода: { key, id, name, preview, width, height, purpose, direct_problem, busy, error }.
+  // Загружаются сразу при выборе (id — с сервера), с сообщением уходят их id.
+  const attachments = ref([])
+  const attachBusy = computed(() => attachments.value.some((a) => a.busy))
+  const readyAttachments = computed(() => attachments.value.filter((a) => a.id && !a.error))
   const selectedClass = computed(() => {
     const m = aiModels.value
     if (!m) return ''
@@ -257,7 +286,7 @@ export function provideChat({ general, ws, basePath, reloadWs, panel = false, pa
       if (m.role === 'user') {
         closeTurn()
         turn = { question: m.content || '', item: null, help: 0, found: false }
-        out.push({ key: `m${m.id}`, id: m.id, role: 'user', content: m.content, refs: m.refs || [], context: m.context || null, created: m.created_at || '' })
+        out.push({ key: `m${m.id}`, id: m.id, role: 'user', content: m.content, refs: m.refs || [], context: m.context || null, attachments: m.attachments || [], created: m.created_at || '' })
       }
       if (m.role === 'error') out.push({ key: `m${m.id}`, role: 'error', content: m.content })
       if (m.role === 'assistant') {
@@ -527,13 +556,14 @@ export function provideChat({ general, ws, basePath, reloadWs, panel = false, pa
 
   // --- Действия пользователя --------------------------------------------------------------------
 
-  /** Проекты, на которые ссылается текст сообщения. */
+  /** Упоминания, которые остались в тексте сообщения. */
   function usedMentions(message) {
+    const key = (m) => (m.type === 'period' ? `period:${m.from}:${m.to}` : `${m.type || 'project'}:${m.id}`)
     const found = new Map()
-    for (const m of mentions.value) if (hasMention(message, m.name)) found.set(m.id, m)
+    for (const m of mentions.value) if (hasMention(message, m.name)) found.set(key(m), m)
     const covered = new Set([...found.values()].map((m) => m.name))
     for (const w of otherProjects.value) {
-      if (!covered.has(w.name) && hasMention(message, w.name)) found.set(w.id, { id: w.id, name: w.name })
+      if (!covered.has(w.name) && hasMention(message, w.name)) found.set(`project:${w.id}`, { id: w.id, name: w.name })
     }
     return [...found.values()]
   }
@@ -545,7 +575,10 @@ export function provideChat({ general, ws, basePath, reloadWs, panel = false, pa
    */
   async function send(text, pending) {
     const message = (text ?? draft.value).trim()
-    if (!message || sending.value || status.value === 'running') return
+    // Картинки уходят только с черновиком из поля ввода, не с готовыми запросами.
+    const files = text == null ? readyAttachments.value.map((a) => a.id) : []
+    if ((!message && !files.length) || sending.value || status.value === 'running') return
+    if (text == null && attachBusy.value) return
     if (!pending && waitingWrites.value.length) {
       pendingAsk.value = { text: text ?? null }
       return
@@ -563,11 +596,12 @@ export function provideChat({ general, ws, basePath, reloadWs, panel = false, pa
         await goChat(id, true)
       }
       // Подсказки-стартеры — готовый текст без упоминаний.
-      const refs = text == null ? usedMentions(message).map((m) => m.id) : []
-      await aiApi.send(id, message, refs, pending || 'reject', context?.value || null)
+      const refs = text == null ? usedMentions(message).map(refPayload) : []
+      await aiApi.send(id, message, refs, pending || 'reject', context?.value || null, files)
       if (text == null || text === draft.value) {
         draft.value = ''
         mentions.value = []
+        attachments.value = []
       }
       stickToBottom = true
       await loadChat(id)
@@ -700,6 +734,7 @@ export function provideChat({ general, ws, basePath, reloadWs, panel = false, pa
     stopPolling()
     data.value = null
     draft.value = ''
+    attachments.value = []
     goChat(null)
     nextTick(() => input.value?.focus())
   }
@@ -837,6 +872,10 @@ export function provideChat({ general, ws, basePath, reloadWs, panel = false, pa
     // Сообщение и модель ответа
     draft,
     mentions,
+    attachments,
+    attachBusy,
+    readyAttachments,
+    modelsSeeImages,
     otherProjects,
     aiConfigured,
     modelItems,

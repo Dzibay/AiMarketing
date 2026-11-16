@@ -67,8 +67,12 @@ TASKS = {
 TASK_LABELS = {**{k: v["label"] for k, v in TASKS.items()}, "chat": "ИИ-чат", "test": "Проверка подключения", "images": "Картинки"}
 # Русский текст у большинства токенизаторов — 2–3 символа на токен; дальше калибруемся по факту.
 CHARS_PER_TOKEN = 2.5
+# Картинка до 2000 px — около 1600 токенов входа у GPT и Claude. Точное число провайдер вернёт в usage;
+# это — для оценки, когда usage нет, и для калибровки символов на токен.
+IMAGE_TOKENS = 1600
 PRICE_MAX = 1_000_000
 NOT_CONFIGURED = "ИИ временно недоступен: администратор ещё не подключил модель. Напишите в поддержку"
+NO_VISION = "Подключённые модели не видят картинки — отметьте их «В объявления» или уберите"
 
 
 def _key_hint(cipher: str) -> str:
@@ -123,6 +127,7 @@ def _class_public(row: dict) -> dict:
         "units_cache": _num(row.get("units_cache")),
         "cost_cache": _num(row.get("cost_cache")),
         "enabled": bool(row.get("enabled")),
+        "vision": bool(row.get("vision")),
         "dots": CLASS_DOTS.get(row["id"], 2),
     }
 
@@ -150,13 +155,21 @@ def _task_classes(row: dict) -> dict:
     return {task: stored.get(task) if stored.get(task) in CLASSES else spec["class"] for task, spec in TASKS.items()}
 
 
-def _resolve_class(wanted: str | None, task: str, classes: dict[str, dict], row: dict) -> dict | None:
-    """Класс для вызова: выбранный, если включён и с моделью, иначе класс задачи, иначе ближайший рабочий."""
+def _resolve_class(
+    wanted: str | None, task: str, classes: dict[str, dict], row: dict, *, vision: bool = False
+) -> dict | None:
+    """Класс для вызова: выбранный, если включён и с моделью, иначе класс задачи, иначе ближайший рабочий.
+    vision — в запросе картинки: только класс, модель которого их видит."""
     order = [wanted, _task_classes(row).get(task) or TASKS["chat"]["class"], "standard", "fast", "thinking"]
     for cid in order:
-        if cid and _usable(classes.get(cid)):
+        if cid and _usable(classes.get(cid)) and (not vision or classes[cid]["vision"]):
             return classes[cid]
     return None
+
+
+def sees_images() -> bool:
+    """Хоть одна включённая модель понимает картинки — можно «Показать ИИ»."""
+    return any(_usable(c) and c["vision"] for c in model_classes())
 
 
 def chat_classes() -> dict:
@@ -167,7 +180,12 @@ def chat_classes() -> dict:
     return {
         "configured": _has_key(row) and default is not None,
         "default": default["id"] if default else "",
-        "items": [{"id": c["id"], "name": c["name"], "dots": c["dots"]} for c in classes.values() if _usable(c)],
+        "items": [
+            {"id": c["id"], "name": c["name"], "dots": c["dots"], "vision": c["vision"]}
+            for c in classes.values()
+            if _usable(c)
+        ],
+        "vision": any(_usable(c) and c["vision"] for c in classes.values()),
     }
 
 
@@ -244,6 +262,7 @@ def _save_classes(conn, classes: list[dict]) -> None:
         units_cache = amount(item.get("units_cache"), f"{name}: единиц за 1 млн токенов кэша")
         cost_cache = amount(item.get("cost_cache"), f"{name}: себестоимость кэша, ₽", digits=2)
         enabled = bool(item.get("enabled"))
+        vision = bool(item.get("vision"))
         for a, b, what in ((units_in, units_out, "цены в единицах"), (cost_in, cost_out, "себестоимости")):
             if (a is None) != (b is None):
                 raise YandexError("ai-price", f"{name}: укажите обе {what} — за вход и за выход")
@@ -252,10 +271,10 @@ def _save_classes(conn, classes: list[dict]) -> None:
         conn.execute(
             """
             UPDATE ai_model_classes SET name = %s, model = %s, units_in = %s, units_out = %s, cost_in = %s,
-                   cost_out = %s, units_cache = %s, cost_cache = %s, enabled = %s, updated_at = NOW()
+                   cost_out = %s, units_cache = %s, cost_cache = %s, enabled = %s, vision = %s, updated_at = NOW()
             WHERE id = %s
             """,
-            (name, model, units_in, units_out, cost_in, cost_out, units_cache, cost_cache, enabled, cid),
+            (name, model, units_in, units_out, cost_in, cost_out, units_cache, cost_cache, enabled, vision, cid),
         )
 
 
@@ -311,12 +330,14 @@ def load_config(
     *,
     model_class: str | None = None,
     model: str | None = None,
+    vision: bool = False,
 ) -> dict:
     """Готовая конфигурация вызова: адрес, модель класса, заголовки и цены класса.
 
     user_id — с кого списывать единицы (None — проверка в админке, без списания). model_class — выбор
     пользователя в чате; выключенный или пустой класс заменяется классом задачи. model — своя модель
-    вместо модели класса (тот же адрес API и ключ, цены — класса).
+    вместо модели класса (тот же адрес API и ключ, цены — класса). vision — в запросе будут картинки:
+    класс без зрения заменяется ближайшим, который их видит; такого нет — ошибка.
     """
     row = _service()
     if not _has_key(row):
@@ -326,7 +347,9 @@ def load_config(
     except RuntimeError as exc:
         raise YandexError("ai-not-configured", NOT_CONFIGURED) from exc
     classes = {c["id"]: c for c in model_classes()}
-    cls = _resolve_class(model_class, task, classes, row)
+    cls = _resolve_class(model_class, task, classes, row, vision=vision)
+    if cls is None and vision:
+        raise YandexError("ai-vision", NO_VISION)
     if cls is None:
         raise YandexError("ai-not-configured", NOT_CONFIGURED)
     provider = row["provider"]
@@ -417,9 +440,13 @@ def _priced(cfg: dict, prefix: str, tokens_in: float, tokens_out: float, cached:
     return ((tokens_in - cached) * rate_in + cached * rate_cache + tokens_out * rate_out) / 1_000_000
 
 
-def units_for(cfg: dict, tokens_in: float, tokens_out: float, cached: float = 0) -> float:
-    """Единиц за вызов по цене класса модели; цена не задана — 0."""
-    return _priced(cfg, "units", tokens_in, tokens_out, cached) or 0.0
+def units_for(cfg: dict, tokens_in: float, tokens_out: float, cached: float = 0, images: int = 0) -> float:
+    """Единиц за вызов по цене класса модели; цена не задана — 0.
+
+    images — картинок в запросе, если tokens_in их не включает (оценка без usage провайдера): каждая
+    идёт как IMAGE_TOKENS токенов входа. В usage провайдера картинки уже посчитаны в prompt_tokens.
+    """
+    return _priced(cfg, "units", tokens_in + images * IMAGE_TOKENS, tokens_out, cached) or 0.0
 
 
 def cost_rub(cfg: dict, tokens_in: float, tokens_out: float, cached: float = 0) -> float | None:
@@ -461,16 +488,34 @@ def require_ready(user_id: int, task: str = "chat") -> dict:
     return cfg
 
 
+def _text_size(messages: list[dict]) -> tuple[int, int]:
+    """Символов текста в запросе и картинок в нём: base64 картинки — не текст, его не считаем."""
+    images = 0
+    plain = []
+    for m in messages:
+        content = m.get("content")
+        if isinstance(content, list):
+            parts = []
+            for part in content:
+                if isinstance(part, dict) and part.get("type") == "image_url":
+                    images += 1
+                else:
+                    parts.append(part)
+            m = {**m, "content": parts}
+        plain.append(m)
+    return len(json.dumps(plain, ensure_ascii=False)), images
+
+
 def estimate_tokens(messages: list[dict], tools: list[dict] | None = None) -> int:
     """Размер запроса в токенах по символам — для сообщений об ошибке, когда ответа с usage нет."""
-    chars = len(json.dumps(messages, ensure_ascii=False))
+    chars, images = _text_size(messages)
     if tools:
         chars += len(json.dumps(tools, ensure_ascii=False))
-    return math.ceil(chars / CHARS_PER_TOKEN)
+    return math.ceil(chars / CHARS_PER_TOKEN) + images * IMAGE_TOKENS
 
 
 def _usage(cfg: dict, data: dict, messages: list[dict], tools, content: str, calls: list[dict]) -> dict:
-    chars_in = len(json.dumps(messages, ensure_ascii=False))
+    chars_in, images = _text_size(messages)
     if tools:
         chars_in += len(json.dumps(tools, ensure_ascii=False))
     chars_out = len(content) + sum(len(c["name"]) + len(c["arguments"]) for c in calls)
@@ -480,10 +525,12 @@ def _usage(cfg: dict, data: dict, messages: list[dict], tools, content: str, cal
         cached = min(cached_tokens(raw), tokens_in)
         estimated = False
     except (TypeError, KeyError, ValueError, AttributeError):
-        tokens_in = math.ceil(chars_in / CHARS_PER_TOKEN)
+        tokens_in = math.ceil(chars_in / CHARS_PER_TOKEN) + images * IMAGE_TOKENS
         tokens_out = math.ceil(chars_out / CHARS_PER_TOKEN)
         cached = 0
         estimated = True
+    # Для калибровки «символов на токен»: картинка идёт как IMAGE_TOKENS токенов текста.
+    chars_in += math.ceil(images * IMAGE_TOKENS * CHARS_PER_TOKEN)
     return {
         "tokens_in": tokens_in,
         "tokens_out": tokens_out,
@@ -491,6 +538,7 @@ def _usage(cfg: dict, data: dict, messages: list[dict], tools, content: str, cal
         "chars_in": chars_in,
         "chars_out": chars_out,
         "estimated": estimated,
+        "images": images,
         "charged": units_for(cfg, tokens_in, tokens_out, cached),
         "cost_rub": cost_rub(cfg, tokens_in, tokens_out, cached),
     }

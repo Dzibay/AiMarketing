@@ -20,7 +20,7 @@ from datetime import timedelta
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import env  # noqa: E402  — до app.*: настройки читаются при импорте
 
-from app import ai_agent, ai_blocks, ai_feedback, journal, negative_lists, rules, search_queries, stats  # noqa: E402
+from app import ai_agent, ai_attachments, ai_blocks, ai_feedback, journal, negative_lists, rules, search_queries, stats  # noqa: E402
 from app.clients import create_client  # noqa: E402
 from app.clock import now_msk  # noqa: E402
 from app.db import ensure_schema, pool  # noqa: E402
@@ -43,7 +43,7 @@ with pool.connection() as conn:
         sys.exit("В базе уже есть пользователи — сид рассчитан на пустую временную БД")
 
 reset_services(pool)
-setup_ai(model="gpt-demo", fast="gpt-demo-mini")
+setup_ai(model="gpt-demo", fast="gpt-demo-mini", vision=("standard",))
 user = register_user(email="demo@tolk.test", password=secrets.token_urlsafe(16), name="Демо")
 uid = user["id"]
 conn_id = make_connection(pool, uid, "agency-lab")
@@ -351,7 +351,23 @@ with pool.connection() as conn:
         (uid, ws_r, "Как идёт неделя"),
     ).fetchone()["id"]
     chats.append(chat)
-    ai_agent._insert_message(conn, chat, "user", "Как идёт неделя по расходу и заявкам?")
+    # Вопрос с @-упоминаниями: кампания и период — чипами в ленте.
+    week_to = now_msk().date() - timedelta(days=1)
+    ai_agent._insert_message(
+        conn,
+        chat,
+        "user",
+        "Как идёт неделя по расходу и заявкам? Особенно @Поиск | Доставка цветов | Москва и МО за @7 дней",
+        refs=ai_agent._clean_refs(
+            conn,
+            uid,
+            ws_r,
+            [
+                {"type": "campaign", "id": r1},
+                {"type": "period", "from": (week_to - timedelta(days=6)).isoformat(), "to": week_to.isoformat(), "name": "7 дней"},
+            ],
+        ),
+    )
     calls = [
         {"id": f"call_show{i}", "name": "show", "arguments": json.dumps(args, ensure_ascii=False)}
         for i, args in enumerate(SHOWS)
@@ -375,11 +391,64 @@ with pool.connection() as conn:
         meta={"followups": ["Срежь ставки в РСЯ", "Покажи по дням заявки"]},
     )
 
+
+
+def demo_png(width: int, height: int, top: tuple, bottom: tuple) -> bytes:
+    """Цветная PNG-заглушка (градиент сверху вниз) — картинка из поля ввода без файлов в репозитории."""
+    import struct
+    import zlib
+
+    def chunk(kind: bytes, body: bytes) -> bytes:
+        return struct.pack(">I", len(body)) + kind + body + struct.pack(">I", zlib.crc32(kind + body))
+
+    rows = []
+    for y in range(height):
+        t = y / max(1, height - 1)
+        pixel = bytes(round(a + (b - a) * t) for a, b in zip(top, bottom))
+        rows.append(b"\x00" + pixel * width)
+    ihdr = struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0)
+    return b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", ihdr) + chunk(b"IDAT", zlib.compress(b"".join(rows))) + chunk(b"IEND", b"")
+
+
+# Чат с картинками из поля ввода: скриншот «Показать ИИ» и баннер «В объявления».
+with pool.connection() as conn:
+    chat = conn.execute(
+        "INSERT INTO ai_chats (user_id, workspace_id, title, status) VALUES (%s, %s, %s, 'idle') RETURNING id",
+        (uid, ws_r, "Скриншот и баннер"),
+    ).fetchone()["id"]
+    files_chat = chat
+    files = []
+    for name, purpose, size, top, bottom in (
+        ("Скриншот отчёта", "ai", (1200, 750), (235, 238, 245), (190, 200, 220)),
+        ("Баннер с пионами", "ads", (1080, 1080), (246, 196, 214), (198, 240, 74)),
+    ):
+        raw = demo_png(*size, top, bottom)
+        files.append(
+            conn.execute(
+                """
+                INSERT INTO ai_attachments (user_id, workspace_id, chat_id, purpose, name, mime, width, height, data)
+                VALUES (%s, %s, %s, %s, %s, 'image/png', %s, %s, %s) RETURNING id, purpose, name, width, height
+                """,
+                (uid, ws_r, chat, purpose, name, size[0], size[1], raw),
+            ).fetchone()
+        )
+    message = ai_agent._insert_message(
+        conn, chat, "user", "Почему на скриншоте упал CTR? И поставь баннер в объявления с пионами",
+        meta={"attachments": ai_attachments.meta(files)},
+    )
+    conn.execute("UPDATE ai_attachments SET message_id = %s WHERE chat_id = %s", (message["id"], chat))
+    ai_agent._insert_message(
+        conn, chat, "assistant",
+        "На скриншоте CTR просел с 4,1 % до 2,6 % с 12-го числа — в те же дни выросла доля показов в РСЯ. "
+        f"Баннер «Баннер с пионами» подходит Директу (1080×1080), предложу его этапом «Картинки» "
+        f"(hash {ai_attachments.pseudo_hash(files[1]['id'])}) — в библиотеку кабинета он загрузится после «Выполнить».",
+    )
+
 env.TOKEN_FILE.write_text(make_session(uid), encoding="utf-8")
 env.save_stand({
     "user_id": uid,
     "workspaces": {"flowers": ws_r, "furniture": ws_v, "promo": ws_x},
     "campaign_row": r1,
-    "chats": {"general": chats[0], "flowers": chats[1], "images": chats[2], "blocks": chats[3]},
+    "chats": {"general": chats[0], "flowers": chats[1], "images": chats[2], "blocks": chats[3], "files": files_chat},
 })
 print(f"Готово: пользователь {uid}, проекты {ws_r}, {ws_v}, {ws_x}. Токен и номера — в {env.DEMO_DIR}")

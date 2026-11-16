@@ -11,7 +11,15 @@
 
       <template v-for="item in items" :key="item.key">
         <div v-if="item.role === 'user'" class="msg msg--user" :data-msg="item.id">
-          <div class="msg__bubble"><template v-for="(part, i) in mentionParts(item)" :key="i"><RouterLink v-if="part.ref" class="mention" :to="`/w/${part.ref.id}/summary`">{{ part.text }}</RouterLink><template v-else>{{ part.text }}</template></template></div>
+          <ul v-if="item.attachments?.length" class="msg__files" aria-label="Картинки сообщения">
+            <li v-for="a in item.attachments" :key="a.id">
+              <a :href="a.url" target="_blank" rel="noopener" class="msg__file" v-tip="a.purpose === 'ads' ? 'Для объявлений' : 'Показана ИИ'">
+                <img :src="a.url" :alt="a.name || 'Картинка'" loading="lazy" :width="a.width" :height="a.height" />
+                <span v-if="a.purpose === 'ads'" class="msg__file-tag">В объявления</span>
+              </a>
+            </li>
+          </ul>
+          <div v-if="item.content" class="msg__bubble"><template v-for="(part, i) in mentionParts(item)" :key="i"><RouterLink v-if="part.ref && mentionLink(part.ref)" class="mention" :to="mentionLink(part.ref)">{{ part.text }}</RouterLink><span v-else-if="part.ref" class="mention mention--plain">{{ part.text }}</span><template v-else>{{ part.text }}</template></template></div>
           <p v-if="item.context?.label" class="msg__context">Про: {{ item.context.label }}</p>
           <div v-if="item.created || item.content" class="msg__meta">
             <time v-if="item.created" class="msg__time" :datetime="item.created">{{ formatDateTime(item.created) }}</time>
@@ -311,7 +319,7 @@ import { aiApi, errorText } from '../../api/web'
 import { askText } from '../../composables/useConfirm'
 import { saveOwnPrompt } from '../../composables/usePrompts'
 import { pushToast } from '../../composables/useToasts'
-import { STATUS_LABELS, mentionParts, useChat } from '../../composables/useChat'
+import { STATUS_LABELS, mentionLink, mentionParts, useChat } from '../../composables/useChat'
 import { useExpert } from '../../composables/useExpert'
 import { useViewport } from '../../composables/useViewport'
 import { formatDateTime, plural } from '../../utils/format'

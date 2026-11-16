@@ -1,6 +1,7 @@
 """ИИ-ассистент: общий ключ сервиса и классы моделей, ход агента с инструментами, согласование действий — с фейковой моделью."""
 
 import json
+from datetime import timedelta
 
 import pytest
 from fastapi.testclient import TestClient
@@ -510,7 +511,12 @@ def test_ai_api(db, monkeypatch):
 
     # Пользователю — только классы, без моделей, ключа и цен; настройки ИИ — в админке.
     models = client.get("/api/web/ai/models", headers=auth).json()
-    assert models == {"configured": True, "default": "standard", "items": [{"id": "standard", "name": "Стандартная", "dots": 2}]}
+    assert models == {
+        "configured": True,
+        "default": "standard",
+        "items": [{"id": "standard", "name": "Стандартная", "dots": 2, "vision": False}],
+        "vision": False,
+    }
     assert client.get("/api/web/ai/settings", headers=auth).status_code == 404
     # Сессия кабинета в админку не пускает: у админки свой вход по паролю.
     assert client.get("/api/admin/ai", headers=auth).status_code == 401
@@ -1048,6 +1054,68 @@ def test_project_references_api(db, monkeypatch):
     assert got["messages"][0]["refs"] == [{"id": other_ws, "name": "Блог"}]
 
 
+def test_typed_references(db, monkeypatch):
+    """@ на кампанию, группу и период: в сообщении — с названиями, у модели — с id; список для @ — по проекту."""
+    s = _seed(db)
+    user = s["user"]
+    other_ws = next(w["id"] for w in workspaces.list_workspaces(user) if w["name"] == "Блог")
+    with db.connection() as conn:
+        group = conn.execute(
+            "INSERT INTO direct_adgroups (user_id, account_id, campaign_row_id, adgroup_id, name) "
+            "VALUES (%s, %s, %s, 501, 'Пластиковые') RETURNING id",
+            (user, s["acc"], s["search"]),
+        ).fetchone()["id"]
+
+    options = ai_agent.mention_options(user, s["ws"])
+    assert {c["name"] for c in options["campaigns"]} == {"Поиск", "РСЯ"}
+    assert options["groups"] == [
+        {"type": "group", "id": group, "name": "Пластиковые", "campaign_row_id": s["search"], "campaign": "Поиск",
+         "project_id": s["ws"]}
+    ]
+    everything = ai_agent.mention_options(user)
+    assert {(c["name"], c["project"]) for c in everything["campaigns"]} == {
+        ("Поиск", "Магазин"), ("РСЯ", "Магазин"), ("Блог", "Блог")
+    }
+    stranger = make_user(db, "mention-stranger@example.com")
+    with pytest.raises(YandexError):
+        ai_agent.mention_options(stranger, s["ws"])
+
+    client = TestClient(app)
+    auth = {"Authorization": f"Bearer {make_session(user)}"}
+    got = client.get(f"/api/web/ai/mentions?workspace_id={s['ws']}", headers=auth)
+    assert got.status_code == 200 and len(got.json()["campaigns"]) == 2
+
+    week = (ai_agent.today_msk() - timedelta(days=7)).isoformat()
+    yesterday = (ai_agent.today_msk() - timedelta(days=1)).isoformat()
+    refs = [
+        {"type": "campaign", "id": s["search"]},
+        {"type": "group", "id": group},
+        {"type": "campaign", "id": s["foreign"]},
+        {"type": "period", "from": week, "to": yesterday, "name": "7 дней"},
+        other_ws,
+    ]
+    fake = FakeModel(_text("Смотрю."))
+    monkeypatch.setattr(ai, "complete", fake)
+    sent = ai_agent.post_message(user, s["chat"], "Сравни @Поиск и @Пластиковые за @7 дней", refs=refs)
+    assert [r.get("type", "project") for r in sent["message"]["refs"]] == ["campaign", "group", "campaign", "period", "project"]
+    assert sent["message"]["refs"][2] == {"type": "campaign", "id": s["foreign"], "name": "Блог", "project_id": other_ws}
+    ai_agent.run_chat(user, s["chat"])
+    text = fake.calls[0][1]["content"]
+    assert f"«Поиск» (campaign_row_id {s['search']})" in text
+    assert f"«Блог» (campaign_row_id {s['foreign']}, project_id {other_ws})" in text
+    assert f"(adgroup_row_id {group}, campaign_row_id {s['search']})" in text
+    assert f"(date_from {week}, date_to {yesterday})" in text
+
+    # Чужая кампания — ошибка, сообщение не сохраняется.
+    stranger_acc = make_account(db, stranger, make_connection(db, stranger, "mention-stranger"))
+    alien = make_campaign(db, stranger, stranger_acc, 77, "Чужая")
+    before = len(ai_agent.get_chat(user, s["chat"])["messages"])
+    with pytest.raises(YandexError) as err:
+        ai_agent.post_message(user, s["chat"], "@Чужая", refs=[{"type": "campaign", "id": alien}])
+    assert err.value.code == "not-found"
+    assert len(ai_agent.get_chat(user, s["chat"])["messages"]) == before
+
+
 def test_chat_model_calls_are_streamed(db, monkeypatch):
     """Ход чата просит ответ потоком: иначе шлюз провайдера рвёт долгий запрос (524)."""
     s = _seed(db)
@@ -1082,7 +1150,11 @@ def test_chat_model_class_is_picked_per_chat(db, monkeypatch):
     assert got["ai"] == {
         "configured": True,
         "default": "standard",
-        "items": [{"id": "fast", "name": "Быстрая", "dots": 1}, {"id": "standard", "name": "Стандартная", "dots": 2}],
+        "items": [
+            {"id": "fast", "name": "Быстрая", "dots": 1, "vision": False},
+            {"id": "standard", "name": "Стандартная", "dots": 2, "vision": False},
+        ],
+        "vision": False,
         "selected": "standard",
     }
 

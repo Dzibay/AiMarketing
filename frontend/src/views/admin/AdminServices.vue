@@ -48,6 +48,8 @@
         Цена — единиц за 1 млн токенов: столько спишется с лимита пользователя. Себестоимость — ₽ за 1 млн токенов по
         тарифу провайдера, для маржи в «Расходе». Кэш — повторяющийся вход (инструменты, промпт, история), который
         провайдер берёт дешевле; пусто — кэш считается как обычный вход. Выключенный класс в чате не показывается.
+        «Зрение» — модель понимает картинки: сообщение с картинкой уйдёт ей, даже если в чате выбрана другая. Без
+        зрения у всех классов картинку можно приложить только для объявлений.
       </p>
       <div v-scroll-x class="table-scroll">
         <table class="table admin-classes">
@@ -56,6 +58,7 @@
               <th>Вкл.</th>
               <th>Название в чате</th>
               <th>Модель</th>
+              <th>Зрение</th>
               <th class="num">Ед. · вход</th>
               <th class="num">Ед. · кэш</th>
               <th class="num">Ед. · выход</th>
@@ -74,6 +77,7 @@
               <td>
                 <input v-model.trim="c.model" type="text" :placeholder="defaultModel" autocomplete="off" aria-label="Модель" />
               </td>
+              <td><UiCheckbox v-model="c.vision" :aria-label="`Модель класса «${c.name}» видит картинки`" /></td>
               <td v-for="f in PRICE_FIELDS" :key="f" class="num">
                 <input v-model="c[f]" type="number" min="0" step="any" inputmode="decimal" placeholder="—" :aria-label="f" />
               </td>
@@ -336,6 +340,7 @@ async function saveAi() {
           name: c.name,
           model: c.model,
           enabled: c.enabled,
+          vision: !!c.vision,
           ...Object.fromEntries(PRICE_FIELDS.map((f) => [f, money(c[f])])),
         })),
         task_classes: aiForm.task_classes,

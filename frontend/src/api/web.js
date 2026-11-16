@@ -257,8 +257,13 @@ export const aiApi = {
   // refs — id других проектов, упомянутых через @: ИИ читает их, но не меняет.
   // pending: что делать с ждущими предложениями ИИ — 'reject' отклонить, 'keep' оставить ждать решения.
   /** context — что открыто в кабинете, когда пишут из панели ИИ (usePageContext); null — без него. */
-  send: (id, text, refs = [], pending = 'reject', context = null) =>
-    post(`/api/web/ai/chats/${id}/messages`, { text, refs, pending, ...(context ? { context } : {}) }),
+  /** attachments — id картинок из uploadAttachment, до четырёх. */
+  send: (id, text, refs = [], pending = 'reject', context = null, attachments = []) =>
+    post(`/api/web/ai/chats/${id}/messages`, { text, refs, pending, attachments, ...(context ? { context } : {}) }),
+  /** Картинка из поля ввода: { data (data URL), name, purpose: 'ai' | 'ads' } → { id, purpose, name, width, height, url, direct_problem }. */
+  uploadAttachment: (payload) => post('/api/web/ai/attachments', payload),
+  /** «Показать ИИ» ↔ «В объявления», пока сообщение не отправлено → то же, что uploadAttachment. */
+  setAttachmentPurpose: (id, purpose) => patch(`/api/web/ai/attachments/${id}`, { purpose }),
   /** Оценка ответа ИИ: { rating: 1 | -1 | 0, reasons, comment } → { feedback } (null — снята). */
   rate: (messageId, payload) => post(`/api/web/ai/messages/${messageId}/feedback`, payload),
   /** Повтор оборвавшегося хода ИИ: модель продолжит с места сбоя, без нового сообщения. */
@@ -310,6 +315,8 @@ export const aiApi = {
    * snoozed — отложенные «Позже»; workspaceId — только одного проекта.
    */
   pending: (workspaceId = null) => request(`/api/web/ai/pending${query({ workspace_id: workspaceId })}`),
+  /** Кампании и группы для @ в поле ввода: проекта (null — всех проектов) → { campaigns, groups }. */
+  mentions: (workspaceId = null) => request(`/api/web/ai/mentions${query({ workspace_id: workspaceId })}`),
 }
 
 export const webApi = {

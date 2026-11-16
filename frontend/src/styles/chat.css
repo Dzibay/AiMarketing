@@ -1936,6 +1936,230 @@ a.aib-card:hover {
   height: 16px;
 }
 
+/* Скрепка на телефоне — меню «Снять фото / Выбрать из галереи», кнопка как у соседних значков. */
+.composer__clip-menu {
+  flex: none;
+}
+
+.composer__clip-menu .ui-menu__btn {
+  width: 32px;
+  height: 32px;
+  min-height: 32px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  background: var(--surface);
+  color: var(--ink-2);
+}
+
+/* Перетаскивают картинку — поле подсвечено. */
+.composer.is-drop {
+  border-color: var(--lime-line);
+  background: var(--lime-soft);
+}
+
+/* Картинки в поле ввода: превью, имя, «Показать ИИ / В объявления», убрать. */
+.composer__files {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0 0 10px;
+  padding: 0;
+  list-style: none;
+}
+
+.composer__file {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 100%;
+  padding: 6px 6px 6px 6px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--surface-2);
+}
+
+.composer__file.is-error {
+  border-color: var(--danger);
+  background: var(--danger-soft);
+}
+
+.composer__thumb {
+  position: relative;
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  overflow: hidden;
+  border-radius: 9px;
+  background: var(--line);
+}
+
+.composer__thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.composer__thumb-spin {
+  position: absolute;
+}
+
+.composer__file-body {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.composer__file-name {
+  max-width: 190px;
+  overflow: hidden;
+  color: var(--ink);
+  font-size: 12.5px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer__file-note.is-error {
+  max-width: 240px;
+  color: var(--danger);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.composer__file-use {
+  display: inline-flex;
+  padding: 2px;
+  border-radius: 999px;
+  background: var(--surface);
+  box-shadow: inset 0 0 0 1px var(--line);
+}
+
+.composer__use {
+  appearance: none;
+  padding: 3px 9px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 11.5px;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.composer__use.is-on {
+  background: var(--ink);
+  color: var(--bg);
+}
+
+.composer__use:disabled:not(.is-on) {
+  color: var(--faint);
+  cursor: not-allowed;
+}
+
+.composer__file-del {
+  appearance: none;
+  display: grid;
+  flex: none;
+  place-items: center;
+  align-self: flex-start;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.composer__file-del:hover {
+  background: var(--line);
+  color: var(--ink);
+}
+
+.composer__file-del svg {
+  width: 14px;
+  height: 14px;
+}
+
+/* Картинки отправленного сообщения — над пузырём, справа. */
+.msg__files {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+  max-width: 82%;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.msg__file {
+  position: relative;
+  display: block;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+}
+
+.msg__file img {
+  display: block;
+  width: auto;
+  max-width: 220px;
+  height: 140px;
+  object-fit: cover;
+}
+
+/* На телефоне — в ряд, а не столбиком на весь экран. */
+@media (max-width: 560px) {
+  .msg__files {
+    max-width: 92%;
+  }
+
+  .msg__file img {
+    max-width: 150px;
+    height: 100px;
+  }
+}
+
+.msg__file-tag {
+  position: absolute;
+  left: 6px;
+  bottom: 6px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: var(--ink);
+  color: var(--bg);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+/* Микрофон пишет — кнопка залита и мягко пульсирует. */
+.composer__mic.is-on {
+  border-color: var(--ink);
+  background: var(--ink);
+  color: var(--bg);
+  animation: mic-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes mic-pulse {
+  50% {
+    box-shadow: 0 0 0 5px color-mix(in srgb, var(--ink) 15%, transparent);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .composer__mic.is-on {
+    animation: none;
+  }
+}
+
 .composer__tasks {
   appearance: none;
   display: inline-flex;
@@ -2044,15 +2268,85 @@ a.aib-card:hover {
   text-underline-offset: 2px;
 }
 
-/* @-упоминания: список проектов над полем ввода. */
+/* @-упоминания: окно над полем ввода — вкладки сверху, список прокручивается под ними. */
 .mention-pop {
   top: auto;
   right: auto;
   bottom: calc(100% + 8px);
   left: 0;
-  width: min(420px, 100%);
-  max-height: 16rem;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: min(440px, 100%);
+}
+
+.mention-pop--down {
+  top: calc(100% + 8px);
+  bottom: auto;
+}
+
+.mention-pop__tabs {
+  display: flex;
+  flex-wrap: nowrap;
+  flex-shrink: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.mention-pop__tabs button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex: 1 0 auto;
+  justify-content: center;
+}
+
+.mention-pop__tabs small {
+  color: var(--muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.mention-pop__list {
+  min-height: 0;
   overflow-y: auto;
+}
+
+.mention-pop__note {
+  margin: 0;
+  padding: 10px 12px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.mention-pop__cal {
+  overflow-y: auto;
+  padding: 2px 4px 4px;
+}
+
+.mention-pop__cal-foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+  /* На телефоне календарь может не влезть по высоте — «Готово» всегда видно. */
+  position: sticky;
+  bottom: -4px;
+  padding: 6px 0 4px;
+  background: var(--surface);
+}
+
+.mention-pop__cal-foot p {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+/* Период — чип без ссылки. */
+.mention--plain:hover {
+  box-shadow: inset 0 0 0 1px var(--line);
 }
 
 .mention-pop__item {
@@ -2500,6 +2794,36 @@ a.aib-card:hover {
 
   .composer__tip {
     display: none;
+  }
+
+  /* Задачи, @, микрофон, модель и отправка в одну строку: «Задачи» — значком, подпись остаётся диктору. */
+  .composer__tasks {
+    width: 32px;
+    padding: 0;
+    justify-content: center;
+  }
+
+  .composer__tasks span {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  .composer__model {
+    flex: 0 1 auto;
+    min-width: 0;
+  }
+
+  .mention-pop .ui-cal__grid td {
+    height: 44px;
+  }
+
+  .mention-pop .ui-cal__day {
+    height: 42px;
+    font-size: 15px;
   }
 
   .chat--hello .chat__main {

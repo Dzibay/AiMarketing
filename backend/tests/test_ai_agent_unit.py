@@ -1,6 +1,7 @@
 """ИИ-ассистент без БД и модели: перезапуск копией, системные правила, запомненные ответы."""
 
 import json
+from datetime import timedelta
 from types import SimpleNamespace
 
 import pytest
@@ -875,12 +876,19 @@ def test_context_note_goes_before_question():
 class RefsConn:
     """conn.execute(...).fetchall() для _clean_refs: проекты пользователя по id."""
 
-    def __init__(self, projects: dict[int, str]):
+    def __init__(self, projects: dict[int, str], campaigns: dict | None = None, groups: dict | None = None):
         self.projects = projects
+        self.campaigns = campaigns or {}
+        self.groups = groups or {}
 
     def execute(self, sql, params):
         ids = params[1]
-        rows = [{"id": i, "name": n} for i, n in self.projects.items() if i in ids]
+        if "direct_adgroups" in sql:
+            rows = [{"id": i, **g} for i, g in self.groups.items() if i in ids]
+        elif "direct_campaigns" in sql:
+            rows = [{"id": i, **c} for i, c in self.campaigns.items() if i in ids]
+        else:
+            rows = [{"id": i, "name": n} for i, n in self.projects.items() if i in ids]
         return SimpleNamespace(fetchall=lambda: rows)
 
 
@@ -900,6 +908,69 @@ def test_clean_refs():
     with pytest.raises(YandexError) as err:
         clean(conn, 1, 2, list(range(100, 100 + ai_agent.MAX_PROJECT_REFS + 1)))
     assert err.value.code == "too-many-refs"
+
+
+def test_clean_refs_typed():
+    conn = RefsConn(
+        {9: "Блог"},
+        campaigns={5: {"name": "Окна — поиск", "workspace_id": 2}},
+        groups={70: {"name": "Пластиковые", "campaign_row_id": 5, "campaign": "Окна — поиск", "workspace_id": 2}},
+    )
+    clean = ai_agent._clean_refs
+    yesterday = (ai_agent.today_msk() - timedelta(days=1)).isoformat()
+    week = (ai_agent.today_msk() - timedelta(days=7)).isoformat()
+    out = clean(
+        conn,
+        1,
+        2,
+        [
+            {"type": "project", "id": 9},
+            {"type": "campaign", "id": 5},
+            {"type": "group", "id": "70"},
+            {"type": "period", "from": week, "to": yesterday, "name": "7 дней"},
+            {"type": "period", "from": week, "to": yesterday},
+            {"type": "campaign", "id": 5},
+        ],
+    )
+    assert out == [
+        {"id": 9, "name": "Блог"},
+        {"type": "campaign", "id": 5, "name": "Окна — поиск", "project_id": 2},
+        {"type": "group", "id": 70, "name": "Пластиковые", "campaign": "Окна — поиск", "campaign_row_id": 5, "project_id": 2},
+        {"type": "period", "from": week, "to": yesterday, "name": "7 дней"},
+    ]
+    with pytest.raises(YandexError) as err:
+        clean(conn, 1, 2, [{"type": "campaign", "id": 6}])
+    assert err.value.code == "not-found" and "кампания" in err.value.message
+    tomorrow = (ai_agent.today_msk() + timedelta(days=2)).isoformat()
+    for bad in (
+        {"type": "period", "from": yesterday, "to": tomorrow},
+        {"type": "period", "from": yesterday, "to": week},
+        {"type": "period", "from": "вчера", "to": yesterday},
+        {"type": "period", "from": "2020-01-01", "to": yesterday},
+        {"type": "ad", "id": 1},
+    ):
+        with pytest.raises(YandexError) as err:
+            clean(conn, 1, 2, [bad])
+        assert err.value.code == "refs", bad
+    with pytest.raises(YandexError) as err:
+        clean(conn, 1, 2, [{"type": "campaign", "id": i} for i in range(ai_agent.MAX_REFS + 1)])
+    assert err.value.code == "too-many-refs"
+
+
+def test_refs_note_typed():
+    refs = [
+        {"type": "campaign", "id": 5, "name": "Окна", "project_id": 2},
+        {"type": "campaign", "id": 6, "name": "Двери", "project_id": 3},
+        {"type": "group", "id": 70, "name": "Пластик", "campaign": "Окна", "campaign_row_id": 5, "project_id": 2},
+        {"type": "period", "from": "2026-11-01", "to": "2026-11-07", "name": "Своя неделя"},
+    ]
+    note = ai_agent._refs_note(refs, workspace_id=2)
+    assert "Упомянуты проекты" not in note
+    assert "[Упомянуты кампании: «Окна» (campaign_row_id 5); «Двери» (campaign_row_id 6, project_id 3)]" in note
+    assert "«Пластик» в кампании «Окна» (adgroup_row_id 70, campaign_row_id 5)" in note
+    assert "«Своя неделя» (date_from 2026-11-01, date_to 2026-11-07)" in note
+    # В общем чате у каждой кампании — её проект.
+    assert "(campaign_row_id 5, project_id 2)" in ai_agent._refs_note(refs, general=True)
 
 
 def test_prompt_says_other_projects_are_read_only(no_memory):

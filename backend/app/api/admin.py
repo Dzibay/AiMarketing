@@ -237,6 +237,8 @@ class ModelClassBody(BaseModel):
     units_cache: float | None = None
     cost_cache: float | None = None
     enabled: bool = True
+    # Модель понимает картинки: сообщения с картинками уходят ей.
+    vision: bool = False
 
 
 class AiServiceBody(BaseModel):

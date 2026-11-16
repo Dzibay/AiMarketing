@@ -75,6 +75,16 @@ const PAGES = [
           b?.scrollIntoView({ block: 'start' }); return !!b })()`],
       ]
     : []),
+  // Окно «@» над полем ввода нового чата: вкладки и свой период в календаре.
+  ['ws-chat-mention', `/w/${ws}/chat`, `(${openMention.toString()})()`],
+  ['ws-chat-mention-period', `/w/${ws}/chat`, `(async () => { if (!(await (${openMention.toString()})())) return false
+    document.querySelectorAll('.mention-pop__tabs button')[2]?.click()
+    await new Promise((r) => setTimeout(r, 200))
+    const custom = [...document.querySelectorAll('.mention-pop__item')].find((b) => b.textContent.includes('Свой период'))
+    custom?.click(); return !!custom })()`],
+  // Картинки: в ленте (скриншот «Показать ИИ», баннер «В объявления») и в поле ввода — вставкой из буфера.
+  ...(stand.chats.files ? [['ws-chat-files', `/w/${ws}/chat/${stand.chats.files}`]] : []),
+  ['ws-chat-attach', `/w/${ws}/chat`, `(${pasteImages.toString()})()`],
   ['ws-campaigns', `/w/${ws}/campaigns`],
   ['ws-campaign', `/w/${ws}/campaigns/${stand.campaign_row}`],
   ['ws-queries', `/w/${ws}/queries`],
@@ -125,6 +135,45 @@ function openAiPanel() {
   const b = [...document.querySelectorAll('.dbar__ai, .bbar__ai')].find((x) => x.offsetParent)
   b?.click()
   return !!b
+}
+
+// Окно «@»: кнопка у поля ввода ставит @ и открывает вкладки; ждём, пока придут кампании.
+async function openMention() {
+  const b = document.querySelector('.composer [aria-label^="Упомянуть"]')
+  if (!b) return false
+  b.click()
+  for (let i = 0; i < 20 && !document.querySelector('.mention-pop__item'); i += 1) {
+    await new Promise((r) => setTimeout(r, 100))
+  }
+  return !!document.querySelector('.mention-pop')
+}
+
+// Две картинки в поле ввода через настоящий обработчик вставки: квадратная и узкая (не годится Директу).
+async function pasteImages() {
+  // Поле ввода включается, когда загрузились модели ИИ.
+  let input = null
+  for (let i = 0; i < 50 && !(input = document.querySelector('.composer__input:not(:disabled)')); i += 1) {
+    await new Promise((r) => setTimeout(r, 100))
+  }
+  if (!input) return false
+  const make = (w, h, color) =>
+    new Promise((resolve) => {
+      const c = document.createElement('canvas')
+      c.width = w
+      c.height = h
+      const ctx = c.getContext('2d')
+      ctx.fillStyle = color
+      ctx.fillRect(0, 0, w, h)
+      c.toBlob((b) => resolve(new File([b], 'pic-' + w + 'x' + h + '.png', { type: 'image/png' })), 'image/png')
+    })
+  const data = new DataTransfer()
+  data.items.add(await make(900, 900, '#f6c4d6'))
+  data.items.add(await make(1600, 400, '#c6f04a'))
+  input.focus()
+  input.dispatchEvent(new ClipboardEvent('paste', { clipboardData: data, bubbles: true, cancelable: true }))
+  const ready = () => document.querySelectorAll('.composer__file').length === 2 && !document.querySelector('.composer__thumb-spin')
+  for (let i = 0; i < 60 && !ready(); i += 1) await new Promise((r) => setTimeout(r, 100))
+  return ready()
 }
 
 // Нижняя панель есть только на узком экране: там «Ещё» открывает шторку.

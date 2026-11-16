@@ -16,7 +16,7 @@ from datetime import date, datetime, timedelta, timezone
 
 from psycopg.types.json import Jsonb
 
-from app import ai, ai_blocks, ai_feedback, audiences, context_files, experiments, image_gen, plans
+from app import ai, ai_attachments, ai_blocks, ai_feedback, audiences, context_files, experiments, image_gen, plans
 from app import help as help_docs
 from app.actions import BULK_ACTIONS, SETTINGS_LABELS, campaign_options
 from app.brief import brief_filled, normalize_brief
@@ -857,9 +857,10 @@ def _t_ad_images(ctx: Context, args: dict) -> dict:
     cid = _int(args, "campaign_row_id")
     ctx.campaign(cid)
     out = campaign_images(ctx.user_id, cid)
+    out["own"] = ai_attachments.project_images(ctx.user_id, ctx.ws_id)
     out["hint"] = (
         "Хэш картинки — в extras.image_hashes объявления. in_campaign — картинки, что уже стоят в объявлениях "
-        "кампании (ads — в скольких); library — остальные картинки кабинета"
+        "кампании (ads — в скольких); library — остальные картинки кабинета; " + OWN_IMAGES_HINT
     )
     return out
 
@@ -878,6 +879,11 @@ _NEED_TEXT = {"image_gen": image_gen.NOT_CONFIGURED}
 MAX_GROUP_IMAGES = 5
 _IMAGE_HASH_RE = re.compile(r"[A-Za-z0-9_-]{1,64}")
 _GENERATE_RE = re.compile(r"сгенер|генерац|генерир|нарис|нейросет", re.I)
+OWN_IMAGES_HINT = (
+    "own — картинки, которые маркетолог приложил в чате «для объявлений»: хэш вида tolk-12, ставь его как "
+    "обычный (image {hash} в таблице stage=images, extras.image_hashes); в библиотеку кабинета картинка "
+    "загрузится сама при выполнении"
+)
 
 
 def _workspace_images(ctx: Context, args: dict) -> dict:
@@ -889,13 +895,14 @@ def _workspace_images(ctx: Context, args: dict) -> dict:
     found = found_images(ctx.user_id, workspace_campaign_row_ids(ctx.user_id, ctx.ws_id), account_id=account_id)
     return {
         "images": [{k: v for k, v in i.items() if k != "preview_url"} for i in found["items"]],
+        "own": ai_attachments.project_images(ctx.user_id, ctx.ws_id),
         "more": found["more"],
         "hint": (
             "Картинки из объявлений кампаний проекта, чаще используемые — первыми. Самих картинок ты не "
             "видишь — выбирай по кампаниям, где они стоят. Предлагай таблицей propose_items stage=images: строка — "
             "картинка, image {hash, account_id}, section — группа, cells [название, откуда, почему]; название — "
             "что на картинке по объявлению, где она стоит, у каждой своё, не «Вариант A»; в группе до "
-            f"{MAX_GROUP_IMAGES}. Картинку из другого кабинета сервис скопирует сам"
+            f"{MAX_GROUP_IMAGES}. Картинку из другого кабинета сервис скопирует сам. " + OWN_IMAGES_HINT
         ),
     }
 
@@ -1121,6 +1128,9 @@ CROSS_PROJECT_TOOLS = (
     "get_slices",
 )
 MAX_PROJECT_REFS = 5
+# Всего упоминаний в сообщении (проекты, кампании, группы, периоды) и самый длинный период.
+MAX_REFS = 10
+MAX_REF_PERIOD_DAYS = 366
 PROJECT_NOTES_LIMIT = 3000
 
 
@@ -1911,13 +1921,28 @@ def _bring_extras_images(ctx: Context, extras_list: list[dict], account_id: int,
     if not wanted:
         return []
     token, login = audiences.account_access(ctx.user_id, account_id)
+    # Картинки, приложенные маркетологом в чате, ждали этого момента в «Толке»: загружаем их сейчас.
+    own = {h for h in wanted if ai_attachments.attachment_id(h) is not None}
+    own_warnings: list[str] = []
+    if own:
+        uploaded = ai_attachments.resolve_hashes(ctx.user_id, own, token, login, account_id, own_warnings)
+        for extras in lists:
+            extras["image_hashes"] = [
+                uploaded.get(str(h), h) for h in extras["image_hashes"] if str(h) not in own or str(h) in uploaded
+            ]
+            if not extras["image_hashes"]:
+                extras.pop("image_hashes")
+        lists = [e for e in lists if e.get("image_hashes")]
+        wanted = {str(h) for extras in lists for h in extras["image_hashes"]} - set(uploaded.values())
+        if not wanted:
+            return own_warnings
     try:
         here = set(ad_extras.image_previews(token, login, sorted(wanted)))
     except YandexError:
-        return []  # библиотека не ответила — картинки проверит Директ при сохранении объявления
+        return own_warnings  # библиотека не ответила — картинки проверит Директ при сохранении объявления
     missing = wanted - here
     if not missing:
-        return []
+        return own_warnings
     sources: dict[int, set[str]] = {}
 
     def source(src, image_hash: str) -> None:
@@ -1953,7 +1978,7 @@ def _bring_extras_images(ctx: Context, extras_list: list[dict], account_id: int,
         warnings.append(
             f"Нет в библиотеке кабинета, {lost_note}: " + _count(len(orphans), "картинка", "картинки", "картинок")
         )
-    return warnings
+    return own_warnings + warnings
 
 
 def _p_duplicate(ctx: Context, args: dict) -> Plan:
@@ -4067,9 +4092,25 @@ def _image_rows(ctx: Context, args: dict, rows: list[dict]) -> int:
                 default = int(_audience_account(ctx, args)["id"])
             image["account_id"] = default
         ctx.require_account(image["account_id"])
+    own_ids = {
+        r["image"]["hash"]: ai_attachments.attachment_id(r["image"]["hash"])
+        for r in rows
+        if ai_attachments.attachment_id(r["image"]["hash"]) is not None
+    }
+    if own_ids:
+        found_own = ai_attachments.for_ads(ctx.user_id, own_ids.values(), ctx.ws_id)
+        lost = [h for h, i in own_ids.items() if i not in found_own]
+        if lost:
+            raise YandexError(
+                "args", f"Картинок {_preview(lost, 5)} нет среди приложенных для объявлений — бери own из list_ad_images"
+            )
     previews: dict[int, dict[str, str]] = {}
     for account_id in sorted({r["image"]["account_id"] for r in rows}):
-        hashes = sorted({r["image"]["hash"] for r in rows if r["image"]["account_id"] == account_id})
+        hashes = sorted(
+            {r["image"]["hash"] for r in rows if r["image"]["account_id"] == account_id and r["image"]["hash"] not in own_ids}
+        )
+        if not hashes:
+            continue
         try:
             token, login = audiences.account_access(ctx.user_id, account_id)
             previews[account_id] = ad_extras.image_previews(token, login, hashes)
@@ -4084,7 +4125,8 @@ def _image_rows(ctx: Context, args: dict, rows: list[dict]) -> int:
             )
     per_group: dict[str, int] = {}
     for row in rows:
-        url = previews.get(row["image"]["account_id"], {}).get(row["image"]["hash"])
+        own_id = own_ids.get(row["image"]["hash"])
+        url = ai_attachments.url(own_id) if own_id else previews.get(row["image"]["account_id"], {}).get(row["image"]["hash"])
         if url:
             row["image"]["preview_url"] = url
         if row["checked"]:
@@ -5624,6 +5666,11 @@ def _message_out(row: dict) -> dict:
         "followups": (row.get("meta") or {}).get("followups") or [],
         "blocks": (row.get("meta") or {}).get("blocks") or [] if row["role"] == "assistant" else [],
         "context": (row.get("meta") or {}).get("context") if row["role"] == "user" else None,
+        "attachments": [
+            {**a, "url": ai_attachments.url(a["id"])} for a in (row.get("meta") or {}).get("attachments") or []
+        ]
+        if row["role"] == "user"
+        else [],
         "feedback": ai_feedback.feedback_out(row),
         "model": row.get("model") or "",
         "created_at": _iso(row.get("created_at")),
@@ -6715,7 +6762,18 @@ def _board_images(user_id: int, workspace_id: int, ops: list[dict]) -> None:
         if op["image"]["account_id"] not in allowed:
             raise YandexError("scope", "Кабинет картинки не подключён к этому проекту")
         by_account.setdefault(op["image"]["account_id"], []).append(op)
+    own = [op for op in adds if ai_attachments.attachment_id(op["text"]) is not None]
+    if own:
+        found_own = ai_attachments.for_ads(user_id, [ai_attachments.attachment_id(op["text"]) for op in own], workspace_id)
+        for op in own:
+            att = ai_attachments.attachment_id(op["text"])
+            if att not in found_own:
+                raise YandexError("args", f"Картинки «{op['name']}» нет среди приложенных — приложите её в чате заново")
+            op["image"]["preview_url"] = ai_attachments.url(att)
     for account_id, items in by_account.items():
+        items = [op for op in items if op not in own]
+        if not items:
+            continue
         token, login = audiences.account_access(user_id, account_id)
         found = ad_extras.image_previews(token, login, sorted({op["text"] for op in items}))
         for op in items:
@@ -7103,43 +7161,199 @@ def _submit(user_id: int, chat_id: int, marker: str) -> dict:
     return submit("ai_chat", user_id, {"chat_id": chat_id, "turn": marker}, priority=PRIORITY_USER, max_attempts=1)
 
 
-def _clean_refs(conn, user_id: int, workspace_id: int, refs) -> list[dict]:
-    """Проекты из @-упоминаний сообщения: свои, без повторов и без самого проекта чата.
+def _ref_period(raw: dict) -> dict:
+    """Период из @-упоминания: ISO-даты, не в будущем и не длиннее MAX_REF_PERIOD_DAYS."""
+    try:
+        start = date.fromisoformat(str(raw.get("from")))
+        end = date.fromisoformat(str(raw.get("to")))
+    except ValueError as exc:
+        raise YandexError("refs", "Период в сообщении указан неверно") from exc
+    # Сутки запаса: у маркетолога восточнее Москвы «сегодня» уже наступило.
+    if start > end or end > today_msk() + timedelta(days=1):
+        raise YandexError("refs", "Период в сообщении указан неверно")
+    if (end - start).days + 1 > MAX_REF_PERIOD_DAYS:
+        raise YandexError("refs", f"Период в сообщении — не длиннее {MAX_REF_PERIOD_DAYS} дней")
+    name = _line(raw.get("name"), 40) or (start.isoformat() if start == end else f"{start} — {end}")
+    return {"type": "period", "from": start.isoformat(), "to": end.isoformat(), "name": name}
 
-    Чужой или удалённый проект — ошибка: лучше сказать об этом, чем отправить ИИ ссылку в пустоту.
+
+def _clean_refs(conn, user_id: int, workspace_id: int | None, refs) -> list[dict]:
+    """@-упоминания сообщения: проекты, кампании, группы и периоды — свои, без повторов.
+
+    Проект — число (как раньше) или {"type": "project", "id"}; в ответе он остаётся {"id", "name"}.
+    Кампания и группа — {"type", "id"} с id строки; в ответе к ним добавляются название и project_id.
+    Сам проект чата отбрасывается. Чужое или удалённое — ошибка: лучше сказать об этом, чем отправить ИИ
+    ссылку в пустоту.
     """
-    ids: list[int] = []
+    parsed: list[tuple[str, object]] = []
     for raw in refs or []:
+        kind = raw.get("type", "project") if isinstance(raw, dict) else "project"
+        if kind == "period":
+            period = _ref_period(raw)
+            key = ("period", (period["from"], period["to"]))
+            if key not in parsed:
+                parsed.append(key)
+                parsed.append(("period-data", period))
+            continue
+        if kind not in ("project", "campaign", "group") or isinstance(raw, bool):
+            raise YandexError("refs", "Упоминание в сообщении указано неверно")
         try:
-            ref_id = int(raw)
+            ref_id = int(raw.get("id") if isinstance(raw, dict) else raw)
         except (TypeError, ValueError) as exc:
-            raise YandexError("refs", "Проект в сообщении указан неверно") from exc
-        if ref_id != workspace_id and ref_id not in ids:
-            ids.append(ref_id)
-    if len(ids) > MAX_PROJECT_REFS:
+            raise YandexError("refs", "Упоминание в сообщении указано неверно") from exc
+        if kind == "project" and ref_id == workspace_id:
+            continue
+        if (kind, ref_id) not in parsed:
+            parsed.append((kind, ref_id))
+    periods = {p["from"] + p["to"]: p for k, p in parsed if k == "period-data"}
+    keys = [(k, v) for k, v in parsed if k != "period-data"]
+    by_kind = {kind: [v for k, v in keys if k == kind] for kind in ("project", "campaign", "group")}
+    if len(by_kind["project"]) > MAX_PROJECT_REFS:
         raise YandexError("too-many-refs", f"В одном сообщении не больше {MAX_PROJECT_REFS} проектов")
-    if not ids:
+    if len(keys) > MAX_REFS:
+        raise YandexError("too-many-refs", f"В одном сообщении не больше {MAX_REFS} упоминаний")
+    if not keys:
         return []
-    names = {
-        r["id"]: r["name"]
+
+    found: dict[tuple[str, object], dict] = {}
+    if by_kind["project"]:
         for r in conn.execute(
-            "SELECT id, name FROM workspaces WHERE user_id = %s AND id = ANY(%s)", (user_id, ids)
+            "SELECT id, name FROM workspaces WHERE user_id = %s AND id = ANY(%s)", (user_id, by_kind["project"])
+        ).fetchall():
+            found[("project", r["id"])] = {"id": r["id"], "name": r["name"]}
+    if by_kind["campaign"]:
+        for r in conn.execute(
+            "SELECT c.id, c.name, wc.workspace_id FROM direct_campaigns c "
+            "JOIN workspace_campaigns wc ON wc.campaign_row_id = c.id AND wc.user_id = c.user_id "
+            "WHERE c.user_id = %s AND c.id = ANY(%s)",
+            (user_id, by_kind["campaign"]),
+        ).fetchall():
+            found[("campaign", r["id"])] = {
+                "type": "campaign", "id": r["id"], "name": r["name"] or f"Кампания {r['id']}",
+                "project_id": r["workspace_id"],
+            }
+    if by_kind["group"]:
+        for r in conn.execute(
+            "SELECT g.id, g.name, g.campaign_row_id, c.name AS campaign, wc.workspace_id FROM direct_adgroups g "
+            "JOIN direct_campaigns c ON c.id = g.campaign_row_id "
+            "JOIN workspace_campaigns wc ON wc.campaign_row_id = c.id AND wc.user_id = c.user_id "
+            "WHERE g.user_id = %s AND g.id = ANY(%s)",
+            (user_id, by_kind["group"]),
+        ).fetchall():
+            found[("group", r["id"])] = {
+                "type": "group", "id": r["id"], "name": r["name"] or f"Группа {r['id']}",
+                "campaign": r["campaign"] or "", "campaign_row_id": r["campaign_row_id"],
+                "project_id": r["workspace_id"],
+            }
+    out = []
+    for kind, value in keys:
+        if kind == "period":
+            out.append(periods[value[0] + value[1]])
+            continue
+        if (kind, value) not in found:
+            what = {"project": "Упомянутый проект не найден", "campaign": "Упомянутая кампания не найдена",
+                    "group": "Упомянутая группа не найдена"}[kind]
+            raise YandexError("not-found", f"{what} — обновите страницу")
+        out.append(found[(kind, value)])
+    return out
+
+
+MENTION_CAMPAIGNS_LIMIT = 300
+MENTION_GROUPS_LIMIT = 1000
+
+
+def mention_options(user_id: int, workspace_id: int | None = None) -> dict:
+    """Что можно упомянуть через @: кампании и группы проекта чата (в общем чате — всех проектов, с названием
+    проекта). Архивные кампании не показываем; проекты фронтенд берёт из своего списка."""
+    where = "wc.user_id = %s AND COALESCE(c.state, '') <> 'ARCHIVED' AND w.archived_at IS NULL"
+    params: list = [user_id]
+    if workspace_id is not None:
+        where += " AND wc.workspace_id = %s"
+        params.append(workspace_id)
+    if workspace_id is not None:
+        require_workspace(user_id, workspace_id, allow_locked=True)
+    with pool.connection() as conn:
+        campaigns = conn.execute(
+            "SELECT c.id, c.name, c.state, wc.workspace_id AS project_id, w.name AS project "
+            "FROM workspace_campaigns wc JOIN direct_campaigns c ON c.id = wc.campaign_row_id "
+            f"JOIN workspaces w ON w.id = wc.workspace_id WHERE {where} "
+            "ORDER BY (c.state = 'ON') DESC, c.name, c.id LIMIT %s",
+            (*params, MENTION_CAMPAIGNS_LIMIT),
         ).fetchall()
+        ids = [r["id"] for r in campaigns]
+        groups = (
+            conn.execute(
+                "SELECT id, name, campaign_row_id FROM direct_adgroups WHERE user_id = %s AND campaign_row_id = ANY(%s) "
+                "ORDER BY name, id LIMIT %s",
+                (user_id, ids, MENTION_GROUPS_LIMIT),
+            ).fetchall()
+            if ids
+            else []
+        )
+    names = {r["id"]: r["name"] for r in campaigns}
+    projects = {r["id"]: r["project_id"] for r in campaigns}
+    return {
+        "campaigns": [
+            {
+                "type": "campaign", "id": r["id"], "name": r["name"] or f"Кампания {r['id']}",
+                "state": r["state"] or "", "project_id": r["project_id"], "project": r["project"],
+            }
+            for r in campaigns
+        ],
+        "groups": [
+            {
+                "type": "group", "id": g["id"], "name": g["name"] or f"Группа {g['id']}",
+                "campaign_row_id": g["campaign_row_id"], "campaign": names.get(g["campaign_row_id"]) or "",
+                "project_id": projects.get(g["campaign_row_id"]),
+            }
+            for g in groups
+        ],
     }
-    if len(names) != len(ids):
-        raise YandexError("not-found", "Упомянутый проект не найден — обновите страницу")
-    return [{"id": i, "name": names[i]} for i in ids]
 
 
-def _refs_note(refs, *, general: bool = False) -> str:
-    """Пометка к сообщению маркетолога для модели: какие проекты он упомянул и как их читать."""
-    items = "; ".join(f"«{_line(r.get('name'), 120)}» (project_id {r.get('id')})" for r in refs or [])
-    if general:
-        return f"\n\n[Упомянуты проекты: {items}. Вызывай инструменты с их project_id]"
-    return (
-        f"\n\n[Упомянуты проекты: {items}. Это другие проекты маркетолога: читай их инструментами с project_id, "
-        "менять их нельзя]"
-    )
+def _refs_note(refs, *, general: bool = False, workspace_id: int | None = None) -> str:
+    """Пометка к сообщению маркетолога для модели: что он упомянул через @ и с какими id это читать."""
+    refs = refs or []
+    projects = [r for r in refs if r.get("type", "project") == "project"]
+    parts = []
+
+    def where(r) -> str:
+        # Кампания чужого проекта (или любого — в общем чате) читается только вместе с его project_id.
+        pid = r.get("project_id")
+        return f", project_id {pid}" if pid and (general or pid != workspace_id) else ""
+
+    campaigns = [
+        f"«{_line(r.get('name'), 120)}» (campaign_row_id {r.get('id')}{where(r)})"
+        for r in refs if r.get("type") == "campaign"
+    ]
+    groups = [
+        f"«{_line(r.get('name'), 120)}» в кампании «{_line(r.get('campaign'), 120)}» "
+        f"(adgroup_row_id {r.get('id')}, campaign_row_id {r.get('campaign_row_id')}{where(r)})"
+        for r in refs if r.get("type") == "group"
+    ]
+    periods = [
+        f"«{_line(r.get('name'), 40)}» (date_from {r.get('from')}, date_to {r.get('to')})"
+        for r in refs if r.get("type") == "period"
+    ]
+    if projects:
+        items = "; ".join(f"«{_line(r.get('name'), 120)}» (project_id {r.get('id')})" for r in projects)
+        if general:
+            parts.append(f"\n\n[Упомянуты проекты: {items}. Вызывай инструменты с их project_id]")
+        else:
+            parts.append(
+                f"\n\n[Упомянуты проекты: {items}. Это другие проекты маркетолога: читай их инструментами с "
+                "project_id, менять их нельзя]"
+            )
+    if campaigns:
+        parts.append(f"\n\n[Упомянуты кампании: {'; '.join(campaigns)}]")
+    if groups:
+        parts.append(f"\n\n[Упомянуты группы: {'; '.join(groups)}]")
+    if periods:
+        parts.append(
+            f"\n\n[Упомянуты периоды: {'; '.join(periods)}. Бери эти даты для отчётов, если маркетолог не сказал "
+            "иначе]"
+        )
+    return "".join(parts)
 
 
 # Что открыто в кабинете, когда маркетолог пишет из панели ИИ (frontend: composables/usePageContext.js).
@@ -7228,19 +7442,21 @@ def post_message(
     user_id: int,
     chat_id: int,
     text: str,
-    refs: list[int] | None = None,
+    refs: list | None = None,
     pending: str = "reject",
     context: dict | None = None,
+    attachments: list | None = None,
 ) -> dict:
     """Сообщение маркетолога. pending — что делать с ждущими предложениями ИИ: reject — отклонить,
     keep — оставить ждать решения. Вопросы, план и таблицы закрываются сообщением всегда: текст и есть ответ.
-    context — что открыто в кабинете (панель ИИ); хранится в meta сообщения и уходит модели строкой перед вопросом."""
+    context — что открыто в кабинете (панель ИИ); хранится в meta сообщения и уходит модели строкой перед вопросом.
+    attachments — id картинок из поля ввода (ai_attachments.upload), до четырёх."""
     from app.jobs import public_job
 
     text = (text or "").strip()
     if pending not in ("keep", "reject"):
         raise YandexError("pending", "pending — keep или reject")
-    if not text:
+    if not text and not attachments:
         raise YandexError("empty", "Пустое сообщение")
     if len(text) > 8000:
         raise YandexError("too-long", "Сообщение длиннее 8000 символов")
@@ -7251,18 +7467,28 @@ def post_message(
         if _chat_out(chat)["status"] == "running":
             raise YandexError("busy", "ИИ ещё отвечает — дождитесь ответа")
         cleaned = _clean_refs(conn, user_id, chat["workspace_id"], refs)
+        images = ai_attachments.claim(conn, user_id, attachments)
+        if any(i["purpose"] == "ai" for i in images) and not ai.sees_images():
+            raise YandexError("ai-vision", ai.NO_VISION)
         if pending == "keep":
             _detach_open_writes(conn, chat_id)
         _skip_open_actions(conn, chat_id, "Пропущено: пользователь написал новое сообщение", by_message=True)
         page = _clean_context(context)
-        message = _insert_message(conn, chat_id, "user", text, refs=cleaned, meta={"context": page} if page else None)
+        meta = {"context": page} if page else {}
+        if images:
+            meta["attachments"] = ai_attachments.meta(images)
+        message = _insert_message(conn, chat_id, "user", text, refs=cleaned, meta=meta or None)
+        if images:
+            ai_attachments.link(
+                conn, [i["id"] for i in images], chat_id=chat_id, workspace_id=chat["workspace_id"], message_id=message["id"]
+            )
         conn.execute(
             """
             UPDATE ai_chats SET status = 'running', error = '', updated_at = NOW(),
                    title = CASE WHEN title = '' THEN %s ELSE title END
             WHERE id = %s
             """,
-            (text.splitlines()[0][:80], chat_id),
+            ((text.splitlines()[0] if text else "Картинка")[:80], chat_id),
         )
     job = _submit(user_id, chat_id, f"m{message['id']}")
     return {"message": _message_out(message), "job": public_job(job)}
@@ -7943,7 +8169,41 @@ def _turn_over(chat_id: int) -> bool:
     return last is not None and (last["role"] == "error" or (last["role"] == "assistant" and not last["tool_calls"]))
 
 
-def _history(chat_id: int, *, general: bool = False) -> list[dict]:
+# Картинки последних стольких сообщений с картинками уходят модели; раньше — только подписью: каждая
+# картинка стоит ~1600 токенов на каждом шаге хода.
+HISTORY_IMAGE_MESSAGES = 3
+
+
+def _attachments_note(items: list[dict], *, shown: bool) -> str:
+    """Подпись картинок сообщения: что за картинки, видит ли их модель, хэши картинок для объявлений."""
+    if not items:
+        return ""
+    names = ", ".join(f"«{a.get('name') or 'картинка'}» {a.get('width')}×{a.get('height')}" for a in items)
+    if shown:
+        lines = [f"[Маркетолог приложил картинки ({len(items)}): {names} — они ниже]"]
+    else:
+        lines = [f"[Маркетолог прикладывал картинки: {names} — сейчас ты их не видишь; нужна — попроси приложить снова]"]
+    ads = [a for a in items if a.get("purpose") == "ads"]
+    if ads:
+        lines.append(
+            "[Для объявлений: "
+            + ", ".join(f"«{a.get('name') or 'картинка'}» — hash {ai_attachments.pseudo_hash(a['id'])}" for a in ads)
+            + ". Проверены по требованиям Директа. Предлагай их таблицей propose_items stage=images (image {hash}), "
+            "в библиотеку кабинета они загрузятся при выполнении]"
+        )
+    return "\n" + "\n".join(lines)
+
+
+def _wants_vision(chat_id: int) -> bool:
+    """В чате есть картинки — ход ведёт модель, которая их видит."""
+    with pool.connection() as conn:
+        return conn.execute("SELECT 1 FROM ai_attachments WHERE chat_id = %s LIMIT 1", (chat_id,)).fetchone() is not None
+
+
+def _history(
+    chat_id: int, *, general: bool = False, workspace_id: int | None = None, images: bool = False
+) -> list[dict]:
+    """Сообщения чата для модели. images — модель видит картинки: последние приложенные уходят ей в запросе."""
     with pool.connection() as conn:
         rows = conn.execute(
             "SELECT * FROM ai_messages WHERE chat_id = %s ORDER BY id DESC LIMIT 400", (chat_id,)
@@ -7975,6 +8235,11 @@ def _history(chat_id: int, *, general: bool = False) -> list[dict]:
     rows = rows[start:]
     # Что было до последней реплики маркетолога — прошлый ход: чтения оттуда укорачиваем.
     last_user = max((i for i, r in enumerate(rows) if r["role"] == "user"), default=-1)
+    with_images = [r["id"] for r in rows if r["role"] == "user" and (r.get("meta") or {}).get("attachments")]
+    shown_ids = set(with_images[-HISTORY_IMAGE_MESSAGES:]) if images else set()
+    pictures = ai_attachments.data_urls(
+        [a["id"] for r in rows if r["id"] in shown_ids for a in r["meta"]["attachments"]]
+    )
 
     out: list[dict] = []
     i = 0
@@ -8013,7 +8278,16 @@ def _history(chat_id: int, *, general: bool = False) -> list[dict]:
             if r["role"] == "user" and (r.get("meta") or {}).get("context"):
                 content = _context_note(r["meta"]["context"]) + content
             if r["role"] == "user" and r.get("refs"):
-                content += _refs_note(r["refs"], general=general)
+                content += _refs_note(r["refs"], general=general, workspace_id=workspace_id)
+            attached = (r.get("meta") or {}).get("attachments") or [] if r["role"] == "user" else []
+            shown = [a for a in attached if a["id"] in pictures] if r["id"] in shown_ids else []
+            if attached:
+                content = (content + _attachments_note(attached, shown=bool(shown))).strip()
+            if shown:
+                content = [
+                    {"type": "text", "text": content},
+                    *({"type": "image_url", "image_url": {"url": pictures[a["id"]]}} for a in shown),
+                ]
             out.append({"role": r["role"], "content": content})
         out += board_notes(r["id"])
         i += 1
@@ -8327,8 +8601,13 @@ def run_chat(user_id: int, chat_id: int, progress=None) -> dict:
     try:
         # Потоком: запрос на десятки тысяч токенов модель читает дольше минуты, и шлюз провайдера рвёт
         # молчащее соединение (524). timeout здесь — паузы между кусками ответа.
+        # В чате картинки — ход ведёт модель, которая их видит, даже если выбрана другая. Таких больше нет —
+        # обычная модель, а картинки она получит подписью.
+        vision = _wants_vision(chat_id) and ai.sees_images()
         cfg = {
-            **ai.load_config(user_id, "chat", chat["workspace_id"], model_class=chat.get("model_class") or None),
+            **ai.load_config(
+                user_id, "chat", chat["workspace_id"], model_class=chat.get("model_class") or None, vision=vision
+            ),
             "timeout": CHAT_TIMEOUT_SECONDS,
             "stream": True,
         }
@@ -8360,7 +8639,7 @@ def run_chat(user_id: int, chat_id: int, progress=None) -> dict:
         system = {"role": "system", "content": _system_prompt(ctx)}
         tools = GENERAL_TOOLS if ctx.general else TOOLS
         for n in range(MAX_STEPS):
-            history = _history(chat_id, general=ctx.general)
+            history = _history(chat_id, general=ctx.general, workspace_id=ctx.ws_id, images=vision)
             if not history or (history[-1]["role"] == "assistant" and not history[-1].get("tool_calls")):
                 break
             step(n, "ИИ думает…")
