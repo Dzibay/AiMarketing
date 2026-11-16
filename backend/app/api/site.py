@@ -58,6 +58,9 @@ def yookassa_webhook(body: dict = Body(default_factory=dict)) -> dict:
         return {"result": payments.handle_notification(body)}
     except YandexError as exc:
         log.warning("Уведомление ЮKassa не обработано: %s", exc.message or exc.code)
+        from app.admin_alerts import yookassa_failed
+
+        yookassa_failed("уведомление об оплате не обработано", exc.message or exc.code or "")
         raise HTTPException(status_code=500, detail="retry") from exc
 
 

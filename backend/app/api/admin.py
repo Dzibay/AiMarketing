@@ -10,8 +10,16 @@ from pydantic import BaseModel
 from app import ai, ai_bridge, ai_feedback, auth, billing, events, image_gen, mailer, payments, plans, promos, referrals, site_check, site_extras, support, wordstat
 from app.api.web import _http
 from app import admin_ai_costs as admin_ai_costs_mod
+from app import admin_alerts as admin_alerts_mod
 from app import admin_dashboard as admin_dashboard_mod
+from app import admin_finance as admin_finance_mod
+from app import admin_outreach as admin_outreach_mod
+from app import admin_payments as admin_payments_mod
+from app import admin_quality as admin_quality_mod
 from app import admin_refs as admin_refs_mod
+from app import admin_site as admin_site_mod
+from app import admin_support as admin_support_mod
+from app import admin_system as admin_system_mod
 from app import admin_users as admin_users_mod
 from app.users import UsersError, count_users, mark_email_verified, set_user_blocked
 from app.yandex import YandexError, yandex_configured
@@ -67,6 +75,7 @@ def admin_me() -> dict:
         "trial_plan": next((p["name"] for p in plans.list_plans(for_admin=True) if p["is_trial"] and p["active"]), None),
         "payments_ready": payments.is_ready(),
         "payments": payments.month_revenue(),
+        "support_waiting": admin_support_mod.waiting_count(),
     }
 
 
@@ -183,6 +192,102 @@ def admin_user_support_reply(user_id: int, body: SupportReplyBody) -> dict:
         return support.admin_reply(user_id, body.text)
     except support.SupportError as exc:
         raise HTTPException(status_code=404 if exc.code == "not-found" else 400, detail=str(exc)) from exc
+
+
+@router.get("/support/inbox")
+def admin_support_inbox(filter: str = "open", q: str = "", page: int = 1) -> dict:
+    """Входящие: сначала без ответа (дольше всех ждущие наверху), последнее сообщение, кто и тариф."""
+    return admin_support_mod.inbox(filter[:8], q[:200], max(1, page))
+
+
+@router.get("/support/user/{user_id}")
+def admin_support_user(user_id: int) -> dict:
+    """Шапка переписки и сама переписка."""
+    card = admin_support_mod.user_card(user_id)
+    if card is None:
+        raise HTTPException(status_code=404, detail="Пользователь не найден")
+    return {"user": card, "thread": support.admin_thread(user_id)}
+
+
+# --- Кому написать, финансы, сайт, воронка, качество, проекты, система ---------------------------
+
+
+@router.get("/outreach")
+def admin_outreach() -> dict:
+    return {"lists": admin_outreach_mod.counts()}
+
+
+@router.get("/outreach/{key}")
+def admin_outreach_list(key: str) -> dict:
+    if key not in admin_outreach_mod.LISTS:
+        raise HTTPException(status_code=404, detail="Нет такого списка")
+    return admin_outreach_mod.items(key)
+
+
+@router.get("/finance")
+def admin_finance(range: str = "12") -> dict:
+    return admin_finance_mod.build(range[:4])
+
+
+def _period_args(p: str, date_from: str, date_to: str) -> tuple:
+    return p[:8], date_from[:10] or None, date_to[:10] or None
+
+
+@router.get("/site/stats")
+def admin_site_stats(p: str = "30d", date_from: str = Query("", alias="from"), date_to: str = Query("", alias="to"), step: str = "") -> dict:
+    return admin_site_mod.site(*_period_args(p, date_from, date_to), step[:8])
+
+
+@router.get("/site/tools")
+def admin_site_tools(p: str = "30d", date_from: str = Query("", alias="from"), date_to: str = Query("", alias="to"), step: str = "") -> dict:
+    return admin_site_mod.tools(*_period_args(p, date_from, date_to), step[:8])
+
+
+@router.get("/funnel")
+def admin_funnel(p: str = "30d", date_from: str = Query("", alias="from"), date_to: str = Query("", alias="to"), source: str = "") -> dict:
+    return admin_site_mod.funnel(*_period_args(p, date_from, date_to), source[:120])
+
+
+@router.get("/quality")
+def admin_quality(p: str = "30d", date_from: str = Query("", alias="from"), date_to: str = Query("", alias="to"), step: str = "") -> dict:
+    return admin_quality_mod.quality(*_period_args(p, date_from, date_to), step[:8])
+
+
+@router.get("/projects")
+def admin_projects(p: str = "30d", date_from: str = Query("", alias="from"), date_to: str = Query("", alias="to"), step: str = "") -> dict:
+    return admin_quality_mod.projects(*_period_args(p, date_from, date_to), step[:8])
+
+
+@router.get("/system")
+def admin_system() -> dict:
+    return admin_system_mod.build()
+
+
+class AlertsBody(BaseModel):
+    kinds: dict[str, bool] = {}
+
+
+class AlertTestBody(BaseModel):
+    kind: str = ""
+
+
+@router.get("/alerts/settings")
+def admin_alerts_settings() -> dict:
+    return admin_alerts_mod.get_settings()
+
+
+@router.put("/alerts/settings")
+def admin_alerts_settings_put(body: AlertsBody) -> dict:
+    return admin_alerts_mod.save_settings(body.kinds)
+
+
+@router.post("/alerts/test")
+def admin_alerts_test(body: AlertTestBody) -> dict:
+    if body.kind not in admin_alerts_mod.KINDS:
+        raise HTTPException(status_code=400, detail="Нет такого уведомления")
+    if not admin_alerts_mod.get_settings()["configured"]:
+        raise HTTPException(status_code=400, detail="Группа поддержки в Telegram не настроена")
+    return {"ok": admin_alerts_mod.send_test(body.kind)}
 
 
 @router.get("/support/images/{message_id}")
@@ -629,6 +734,26 @@ def admin_payments_settings_test() -> dict:
 @router.get("/payments")
 def admin_payments(user_id: int | None = None, status: str = "", limit: int = 300) -> dict:
     return payments.admin_list(user_id=user_id, status=status, limit=limit)
+
+
+@router.get("/payments/list")
+def admin_payments_list(
+    q: str = "",
+    status: str = "",
+    plan: str = "",
+    months: int = 0,
+    no_receipt: bool = False,
+    test: str = "hide",
+    p: str = "all",
+    date_from: str = Query("", alias="from"),
+    date_to: str = Query("", alias="to"),
+    page: int = 1,
+) -> dict:
+    """Платежи с поиском и фильтрами, по 50, с итогами выборки."""
+    return admin_payments_mod.build(
+        q=q[:200], status=status[:16], plan=plan[:100], months=months, no_receipt=no_receipt, test=test[:8],
+        p=p[:8], date_from=date_from[:10] or None, date_to=date_to[:10] or None, page=max(1, page),
+    )
 
 
 @router.post("/payments/{payment_id}/sync")

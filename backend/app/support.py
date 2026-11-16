@@ -239,6 +239,10 @@ def _forward(user_id: int, thread: dict, message_id: int, text: str, raw: bytes 
                 conn.execute("UPDATE support_threads SET tg_topic_id = %s WHERE id = %s", (topic, thread["id"]))
         line = _context_line(ctx)
         body = f"{text}\n\n— {line}" if line else text
+        from app.admin_alerts import admin_link
+
+        link = admin_link(f"support?user={user_id}")
+        body = f"{body or '(скриншот)'}\n{link}" if link else body
         sent = tg.send_to_support_topic(topic, body or "(скриншот)", image=raw, image_type=kind)
         if sent:
             with pool.connection() as conn:

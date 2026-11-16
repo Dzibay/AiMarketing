@@ -22,10 +22,10 @@
           <span class="sdot" :class="s.dot"></span>{{ s.label }}
         </component>
         <span class="adm-status__gap"></span>
-        <RouterLink class="adm-status__item" :class="{ 'is-warn': status.support_open }" :to="`${ADMIN_BASE}/users`">
+        <RouterLink class="adm-status__item" :class="{ 'is-warn': status.support_open }" :to="`${ADMIN_BASE}/support`">
           Без ответа в поддержке: <b>{{ num(status.support_open) }}</b>
         </RouterLink>
-        <RouterLink class="adm-status__item" :class="{ 'is-warn': status.no_receipt }" :to="`${ADMIN_BASE}/payments`">
+        <RouterLink class="adm-status__item" :class="{ 'is-warn': status.no_receipt }" :to="`${ADMIN_BASE}/payments?no_receipt=1`">
           Без чека: <b>{{ num(status.no_receipt) }}</b>
         </RouterLink>
       </section>
@@ -326,7 +326,7 @@ const SERVICES = {
   payments: { label: 'ЮKassa', to: `${S}/payments` },
   email: { label: 'Почта', to: S },
   bridge: { label: 'Мост', to: `${S}/bridge` },
-  queue: { label: 'Очередь задач' },
+  queue: { label: 'Очередь задач', to: `${ADMIN_BASE}/system` },
 }
 
 const statusItems = computed(() =>

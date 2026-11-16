@@ -99,6 +99,22 @@ def _sync_payments() -> None:
     result = sync_open()
     if result["checked"] or result["errors"]:
         log.info("Сверка платежей: %s", result)
+    if result["errors"]:
+        from app.admin_alerts import yookassa_failed
+
+        yookassa_failed(
+            "сверка платежей не прошла",
+            f"Не удалось сверить {result['errors']} из {result['checked'] + result['errors']} платежей.",
+        )
+
+
+def _check_alerts() -> None:
+    """Сбои для владельца в Telegram: ИИ не отвечает, платёж без чека, застрявшая задача, рост расхода."""
+    from app.admin_alerts import check_all
+
+    sent = check_all()
+    if sent:
+        log.info("Уведомления о сбоях: %s", sent)
 
 
 def _purge_jobs() -> None:
@@ -139,6 +155,7 @@ SCHEDULES: dict[str, tuple[int, Callable[[], None]]] = {
     "signals": (6 * 3600, _enqueue_signals),
     "payments": (600, _sync_payments),
     "support_emails": (300, _support_emails),
+    "alerts": (300, _check_alerts),
 }
 
 

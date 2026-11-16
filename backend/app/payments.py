@@ -495,6 +495,9 @@ def apply(payment_id: int) -> dict | None:
         plans.resume(user_id)
     if bonus:
         _record_bonus(user_id, bonus, payment_id)
+    from app import admin_alerts
+
+    admin_alerts.payment(dict(pay))
     return pay
 
 

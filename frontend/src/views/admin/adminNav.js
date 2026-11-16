@@ -1,4 +1,19 @@
-import { CreditCard, Globe, LayoutDashboard, Link2, Settings, ThumbsUp, Users, Wallet } from '@lucide/vue'
+import {
+  Activity,
+  Banknote,
+  CreditCard,
+  Filter,
+  FolderKanban,
+  Globe,
+  LayoutDashboard,
+  LifeBuoy,
+  Link2,
+  Send,
+  Settings,
+  ThumbsUp,
+  Users,
+  Wallet,
+} from '@lucide/vue'
 
 /**
  * Меню админки. Рабочие страницы — группами, всё настраиваемое — в «Настройках» (свои пункты ниже, SETTINGS).
@@ -24,13 +39,24 @@ export const NAV = [
         badge: (s) => s?.payments?.no_receipt || 0,
         badgeTip: 'Оплаты без чека в «Мой налог»',
       },
+      {
+        key: 'support',
+        label: 'Обращения',
+        icon: LifeBuoy,
+        to: `${ADMIN_BASE}/support`,
+        badge: (s) => s?.support_waiting || 0,
+        badgeTip: 'Переписки, где ждут ответа',
+      },
+      { key: 'outreach', label: 'Кому написать', icon: Send, to: `${ADMIN_BASE}/outreach` },
     ],
   },
   {
     title: 'Аналитика',
     items: [
       { key: 'site', label: 'Сайт', icon: Globe, to: `${ADMIN_BASE}/site` },
+      { key: 'funnel', label: 'Воронка', icon: Filter, to: `${ADMIN_BASE}/funnel` },
       { key: 'refs', label: 'Реф-ссылки', icon: Link2, to: `${ADMIN_BASE}/refs` },
+      { key: 'finance', label: 'Финансы', icon: Banknote, to: `${ADMIN_BASE}/finance` },
     ],
   },
   {
@@ -38,6 +64,13 @@ export const NAV = [
     items: [
       { key: 'ai-costs', label: 'Расходы на ИИ', icon: Wallet, to: `${ADMIN_BASE}/ai-costs` },
       { key: 'ai-quality', label: 'Качество ИИ', icon: ThumbsUp, to: `${ADMIN_BASE}/ai-quality` },
+    ],
+  },
+  {
+    title: 'Сервис',
+    items: [
+      { key: 'projects', label: 'Проекты и Директ', icon: FolderKanban, to: `${ADMIN_BASE}/projects` },
+      { key: 'system', label: 'Система', icon: Activity, to: `${ADMIN_BASE}/system` },
     ],
   },
 ]
@@ -81,6 +114,10 @@ export const SETTINGS = [
     title: 'Сайт',
     items: [{ path: 'site', label: 'Контакты и защита', hint: 'Контакты в подвале, SmartCaptcha, ИИ-генераторы лендинга' }],
   },
+  {
+    title: 'Владельцу',
+    items: [{ path: 'alerts', label: 'Уведомления', hint: 'Оплаты и сбои — в Telegram-группу поддержки, темы «Оплаты» и «Сбои»' }],
+  },
 ].map((group) => ({ ...group, items: group.items.map((item) => ({ ...item, to: `${S}/${item.path}` })) }))
 
 /** Что задаётся на сервере (переменные окружения): в админке только состояние. */
@@ -112,7 +149,8 @@ export const OLD_TABS = {
   services: `${S}/ai`,
   site: `${S}/site`,
   usage: `${ADMIN_BASE}/ai-costs`,
-  feedback: `${ADMIN_BASE}/ai-quality`,
+  feedback: `${ADMIN_BASE}/ai-quality?tab=feedback`,
+  waitlist: `${ADMIN_BASE}/site?tab=waitlist`,
 }
 
 export function navActive(item, path) {

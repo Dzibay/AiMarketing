@@ -199,4 +199,33 @@ export const adminApi = {
   feedbackSummary: (p = '30d') => call(`/feedback/summary?p=${encodeURIComponent(p)}`),
   /** Чат пользователя на чтение: { chat, messages: [{ role, content, model, feedback }] }. */
   chat: (id) => call(`/chats/${id}`),
+
+  /** Платежи с фильтрами (q, status, plan, months, no_receipt, test, p | from/to, page). Поля — app/admin_payments.py. */
+  paymentsList: (params = {}) => call(`/payments/list?${query(params)}`),
+  /** Входящие обращения (filter open | all, q, page) и переписка с шапкой пользователя. */
+  supportInbox: (params = {}) => call(`/support/inbox?${query(params)}`),
+  supportUser: (id) => call(`/support/user/${id}`),
+  /** Готовые списки «Кому написать»: { lists: [{ key, label, hint, count }] } и люди одного списка. */
+  outreach: () => call('/outreach'),
+  outreachList: (key) => call(`/outreach/${encodeURIComponent(key)}`),
+  /** Финансы по месяцам за range (6 | 12 | 24 | all). Поля — app/admin_finance.py. */
+  finance: (range = '12') => call(`/finance?range=${encodeURIComponent(range)}`),
+  /** Сайт, инструменты лендинга, воронка, качество ИИ, проекты: params — p или from/to, step (у воронки — source). */
+  siteStats: (params = {}) => call(`/site/stats?${query(params)}`),
+  siteTools: (params = {}) => call(`/site/tools?${query(params)}`),
+  funnel: (params = {}) => call(`/funnel?${query(params)}`),
+  quality: (params = {}) => call(`/quality?${query(params)}`),
+  projects: (params = {}) => call(`/projects?${query(params)}`),
+  system: () => call('/system'),
+  alerts: () => call('/alerts/settings'),
+  saveAlerts: (kinds) => send('PUT', '/alerts/settings', { kinds }),
+  testAlert: (kind) => send('POST', '/alerts/test', { kind }),
+}
+
+function query(params) {
+  return new URLSearchParams(
+    Object.entries(params)
+      .filter(([, v]) => v !== '' && v != null && v !== false)
+      .map(([k, v]) => [k, String(v)]),
+  )
 }
