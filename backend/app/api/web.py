@@ -962,6 +962,17 @@ def web_queries(
         raise _http(exc) from exc
 
 
+@router.get("/queries/highlights")
+def web_queries_highlights(user_id: int = Depends(require_web_user)) -> dict:
+    """«Все проекты», простой режим: дорогие запросы без заявок и минус-фразы за месяц."""
+    from app.query_cleaning import portfolio_highlights
+
+    try:
+        return portfolio_highlights(user_id)
+    except YandexError as exc:
+        raise _http(exc) from exc
+
+
 @router.get("/direct/campaigns")
 def web_list_campaigns(
     account_id: int | None = None,

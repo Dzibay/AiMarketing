@@ -173,6 +173,8 @@ export const wsApi = {
   rules: (id) => request(`${WS(id)}/rules`),
   // Чистка поисковых запросов: очередь, разметка ИИ, решения и память.
   queries: (id, params = {}) => request(`${WS(id)}/queries${query(params)}`),
+  /** Простой режим: дорогие запросы без заявок и минус-фразы за 30 дней. */
+  queriesHighlights: (id) => request(`${WS(id)}/queries/highlights`),
   queriesSync: (id, days, onProgress) => runJob(`${WS(id)}/queries/sync`, { days }, onProgress),
   queriesClassify: (id, payload = {}, onProgress) => runJob(`${WS(id)}/queries/classify`, payload, onProgress),
   /** Без вызова ИИ: сколько закроют правила, сколько уйдёт в модель, токены, ₽ и остаток лимита. */
@@ -401,6 +403,7 @@ export const webApi = {
   portfolio: (params = {}) => request(`/api/web/portfolio${query(params)}`),
   /** «Все проекты»: общая очередь разбора поисковых запросов, у строки — её проект. */
   queries: (params = {}) => request(`/api/web/queries${query(params)}`),
+  queriesHighlights: () => request('/api/web/queries/highlights'),
   bulkAction: (payload) =>
     request('/api/web/direct/campaigns/actions', { method: 'POST', body: JSON.stringify(payload) }),
   createCampaign: (payload) =>

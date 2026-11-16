@@ -152,6 +152,13 @@
         <p v-if="showTargets && targets.length > 50" class="meta-note">Показаны 50 самых дорогих.</p>
       </div>
 
+      <QueryHighlights
+        v-if="highlights && counts.all"
+        :costly="highlights.costly"
+        :removed="highlights.removed_30d"
+        :workspace-id="ws.id"
+      />
+
       <ExpertHint>Фильтры, таблица всех запросов, ручная правка минус-фраз и память решений</ExpertHint>
     </template>
   </template>
@@ -716,6 +723,7 @@
 import UiSkeleton from '../../components/ui/UiSkeleton.vue'
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import EmptyState from '../../components/ui/EmptyState.vue'
+import QueryHighlights from '../../components/QueryHighlights.vue'
 import UiCheckbox from '../../components/ui/UiCheckbox.vue'
 import UiListTools from '../../components/ui/UiListTools.vue'
 import UiRowMore from '../../components/ui/UiRowMore.vue'
@@ -892,6 +900,7 @@ const GROUP_SHOWN = 5
 const targets = ref([])
 const showTargets = ref(false)
 const openWhy = reactive({})
+const highlights = ref(null)
 
 function phraseOf(q) {
   return (decisions[q.query_norm]?.negative_phrase || q.query).trim().toLowerCase()
@@ -1022,11 +1031,14 @@ async function loadSimple() {
   loadError.value = ''
   try {
     const params = { tab: 'negative', limit: SIMPLE_LIMIT, offset: 0 }
-    const [neg, tgt] = await Promise.all([
+    const [neg, tgt, hl] = await Promise.all([
       wsApi.queries(ws.value.id, params),
       wsApi.queries(ws.value.id, { ...params, tab: 'target' }),
+      // Дополнение к разбору: без него страница всё равно рабочая.
+      wsApi.queriesHighlights(ws.value.id).catch(() => null),
     ])
     if (seq !== loadSeq) return
+    highlights.value = hl
     for (const q of [...neg.items, ...tgt.items]) initDecision(q)
     data.value = neg
     items.value = neg.items

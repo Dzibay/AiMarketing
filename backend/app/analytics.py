@@ -142,13 +142,27 @@ def workspace_analytics(
     date_from: date,
     date_to: date,
     with_tops: bool = True,
+    campaign_row_id: int | None = None,
 ) -> dict:
+    """campaign_row_id — отчёт по одной кампании проекта: только её Директ и её переходы по цели,
+    без визитов сайта (Метрика считает их на весь сайт)."""
     ws = require_workspace(user_id, workspace_id)
     days = (date_to - date_from).days + 1
     prev_to = date_from - timedelta(days=1)
     prev_from = prev_to - timedelta(days=days - 1)
     campaigns = _workspace_campaigns(user_id, workspace_id)
     data = _load_stats(user_id, ws, prev_from, date_to)
+    # Источник заявок — как у всего проекта, даже если у этой кампании переходов по цели не было.
+    goal_any = bool(data["goal"])
+    if campaign_row_id:
+        campaigns = [c for c in campaigns if int(c["id"]) == int(campaign_row_id)]
+        if not campaigns:
+            raise YandexError("scope", "Кампания не входит в этот проект")
+        data["direct"] = [r for r in data["direct"] if int(r["campaign_row_id"]) == int(campaign_row_id)]
+        data["metrika"] = []
+        only = int(campaigns[0]["campaign_id"])
+        data["goal"] = [r for r in data["goal"] if r["campaign_id"] is not None and int(r["campaign_id"]) == only]
+        with_tops = False
 
     by_campaign_id = {int(c["campaign_id"]): int(c["id"]) for c in campaigns}
     cur: dict = defaultdict(int)
@@ -193,7 +207,7 @@ def workspace_analytics(
         day_sums[r["day"]]["goal_reaches"] += reaches
         if r["day"] >= date_from:
             camp_sums[row_id]["goal_reaches"] += reaches
-    use_goal = bool(ws["goal_id"]) and goal_rows > 0
+    use_goal = bool(ws["goal_id"]) and (goal_rows > 0 or goal_any)
 
     totals = _metrics(cur, use_goal=use_goal)
     totals["bounce_rate"] = round(bounce_num / totals["visits"], 1) if totals["visits"] else None

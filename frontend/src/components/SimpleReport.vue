@@ -35,8 +35,29 @@
     </div>
 
     <div class="ccard simple-report__chart">
-      <h3 class="section-h">Расход по дням</h3>
-      <TrendChart :points="data.by_day" value-key="cost_kopecks" label="Расход" :format-value="rub" :height="190" />
+      <div class="simple-report__head">
+        <h3 class="section-h">{{ chart.title }}</h3>
+        <div class="seg seg--sm" role="group" aria-label="Что показать на графике">
+          <button
+            v-for="m in CHARTS"
+            :key="m.key"
+            type="button"
+            :class="{ active: chartKey === m.key }"
+            :aria-pressed="chartKey === m.key"
+            @click="chartKey = m.key"
+          >
+            {{ m.label }}
+          </button>
+        </div>
+      </div>
+      <TrendChart
+        :points="data.by_day"
+        :prev-points="data.prev_by_day || []"
+        :value-key="chart.key"
+        :label="chart.label"
+        :format-value="chart.fmt"
+        :height="190"
+      />
     </div>
 
     <template v-if="bars.length">
@@ -64,7 +85,7 @@
 </template>
 
 <script setup>
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import { RouterLink } from 'vue-router'
 import { Sparkles } from '@lucide/vue'
 import TrendChart from './TrendChart.vue'
@@ -93,6 +114,15 @@ const props = defineProps({
   hint: { type: String, default: 'Все метрики, сравнение с прошлым периодом и подробные таблицы' },
 })
 const emit = defineEmits(['period'])
+
+// График: переключатель показателя, пунктир — прошлый период той же длины.
+const CHARTS = [
+  { key: 'cost_kopecks', label: 'Расход', title: 'Расход по дням', fmt: rub },
+  { key: 'conversions', label: 'Заявки', title: 'Заявки по дням', fmt: num },
+  { key: 'cpa_kopecks', label: 'Цена заявки', title: 'Цена заявки по дням', fmt: rub },
+]
+const chartKey = ref('cost_kopecks')
+const chart = computed(() => CHARTS.find((m) => m.key === chartKey.value))
 
 /** За период ни расхода, ни заявок — вместо нулевых плиток и пустого графика рисунок и следующий шаг. */
 const empty = computed(() => {
@@ -160,8 +190,16 @@ const bars = computed(() => {
   margin-top: 12px;
   padding: 4px 18px 12px;
 }
-.simple-report__chart .section-h {
+.simple-report__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
   margin: 12px 0 4px;
+}
+.simple-report__head .section-h {
+  margin: 0;
 }
 .hbar__name a {
   color: var(--ink);

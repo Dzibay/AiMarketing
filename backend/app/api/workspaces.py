@@ -32,6 +32,7 @@ from app.query_cleaning import (
     forget_decisions,
     list_decisions,
     needs_direct,
+    query_highlights,
     query_queue,
 )
 from app.metrika_sync import canonical_counters
@@ -325,12 +326,17 @@ def ws_analytics(
     workspace_id: int,
     date_from: str = "",
     date_to: str = "",
+    campaign_row_id: int | None = None,
     user_id: int = Depends(require_web_user),
 ) -> dict:
     _ws(user_id, workspace_id)
+    if campaign_row_id:
+        _ws_campaign(user_id, workspace_id, campaign_row_id)
     try:
         d_from, d_to = parse_range(date_from, date_to)
-        return workspace_analytics(user_id, workspace_id, date_from=d_from, date_to=d_to)
+        return workspace_analytics(
+            user_id, workspace_id, date_from=d_from, date_to=d_to, campaign_row_id=campaign_row_id
+        )
     except YandexError as exc:
         raise _http(exc) from exc
 
@@ -873,6 +879,15 @@ def ws_queries(
             limit=limit,
             offset=offset,
         )
+    except YandexError as exc:
+        raise _http(exc) from exc
+
+
+@router.get("/{workspace_id}/queries/highlights")
+def ws_queries_highlights(workspace_id: int, user_id: int = Depends(require_web_user)) -> dict:
+    """Простой режим: дорогие запросы без заявок и сколько минус-фраз добавлено за месяц."""
+    try:
+        return query_highlights(user_id, workspace_id)
     except YandexError as exc:
         raise _http(exc) from exc
 

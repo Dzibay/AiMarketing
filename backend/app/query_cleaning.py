@@ -254,6 +254,61 @@ def query_queue(
     }
 
 
+HIGHLIGHT_ROWS = 5
+_NOT_MINUSED = "COALESCE(NOT (l.confirmed = TRUE AND l.verdict = 'negative'), TRUE)"
+
+
+def query_highlights(user_id: int, workspace_id: int, *, limit: int = HIGHLIGHT_ROWS) -> dict:
+    """Простой режим «Запросов»: самые дорогие запросы без заявок (ещё не убранные в минус)
+    и сколько минус-фраз добавлено за 30 дней."""
+    require_workspace(user_id, workspace_id)
+    join = "FROM a LEFT JOIN query_labels l ON l.workspace_id = %s AND l.query_norm = a.norm"
+    with pool.connection() as conn:
+        rows = conn.execute(
+            f"""
+            WITH a AS ({_agg_sql()})
+            SELECT a.*, l.verdict, l.reason, l.negative_phrase, l.level, l.source, l.confirmed,
+                   l.applied_at, l.updated_at AS label_at
+            {join}
+            WHERE a.conversions = 0 AND a.cost_kopecks > 0 AND {_NOT_MINUSED}
+            ORDER BY a.cost_kopecks DESC, a.clicks DESC, a.norm
+            LIMIT %s
+            """,
+            (user_id, workspace_id, workspace_id, max(1, min(int(limit), 20))),
+        ).fetchall()
+        removed = conn.execute(
+            """
+            SELECT COUNT(DISTINCT lower(negative_phrase)) FILTER (WHERE negative_phrase <> '') AS phrases,
+                   COUNT(*) AS queries
+            FROM query_labels
+            WHERE workspace_id = %s AND user_id = %s AND verdict = 'negative' AND confirmed = TRUE
+              AND applied_at >= NOW() - INTERVAL '30 days'
+            """,
+            (workspace_id, user_id),
+        ).fetchone()
+    ctx = _context(user_id, rows)
+    return {
+        "costly": [_row_out(r, ctx) for r in rows],
+        "removed_30d": {"phrases": int(removed["phrases"] or 0), "queries": int(removed["queries"] or 0)},
+    }
+
+
+def portfolio_highlights(user_id: int, *, limit: int = HIGHLIGHT_ROWS) -> dict:
+    """То же по всем проектам: дорогие запросы без заявок одним списком, у строки — её проект."""
+    costly: list[dict] = []
+    removed = {"phrases": 0, "queries": 0}
+    for ws in list_workspaces(user_id):
+        if ws["locked"]:
+            continue
+        h = query_highlights(user_id, ws["id"], limit=limit)
+        project = {"id": ws["id"], "name": ws["name"]}
+        costly.extend({**row, "project": project} for row in h["costly"])
+        for key in removed:
+            removed[key] += h["removed_30d"][key]
+    costly.sort(key=lambda r: (-r["cost_rub"], -r["clicks"], r["query_norm"]))
+    return {"costly": costly[:limit], "removed_30d": removed}
+
+
 def portfolio_queue(
     user_id: int,
     *,

@@ -47,6 +47,7 @@
           </div>
         </div>
       </div>
+      <QueryHighlights v-if="highlights" :costly="highlights.costly" :removed="highlights.removed_30d" />
       <ExpertHint>Общая таблица запросов по всем сайтам, фильтры и пакетное применение</ExpertHint>
     </template>
   </template>
@@ -282,6 +283,7 @@ import { formatDateTime, niceQuotes, num, plural, rubles } from '../utils/format
 import { useHead } from '../utils/useHead'
 import TermHint from '../components/TermHint.vue'
 import ExpertHint from '../components/ExpertHint.vue'
+import QueryHighlights from '../components/QueryHighlights.vue'
 import EmptyState from '../components/ui/EmptyState.vue'
 import Modal from '../components/ui/Modal.vue'
 import PageHeader from '../components/ui/PageHeader.vue'
@@ -353,6 +355,7 @@ const busy = ref(false)
 const busyText = ref('')
 const problems = ref([])
 const allProjects = ref([])
+const highlights = ref(null)
 let seq = 0
 let timer = null
 
@@ -421,6 +424,11 @@ function toggle(k, on) {
 
 function toggleAll(on) {
   selected.value = on ? new Set(selectable.value.map(key)) : new Set()
+}
+
+async function loadHighlights() {
+  if (expert.value) return
+  highlights.value = await webApi.queriesHighlights().catch(() => null)
 }
 
 async function load() {
@@ -527,7 +535,11 @@ async function applySelected() {
   }
 }
 
-onMounted(load)
+onMounted(() => {
+  load()
+  loadHighlights()
+})
+watch(expert, loadHighlights)
 </script>
 
 <style scoped>

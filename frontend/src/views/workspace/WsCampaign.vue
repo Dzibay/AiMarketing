@@ -88,6 +88,36 @@
           </div>
         </div>
 
+        <div class="ccard camp-trend">
+          <div class="camp-trend__head">
+            <h3 class="section-h">За 14 дней</h3>
+            <div class="seg seg--sm" role="group" aria-label="Что показать на графике">
+              <button
+                v-for="m in TREND_METRICS"
+                :key="m.key"
+                type="button"
+                :class="{ active: trendKey === m.key }"
+                :aria-pressed="trendKey === m.key"
+                @click="trendKey = m.key"
+              >
+                {{ m.label }}
+              </button>
+            </div>
+          </div>
+          <UiSkeleton v-if="!trend && !trendError" variant="text" :count="3" label="Загружаем график" />
+          <p v-else-if="trendError" class="ccard--note">{{ trendError }}</p>
+          <p v-else-if="!trendHasData" class="ccard--note">За 14 дней у кампании не было ни расхода, ни заявок.</p>
+          <TrendChart
+            v-else
+            :points="trend.by_day"
+            :prev-points="trend.prev_by_day"
+            :value-key="trendKey"
+            :label="trendMetric.label"
+            :format-value="trendMetric.fmt"
+            :height="150"
+          />
+        </div>
+
         <h3 class="section-h">Что внутри <span class="cgroup__n">группы объявлений и их доля расхода</span></h3>
         <div class="ccard">
           <UiSkeleton v-if="structLoading" variant="table" :count="3" label="Загружаем группы" />
@@ -113,8 +143,15 @@
           Недавние изменения
           <RouterLink class="home-link" :to="`/w/${ws.id}/history`">Вся история</RouterLink>
         </h3>
-        <div class="ccard">
-          <p v-if="!recent.length" class="ccard--note">В этой кампании пока ничего не меняли.</p>
+        <EmptyState v-if="!recent.length" art="history" text="В этой кампании пока ничего не меняли. ИИ посмотрит статистику и подскажет, с чего начать.">
+          <template #action>
+            <RouterLink class="btn btn--ghost" :to="improveLink">
+              <Sparkles :size="16" aria-hidden="true" />
+              Спросить ИИ, что улучшить
+            </RouterLink>
+          </template>
+        </EmptyState>
+        <div v-else class="ccard">
           <div v-for="a in recent" :key="a.id" class="prow">
             <div class="prow__main">
               <b>{{ keepNumbers(a.title || a.action) }}</b>
@@ -253,6 +290,8 @@ import ActionWho from '../../components/ActionWho.vue'
 import CampaignStructure from '../../components/CampaignStructure.vue'
 import ExpertHint from '../../components/ExpertHint.vue'
 import TermHint from '../../components/TermHint.vue'
+import TrendChart from '../../components/TrendChart.vue'
+import EmptyState from '../../components/ui/EmptyState.vue'
 import PageHeader from '../../components/ui/PageHeader.vue'
 import UiMenu from '../../components/ui/UiMenu.vue'
 import UiMenuItem from '../../components/ui/UiMenuItem.vue'
@@ -374,11 +413,40 @@ function touches(payload, id) {
 }
 const recent = computed(() => actions.value.filter((a) => touches(a.payload, campaignId.value)).slice(0, 3))
 
+// График над «Что внутри»: 14 дней кампании и пунктиром — 14 дней до них.
+const TREND_METRICS = [
+  { key: 'cost_kopecks', label: 'Расход', fmt: rub },
+  { key: 'conversions', label: 'Заявки', fmt: num },
+]
+const trendKey = ref('cost_kopecks')
+const trendMetric = computed(() => TREND_METRICS.find((m) => m.key === trendKey.value))
+const trend = ref(null)
+const trendError = ref('')
+const trendHasData = computed(() => (trend.value?.by_day || []).some((d) => d.cost_kopecks || d.conversions))
+
+async function loadTrend() {
+  const id = campaignId.value
+  trend.value = null
+  trendError.value = ''
+  try {
+    const data = await wsApi.analytics(ws.value.id, { ...lastDays(14), campaign_row_id: id })
+    if (id === campaignId.value) trend.value = data
+  } catch (err) {
+    if (id === campaignId.value) trendError.value = errorText(err)
+  }
+}
+
+const improveLink = computed(() => ({
+  path: `/w/${ws.value.id}/chat`,
+  query: { ask: 'improve', cid: String(campaignId.value), name: name.value || undefined },
+}))
+
 async function loadSimple() {
   if (expert.value) return
   const id = campaignId.value
   structLoading.value = true
   structError.value = ''
+  loadTrend()
   const [s, a] = await Promise.allSettled([
     wsApi.campaign(ws.value.id, id),
     wsApi.actions(ws.value.id, { limit: 100 }),
@@ -545,6 +613,21 @@ watch(expert, (on) => {
 }
 .camp-budget {
   margin-top: 12px;
+}
+.camp-trend {
+  margin-top: 12px;
+  padding: 4px 18px 12px;
+}
+.camp-trend__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 12px 0 4px;
+}
+.camp-trend__head .section-h {
+  margin: 0;
 }
 .camp-budget .prow__main {
   display: flex;
