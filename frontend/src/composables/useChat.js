@@ -312,12 +312,16 @@ export function provideChat({ general, ws, basePath, reloadWs, panel = false, pa
             argsShown: call.args,
           })
         }
+      } else if (call.name === 'show') {
+        // Блок в ответе — сам блок рисуется под текстом (m.blocks), шагом «ИИ прочитал» он не нужен.
+        continue
       } else {
         const parsed = raw != null ? parseToolResult(raw) : null
         reads.push({ id: call.id, label: call.label, args: call.args, result: parsed?.text ?? null, failed: parsed?.failed })
       }
     }
-    if (!m.content && !reads.length && !asks.length && !writes.length) return null
+    const blocks = m.blocks || []
+    if (!m.content && !reads.length && !asks.length && !writes.length && !blocks.length) return null
     return {
       key: `m${m.id}`,
       id: m.id,
@@ -331,6 +335,7 @@ export function provideChat({ general, ws, basePath, reloadWs, panel = false, pa
       reads,
       asks,
       writes,
+      blocks,
     }
   }
 

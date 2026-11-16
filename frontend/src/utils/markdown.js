@@ -29,7 +29,49 @@ function tableCells(line) {
 
 const isTableSep = (line) => /^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$/.test(line)
 
-export function renderMarkdown(source) {
+/** Число из ячейки («12 400 ₽», «3,5 %», «−8 %»); null — в ячейке текст. */
+function cellNumber(text) {
+  const clean = text
+    .replace(/[\s  ₽%×]/g, '')
+    .replace(/[−–]/g, '-')
+    .replace(',', '.')
+  if (!/^[-+]?\d*\.?\d+$/.test(clean)) return null
+  return Number(clean)
+}
+
+/**
+ * Клик по заголовку таблицы из renderMarkdown(…, { sortable: true }): строки переставляются в DOM.
+ * Числа — сначала большие, текст — по алфавиту; повторный клик — наоборот. true — клик был по сортировке.
+ */
+export function sortMdTable(event) {
+  const button = event.target instanceof Element ? event.target.closest('button.md-sort') : null
+  if (!button) return false
+  const th = button.closest('th')
+  const table = th.closest('table')
+  const body = table.tBodies[0]
+  const col = th.cellIndex
+  const rows = [...body.rows]
+  const cells = rows.map((r) => r.cells[col]?.textContent.trim() ?? '')
+  const numeric = cells.filter(Boolean).every((c) => cellNumber(c) !== null)
+  const was = th.getAttribute('aria-sort')
+  const desc = was === 'none' || !was ? numeric : was === 'ascending'
+  for (const other of th.parentElement.cells) other.setAttribute('aria-sort', 'none')
+  th.setAttribute('aria-sort', desc ? 'descending' : 'ascending')
+  const dir = desc ? -1 : 1
+  const order = rows.map((row, i) => ({ row, text: cells[i], value: numeric ? cellNumber(cells[i]) : null }))
+  order.sort((a, b) => {
+    if (numeric) {
+      if (a.value === null) return 1
+      if (b.value === null) return -1
+      return dir * (a.value - b.value)
+    }
+    return dir * a.text.localeCompare(b.text, 'ru', { numeric: true })
+  })
+  for (const { row } of order) body.appendChild(row)
+  return true
+}
+
+export function renderMarkdown(source, { sortable = false } = {}) {
   const lines = String(source || '').replace(/\r\n/g, '\n').split('\n')
   const out = []
   let para = []
@@ -73,8 +115,14 @@ export function renderMarkdown(source) {
         i += 1
       }
       i -= 1
+      // Сортировка — когда есть что переставлять; заголовок становится кнопкой.
+      const sort = sortable && rows.length > 1
+      const th = (c) =>
+        sort
+          ? `<th aria-sort="none"><button type="button" class="md-sort">${inline(c)}<span class="md-sort__arrow" aria-hidden="true"></span></button></th>`
+          : `<th>${inline(c)}</th>`
       out.push(
-        `<div class="md-table"><table><thead><tr>${head.map((c) => `<th>${inline(c)}</th>`).join('')}</tr></thead>` +
+        `<div class="md-table${sort ? ' md-table--sortable' : ''}"><table><thead><tr>${head.map(th).join('')}</tr></thead>` +
           `<tbody>${rows.map((r) => `<tr>${r.map((c) => `<td>${inline(c)}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`,
       )
       continue

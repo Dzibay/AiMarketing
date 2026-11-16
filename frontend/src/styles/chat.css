@@ -939,6 +939,331 @@
   font-weight: 700;
 }
 
+/* Широкая таблица листается вбок внутри рамки, первый столбец (название) остаётся на месте. */
+.chat__thread .md-table table,
+.aib-table table {
+  width: max-content;
+  min-width: 100%;
+}
+
+.chat__thread .md-table th,
+.chat__thread .md-table td {
+  max-width: 22rem;
+  overflow-wrap: break-word;
+}
+
+.chat__thread .md-table th:first-child,
+.chat__thread .md-table td:first-child,
+.aib-table th:first-child {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  background: var(--surface);
+  box-shadow: inset -1px 0 0 var(--line);
+}
+
+.chat__thread .md-table thead th:first-child,
+.aib-table thead th:first-child {
+  background: var(--surface-2);
+}
+
+.chat__thread .md-table td:first-child + td,
+.chat__thread .md-table th:first-child + th {
+  border-left: 0;
+}
+
+/* Заголовок-кнопка сортировки: стрелка показывает порядок, без неё — «можно отсортировать». */
+.md-sort,
+.aib-sort {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.md-sort:hover,
+.aib-sort:hover {
+  color: var(--ink);
+}
+
+.md-sort__arrow::after {
+  content: '↕';
+  opacity: 0.45;
+  font-weight: 400;
+}
+
+th[aria-sort='descending'] > .md-sort .md-sort__arrow::after {
+  content: '↓';
+  opacity: 1;
+}
+
+th[aria-sort='ascending'] > .md-sort .md-sort__arrow::after {
+  content: '↑';
+  opacity: 1;
+}
+
+th[aria-sort='descending'] > .md-sort,
+th[aria-sort='ascending'] > .md-sort,
+th[aria-sort='descending'] > .aib-sort,
+th[aria-sort='ascending'] > .aib-sort {
+  color: var(--ink);
+}
+
+.aib-sort svg {
+  flex: none;
+  width: 13px;
+  height: 13px;
+  opacity: 0.45;
+}
+
+th[aria-sort='descending'] > .aib-sort svg,
+th[aria-sort='ascending'] > .aib-sort svg {
+  opacity: 1;
+}
+
+/* ---------- Наглядные блоки ответа (show): график, сравнение, карточки, таблица ---------- */
+
+.aib-list {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+  margin: 4px 0 12px;
+}
+
+.aib {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--surface);
+}
+
+.aib__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 2px 12px;
+  font-size: 14px;
+}
+
+.aib__muted {
+  color: var(--muted);
+  font-size: 12.5px;
+}
+
+.aib .sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+.aib-chart {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.aib-chart__total {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+}
+
+.aib-chart__total strong {
+  font-size: 20px;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+}
+
+.aib-compare {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+.aib-compare th,
+.aib-compare td {
+  padding: 7px 6px;
+  border-bottom: 1px solid var(--line);
+  text-align: right;
+  white-space: nowrap;
+}
+
+.aib-compare th:first-child {
+  padding-left: 0;
+  text-align: left;
+  white-space: normal;
+}
+
+.aib-compare td:last-child {
+  padding-right: 0;
+}
+
+.aib-compare thead th {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.aib-compare tbody th {
+  font-weight: 500;
+}
+
+.aib-compare tr:last-child > * {
+  border-bottom: 0;
+}
+
+.aib-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 8px;
+  min-width: 0;
+}
+
+.aib-card {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  padding: 11px 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface-2);
+  color: inherit;
+  text-decoration: none;
+}
+
+a.aib-card:hover {
+  border-color: var(--muted);
+}
+
+.aib-card__head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.aib-card__name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  font-size: 13.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.aib-card__go {
+  flex: none;
+  width: 15px;
+  height: 15px;
+  color: var(--muted);
+}
+
+.aib-card__sub {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  min-width: 0;
+}
+
+.aib-card__nums {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+  margin: 0;
+}
+
+.aib-card__nums dt {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 11.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.aib-card__nums dd {
+  margin: 0;
+  font-size: 13.5px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.aib-cards__more {
+  grid-column: 1 / -1;
+  margin: 0;
+}
+
+.aib-table {
+  display: grid;
+  justify-items: start;
+  gap: 8px;
+  min-width: 0;
+}
+
+.aib-table__scroll {
+  justify-self: stretch;
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+}
+
+.aib-table table {
+  border-collapse: collapse;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+.aib-table th,
+.aib-table td {
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--line);
+  text-align: right;
+  white-space: nowrap;
+}
+
+.aib-table th:first-child {
+  max-width: 14rem;
+  overflow: hidden;
+  text-align: left;
+  text-overflow: ellipsis;
+  font-weight: 500;
+}
+
+.aib-table th:first-child a {
+  color: inherit;
+}
+
+.aib-table thead th {
+  background: var(--surface-2);
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.aib-table thead th:not(:first-child) .aib-sort {
+  margin-left: auto;
+}
+
+.aib-table tbody tr:last-child > * {
+  border-bottom: 0;
+}
+
 /* ---------- Карточки предложений, вопросов и плана ---------- */
 
 .action-card {

@@ -139,10 +139,15 @@ def test_restart_reports_failed_pause(direct):
 def test_every_tool_has_schema_and_label():
     schemas = {tool["function"]["name"] for tool in ai_agent.TOOLS}
     assert schemas == (
-        set(ai_agent.READ_TOOLS) | set(ai_agent.WRITE_TOOLS) | set(ai_agent.ASK_TOOLS) | ai_agent.SERVICE_TOOLS
+        set(ai_agent.READ_TOOLS)
+        | set(ai_agent.WRITE_TOOLS)
+        | set(ai_agent.ASK_TOOLS)
+        | ai_agent.SERVICE_TOOLS
+        | {ai_agent.SHOW_TOOL}
     )
     assert set(ai_agent.WRITE_TOOLS) | set(ai_agent.ASK_TOOLS) <= set(ai_agent.TOOL_LABELS)
     assert ai_agent.SUGGEST_TOOL in ai_agent.GENERAL_TOOL_NAMES
+    assert ai_agent.SHOW_TOOL in ai_agent.GENERAL_TOOL_NAMES and ai_agent.SHOW_TOOL in ai_agent.TOOL_LABELS
 
 
 def test_followups_from_suggest_call():
@@ -752,7 +757,8 @@ def test_project_id_only_on_read_tools():
     with_project = {
         t["function"]["name"] for t in ai_agent.TOOLS if "project_id" in t["function"]["parameters"]["properties"]
     }
-    assert with_project == set(ai_agent.CROSS_PROJECT_TOOLS) | {"get_project"}
+    # show — блок в ответе: тоже только читает статистику, в том числе соседнего проекта.
+    assert with_project == set(ai_agent.CROSS_PROJECT_TOOLS) | {"get_project", ai_agent.SHOW_TOOL}
     assert set(ai_agent.CROSS_PROJECT_TOOLS) <= set(ai_agent.READ_TOOLS)
     # Пишут или стоят денег — только в текущем проекте.
     for name in ("refresh_search_queries", "remember_fact", "generate_images", "get_wordstat", "check_links"):

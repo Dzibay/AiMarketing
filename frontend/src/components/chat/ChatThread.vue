@@ -39,7 +39,8 @@
         </UiNotice>
 
         <div v-else class="msg msg--ai" :data-msg="item.id">
-          <div v-if="item.content" class="msg__text md" @click="onTextClick" v-html="renderMarkdown(item.content)" />
+          <div v-if="item.content" class="msg__text md" @click="onTextClick" v-html="renderMarkdown(item.content, { sortable: true })" />
+          <ChatBlocks v-if="item.blocks?.length" :blocks="item.blocks" />
 
           <details v-if="item.reads.length" class="chat-steps">
             <summary>
@@ -315,7 +316,8 @@ import { useExpert } from '../../composables/useExpert'
 import { useViewport } from '../../composables/useViewport'
 import { formatDateTime, plural } from '../../utils/format'
 import { foldFrom, heightOf } from '../../utils/foldAnim'
-import { renderMarkdown } from '../../utils/markdown'
+import { renderMarkdown, sortMdTable } from '../../utils/markdown'
+import ChatBlocks from './blocks/ChatBlocks.vue'
 import AiChanges from '../../views/workspace/AiChanges.vue'
 import AiCheckTable from '../../views/workspace/AiCheckTable.vue'
 import AiItemsCard from '../../views/workspace/AiItemsCard.vue'
@@ -337,6 +339,7 @@ const router = useRouter()
 
 /** Ссылка ИИ на экран кабинета (/cabinet/…, /w/12/settings) — переход роутера, без перезагрузки страницы. */
 function onTextClick(event) {
+  if (sortMdTable(event)) return
   const link = event.target instanceof Element ? event.target.closest('a[data-route]') : null
   if (!link || event.ctrlKey || event.metaKey || event.shiftKey || event.button) return
   event.preventDefault()

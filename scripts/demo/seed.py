@@ -20,7 +20,7 @@ from datetime import timedelta
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import env  # noqa: E402  — до app.*: настройки читаются при импорте
 
-from app import ai_agent, ai_feedback, journal, negative_lists, rules, search_queries, stats  # noqa: E402
+from app import ai_agent, ai_blocks, ai_feedback, journal, negative_lists, rules, search_queries, stats  # noqa: E402
 from app.clients import create_client  # noqa: E402
 from app.clock import now_msk  # noqa: E402
 from app.db import ensure_schema, pool  # noqa: E402
@@ -336,11 +336,50 @@ with pool.connection() as conn:
         summary=images["title"], call="call_images",
     )
 
+# Наглядные блоки (show): график, сравнение, карточки и таблица — числа считает ai_blocks, как в живом чате;
+# итоговый текст — с обычной markdown-таблицей (сортировка и закреплённый столбец).
+SHOWS = [
+    {"type": "chart", "title": "Расход по дням", "metric": "cost", "compare_previous": True},
+    {"type": "compare", "title": "Неделя к прошлой", "metrics": ["cost", "clicks", "conversions", "cpa"]},
+    {"type": "campaigns", "title": "Кампании проекта"},
+    {"type": "table", "title": "Кампании за 7 дней", "by": "campaigns",
+     "metrics": ["cost", "clicks", "ctr", "conversions", "cpa"], "sort": "cost"},
+]
+with pool.connection() as conn:
+    chat = conn.execute(
+        "INSERT INTO ai_chats (user_id, workspace_id, title, status) VALUES (%s, %s, %s, 'idle') RETURNING id",
+        (uid, ws_r, "Как идёт неделя"),
+    ).fetchone()["id"]
+    chats.append(chat)
+    ai_agent._insert_message(conn, chat, "user", "Как идёт неделя по расходу и заявкам?")
+    calls = [
+        {"id": f"call_show{i}", "name": "show", "arguments": json.dumps(args, ensure_ascii=False)}
+        for i, args in enumerate(SHOWS)
+    ]
+    blocks = [ai_blocks.build_block(uid, ws_r, args) for args in SHOWS]
+    ai_agent._insert_message(
+        conn, chat, "assistant", "", tool_calls=calls, meta={"blocks": ai_agent._jsonable(blocks)}
+    )
+    for call, block in zip(calls, blocks):
+        ai_agent._insert_message(
+            conn, chat, "tool", ai_agent._dump(ai_blocks.block_brief(block)), tool_call_id=call["id"], tool_name="show"
+        )
+    ai_agent._insert_message(
+        conn, chat, "assistant",
+        "Расход ровный, заявки держатся. Где смотреть внимательнее:\n\n"
+        "| Кампания | Расход | Заявки | Цена заявки | Что сделать |\n|---|---|---|---|---|\n"
+        "| Поиск · Доставка цветов · Москва и МО | 18 400 ₽ | 23 | 800 ₽ | оставить как есть |\n"
+        "| РСЯ · Букеты | 9 950 ₽ | 5 | 1 990 ₽ | срезать ставки на 15 % |\n"
+        "| Поиск · Розы | 4 120 ₽ | 6 | 687 ₽ | поднять бюджет |\n"
+        "| Ретаргетинг | 1 300 ₽ | 0 | — | проверить аудиторию |",
+        meta={"followups": ["Срежь ставки в РСЯ", "Покажи по дням заявки"]},
+    )
+
 env.TOKEN_FILE.write_text(make_session(uid), encoding="utf-8")
 env.save_stand({
     "user_id": uid,
     "workspaces": {"flowers": ws_r, "furniture": ws_v, "promo": ws_x},
     "campaign_row": r1,
-    "chats": {"general": chats[0], "flowers": chats[1], "images": chats[2]},
+    "chats": {"general": chats[0], "flowers": chats[1], "images": chats[2], "blocks": chats[3]},
 })
 print(f"Готово: пользователь {uid}, проекты {ws_r}, {ws_v}, {ws_x}. Токен и номера — в {env.DEMO_DIR}")

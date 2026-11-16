@@ -16,7 +16,7 @@ from datetime import date, datetime, timedelta, timezone
 
 from psycopg.types.json import Jsonb
 
-from app import ai, ai_feedback, audiences, context_files, experiments, image_gen, plans
+from app import ai, ai_blocks, ai_feedback, audiences, context_files, experiments, image_gen, plans
 from app import help as help_docs
 from app.actions import BULK_ACTIONS, SETTINGS_LABELS, campaign_options
 from app.brief import brief_filled, normalize_brief
@@ -4207,6 +4207,15 @@ FOLLOWUPS_AFTER_DONE = ["Что изменилось?", "Что ещё улуч�
 FOLLOWUPS_AFTER_REVIEW = ["Покажи по кампаниям", "Предложи правки"]
 FOLLOWUPS_AFTER_STOP = ["Продолжай"]
 _REVIEW_TOOLS = ("get_signals", "get_experiments")
+# show — наглядный блок в ответе (график, сравнение, карточки кампаний, таблица): модель описывает, что показать,
+# числа считает бэкенд (ai_blocks) тем же расчётом, что и «Отчёты». Блок ложится в meta.blocks сообщения с вызовом.
+SHOW_TOOL = "show"
+SHOW_RULE = (
+    "- Когда ответ про динамику, сравнение периодов или нескольких кампаний, покажи это блоком show, а не "
+    "перечнем цифр: type=chart — метрика по дням (по умолчанию с пунктиром прошлого периода), compare — период к "
+    "прошлому, campaigns — карточки кампаний, table — таблица по кампаниям, дням или проектам. Числа считает "
+    "сервис; в тексте объясни, что из них следует. Не больше двух блоков на ответ, если не просят больше."
+)
 FOLLOWUP_RULE = (
     "- Закончив ответ, если не ждёшь решения по карточке, в том же сообщении вызови suggest_next: 2–3 логичных "
     "следующих вопроса или просьбы от лица маркетолога. Уже сделанное не предлагай."
@@ -4285,6 +4294,7 @@ TOOL_LABELS = {
     "ads_action": "Объявления",
     "fix_links": "Ссылки по шаблону",
     "suggest_next": "Подсказки «что дальше»",
+    "show": "Блок в ответе",
 }
 
 
@@ -5066,6 +5076,33 @@ TOOLS = [
         {"items": {"type": "array", "items": {"type": "string"}}},
         ["items"],
     ),
+    _fn(
+        "show",
+        "Показать в ответе наглядный блок; числа считает сервис из статистики (как в «Отчётах»), ты описываешь, "
+        "что показать. type: chart — metric по дням, с пунктиром прошлого периода (compare_previous=false — без "
+        "него), можно одну кампанию campaign_row_id; compare — metrics за период против прошлого такого же; "
+        "campaigns — карточки кампаний campaign_row_ids (без них — все), до 3 metrics; table — разрез by: "
+        "campaigns, days или projects (только общий чат), до 6 metrics, sort — метрика сортировки. "
+        "Метрики: cost, impressions, clicks, ctr, cpc, conversions, cr, cpa, revenue, drr, visits. "
+        "Ответ — те же числа коротко: не повторяй их таблицей в тексте.",
+        {
+            "type": {"type": "string", "enum": ["chart", "compare", "campaigns", "table"]},
+            "title": {"type": "string", "description": "заголовок блока, коротко; без него — по метрике"},
+            "metric": {"type": "string", "description": "для chart"},
+            "metrics": {"type": "array", "items": {"type": "string"}, "description": "для compare, campaigns, table"},
+            **_RANGE,
+            "compare_previous": {"type": "boolean"},
+            "campaign_row_id": {**_ID, "description": "chart, compare или table by=days — только эта кампания"},
+            "campaign_row_ids": {**_IDS, "description": "campaigns и table by=campaigns — только эти кампании"},
+            "by": {"type": "string", "enum": ["campaigns", "days", "projects"]},
+            "sort": {"type": "string"},
+            "project_id": {
+                **_ID,
+                "description": "другой проект пользователя (list_projects); в общем чате без него — все проекты",
+            },
+        },
+        ["type"],
+    ),
 ]
 
 for _tool in TOOLS:
@@ -5096,7 +5133,16 @@ GENERAL_WRITE_TOOLS = (
 )
 GENERAL_ASK_TOOLS = ("ask_questions", "propose_plan")
 GENERAL_TOOL_NAMES = frozenset(
-    {"help_search", "list_projects", "get_project", *CROSS_PROJECT_TOOLS, *GENERAL_WRITE_TOOLS, *GENERAL_ASK_TOOLS, SUGGEST_TOOL}
+    {
+        "help_search",
+        "list_projects",
+        "get_project",
+        *CROSS_PROJECT_TOOLS,
+        *GENERAL_WRITE_TOOLS,
+        *GENERAL_ASK_TOOLS,
+        SUGGEST_TOOL,
+        SHOW_TOOL,
+    }
 )
 
 
@@ -5237,6 +5283,7 @@ def _general_prompt(ctx: Context) -> str:
         "бриф и ответы маркетолога. Предложи открыть ИИ-помощника в нужном проекте.",
         "- Если действие отклонено, не повторяй его без новой просьбы. Если ошибка — объясни её.",
         "- Если часть согласованного плана не выполнена, прямо скажи, что именно не сделано.",
+        SHOW_RULE,
         FOLLOWUP_RULE,
     ]
     return "\n".join(lines)
@@ -5453,6 +5500,7 @@ def _project_prompt(ctx: Context) -> str:
         "не подтвердилось — остановить тестовые кампании. Итог записывай finish_experiment, когда маркетолог "
         "согласен с выводом.",
         "- Если действие отклонено, не повторяй его без новой просьбы. Если ошибка — объясни её пользователю.",
+        SHOW_RULE,
         FOLLOWUP_RULE,
         "- Если часть согласованного плана не выполнена (ошибка, отклонено, пропущено) или ты её убрал, прямо "
         "скажи, что именно не сделано, — не называй план выполненным.",
@@ -5574,6 +5622,7 @@ def _message_out(row: dict) -> dict:
         "tool_name": row.get("tool_name") or "",
         "refs": row.get("refs") or [],
         "followups": (row.get("meta") or {}).get("followups") or [],
+        "blocks": (row.get("meta") or {}).get("blocks") or [] if row["role"] == "assistant" else [],
         "context": (row.get("meta") or {}).get("context") if row["role"] == "user" else None,
         "feedback": ai_feedback.feedback_out(row),
         "model": row.get("model") or "",
@@ -8059,6 +8108,25 @@ def _normalize_call(name: str, args: dict) -> dict:
     return args
 
 
+def _show(ctx: Context, message_id: int, args: dict) -> dict:
+    """show: блок считается из статистики и дописывается в meta.blocks сообщения; модели — те же числа коротко."""
+    ws_id = ctx.ws_id
+    if args.get("project_id") not in (None, ""):
+        ws_id = ctx.project(_int(args, "project_id")).ws_id
+    block = ai_blocks.build_block(ctx.user_id, ws_id, args)
+    with pool.connection() as conn:
+        row = conn.execute("SELECT meta FROM ai_messages WHERE id = %s FOR UPDATE", (message_id,)).fetchone()
+        blocks = list(((row or {}).get("meta") or {}).get("blocks") or [])
+        if len(blocks) >= ai_blocks.MAX_BLOCKS_PER_MESSAGE:
+            return {"ok": False, "error": f"В одном ответе не больше {ai_blocks.MAX_BLOCKS_PER_MESSAGE} блоков"}
+        blocks.append(block)
+        conn.execute(
+            "UPDATE ai_messages SET meta = COALESCE(meta, '{}'::jsonb) || %s WHERE id = %s",
+            (Jsonb({"blocks": _jsonable(blocks)}), message_id),
+        )
+    return ai_blocks.block_brief(block)
+
+
 def _handle_call(ctx: Context, chat_id: int, message_id: int, call: dict) -> int:
     """Выполняет вызов инструмента; возвращает 1, если действие ждёт согласования."""
     name = call["name"]
@@ -8075,6 +8143,15 @@ def _handle_call(ctx: Context, chat_id: int, message_id: int, call: dict) -> int
     except ValueError:
         return reply({"ok": False, "error": "Аргументы должны быть JSON-объектом"})
     args = _normalize_call(name, args)
+
+    if name == SHOW_TOOL:
+        try:
+            return reply(_show(ctx, message_id, args))
+        except YandexError as exc:
+            return reply({"ok": False, "error": exc.message or exc.code})
+        except Exception:
+            log.exception("ИИ-блок %s", args.get("type"))
+            return reply({"ok": False, "error": "Внутренняя ошибка инструмента"})
 
     target = ctx
     if ctx.general:

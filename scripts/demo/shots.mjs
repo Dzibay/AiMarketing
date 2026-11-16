@@ -66,6 +66,15 @@ const PAGES = [
   ['ws-chat', `/w/${ws}/chat/${stand.chats.flowers}`],
   // Чат с этапом «Картинки»: галерея на согласование (на старых стендах этого чата нет).
   ...(stand.chats.images ? [['ws-chat-images', `/w/${ws}/chat/${stand.chats.images}`]] : []),
+  // Чат с наглядными блоками (график, сравнение, карточки, таблица) и markdown-таблицей с сортировкой.
+  ...(stand.chats.blocks
+    ? [
+        ['ws-chat-blocks', `/w/${ws}/chat/${stand.chats.blocks}`],
+        ['ws-chat-blocks-top', `/w/${ws}/chat/${stand.chats.blocks}`,
+          `(async () => { await new Promise((r) => setTimeout(r, 600)); const b = document.querySelector('.aib-list')
+          b?.scrollIntoView({ block: 'start' }); return !!b })()`],
+      ]
+    : []),
   ['ws-campaigns', `/w/${ws}/campaigns`],
   ['ws-campaign', `/w/${ws}/campaigns/${stand.campaign_row}`],
   ['ws-queries', `/w/${ws}/queries`],
@@ -97,6 +106,15 @@ const PAGES = [
     await new Promise((r) => setTimeout(r, 900))
     const rows = [...document.querySelectorAll('.aip__list .srow')]
     ;(rows.find((b) => /картин/i.test(b.textContent)) || rows[0])?.click(); return !!rows.length })()`]]
+    : []),
+  // Блоки ответа в узкой панели (420 px): график, сравнение, карточки и таблица.
+  ...(stand.chats.blocks
+    ? [['ai-panel-blocks', `/w/${ws}/summary`, `(async () => { if (!(${openAiPanel.toString()})()) return false
+    await new Promise((r) => setTimeout(r, 500))
+    document.querySelector('.aip__head [aria-label="Все чаты"]')?.click()
+    await new Promise((r) => setTimeout(r, 900))
+    const row = [...document.querySelectorAll('.aip__list .srow')].find((b) => /неделя/i.test(b.textContent))
+    row?.click(); return !!row })()`]]
     : []),
 ].filter(([name]) => !only || only.includes(name))
 
