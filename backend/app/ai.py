@@ -32,6 +32,9 @@ from app.yandex import YandexError
 log = logging.getLogger(__name__)
 
 OPENAI_BASE = "https://api.openai.com/v1"
+# Claude идёт родным Messages API: OpenAI-совместимый слой Anthropic не кэширует начало запроса.
+ANTHROPIC_VERSION = "2023-06-01"
+ANTHROPIC_MAX_TOKENS = 32000
 YANDEX_BASE = "https://llm.api.cloud.yandex.net/v1"
 PROVIDERS = {
     "openai": {"label": "OpenAI-совместимый", "default_model": "gpt-4o-mini"},
@@ -375,6 +378,24 @@ def load_config(
         if bridge["anthropic"]:
             # OpenAI-совместимый слой Anthropic отвечает 400 на temperature ниже 1 у новых Claude.
             temperature = None
+    anthropic = None
+    if provider == "openai" and (bridge or {}).get("messages_url"):
+        anthropic = {"url": bridge["messages_url"], "model": bridge.get("native_model") or model}
+    elif provider == "openai" and not bridge and urlsplit(base).hostname == "api.anthropic.com":
+        anthropic = {"url": f"{base.rstrip('/')}/messages", "model": model}
+    if anthropic:
+        # Родной API Claude: ключ — в x-api-key (Bearer он понял бы как OAuth-токен).
+        anthropic["headers"] = {
+            **{k: v for k, v in headers.items() if k not in ("Authorization", "OpenAI-Project")},
+            "x-api-key": key,
+            "anthropic-version": ANTHROPIC_VERSION,
+        }
+    # prompt_cache_key понимает сам OpenAI; чужие OpenAI-совместимые API могут его не знать.
+    openai_cache = (
+        provider == "openai"
+        and ai_bridge.model_provider(model_name) == "openai"
+        and ((bridge or {}).get("kind") == "worker" or (not bridge and base.rstrip("/") == OPENAI_BASE))
+    )
     return {
         "provider": provider,
         "base_url": base,
@@ -382,6 +403,8 @@ def load_config(
         "headers": headers,
         "bridge": bool(bridge),
         "bridge_kind": bridge["kind"] if bridge else "",
+        "anthropic": anthropic,
+        "openai_cache": openai_cache,
         "temperature": temperature,
         "check_host": base != OPENAI_BASE,
         "user_id": user_id,
@@ -677,6 +700,192 @@ def _post_stream(url: str, body: dict, headers: dict, timeout: float) -> tuple[h
     return response, {"choices": [{"message": message}], "usage": usage, "model": answered_by}
 
 
+# --- Родной Messages API Claude ---------------------------------------------------------------------
+# OpenAI-совместимый слой Anthropic кэш не поддерживает: системный промпт и схемы инструментов шли по полной
+# цене в каждом шаге хода. Родной API кэширует начало запроса до точек cache_control — инструменты, системный
+# промпт, последнее сообщение (следующий шаг хода читает всё это из кэша).
+
+_EPHEMERAL = {"type": "ephemeral"}
+
+
+def _tool_id(value) -> str:
+    """id вызова для Anthropic: только буквы, цифры, _ и - (у других моделей в истории бывают другие)."""
+    return re.sub(r"[^a-zA-Z0-9_-]", "_", str(value or "")) or "call"
+
+
+def _anthropic_parts(content) -> list[dict]:
+    """content OpenAI (строка или части text / image_url) → блоки Anthropic, без пустого текста."""
+    if isinstance(content, str) or content is None:
+        return [{"type": "text", "text": content}] if content else []
+    blocks = []
+    for part in content:
+        if not isinstance(part, dict):
+            continue
+        if part.get("type") == "text" and part.get("text"):
+            blocks.append({"type": "text", "text": part["text"]})
+        elif part.get("type") == "image_url":
+            url = str((part.get("image_url") or {}).get("url") or "")
+            match = re.match(r"data:([^;,]+);base64,(.*)", url, re.S)
+            if match:
+                source = {"type": "base64", "media_type": match.group(1), "data": match.group(2)}
+            else:
+                source = {"type": "url", "url": url}
+            blocks.append({"type": "image", "source": source})
+    return blocks
+
+
+def anthropic_body(messages: list[dict], tools: list[dict] | None, model: str) -> dict:
+    """Запрос chat/completions (сообщения и инструменты OpenAI) → тело /v1/messages с точками кэша."""
+    system = []
+    out: list[dict] = []
+    for m in messages:
+        role = m.get("role")
+        if role in ("system", "developer"):
+            system.extend(b["text"] for b in _anthropic_parts(m.get("content")) if b["type"] == "text")
+            continue
+        if role == "tool":
+            text = m.get("content")
+            if not isinstance(text, str):
+                text = json.dumps(text, ensure_ascii=False)
+            blocks = [{"type": "tool_result", "tool_use_id": _tool_id(m.get("tool_call_id")), "content": text or "(пусто)"}]
+            role = "user"
+        elif role == "assistant":
+            blocks = _anthropic_parts(m.get("content"))
+            for call in m.get("tool_calls") or []:
+                fn = call.get("function") or {}
+                args = fn.get("arguments")
+                if isinstance(args, str):
+                    try:
+                        args = json.loads(args or "{}")
+                    except ValueError:
+                        args = {}
+                blocks.append({
+                    "type": "tool_use",
+                    "id": _tool_id(call.get("id")),
+                    "name": fn.get("name") or "",
+                    "input": args if isinstance(args, dict) else {},
+                })
+        else:
+            blocks = _anthropic_parts(m.get("content"))
+            role = "user"
+        if not blocks:
+            continue
+        # Подряд идущие сообщения одной роли — одно сообщение (ответы инструментов шага — одним user).
+        if out and out[-1]["role"] == role:
+            out[-1]["content"].extend(blocks)
+        else:
+            out.append({"role": role, "content": blocks})
+    body: dict = {"model": model, "max_tokens": ANTHROPIC_MAX_TOKENS, "messages": out}
+    if system:
+        body["system"] = [{"type": "text", "text": "\n\n".join(system), "cache_control": _EPHEMERAL}]
+    if tools:
+        converted = []
+        for tool in tools:
+            fn = tool.get("function") or tool
+            converted.append({
+                "name": fn.get("name") or "",
+                "description": fn.get("description") or "",
+                "input_schema": fn.get("parameters") or {"type": "object", "properties": {}},
+            })
+        converted[-1] = {**converted[-1], "cache_control": _EPHEMERAL}
+        body["tools"] = converted
+    if out:
+        last = out[-1]["content"]
+        last[-1] = {**last[-1], "cache_control": _EPHEMERAL}
+    return body
+
+
+REFUSAL_TEXT = "Модель отказалась отвечать на этот запрос."
+
+
+def _from_anthropic(blocks: list[dict], usage: dict | None, model: str, stop_reason: str = "") -> dict:
+    """Ответ /v1/messages → тот же вид, что у chat/completions (choices[0].message, usage, model)."""
+    text = "".join(b.get("text") or "" for b in blocks if b.get("type") == "text")
+    calls = []
+    for b in blocks:
+        if b.get("type") != "tool_use":
+            continue
+        args = b.get("input")
+        if not isinstance(args, str):
+            args = json.dumps(args if args is not None else {}, ensure_ascii=False)
+        calls.append({"id": b.get("id") or "", "function": {"name": b.get("name") or "", "arguments": args or "{}"}})
+    if stop_reason == "refusal" and not text and not calls:
+        text = REFUSAL_TEXT
+    converted = None
+    if isinstance(usage, dict):
+        try:
+            read = int(usage.get("cache_read_input_tokens") or 0)
+            written = int(usage.get("cache_creation_input_tokens") or 0)
+            converted = {
+                # Как у OpenAI: prompt_tokens — весь вход, из кэша — его часть.
+                "prompt_tokens": int(usage.get("input_tokens") or 0) + read + written,
+                "completion_tokens": int(usage.get("output_tokens") or 0),
+                "prompt_tokens_details": {"cached_tokens": read},
+            }
+        except (TypeError, ValueError):
+            converted = None
+    return {"choices": [{"message": {"content": text, "tool_calls": calls}}], "usage": converted, "model": model}
+
+
+def _post_anthropic(url: str, body: dict, headers: dict, timeout: float, stream: bool) -> tuple[httpx.Response, dict | None]:
+    """Запрос в /v1/messages → (ответ, тело в виде chat/completions); тело None — ответ не поток, его читают JSON."""
+    if not stream:
+        return httpx.post(url, json=body, headers=headers, timeout=timeout, follow_redirects=False), None
+    deadline = time.monotonic() + STREAM_TOTAL_SECONDS
+    blocks: dict[int, dict] = {}
+    usage: dict = {}
+    model = ""
+    stop_reason = ""
+    with httpx.stream(
+        "POST", url, json={**body, "stream": True}, headers=headers,
+        timeout=httpx.Timeout(timeout, connect=30.0), follow_redirects=False,
+    ) as response:
+        if response.status_code >= 400 or "text/event-stream" not in response.headers.get("content-type", ""):
+            response.read()
+            return response, None
+        for line in response.iter_lines():
+            if time.monotonic() > deadline:
+                raise httpx.ReadTimeout("ответ идёт дольше предела")
+            if not line.startswith("data:"):
+                continue
+            try:
+                event = json.loads(line[5:].strip())
+            except ValueError:
+                continue
+            if not isinstance(event, dict):
+                continue
+            kind = event.get("type")
+            if kind == "error":
+                err = event.get("error") or {}
+                text = str(err.get("message") if isinstance(err, dict) else err)[:300]
+                err_type = str(err.get("type") or "") if isinstance(err, dict) else ""
+                overloaded = err_type in ("overloaded_error", "api_error") or "overloaded" in text.lower()
+                raise (_transient if overloaded else YandexError)("ai-error", f"Ошибка ИИ: {text}")
+            if kind == "message_start":
+                message = event.get("message") or {}
+                model = str(message.get("model") or "")
+                usage.update(message.get("usage") or {})
+            elif kind == "content_block_start":
+                block = dict(event.get("content_block") or {})
+                if block.get("type") == "tool_use":
+                    block["input"] = ""  # приходит кусками partial_json
+                blocks[event.get("index", len(blocks))] = block
+            elif kind == "content_block_delta":
+                delta = event.get("delta") or {}
+                block = blocks.setdefault(event.get("index", 0), {"type": "text", "text": ""})
+                if delta.get("type") == "text_delta":
+                    block["text"] = (block.get("text") or "") + (delta.get("text") or "")
+                elif delta.get("type") == "input_json_delta":
+                    block["input"] = (block.get("input") or "") + (delta.get("partial_json") or "")
+            elif kind == "message_delta":
+                stop_reason = str((event.get("delta") or {}).get("stop_reason") or "")
+                usage.update({k: v for k, v in (event.get("usage") or {}).items() if v is not None})
+            elif kind == "message_stop":
+                break
+    ordered = [b for _, b in sorted(blocks.items())]
+    return response, _from_anthropic(ordered, usage or None, model, stop_reason)
+
+
 def _transient(code: str, message: str, retry_after: float | None = None) -> YandexError:
     """Ошибка, которая обычно проходит сама: complete() повторит запрос, прежде чем её показать."""
     exc = YandexError(code, message)
@@ -734,26 +943,63 @@ def _raise_for_status(cfg: dict, response: httpx.Response) -> None:
         raise _transient("ai-error", message) if status in RETRY_STATUSES else YandexError("ai-error", message)
 
 
-def _send(cfg: dict, url: str, body: dict, timeout: float) -> dict:
-    """Одна попытка chat/completions → тело ответа. Ошибки — YandexError, временные помечены transient."""
+# Родной API отклонил сам запрос (не ключ и не лимит): тот же запрос уходит OpenAI-совместимым путём.
+NATIVE_REJECTED = {400, 404, 405, 422}
+
+
+def _send(cfg: dict, url: str, body: dict, timeout: float, native: bool = False) -> dict:
+    """Одна попытка → тело ответа в виде chat/completions. Ошибки — YandexError, временные помечены transient.
+
+    native — родной /v1/messages Claude (url и body уже для него); его отказ в самом запросе помечен native_rejected.
+    """
     try:
-        response, data = _post_stream(url, body, cfg["headers"], timeout) if cfg.get("stream") else (None, None)
-        # Провайдер не знает stream / stream_options — спрашиваем обычным способом.
-        if response is None or (response.status_code == 400 and "stream" in response.text.lower()):
-            response = httpx.post(url, json=body, headers=cfg["headers"], timeout=timeout, follow_redirects=False)
-            data = None
+        if native:
+            response, data = _post_anthropic(url, body, cfg["anthropic"]["headers"], timeout, bool(cfg.get("stream")))
+        else:
+            response, data = _post_stream(url, body, cfg["headers"], timeout) if cfg.get("stream") else (None, None)
+            # Провайдер не знает stream / stream_options — спрашиваем обычным способом.
+            if response is None or (response.status_code == 400 and "stream" in response.text.lower()):
+                response = httpx.post(url, json=body, headers=cfg["headers"], timeout=timeout, follow_redirects=False)
+                data = None
     except httpx.TimeoutException as exc:
         raise YandexError("ai-timeout", "ИИ не ответил за отведённое время") from exc
     except httpx.HTTPError as exc:
         # Соединение не установилось или оборвалось посреди ответа.
         raise _transient("ai-network", f"Не удалось связаться с ИИ: {exc.__class__.__name__}") from exc
-    _raise_for_status(cfg, response)
+    try:
+        _raise_for_status(cfg, response)
+    except YandexError as exc:
+        if native and response.status_code in NATIVE_REJECTED:
+            exc.native_rejected = True
+        raise
     if data is None:
         try:
             data = response.json()
         except ValueError as exc:
             raise YandexError("ai-error", "Непонятный ответ ИИ") from exc
+        if native:
+            if not isinstance(data, dict) or not isinstance(data.get("content"), list):
+                raise YandexError("ai-error", "Непонятный ответ ИИ")
+            data = _from_anthropic(data["content"], data.get("usage"), str(data.get("model") or ""), str(data.get("stop_reason") or ""))
     return data
+
+
+def _send_retrying(cfg: dict, url: str, body: dict, timeout: float, native: bool = False) -> dict:
+    """_send с повтором временных сбоев (паузы RETRY_PAUSES)."""
+    pauses = list(RETRY_PAUSES)
+    attempt = 1
+    while True:
+        try:
+            return _send(cfg, url, body, timeout, native)
+        except YandexError as exc:
+            wait = _retry_wait(exc, pauses)
+            if wait is None:
+                if attempt > 1 and exc.message:
+                    exc.message = f"{exc.message} (попыток: {attempt})"
+                raise
+            log.warning("ИИ: временный сбой %s (%s), повтор через %s с", exc.code, exc.message, wait)
+            time.sleep(wait)
+            attempt += 1
 
 
 def _retry_wait(exc: YandexError, pauses: list) -> float | None:
@@ -784,23 +1030,22 @@ def complete(cfg: dict, messages: list[dict], tools: list[dict] | None = None) -
         body["temperature"] = cfg.get("temperature", 0.3)
     if tools:
         body["tools"] = tools
+    if cfg.get("openai_cache") and cfg.get("cache_key"):
+        # Запросы одного чата — на один сервер OpenAI: там уже лежит кэш их общего начала.
+        body["prompt_cache_key"] = cfg["cache_key"]
     url = f"{cfg['base_url']}/chat/completions"
     timeout = cfg.get("timeout") or TIMEOUT_SECONDS
-    pauses = list(RETRY_PAUSES)
-    attempt = 1
-    while True:
+    data = None
+    native = cfg.get("anthropic")
+    if native:
         try:
-            data = _send(cfg, url, body, timeout)
-            break
+            data = _send_retrying(cfg, native["url"], anthropic_body(messages, tools, native["model"]), timeout, native=True)
         except YandexError as exc:
-            wait = _retry_wait(exc, pauses)
-            if wait is None:
-                if attempt > 1 and exc.message:
-                    exc.message = f"{exc.message} (попыток: {attempt})"
+            if not getattr(exc, "native_rejected", False):
                 raise
-            log.warning("ИИ: временный сбой %s (%s), повтор через %s с", exc.code, exc.message, wait)
-            time.sleep(wait)
-            attempt += 1
+            log.warning("ИИ: родной API Claude отклонил запрос (%s), повтор через совместимый", exc.message)
+    if data is None:
+        data = _send_retrying(cfg, url, body, timeout)
     try:
         message = data["choices"][0]["message"]
     except (KeyError, IndexError, TypeError) as exc:

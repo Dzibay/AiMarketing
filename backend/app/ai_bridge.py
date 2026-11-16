@@ -239,14 +239,19 @@ def target(use: str, model: str = "") -> dict | None:
             "headers": {WORKER_TOKEN_HEADER: _decrypt(row["worker_token_enc"], "Секрет Worker'а")},
             "model": bare,
             "anthropic": provider == "anthropic",
+            # Родной API Claude (/v1/messages): только он кэширует запрос; Worker пересылает любой путь.
+            "messages_url": f"{row['worker_url']}/anthropic/v1/messages" if provider == "anthropic" else "",
         }
     headers = {TOKEN_HEADER: f"Bearer {_decrypt(row['token_enc'], 'Токен шлюза')}"} if row.get("token_enc") else {}
+    bare = model.split("/", 1)[1] if "/" in model else model
     return {
         "kind": "gateway",
         "base_url": _base(row, "compat" if use == "chat" else "openai"),
         "headers": headers,
         "model": gateway_model(model) if use == "chat" else model,
         "anthropic": provider == "anthropic",
+        "messages_url": f"{_base(row, 'anthropic')}/v1/messages" if provider == "anthropic" else "",
+        "native_model": bare,
     }
 
 

@@ -126,7 +126,7 @@ def test_claude_request_has_no_temperature_and_region_error(db, monkeypatch):
     sent = {}
 
     def post(url, json=None, headers=None, **kwargs):
-        sent.update(url=url, body=json)
+        sent.update(url=url, body=json, headers=headers)
         return httpx.Response(
             403, json={"error": {"type": "forbidden", "message": "Request not allowed"}}, request=httpx.Request("POST", url)
         )
@@ -134,7 +134,9 @@ def test_claude_request_has_no_temperature_and_region_error(db, monkeypatch):
     monkeypatch.setattr(ai.httpx, "post", post)
     with pytest.raises(YandexError) as exc:
         ai.complete(ai.load_config(user), [{"role": "user", "content": "привет"}])
-    assert sent["url"] == f"{GATEWAY}/compat/chat/completions" and sent["body"]["model"] == "anthropic/claude-opus-5-5"
+    # Claude — родным Messages API (он кэширует начало запроса): модель без префикса, ключ в x-api-key.
+    assert sent["url"] == f"{GATEWAY}/anthropic/v1/messages" and sent["body"]["model"] == "claude-opus-5-5"
+    assert sent["headers"]["x-api-key"] == "sk-ant-test-key" and "Authorization" not in sent["headers"]
     assert "temperature" not in sent["body"]
     assert exc.value.code == "ai-region" and "Worker" in exc.value.message
 
