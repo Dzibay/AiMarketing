@@ -130,7 +130,9 @@
             <tbody>
               <tr v-for="row in data.by_user" :key="row.user_id">
                 <td>
-                  {{ row.email || `#${row.user_id}` }}
+                  <RouterLink :to="{ path: '/admin-panel/users', query: { user: row.user_id } }">
+                    {{ row.email || `#${row.user_id}` }}
+                  </RouterLink>
                   <small v-if="row.name" class="cell-note">{{ row.name }}</small>
                 </td>
                 <td class="num">{{ num(row.calls) }}</td>

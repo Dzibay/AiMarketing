@@ -372,8 +372,8 @@ def test_admin_usage_and_user_limits(db, monkeypatch):
     assert put.status_code == 200 and put.json()["units_limit"] == 100.0
     users = client.get("/api/admin/users", headers=auth).json()
     row = next(u for u in users["items"] if u["id"] == user)
-    usage = {k: row["usage"][k] for k in ("spent", "limit", "cost_rub", "calls")}
-    assert usage == {"spent": 51.0, "limit": 100.0, "cost_rub": 6.02, "calls": 3}
+    assert row["usage"] == {"spent": 51.0, "limit": 100.0}
+    assert row["ai_cost_rub"] == 7.02  # за всё время, с прошлым месяцем
     assert row["subscription"]["overrides"] == {"units_limit": 100.0} and row["subscription"]["plan"] is None
     assert client.put("/api/admin/users/999999/subscription", headers=auth, json={"overrides": {}}).status_code == 404
     cleared = client.put(f"/api/admin/users/{user}/subscription", headers=auth, json={"overrides": {"units_limit": None}})

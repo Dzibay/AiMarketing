@@ -323,20 +323,6 @@ def set_user_blocked(user_id: int, *, blocked: bool, reason: str = "") -> dict:
     return admin_user(row)
 
 
-def list_users(limit: int = 100, offset: int = 0) -> list[dict]:
-    with pool.connection() as conn:
-        rows = conn.execute(
-            """
-            SELECT id, email, name, yandex_uid, blocked_at, blocked_reason, email_verified_at, created_at
-            FROM users
-            ORDER BY created_at DESC
-            LIMIT %s OFFSET %s
-            """,
-            (limit, offset),
-        ).fetchall()
-    return [admin_user(row) for row in rows]
-
-
 def mark_email_verified(user_id: int) -> None:
     with pool.connection() as conn:
         conn.execute(

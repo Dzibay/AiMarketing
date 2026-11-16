@@ -322,30 +322,6 @@ def plan_history(user_id: int, limit: int = 30) -> list[dict]:
 # --- Админка ------------------------------------------------------------------------------------
 
 
-def users_usage(user_ids: list[int]) -> dict[int, dict]:
-    """Для таблицы пользователей: {user_id: {"spent", "limit", "cost_rub", "calls", "period_*"}} за текущий период каждого."""
-    out = {}
-    for uid in user_ids:
-        sub = plans.subscription(uid)
-        with pool.connection() as conn:
-            row = conn.execute(
-                """
-                SELECT COALESCE(SUM(charged), 0) AS charged, COALESCE(SUM(cost_rub), 0) AS cost, COUNT(*) AS n
-                FROM ai_usage WHERE user_id = %s AND created_at >= %s AND created_at < %s
-                """,
-                (uid, sub["period_start"], sub["period_end"]),
-            ).fetchone()
-        out[uid] = {
-            "spent": round(float(row["charged"]), 2),
-            "limit": sub["units_limit"],
-            "cost_rub": round(float(row["cost"]), 2),
-            "calls": int(row["n"]),
-            "period_start": sub["period_start"].isoformat(),
-            "period_end": sub["period_end"].isoformat(),
-        }
-    return out
-
-
 def service_usage(month: str | None = None) -> dict:
     """Расход сервиса за месяц для админки: единицы и себестоимость по видам, классам моделей и пользователям."""
     from app import ai

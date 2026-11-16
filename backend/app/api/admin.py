@@ -9,7 +9,8 @@ from pydantic import BaseModel
 
 from app import ai, ai_bridge, ai_feedback, auth, billing, events, image_gen, mailer, payments, plans, promos, referrals, site_check, site_extras, support, wordstat
 from app.api.web import _http
-from app.users import UsersError, count_users, list_users, mark_email_verified, set_user_blocked
+from app import admin_users as admin_users_mod
+from app.users import UsersError, count_users, mark_email_verified, set_user_blocked
 from app.yandex import YandexError, yandex_configured
 
 admin_public = APIRouter(tags=["admin"])
@@ -82,24 +83,38 @@ class SubscriptionBody(BaseModel):
 
 
 @router.get("/users")
-def admin_users(limit: int = 100, offset: int = 0) -> dict:
-    limit = max(1, min(limit, 200))
-    offset = max(0, offset)
-    items = list_users(limit=limit, offset=offset)
-    usage = billing.users_usage([u["id"] for u in items])
-    tickets = support.admin_counts()
-    return {
-        "items": [
-            {
-                **u,
-                "usage": usage.get(u["id"]),
-                "subscription": plans.admin_view(u["id"]),
-                "support": tickets.get(u["id"], {"total": 0, "unread": 0}),
-            }
-            for u in items
-        ],
-        "total": count_users(),
+def admin_users(
+    q: str = "",
+    plan: int | None = None,
+    sub: str = "",
+    activity: str = "",
+    source: str = "",
+    paid: str = "",
+    blocked: bool = False,
+    unverified: bool = False,
+    sort: str = "created",
+    dir: str = "desc",
+    page: int = 1,
+) -> dict:
+    """Страница списка пользователей (по 50) с итогами; options — что выбрать в фильтрах."""
+    filters = {
+        "q": q[:200],
+        "plan": plan,
+        "sub": sub if sub in admin_users_mod.SUBS else "",
+        "activity": activity if activity in admin_users_mod.ACTIVITY else "",
+        "source": source[:40],
+        "paid": paid,
+        "blocked": blocked,
+        "unverified": unverified,
     }
+    out = admin_users_mod.list_page(filters, sort=sort, desc=dir != "asc", page=page)
+    return {**out, "options": admin_users_mod.filter_options()}
+
+
+@router.get("/users/{user_id}/card")
+def admin_user_card(user_id: int) -> dict:
+    """Карточка пользователя для боковой панели."""
+    return _call(admin_users_mod.card, user_id)
 
 
 @router.post("/users/{user_id}/block")

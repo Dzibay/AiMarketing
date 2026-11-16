@@ -235,7 +235,33 @@ a.adm-stat:hover {
 
 /* ---- части страниц ---- */
 
-/* Переписка с пользователем в окне поддержки (список пользователей). */
+/* Метка активности пользователя: чем давнее заход, тем бледнее; ни разу — пустая рамка. */
+.act-mark {
+  display: block;
+  border-radius: 3px;
+  background: var(--lime);
+}
+.act-mark.act-1 {
+  background: color-mix(in srgb, var(--lime) 78%, var(--surface));
+}
+.act-mark.act-2 {
+  background: color-mix(in srgb, var(--lime) 56%, var(--surface));
+}
+.act-mark.act-3 {
+  background: color-mix(in srgb, var(--lime) 36%, var(--surface));
+}
+.act-mark.act-4 {
+  background: color-mix(in srgb, var(--lime) 18%, var(--surface));
+}
+.act-mark.act-5 {
+  background: color-mix(in srgb, var(--ink) 18%, var(--surface));
+}
+.act-mark.act-never {
+  background: transparent;
+  box-shadow: inset 0 0 0 1.5px var(--faint);
+}
+
+/* Переписка с пользователем в панели пользователя. */
 .admin-sup {
   display: flex;
   flex-direction: column;

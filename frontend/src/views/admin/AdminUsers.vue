@@ -1,563 +1,444 @@
 <template>
   <section class="panel">
-    <div class="panel__head">
-      <h2>Пользователи</h2>
-      <span class="chip">{{ num(total) }}</span>
+    <div class="au-tools">
+      <input
+        v-model.trim="search"
+        type="search"
+        class="search-input au-tools__search"
+        placeholder="Почта, имя, № или код ссылки"
+        aria-label="Поиск пользователя"
+      />
+      <UiSelect :model-value="f.plan" :options="planFilter" size="sm" aria-label="Тариф" @update:model-value="setF('plan', $event)" />
+      <UiSelect :model-value="f.sub" :options="SUB_OPTIONS" size="sm" aria-label="Подписка" @update:model-value="setF('sub', $event)" />
+      <UiSelect
+        :model-value="f.activity"
+        :options="ACTIVITY_OPTIONS"
+        size="sm"
+        aria-label="Активность"
+        @update:model-value="setF('activity', $event)"
+      />
+      <UiSelect :model-value="f.source" :options="sourceFilter" size="sm" aria-label="Источник" @update:model-value="setF('source', $event)" />
+      <UiSelect :model-value="f.paid" :options="PAID_OPTIONS" size="sm" aria-label="Платежи" @update:model-value="setF('paid', $event)" />
+      <UiCheckbox :model-value="f.blocked" @update:model-value="setF('blocked', $event)">заблокированы</UiCheckbox>
+      <UiCheckbox :model-value="f.unverified" @update:model-value="setF('unverified', $event)">почта не подтверждена</UiCheckbox>
+      <span class="au-tools__sort">
+        <UiSelect :model-value="f.sort" :options="SORT_OPTIONS" size="sm" aria-label="Сортировка" @update:model-value="setF('sort', $event)" />
+        <button
+          class="btn btn--ghost btn--sm"
+          type="button"
+          :aria-label="f.dir === 'asc' ? 'По возрастанию' : 'По убыванию'"
+          v-tip="f.dir === 'asc' ? 'По возрастанию' : 'По убыванию'"
+          @click="setF('dir', f.dir === 'asc' ? 'desc' : 'asc')"
+        >
+          {{ f.dir === 'asc' ? '↑' : '↓' }}
+        </button>
+      </span>
+      <button v-if="filtered" class="btn btn--ghost btn--sm" type="button" @click="resetFilters">Сбросить</button>
     </div>
-    <p class="hint">
-      Расход — в единицах за текущий период пользователя (срок его тарифа; без тарифа — календарный месяц).
-      Лимиты, проекты и функции берутся из тарифа; «свои условия» — правки поверх тарифа для одного пользователя.
+
+    <p v-if="data" class="au-summary">
+      Найдено <b>{{ num(data.summary.found) }}</b> · платят <b>{{ num(data.summary.paying) }}</b> · заходили сегодня
+      <b>{{ num(data.summary.today) }}</b>
     </p>
-    <p v-if="loading" class="empty">Загружаем…</p>
-    <p v-else-if="!users.length" class="empty">Пользователей пока нет.</p>
-    <div v-else v-scroll-x class="table-scroll">
-      <table class="table admin-users">
+
+    <p v-if="!data" class="empty">{{ failed ? 'Не удалось загрузить список.' : 'Загружаем…' }}</p>
+    <p v-else-if="!data.items.length" class="empty">{{ filtered ? 'Никого не нашлось — измените фильтры.' : 'Пользователей пока нет.' }}</p>
+    <div v-else v-scroll-x class="table-scroll" :class="{ 'is-loading': loading }">
+      <table class="table au-table">
         <thead>
           <tr>
+            <th class="au-mark-col" aria-label="Активность"></th>
             <th>Пользователь</th>
-            <th>Регистрация</th>
+            <th>Источник</th>
             <th>Тариф</th>
-            <th>Расход периода</th>
-            <th class="num">Вызовов</th>
-            <th class="num">Себестоимость</th>
-            <th>Статус</th>
+            <th>Оплачено всего</th>
+            <th class="num">Платежи</th>
+            <th>Лимит</th>
+            <th class="num">ИИ и маржа</th>
+            <th>Проекты</th>
           </tr>
         </thead>
         <tbody>
-          <tr v-for="u in users" :key="u.id" :class="{ 'is-muted': u.blocked }">
+          <tr v-for="u in data.items" :key="u.id" :class="{ 'is-muted': u.blocked }" @click="openUser(u.id, $event)">
+            <td class="au-mark-col">
+              <span class="act-mark" :class="`act-${activityLevel(u.last_seen_at)}`" v-tip="activityText(u.last_seen_at)"></span>
+            </td>
             <td>
-              <strong>{{ u.email || '—' }}</strong>
+              <RouterLink class="au-user" :to="userLink(u.id)">{{ u.email || `#${u.id}` }}</RouterLink>
               <small class="cell-note">
-                #{{ u.id }}<template v-if="u.name"> · {{ u.name }}</template><template v-if="u.has_yandex"> · вход через Яндекс</template>
-                <template v-if="u.telegram_linked"> · Telegram</template>
+                #{{ u.id }}<template v-if="u.name"> · {{ u.name }}</template> · с {{ formatDay(u.created_at) }}
               </small>
-              <template v-if="!u.email_verified">
-                <span class="chip chip--warning">почта не подтверждена</span>
-                <button class="btn btn--ghost btn--xs" type="button" :disabled="busyId === u.id" @click="verifyEmail(u)">
-                  Подтвердить
-                </button>
-              </template>
-            </td>
-            <td>{{ formatDate(u.created_at) }}</td>
-            <td class="admin-users__plan">
-              <strong>{{ u.subscription?.plan?.name || 'Без тарифа' }}</strong>
-              <small class="cell-note">{{ termText(u.subscription) }}</small>
-              <span v-if="u.subscription?.expired" class="chip chip--bad">закончилась</span>
-              <span v-if="hasOverrides(u.subscription)" class="chip chip--info">свои условия</span>
-              <button class="btn btn--ghost btn--xs" type="button" :disabled="busyId === u.id" @click="openEdit(u)">
-                Изменить
-              </button>
-            </td>
-            <td class="admin-users__usage">
-              <span>{{ num(u.usage?.spent, 2) }}<template v-if="limitOf(u) !== null"> из {{ num(limitOf(u), 2) }}</template> ед.</span>
-              <div
-                v-if="limitOf(u) !== null"
-                class="meter"
-                :class="tone(u)"
-                role="progressbar"
-                :aria-valuenow="usedPct(u)"
-                aria-valuemin="0"
-                aria-valuemax="100"
-              >
-                <span :style="{ width: `${usedPct(u)}%` }"></span>
-              </div>
-            </td>
-            <td class="num">{{ num(u.usage?.calls) }}</td>
-            <td class="num">{{ rubAi(u.usage?.cost_rub) }}</td>
-            <td>
-              <span v-if="u.blocked" class="tone-bad" v-tip="u.blocked_reason">
-                заблокирован<template v-if="u.blocked_reason">: {{ u.blocked_reason }}</template>
+              <span class="au-badges">
+                <span v-if="u.has_yandex" class="chip">Яндекс</span>
+                <span v-if="!u.email_verified" class="chip chip--warning">почта не подтверждена</span>
+                <span v-if="u.blocked" class="chip chip--bad" v-tip="u.blocked_reason">заблокирован</span>
+                <span v-if="u.support_unread" class="chip chip--info">обращение · {{ u.support_unread }}</span>
               </span>
-              <span v-else class="tone-ok">активен</span>
-              <button class="btn btn--ghost btn--xs" type="button" @click="openEvents(u)">События</button>
-              <button
-                v-if="u.support?.total"
-                class="btn btn--xs"
-                :class="u.support.unread ? 'btn--accent' : 'btn--ghost'"
-                type="button"
-                @click="openSupport(u)"
-              >
-                Обращения: {{ u.support.total }}<template v-if="u.support.unread"> · новых {{ u.support.unread }}</template>
-              </button>
-              <button
-                v-if="!u.blocked"
-                class="btn btn--ghost btn--xs"
-                type="button"
-                :disabled="busyId === u.id"
-                @click="blockUser(u)"
-              >
-                Заблокировать
-              </button>
-              <button v-else class="btn btn--ghost btn--xs" type="button" :disabled="busyId === u.id" @click="unblockUser(u)">
-                Разблокировать
-              </button>
+            </td>
+            <td>
+              <template v-if="sourceView(u.source)">
+                <span class="au-src">
+                  <i v-if="sourceView(u.source).color" :style="{ background: sourceView(u.source).color }"></i>{{ sourceView(u.source).text }}
+                </span>
+                <small v-if="sourceView(u.source).note" class="cell-note">{{ sourceView(u.source).note }}</small>
+              </template>
+              <span v-else class="cell-note">—</span>
+            </td>
+            <td class="au-tariff">
+              {{ tariffView(u).title }}
+              <small v-if="tariffView(u).note" class="cell-note" :class="tariffView(u).tone">{{ tariffView(u).note }}</small>
+              <span v-if="hasOverrides(u.subscription)" class="chip chip--info">свои условия</span>
+            </td>
+            <td>{{ paidTotalText(u.paid) }}</td>
+            <td class="num">{{ u.paid.rub ? rubles(u.paid.rub) : '—' }}</td>
+            <td class="au-limit">
+              <template v-if="usedPct(u.usage) !== null">
+                <span>{{ usedPct(u.usage) }}%</span>
+                <div
+                  class="meter"
+                  :class="usedPct(u.usage) >= 100 ? 'is-over' : usedPct(u.usage) >= 80 ? 'is-near' : ''"
+                  role="progressbar"
+                  :aria-valuenow="Math.min(100, usedPct(u.usage))"
+                  aria-valuemin="0"
+                  aria-valuemax="100"
+                  v-tip="`${num(u.usage.spent, 2)} из ${num(u.usage.limit, 2)} ед. за период`"
+                >
+                  <span :style="{ width: `${Math.min(100, usedPct(u.usage))}%` }"></span>
+                </div>
+              </template>
+              <span v-else class="cell-note">без лимита · {{ num(u.usage.spent, 2) }} ед.</span>
+            </td>
+            <td class="num">
+              {{ rubAi(u.ai_cost_rub) }}
+              <small class="cell-note" :class="{ 'tone-bad': u.margin_rub < 0 }">маржа {{ rubles(u.margin_rub) }}</small>
+            </td>
+            <td>
+              <template v-if="u.projects.count">
+                {{ u.projects.count }} {{ plural(u.projects.count, 'проект', 'проекта', 'проектов') }}
+                <small class="cell-note">
+                  <template v-if="u.projects.direct">Директ · {{ u.projects.campaigns }} {{ plural(u.projects.campaigns, 'кампания', 'кампании', 'кампаний') }}</template>
+                  <template v-else>без Директа</template>
+                </small>
+              </template>
+              <span v-else class="cell-note">нет</span>
             </td>
           </tr>
         </tbody>
       </table>
     </div>
+
+    <nav v-if="data && data.pages > 1" class="au-pages" aria-label="Страницы">
+      <button class="btn btn--ghost btn--sm" type="button" :disabled="data.page <= 1" @click="setPage(data.page - 1)">← Назад</button>
+      <span>Страница {{ data.page }} из {{ data.pages }}</span>
+      <button class="btn btn--ghost btn--sm" type="button" :disabled="data.page >= data.pages" @click="setPage(data.page + 1)">Дальше →</button>
+    </nav>
+
+    <AdminUserPanel :user-id="openId" :plans="plans" :features="features" @close="closeUser" @changed="onChanged" />
   </section>
-
-  <Modal :open="!!edit" :title="edit ? `Подписка ${edit.user.email || `#${edit.user.id}`}` : ''" :locked="saving" wide @close="edit = null">
-    <form v-if="edit" id="sub-form" class="form-grid" @submit.prevent="saveSubscription">
-      <p v-if="editError" class="form-error">{{ editError }}</p>
-      <p class="hint">
-        Сейчас: <b>{{ edit.user.subscription?.plan?.name || 'без тарифа' }}</b>, {{ termText(edit.user.subscription) }}.
-        Новый тариф начинает период заново с сегодняшнего дня.
-      </p>
-      <div v-field class="field">
-        <label>Тариф</label>
-        <UiSelect v-model="edit.plan_id" :options="planOptions" />
-      </div>
-      <div v-field class="field">
-        <label>Последний день подписки</label>
-        <UiDatePicker v-model="edit.until" clearable clear-label="Без срока" />
-        <small class="field-hint">
-          При смене тарифа без срока — срок тарифа с сегодняшнего дня. Прошедшая дата закрывает доступ.
-        </small>
-      </div>
-
-      <h3>Свои условия поверх тарифа</h3>
-      <div v-field class="field">
-        <label>Единиц за период</label>
-        <div class="admin-override">
-          <UiSelect v-model="edit.units_mode" :options="limitModes('units_limit')" aria-label="Лимит единиц" />
-          <input
-            v-if="edit.units_mode === 'custom'"
-            v-model="edit.units_limit"
-            type="number"
-            min="0"
-            step="any"
-            inputmode="decimal"
-            aria-label="Единиц за период"
-            required
-          />
-        </div>
-      </div>
-      <div v-field class="field">
-        <label>Проектов</label>
-        <div class="admin-override">
-          <UiSelect v-model="edit.projects_mode" :options="limitModes('projects_limit')" aria-label="Лимит проектов" />
-          <input
-            v-if="edit.projects_mode === 'custom'"
-            v-model="edit.projects_limit"
-            type="number"
-            min="0"
-            step="1"
-            inputmode="numeric"
-            aria-label="Проектов"
-            required
-          />
-        </div>
-      </div>
-      <fieldset>
-        <legend>Функции</legend>
-        <div v-for="(label, key) in features" :key="key" v-field class="field">
-          <label>{{ label }}</label>
-          <UiSelect v-model="edit.features[key]" :options="featureModes(key)" />
-        </div>
-      </fieldset>
-    </form>
-    <template #footer>
-      <button
-        class="btn btn--ghost"
-        type="button"
-        :disabled="saving || !edit?.user.subscription?.plan"
-        v-tip="edit?.user.subscription?.plan ? '' : 'Продлить можно только подписку с тарифом'"
-        @click="renew"
-      >
-        Продлить на {{ edit?.user.subscription?.plan?.days || '' }} дн.
-      </button>
-      <button class="btn btn--ghost" type="button" :disabled="saving" @click="edit = null">Отмена</button>
-      <button class="btn btn--accent" type="submit" form="sub-form" :disabled="saving">
-        {{ saving ? 'Сохраняем…' : 'Сохранить' }}
-      </button>
-    </template>
-  </Modal>
-
-  <Modal :open="!!log" :title="log ? `События ${log.user.email || `#${log.user.id}`}` : ''" wide @close="log = null">
-    <p v-if="log?.loading" class="empty">Загружаем…</p>
-    <p v-else-if="!log?.items.length" class="empty">Событий пока нет.</p>
-    <div v-else v-scroll-x class="table-scroll">
-      <table class="table">
-        <thead>
-          <tr>
-            <th>Когда</th>
-            <th>Событие</th>
-            <th>Подробности</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-for="(e, i) in log.items" :key="i">
-            <td>{{ formatDateTime(e.created_at) }}</td>
-            <td>{{ e.label }}</td>
-            <td class="cell-note">{{ metaText(e.meta) }}</td>
-          </tr>
-        </tbody>
-      </table>
-    </div>
-  </Modal>
-
-  <Modal :open="!!ticket" :title="ticket ? `Обращения ${ticket.user.email || `#${ticket.user.id}`}` : ''" wide @close="closeTicket">
-    <template v-if="ticket">
-      <p v-if="ticket.loading" class="empty">Загружаем…</p>
-      <p v-else-if="!ticket.messages.length" class="empty">Сообщений нет.</p>
-      <div v-else class="admin-sup">
-        <div v-for="m in ticket.messages" :key="m.id" class="sup-msg" :class="`is-${m.author}`">
-          <small class="sup-msg__who">{{ m.author === 'admin' ? 'Поддержка' : 'Пользователь' }}</small>
-          <a v-if="m.has_image && ticketImages[m.id]" :href="ticketImages[m.id]" target="_blank" rel="noopener" class="sup-msg__img">
-            <img :src="ticketImages[m.id]" alt="Скриншот" />
-          </a>
-          <span v-else-if="m.has_image" class="sup-msg__img is-loading">Скриншот…</span>
-          <p v-if="m.body">{{ m.body }}</p>
-          <small class="sup-msg__time">
-            {{ formatDateTime(m.created_at) }}<template v-if="contextText(m.context)"> · {{ contextText(m.context) }}</template>
-          </small>
-        </div>
-      </div>
-      <p class="hint">
-        Ответ придёт пользователю в виджет и колокольчик, в Telegram — если привязан, иначе письмом.<template
-          v-if="ticket.topic"
-        > Копия уйдёт в тему группы поддержки.</template>
-      </p>
-      <textarea v-model="ticket.reply" class="input" rows="3" maxlength="4000" placeholder="Ответ пользователю"></textarea>
-    </template>
-    <template #footer>
-      <button class="btn btn--ghost" type="button" @click="closeTicket">Закрыть</button>
-      <button
-        class="btn btn--accent"
-        type="button"
-        :disabled="!ticket || ticket.sending || !ticket.reply.trim()"
-        @click="sendReply"
-      >
-        Ответить
-      </button>
-    </template>
-  </Modal>
 </template>
 
 <script setup>
-import { computed, onMounted, ref } from 'vue'
-import Modal from '../../components/ui/Modal.vue'
-import UiDatePicker from '../../components/ui/UiDatePicker.vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
+import UiCheckbox from '../../components/ui/UiCheckbox.vue'
 import UiSelect from '../../components/ui/UiSelect.vue'
+import AdminUserPanel from './AdminUserPanel.vue'
 import { adminApi } from '../../api/admin'
 import { errorText } from '../../api/web'
-import { askText } from '../../composables/useConfirm'
+import { reloadAdminSummary } from '../../composables/useAdminSummary'
 import { pushToast } from '../../composables/useToasts'
-import { formatDate, formatDateTime, num, rubAi } from '../../utils/format'
+import { formatDay, num, plural, rubAi, rubles } from '../../utils/format'
+import { activityLevel, activityText, hasOverrides, paidTotalText, sourceView, tariffView, usedPct } from './adminUsers'
 
-const loading = ref(true)
-const users = ref([])
-const total = ref(0)
+/**
+ * Список пользователей: поиск, фильтры, сортировка и страница — в адресе (?q=…&sub=…&page=…),
+ * по одному запросу к серверу на страницу. ?user=ID открывает панель пользователя поверх списка.
+ */
+const SUB_OPTIONS = [
+  { value: '', label: 'Любая подписка' },
+  { value: 'paying', label: 'Платит' },
+  { value: 'trial', label: 'Пробный' },
+  { value: 'expired', label: 'Истекла' },
+  { value: 'none', label: 'Без тарифа' },
+]
+const ACTIVITY_OPTIONS = [
+  { value: '', label: 'Любая активность' },
+  { value: 'today', label: 'Заходили сегодня' },
+  { value: 'week', label: 'За 7 дней' },
+  { value: 'lost', label: 'Пропали 14+ дней' },
+  { value: 'never', label: 'Ни разу не заходили' },
+]
+const PAID_OPTIONS = [
+  { value: '', label: 'Платили и нет' },
+  { value: 'yes', label: 'Платили' },
+  { value: 'no', label: 'Не платили' },
+]
+const SORT_OPTIONS = [
+  { value: 'created', label: 'По регистрации' },
+  { value: 'seen', label: 'По последнему заходу' },
+  { value: 'paid', label: 'По сумме платежей' },
+  { value: 'ai', label: 'По расходу ИИ' },
+  { value: 'ends', label: 'По концу подписки' },
+]
+const DEFAULTS = { q: '', plan: '', sub: '', activity: '', source: '', paid: '', blocked: false, unverified: false, sort: 'created', dir: 'desc', page: 1 }
+const FILTER_KEYS = ['q', 'plan', 'sub', 'activity', 'source', 'paid', 'blocked', 'unverified']
+
+const route = useRoute()
+const router = useRouter()
+const data = ref(null)
+const loading = ref(false)
+const failed = ref(false)
 const plans = ref([])
-const planOptions = computed(() => [
-  { value: null, label: 'Без тарифа — без ограничений' },
-  ...plans.value.map((p) => ({
-    value: p.id,
-    label: `${p.name}${p.is_trial ? ' (пробный)' : ''}${p.active ? '' : ' — выключен'} · ${p.days} дн.`,
+const features = ref({})
+const options = ref({ plans: [], groups: [], links: [] })
+
+/** Состояние таблицы из адреса. */
+const f = computed(() => {
+  const q = route.query
+  const one = (k) => (typeof q[k] === 'string' ? q[k] : '')
+  return {
+    q: one('q'),
+    plan: one('plan'),
+    sub: one('sub'),
+    activity: one('activity'),
+    source: one('source'),
+    paid: one('paid'),
+    blocked: one('blocked') === '1',
+    unverified: one('unverified') === '1',
+    sort: SORT_OPTIONS.some((o) => o.value === one('sort')) ? one('sort') : DEFAULTS.sort,
+    dir: one('dir') === 'asc' ? 'asc' : 'desc',
+    page: Math.max(1, parseInt(one('page'), 10) || 1),
+  }
+})
+const filtered = computed(() => FILTER_KEYS.some((k) => f.value[k] !== DEFAULTS[k]))
+const openId = computed(() => {
+  const id = parseInt(route.query.user, 10)
+  return id > 0 ? id : null
+})
+
+const planFilter = computed(() => [
+  { value: '', label: 'Любой тариф' },
+  ...options.value.plans.map((p) => ({
+    value: String(p.id),
+    label: `${p.name}${p.is_trial ? ' (пробный)' : ''}${p.active ? '' : ' — выключен'}`,
   })),
 ])
-const features = ref({})
-const busyId = ref(null)
-const edit = ref(null)
-const editError = ref('')
-const saving = ref(false)
-const log = ref(null)
+const sourceFilter = computed(() => [
+  { value: '', label: 'Любой источник' },
+  { value: 'ref', label: 'Любая ссылка' },
+  { value: 'personal', label: 'Личные ссылки' },
+  { value: 'none', label: 'Без ссылки' },
+  ...options.value.groups.map((g) => ({ value: `group:${g.id}`, label: g.name, group: 'Группы' })),
+  ...options.value.links.map((l) => ({ value: `link:${l.id}`, label: l.name || l.code, hint: l.code, group: 'Ссылки' })),
+])
 
-const limitOf = (u) => u.usage?.limit ?? null
-
-function usedPct(u) {
-  const limit = limitOf(u)
-  if (limit === null) return 0
-  if (limit <= 0) return 100
-  return Math.min(100, Math.round(((u.usage?.spent || 0) / limit) * 100))
+// Пишем в адрес только отличное от умолчаний — ссылку на выборку можно скопировать.
+function writeQuery(next) {
+  const query = {}
+  for (const [k, v] of Object.entries(next)) {
+    if (v === DEFAULTS[k]) continue
+    query[k] = typeof v === 'boolean' ? '1' : String(v)
+  }
+  if (route.query.user) query.user = route.query.user
+  if (route.query.tab) query.tab = route.query.tab
+  router.replace({ query })
 }
 
-function tone(u) {
-  const p = usedPct(u)
-  return p >= 100 ? 'is-over' : p >= 80 ? 'is-near' : ''
+function setF(key, value) {
+  writeQuery({ ...f.value, [key]: value ?? DEFAULTS[key], page: key === 'page' ? value : 1 })
 }
 
-function dayText(day) {
-  if (!day) return ''
-  const [y, m, d] = day.split('-')
-  return `${d}.${m}.${y}`
+function setPage(page) {
+  setF('page', page)
 }
 
-function termText(sub) {
-  if (!sub?.last_day) return 'бессрочно'
-  return `${sub.expired ? 'закончилась' : 'по'} ${dayText(sub.last_day)}`
+function resetFilters() {
+  search.value = ''
+  writeQuery({ ...DEFAULTS, sort: f.value.sort, dir: f.value.dir })
 }
 
-function hasOverrides(sub) {
-  const o = sub?.overrides || {}
-  return 'units_limit' in o || 'projects_limit' in o || Object.keys(o.features || {}).length > 0
-}
+// Поиск — с паузой, чтобы не дёргать сервер на каждую букву.
+const search = ref(f.value.q)
+let searchTimer = null
+watch(search, (v) => {
+  clearTimeout(searchTimer)
+  searchTimer = setTimeout(() => {
+    if (v !== f.value.q) setF('q', v)
+  }, 350)
+})
+watch(
+  () => f.value.q,
+  (v) => {
+    if (v !== search.value) search.value = v
+  },
+)
 
-const META_LABELS = {
-  via: (v) => (v === 'yandex' ? 'через Яндекс' : v === 'email' ? 'по почте' : v),
-  by: (v) => (v === 'admin' ? 'админом' : v),
-  auto: (v) => (v ? 'автоматически' : 'выбран пользователем'),
-  renew: (v) => (v ? 'продление' : ''),
-  last_day: (v) => (v ? `по ${dayText(v)}` : 'бессрочно'),
-  all: (v) => (v ? 'все предложения' : ''),
-}
-
-function metaText(meta) {
-  return Object.entries(meta || {})
-    .map(([k, v]) => (META_LABELS[k] ? META_LABELS[k](v) : `${k}: ${v}`))
-    .filter(Boolean)
-    .join(' · ')
-}
-
+let seq = 0
 async function load() {
+  const my = ++seq
+  const { page, ...rest } = f.value
+  loading.value = true
   try {
-    const [data, planData] = await Promise.all([adminApi.users(), adminApi.plans()])
-    users.value = data.items || []
-    total.value = data.total || 0
-    plans.value = planData.items || []
-    features.value = planData.features || {}
+    const res = await adminApi.users({ ...rest, blocked: rest.blocked ? 1 : '', unverified: rest.unverified ? 1 : '', page })
+    if (my !== seq) return
+    data.value = res
+    options.value = res.options || options.value
+    failed.value = false
   } catch (err) {
+    if (my !== seq) return
+    failed.value = true
     pushToast(errorText(err), 'error')
   } finally {
-    loading.value = false
+    if (my === seq) loading.value = false
   }
 }
 
-function replace(id, patch) {
-  users.value = users.value.map((u) => (u.id === id ? { ...u, ...patch } : u))
-}
+// Список перечитываем только при смене фильтров и страницы, не при открытии панели.
+const listKey = computed(() => JSON.stringify(f.value))
+watch(listKey, load)
 
-// Ответ блокировки — неполный пользователь: берём только статус, остальное в строке не трогаем.
-function blockState(res) {
-  return { blocked: res.blocked, blocked_at: res.blocked_at, blocked_reason: res.blocked_reason }
-}
-
-// --- Подписка ---
-
-function modeOf(overrides, key) {
-  if (!(key in overrides)) return 'plan'
-  return overrides[key] === null ? 'none' : 'custom'
-}
-
-function openEdit(u) {
-  const sub = u.subscription || {}
-  const o = sub.overrides || {}
-  const featureOverrides = o.features || {}
-  editError.value = ''
-  edit.value = {
-    user: u,
-    plan_id: sub.plan?.id ?? null,
-    until: sub.last_day || '',
-    units_mode: modeOf(o, 'units_limit'),
-    units_limit: o.units_limit ?? '',
-    projects_mode: modeOf(o, 'projects_limit'),
-    projects_limit: o.projects_limit ?? '',
-    features: Object.fromEntries(
-      Object.keys(features.value).map((k) => [k, k in featureOverrides ? (featureOverrides[k] ? 'on' : 'off') : 'plan']),
-    ),
-  }
-}
-
-function selectedPlan() {
-  return plans.value.find((p) => p.id === edit.value?.plan_id) || null
-}
-
-function planLimitText(key) {
-  const p = selectedPlan()
-  if (!p || p[key] === null) return 'без лимита'
-  return num(p[key], 2)
-}
-
-function planFeature(key) {
-  const p = selectedPlan()
-  return !p || p.features?.[key] !== false
-}
-
-function limitModes(key) {
-  return [
-    { value: 'plan', label: `как в тарифе (${planLimitText(key)})` },
-    { value: 'none', label: 'без лимита' },
-    { value: 'custom', label: 'своё значение' },
-  ]
-}
-
-function featureModes(key) {
-  return [
-    { value: 'plan', label: `как в тарифе (${planFeature(key) ? 'есть' : 'нет'})` },
-    { value: 'on', label: 'открыта' },
-    { value: 'off', label: 'закрыта' },
-  ]
-}
-
-function overridesOf(e) {
-  const out = {}
-  if (e.units_mode === 'none') out.units_limit = null
-  if (e.units_mode === 'custom') out.units_limit = Number(e.units_limit)
-  if (e.projects_mode === 'none') out.projects_limit = null
-  if (e.projects_mode === 'custom') out.projects_limit = Number(e.projects_limit)
-  const f = Object.fromEntries(
-    Object.entries(e.features)
-      .filter(([, v]) => v !== 'plan')
-      .map(([k, v]) => [k, v === 'on']),
-  )
-  if (Object.keys(f).length) out.features = f
-  return out
-}
-
-// Отправляем только изменённое: тариф без новой даты получает срок тарифа с сегодняшнего дня.
-function changedPayload(e) {
-  const sub = e.user.subscription || {}
-  const payload = { overrides: overridesOf(e) }
-  if (e.plan_id !== (sub.plan?.id ?? null)) payload.plan_id = e.plan_id
-  if ((e.until || '') !== (sub.last_day || '')) payload.until = e.until || null
-  return payload
-}
-
-async function submitSubscription(payload, done) {
-  const u = edit.value.user
-  saving.value = true
-  editError.value = ''
+async function loadPlans() {
   try {
-    const sub = await adminApi.setSubscription(u.id, payload)
-    edit.value = null
-    pushToast(done)
-    // Период и лимит могли смениться — расход пересчитываем целиком.
-    const fresh = await adminApi.users()
-    users.value = fresh.items || users.value
-    if (!fresh.items) replace(u.id, { subscription: sub })
-  } catch (err) {
-    editError.value = errorText(err)
-  } finally {
-    saving.value = false
-  }
-}
-
-function saveSubscription() {
-  return submitSubscription(changedPayload(edit.value), 'Подписка сохранена')
-}
-
-function renew() {
-  const days = edit.value.user.subscription?.plan?.days
-  return submitSubscription({ renew: true }, `Подписка продлена на ${days} дн.`)
-}
-
-async function verifyEmail(u) {
-  busyId.value = u.id
-  try {
-    await adminApi.verifyEmail(u.id)
-    replace(u.id, { email_verified: true })
-    pushToast('Почта отмечена подтверждённой')
+    const res = await adminApi.plans()
+    plans.value = res.items || []
+    features.value = res.features || {}
   } catch (err) {
     pushToast(errorText(err), 'error')
-  } finally {
-    busyId.value = null
   }
 }
 
-async function openEvents(u) {
-  log.value = { user: u, items: [], loading: true }
-  try {
-    const data = await adminApi.events(u.id)
-    if (log.value?.user.id === u.id) log.value = { user: u, items: data.items || [], loading: false }
-  } catch (err) {
-    log.value = null
-    pushToast(errorText(err), 'error')
-  }
+function userLink(id) {
+  return { query: { ...route.query, user: String(id), tab: undefined } }
 }
 
-// --- Обращения в поддержку ---
-
-const ticket = ref(null)
-const ticketImages = ref({})
-
-function contextText(ctx) {
-  if (!ctx) return ''
-  return [
-    ctx.page,
-    ctx.workspace ? `проект «${ctx.workspace.name}» #${ctx.workspace.id}` : '',
-    ctx.plan ? `тариф ${ctx.plan}` : '',
-    ctx.browser,
-  ]
-    .filter(Boolean)
-    .join(' · ')
+// Клик по строке открывает панель; ссылки и кнопки внутри работают сами.
+function openUser(id, event) {
+  if (event?.target.closest('a, button, input, label')) return
+  if (window.getSelection()?.toString()) return
+  router.replace(userLink(id))
 }
 
-function showTicket(u, data) {
-  ticket.value = { ...(ticket.value || {}), user: u, messages: data.messages || [], topic: data.topic, loading: false }
-  for (const m of ticket.value.messages) {
-    if (!m.has_image || ticketImages.value[m.id] !== undefined) continue
-    ticketImages.value = { ...ticketImages.value, [m.id]: '' }
-    adminApi
-      .supportImage(m.id)
-      .then((url) => (ticketImages.value = { ...ticketImages.value, [m.id]: url }))
-      .catch(() => {})
-  }
+function closeUser() {
+  const { user, tab, ...rest } = route.query
+  router.replace({ query: rest })
 }
 
-async function openSupport(u) {
-  ticket.value = { user: u, messages: [], topic: null, loading: true, reply: '', sending: false }
-  try {
-    showTicket(u, await adminApi.support(u.id))
-    replace(u.id, { support: { ...u.support, unread: 0 } })
-  } catch (err) {
-    ticket.value = null
-    pushToast(errorText(err), 'error')
-  }
+function onChanged() {
+  load()
+  reloadAdminSummary()
 }
 
-async function sendReply() {
-  const t = ticket.value
-  if (!t || !t.reply.trim()) return
-  t.sending = true
-  try {
-    const data = await adminApi.supportReply(t.user.id, t.reply.trim())
-    t.reply = ''
-    showTicket(t.user, data)
-    replace(t.user.id, { support: { total: data.messages.length, unread: 0 } })
-  } catch (err) {
-    pushToast(errorText(err), 'error')
-  } finally {
-    if (ticket.value) ticket.value.sending = false
-  }
-}
-
-function closeTicket() {
-  ticket.value = null
-  for (const url of Object.values(ticketImages.value)) if (url) URL.revokeObjectURL(url)
-  ticketImages.value = {}
-}
-
-// --- Блокировка ---
-
-async function blockUser(u) {
-  const reason = await askText('Причина (необязательно)', {
-    title: `Заблокировать ${u.email || 'пользователя'}?`,
-    confirmText: 'Заблокировать',
-    danger: true,
-  })
-  if (reason == null) return
-  busyId.value = u.id
-  try {
-    replace(u.id, blockState(await adminApi.blockUser(u.id, reason)))
-  } catch (err) {
-    pushToast(errorText(err), 'error')
-  } finally {
-    busyId.value = null
-  }
-}
-
-async function unblockUser(u) {
-  busyId.value = u.id
-  try {
-    replace(u.id, blockState(await adminApi.unblockUser(u.id)))
-  } catch (err) {
-    pushToast(errorText(err), 'error')
-  } finally {
-    busyId.value = null
-  }
-}
-
-onMounted(load)
+onMounted(() => {
+  load()
+  loadPlans()
+})
+onBeforeUnmount(() => clearTimeout(searchTimer))
 </script>
+
+<style scoped>
+.au-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.au-tools__search {
+  flex: 1 1 240px;
+  max-width: 320px;
+}
+.au-tools__sort {
+  display: inline-flex;
+  gap: 4px;
+  margin-left: auto;
+}
+.au-summary {
+  margin: 0 0 10px;
+  color: var(--muted);
+  font-size: 14px;
+}
+.au-summary b {
+  color: var(--ink);
+}
+.table-scroll.is-loading {
+  opacity: 0.6;
+  transition: opacity 0.15s;
+}
+.au-table tbody tr {
+  cursor: pointer;
+}
+.au-table tbody tr:hover td {
+  background: var(--accent-soft);
+}
+.au-table td {
+  vertical-align: top;
+}
+.au-mark-col {
+  width: 10px;
+  padding: 0 0 0 4px !important;
+}
+td.au-mark-col {
+  position: relative;
+}
+td.au-mark-col .act-mark {
+  position: absolute;
+  top: 3px;
+  bottom: 3px;
+  left: 2px;
+  width: 6px;
+}
+.au-user {
+  color: var(--ink);
+  font-weight: 700;
+  text-decoration: none;
+  overflow-wrap: anywhere;
+}
+.au-user:hover {
+  text-decoration: underline;
+}
+.au-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 4px;
+}
+.au-badges:empty {
+  display: none;
+}
+.au-src {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+}
+.au-src i {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+.au-tariff {
+  min-width: 200px;
+}
+.au-tariff .chip {
+  margin-top: 4px;
+}
+.au-limit {
+  min-width: 110px;
+}
+.au-limit .meter {
+  margin-top: 4px;
+}
+.au-pages {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  margin-top: 14px;
+  color: var(--muted);
+  font-size: 14px;
+}
+.is-muted {
+  opacity: 0.65;
+}
+</style>

@@ -30,10 +30,20 @@ export const adminApi = {
    */
   me: () => call('/me'),
   /**
-   * { items: [пользователь + usage { spent, limit, cost_rub, calls, period_start, period_end }
-   *   + subscription { plan, last_day, state, expired, units_limit, projects_limit, features, overrides }], total }.
+   * Страница списка (по 50). params: q, plan, sub (paying|trial|expired|none), activity (today|week|lost|never),
+   * source (link:ID | group:ID | personal | ref | none), paid (yes|no), blocked, unverified, sort
+   * (created|seen|paid|ai|ends), dir (asc|desc), page.
+   * { items: [пользователь + last_seen_at, source, subscription, last_payment, paid { rub, count, days },
+   *   ai_cost_rub, margin_rub, usage { spent, limit }, projects { count, direct, campaigns }, support_unread],
+   *   summary { found, paying, today }, page, pages, per_page, options { plans, groups, links } }.
    */
-  users: (limit = 200, offset = 0) => call(`/users?limit=${limit}&offset=${offset}`),
+  users: (params = {}) => {
+    const q = new URLSearchParams()
+    for (const [k, v] of Object.entries(params)) if (v !== '' && v !== null && v !== undefined && v !== false) q.set(k, v)
+    return call(`/users?${q}`)
+  },
+  /** Карточка для панели: { user (как строка списка), days, ai_days, ai_tasks, chats, project_list }. */
+  userCard: (id) => call(`/users/${id}/card`),
   blockUser: (id, reason = '') => send('POST', `/users/${id}/block`, { reason }),
   unblockUser: (id) => send('POST', `/users/${id}/unblock`),
   /**

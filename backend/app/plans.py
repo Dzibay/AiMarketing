@@ -325,8 +325,12 @@ def email_check_required() -> bool:
 
 def subscription(user_id: int, *, now: datetime | None = None) -> dict:
     """Действующие условия пользователя: тариф, срок, лимиты с учётом правок админа, функции, период."""
+    return subscription_from(_row(user_id) or {}, now=now)
+
+
+def subscription_from(row: dict, *, now: datetime | None = None) -> dict:
+    """Как subscription(), но из уже прочитанной строки (поля как у _row) — для списков без запроса на человека."""
     now = now or now_msk()
-    row = _row(user_id) or {}
     has_plan = row.get("plan_id") is not None
     overrides = row.get("overrides") or {}
     starts_at = row.get("starts_at") or row.get("user_created_at") or now
@@ -595,7 +599,7 @@ def add_days(conn, user_id: int, days: int, now: datetime) -> dict:
 
 def admin_view(user_id: int, sub: dict | None = None) -> dict:
     sub = sub or subscription(user_id)
-    return {**public(sub), "units_limit": sub["units_limit"], "overrides": sub["overrides"]}
+    return {**public(sub), "units_limit": sub["units_limit"], "overrides": sub["overrides"], "bonus_units": sub["bonus_units"]}
 
 
 def resume(user_id: int) -> None:

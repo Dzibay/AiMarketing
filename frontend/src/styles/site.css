@@ -607,27 +607,6 @@ button.stat-card[aria-pressed='true'] {
   color: var(--accent);
 }
 
-.admin-users td {
-  vertical-align: top;
-}
-
-.admin-users td .btn {
-  margin-top: 0.3rem;
-}
-
-.admin-users__usage .meter {
-  margin-top: 0.35rem;
-  min-width: 7rem;
-}
-
-.admin-users .chip {
-  margin-top: 0.3rem;
-}
-
-.admin-users__plan .chip + .chip {
-  margin-left: 0.3rem;
-}
-
 /* Правка поверх тарифа: режим (как в тарифе / без лимита / своё) и число рядом. */
 .admin-override {
   display: flex;

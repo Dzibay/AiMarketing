@@ -61,7 +61,12 @@
               {{ formatDateTime(p.created_at) }}
               <small class="cell-note">№ {{ p.id }}<template v-if="p.provider_id"> · {{ p.provider_id }}</template></small>
             </td>
-            <td>{{ p.email || `id ${p.user_id}` }}</td>
+            <td>
+              <RouterLink v-if="p.user_id" :to="{ path: '/admin-panel/users', query: { user: p.user_id } }">
+                {{ p.email || `id ${p.user_id}` }}
+              </RouterLink>
+              <template v-else>—</template>
+            </td>
             <td>
               {{ p.plan_name || '—' }}
               <small class="cell-note">

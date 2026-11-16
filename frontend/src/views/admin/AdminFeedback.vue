@@ -24,7 +24,10 @@
             <ThumbsUp v-else aria-hidden="true" />
             {{ f.rating < 0 ? 'Плохо' : 'Хорошо' }}
           </span>
-          <span>{{ f.user.email }}</span>
+          <RouterLink v-if="f.user.id" :to="{ path: '/admin-panel/users', query: { user: f.user.id } }">
+            {{ f.user.email || `#${f.user.id}` }}
+          </RouterLink>
+          <span v-else>{{ f.user.email }}</span>
           <span v-if="f.model" class="cell-note">{{ f.model }}</span>
           <time class="cell-note" :datetime="f.created_at">{{ formatDateTime(f.created_at) }}</time>
         </div>
@@ -49,38 +52,15 @@
       Показать ещё
     </button>
 
-    <Modal :open="!!reading" :title="reading?.chat.title || 'Чат'" wide @close="reading = null">
-      <template v-if="reading">
-        <p class="cell-note">
-          {{ reading.chat.email }} · {{ reading.chat.general ? 'общий чат' : 'чат проекта' }} · начат
-          {{ formatDateTime(reading.chat.created_at) }}
-        </p>
-        <ol class="fb-chat">
-          <li
-            v-for="m in reading.messages"
-            :key="m.id"
-            class="fb-chat__msg"
-            :class="[`is-${m.role}`, { 'is-rated': m.id === readingMessage }]"
-          >
-            <div class="fb-chat__who">
-              {{ m.role === 'user' ? 'Пользователь' : `ИИ${m.model ? ` · ${m.model}` : ''}` }}
-              <span v-if="m.feedback" :class="m.feedback.rating < 0 ? 'tone-bad' : 'tone-ok'">
-                · {{ m.feedback.rating < 0 ? 'плохо' : 'хорошо' }}
-              </span>
-            </div>
-            <p>{{ m.content }}</p>
-          </li>
-        </ol>
-      </template>
-    </Modal>
+    <AdminChatModal :chat="reading" :highlight="readingMessage" @close="reading = null" />
   </section>
 </template>
 
 <script setup>
-import { computed, nextTick, onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { MessagesSquare, ThumbsDown, ThumbsUp } from '@lucide/vue'
-import Modal from '../../components/ui/Modal.vue'
 import UiSelect from '../../components/ui/UiSelect.vue'
+import AdminChatModal from './AdminChatModal.vue'
 import { adminApi } from '../../api/admin'
 import { errorText } from '../../api/web'
 import { pushToast } from '../../composables/useToasts'
@@ -133,8 +113,6 @@ async function openChat(f) {
   try {
     reading.value = await adminApi.chat(f.chat_id)
     readingMessage.value = f.message_id
-    await nextTick()
-    document.querySelector('.fb-chat__msg.is-rated')?.scrollIntoView({ block: 'center' })
   } catch (err) {
     pushToast(errorText(err), 'error')
   }
@@ -216,41 +194,9 @@ onMounted(() => load())
   margin: 0;
   overflow-wrap: anywhere;
 }
-.fb-chat {
-  display: grid;
-  gap: 12px;
-  margin: 12px 0 0;
-  padding: 0;
-  list-style: none;
-}
-.fb-chat__msg {
-  padding: 10px 12px;
-  border-radius: 12px;
-  background: color-mix(in srgb, var(--ink) 4%, transparent);
-}
-.fb-chat__msg.is-user {
-  margin-left: 15%;
-}
-.fb-chat__msg.is-rated {
-  outline: 2px solid var(--ink);
-}
-.fb-chat__msg p {
-  margin: 4px 0 0;
-  overflow-wrap: anywhere;
-  white-space: pre-wrap;
-  font-size: 14px;
-}
-.fb-chat__who {
-  color: var(--muted);
-  font-size: 12px;
-  font-weight: 700;
-}
 @media (max-width: 640px) {
   .fb-item__qa {
     grid-template-columns: 1fr;
-  }
-  .fb-chat__msg.is-user {
-    margin-left: 0;
   }
 }
 </style>
