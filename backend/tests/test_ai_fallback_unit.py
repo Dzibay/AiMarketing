@@ -24,8 +24,9 @@ def _clean(monkeypatch):
     monkeypatch.setattr(ai, "_down", {})
     monkeypatch.setattr(ai, "RETRY_PAUSES", (2, 5))
     monkeypatch.setattr(ai.time, "sleep", lambda s: None)
-    monkeypatch.setattr(ai, "load_config", lambda user_id, task, ws, model_class=None, vision=False: {
-        **CFG, "model": "f", "model_name": "f", "class_name": "Быстрая", "model_class": model_class, "fallbacks": []})
+    monkeypatch.setattr(ai, "load_config", lambda user_id, task, ws, model_class=None, model=None, vision=False: {
+        **CFG, "model": model or "f", "model_name": model or "f", "class_name": "Быстрая", "model_class": model_class,
+        "fallbacks": []})
 
 
 def _provider(monkeypatch, replies: dict):
@@ -76,7 +77,9 @@ def test_unavailable_model_falls_back_and_is_skipped_next_time(monkeypatch):
     calls = _provider(monkeypatch, {"m": (503, NOT_SERVED), "f": (200, OK)})
     reply = ai.complete(CFG, PING)
     assert reply["content"] == "готов" and calls == ["m", "f"]
-    assert reply["fallback"]["model_name"] == "f" and reply["fallback"]["class_name"] == "Быстрая"
+    # Класс и его цена — выбранные: в чате подмену не видно; модель и след подмены — для админки.
+    assert reply["fallback"]["model_name"] == "f" and reply["fallback"]["class_name"] == "Стандартная"
+    assert reply["fallback"]["model_class"] == "standard" and reply["fallback"]["fallback_from"] == "m"
     assert reply["fallback_from"] == "Стандартная" and reply["fallback"]["fallbacks"] == []
     # Отказавшую модель следующие минуты не зовут первой.
     calls.clear()
@@ -98,26 +101,109 @@ def test_key_errors_do_not_fall_back(monkeypatch):
     assert err.value.code == "ai-auth" and calls == ["m"]
 
 
-def test_config_lists_fallbacks(monkeypatch):
+def _setup_classes(monkeypatch, classes):
     monkeypatch.undo()
-    classes = [
-        {"id": "standard", "name": "Стандартная", "model": "m1", "enabled": True, "vision": True},
-        {"id": "fast", "name": "Быстрая", "model": "m2", "enabled": True, "vision": False},
-        {"id": "thinking", "name": "Думающая", "model": "m1", "enabled": True, "vision": True},
-    ]
     for c in classes:
-        c.update(units_in=1, units_out=1, cost_in=1, cost_out=1)
+        c.setdefault("enabled", True)
+        c.setdefault("vision", False)
+        c.setdefault("reserves", [])
+        c.setdefault("units_in", 1)
+        c.setdefault("units_out", 1)
+        c.setdefault("cost_in", 1)
+        c.setdefault("cost_out", 1)
     monkeypatch.setattr(ai, "decrypt_token", lambda cipher: "sk")
     monkeypatch.setattr(ai, "model_classes", lambda: classes)
     monkeypatch.setattr(ai, "_service", lambda: {"provider": "openai", "base_url": "https://ai.example/v1",
                                                  "api_key_enc": "x", "temperature": None})
     monkeypatch.setattr(ai.ai_bridge, "target", lambda use, model: None)
+
+
+def _models(cfg):
+    return [f["model"] for f in cfg["fallbacks"]]
+
+
+def test_config_lists_fallbacks(monkeypatch):
+    _setup_classes(monkeypatch, [
+        {"id": "standard", "name": "Стандартная", "model": "m1", "vision": True},
+        {"id": "fast", "name": "Быстрая", "model": "m2"},
+        {"id": "thinking", "name": "Думающая", "model": "m1", "vision": True},
+    ])
     # Та же модель в другом классе — не запасная.
-    assert ai.load_config(None, "chat")["fallbacks"] == [{"id": "fast", "model": "m2"}]
+    assert ai.load_config(None, "chat")["fallbacks"] == [
+        {"id": "fast", "model": "m2", "vision": False, "cost_in": 1, "cost_out": 1, "cost_cache": None}]
     assert ai.load_config(None, "chat", vision=True)["fallbacks"] == []
     assert ai.load_config(None, "test", model_class="fast")["fallbacks"] == []
     # Своя модель задачи (проверка сайта) — запасная — модель её класса.
-    assert ai.load_config(None, "site_check", model="x")["fallbacks"][0] == {"id": "fast", "model": "m2"}
+    assert _models(ai.load_config(None, "site_check", model="x"))[0] == "m2"
+
+
+def test_chain_goes_reserves_then_cheaper_down_then_dearer(monkeypatch):
+    _setup_classes(monkeypatch, [
+        {"id": "fast", "name": "Быстрая", "model": "f", "cost_in": 1, "cost_out": 2,
+         "reserves": [{"model": "f-r", "vision": False, "cost_in": 1, "cost_out": 1, "cost_cache": None}]},
+        {"id": "standard", "name": "Стандартная", "model": "s", "cost_in": 5, "cost_out": 10,
+         "reserves": [{"model": "s-r1", "vision": True, "cost_in": 3, "cost_out": 9, "cost_cache": None},
+                      {"model": "s-r2", "vision": False, "cost_in": 2, "cost_out": 8, "cost_cache": None}]},
+        {"id": "thinking", "name": "Думающая", "model": "t", "cost_in": 20, "cost_out": 40, "vision": True},
+    ])
+    assert _models(ai.load_config(None, "chat", model_class="thinking")) == ["s", "s-r1", "s-r2", "f", "f-r"]
+    assert _models(ai.load_config(None, "chat", model_class="standard")) == ["s-r1", "s-r2", "f", "f-r", "t"]
+    assert _models(ai.load_config(None, "chat", model_class="fast")) == ["f-r", "s", "s-r1", "s-r2", "t"]
+    # С картинками — только видящие.
+    assert _models(ai.load_config(None, "chat", model_class="thinking", vision=True)) == ["s-r1"]
+
+
+def test_chain_without_costs_uses_dots(monkeypatch):
+    _setup_classes(monkeypatch, [
+        {"id": "fast", "name": "Быстрая", "model": "f", "cost_in": None, "cost_out": None},
+        {"id": "standard", "name": "Стандартная", "model": "s"},
+        {"id": "thinking", "name": "Думающая", "model": "t"},
+    ])
+    assert _models(ai.load_config(None, "chat", model_class="standard")) == ["f", "t"]
+
+
+def test_reserve_bills_at_class_price_and_is_logged(monkeypatch):
+    _setup_classes(monkeypatch, [
+        {"id": "standard", "name": "Стандартная", "model": "s", "units_in": 100, "units_out": 100, "cost_in": 10, "cost_out": 10,
+         "reserves": [{"model": "r", "vision": False, "cost_in": 1, "cost_out": 1, "cost_cache": None}]},
+        {"id": "fast", "name": "Быстрая", "model": "f", "units_in": 5, "units_out": 5, "cost_in": 2, "cost_out": 2},
+    ])
+    monkeypatch.setattr(ai, "_down", {})
+    monkeypatch.setattr(ai, "RETRY_PAUSES", ())
+    recorded = []
+    monkeypatch.setattr(ai, "_record", lambda cfg, usage: recorded.append((cfg, usage)))
+    monkeypatch.setattr(ai, "check_budget", lambda cfg: None)
+    monkeypatch.setattr(ai, "_check_url_resolves_public", lambda url: None)
+    reply_ok = {"choices": [{"message": {"content": "готов"}}],
+                "usage": {"prompt_tokens": 1_000_000, "completion_tokens": 0}}
+    calls = _provider(monkeypatch, {"s": (503, NOT_SERVED), "r": (503, NOT_SERVED), "f": (200, reply_ok)})
+    cfg = ai.load_config(7, "chat", model_class="standard")
+    reply = ai.complete(cfg, PING)
+    assert calls == ["s", "r", "f"]
+    used, usage = recorded[0]
+    # Цена — выбранного класса, себестоимость — ответившей модели; класс в чате прежний.
+    assert used["model_class"] == "standard" and used["class_name"] == "Стандартная" and used["model_name"] == "f"
+    assert usage["charged"] == 100 and usage["cost_rub"] == 2
+    assert used["fallback_from"] == "s" and "не отдаёт модель s" in used["fallback_reason"]
+    # Следующим шагам хода — cfg ответившей, без уже отказавших в запасе.
+    assert reply["fallback"]["fallbacks"] == []
+
+
+def test_save_reserves_validation():
+    clean = ai._clean_reserves("Стандартная", "s", [
+        {"model": " r1 ", "cost_in": "1,5", "cost_out": 3}, {"model": ""}, {"model": "r2", "vision": True}])
+    assert clean == [
+        {"model": "r1", "vision": False, "cost_in": 1.5, "cost_out": 3.0, "cost_cache": None},
+        {"model": "r2", "vision": True, "cost_in": None, "cost_out": None, "cost_cache": None},
+    ]
+    for items, text in (
+        ([{"model": "s"}], "уже есть"),
+        ([{"model": "r", "cost_in": 1}], "обе"),
+        ([{"model": f"r{i}"} for i in range(ai.MAX_RESERVES + 1)], "не больше"),
+    ):
+        with pytest.raises(YandexError) as err:
+            ai._clean_reserves("Стандартная", "s", items)
+        assert text in err.value.message
 
 
 def test_similar_models_for_a_wrong_id(monkeypatch):

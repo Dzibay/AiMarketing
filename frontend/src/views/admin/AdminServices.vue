@@ -86,6 +86,58 @@
         </table>
       </div>
 
+      <h3>Резервные модели</h3>
+      <p class="field-hint">
+        Если провайдер не отдаёт модель класса (нет такой модели, кончились деньги или квота, регион), ход идёт её
+        резервами по порядку, потом классами дешевле — до самого дешёвого (каждый со своими резервами), и только потом
+        дороже. Пользователь платит по цене выбранного класса и подмены не видит; себестоимость — модели, которая
+        ответила. Подмены видны в «Расходе». Отказавшая модель 10 минут зовётся последней.
+      </p>
+      <div v-for="c in aiForm.classes" :key="`r-${c.id}`" class="reserve-block">
+        <p class="reserve-block__head">
+          <b>{{ c.name }}</b> <span class="cell-note">{{ c.model || 'модель не указана' }}</span>
+        </p>
+        <div v-if="c.reserves.length" v-scroll-x class="table-scroll">
+          <table class="table admin-classes">
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>Модель</th>
+                <th>Зрение</th>
+                <th class="num">₽ · вход</th>
+                <th class="num">₽ · кэш</th>
+                <th class="num">₽ · выход</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="(r, i) in c.reserves" :key="i">
+                <td>{{ i + 1 }}</td>
+                <td>
+                  <input v-model.trim="r.model" type="text" autocomplete="off" :aria-label="`Резерв ${i + 1} класса «${c.name}»`" />
+                </td>
+                <td><UiCheckbox v-model="r.vision" :aria-label="`Резерв ${i + 1} видит картинки`" /></td>
+                <td v-for="f in RESERVE_COST_FIELDS" :key="f" class="num">
+                  <input v-model="r[f]" type="number" min="0" step="any" inputmode="decimal" placeholder="—" :aria-label="f" />
+                </td>
+                <td>
+                  <button class="btn btn--ghost btn--sm" type="button" :disabled="i === 0" aria-label="Выше" @click="moveReserve(c, i)">↑</button>
+                  <button class="btn btn--ghost btn--sm" type="button" aria-label="Убрать резерв" @click="c.reserves.splice(i, 1)">✕</button>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <button
+          v-if="c.reserves.length < MAX_RESERVES"
+          class="btn btn--ghost btn--sm"
+          type="button"
+          @click="c.reserves.push({ model: '', vision: false, cost_in: '', cost_cache: '', cost_out: '' })"
+        >
+          + резервная модель
+        </button>
+      </div>
+
       <h3>Фоновые задачи</h3>
       <div v-for="t in ai.tasks" :key="t.id" v-field class="field">
         <label>{{ t.label }}</label>
@@ -265,6 +317,13 @@ const props = defineProps({
 const emit = defineEmits(['changed'])
 
 const PRICE_FIELDS = ['units_in', 'units_cache', 'units_out', 'cost_in', 'cost_cache', 'cost_out']
+const RESERVE_COST_FIELDS = ['cost_in', 'cost_cache', 'cost_out']
+const MAX_RESERVES = 5
+
+function moveReserve(cls, i) {
+  const [item] = cls.reserves.splice(i, 1)
+  cls.reserves.splice(i - 1, 0, item)
+}
 
 const ai = ref({ providers: [], tasks: [], classes: [], configured: false, has_key: false, key_hint: '', default_base_url: '' })
 const aiForm = reactive({
@@ -319,7 +378,11 @@ function fillAi(data) {
   aiForm.folder_id = data.folder_id || ''
   aiForm.temperature = data.temperature ?? 0.3
   aiForm.api_key = ''
-  aiForm.classes = (data.classes || []).map((c) => ({ ...c, ...Object.fromEntries(PRICE_FIELDS.map((f) => [f, blank(c[f])])) }))
+  aiForm.classes = (data.classes || []).map((c) => ({
+    ...c,
+    ...Object.fromEntries(PRICE_FIELDS.map((f) => [f, blank(c[f])])),
+    reserves: (c.reserves || []).map((r) => ({ ...r, ...Object.fromEntries(RESERVE_COST_FIELDS.map((f) => [f, blank(r[f])])) })),
+  }))
   aiForm.task_classes = { ...(data.task_classes || {}) }
 }
 
@@ -342,6 +405,9 @@ async function saveAi() {
           enabled: c.enabled,
           vision: !!c.vision,
           ...Object.fromEntries(PRICE_FIELDS.map((f) => [f, money(c[f])])),
+          reserves: c.reserves
+            .filter((r) => r.model)
+            .map((r) => ({ model: r.model, vision: !!r.vision, ...Object.fromEntries(RESERVE_COST_FIELDS.map((f) => [f, money(r[f])])) })),
         })),
         task_classes: aiForm.task_classes,
       }),

@@ -118,8 +118,12 @@ def record(
     estimated: bool = False,
     charged: float = 0.0,
     cost_rub: float | None = None,
+    fallback_from: str = "",
+    fallback_reason: str = "",
 ) -> None:
-    """Строка списания. Ошибка учёта не роняет операцию: результат уже получен и оплачен сервисом."""
+    """Строка списания. Ошибка учёта не роняет операцию: результат уже получен и оплачен сервисом.
+
+    fallback_from / fallback_reason — ответила запасная модель: какая была назначена и почему заменили."""
     if not user_id:
         return
     try:
@@ -127,8 +131,9 @@ def record(
             conn.execute(
                 """
                 INSERT INTO ai_usage (user_id, workspace_id, kind, task, model, model_class, tokens_in, tokens_out,
-                                      tokens_cached, chars_in, chars_out, units, estimated, charged, cost_rub)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                                      tokens_cached, chars_in, chars_out, units, estimated, charged, cost_rub,
+                                      fallback_from, fallback_reason)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """,
                 (
                     user_id,
@@ -146,6 +151,8 @@ def record(
                     bool(estimated),
                     round(float(charged or 0), 4),
                     cost_rub,
+                    (fallback_from or "")[:200],
+                    (fallback_reason or "")[:300],
                 ),
             )
     except Exception:  # noqa: BLE001
@@ -352,6 +359,24 @@ def service_usage(month: str | None = None) -> dict:
             FROM ai_usage ORDER BY m DESC LIMIT 12
             """
         ).fetchall()
+        # Какие модели на деле отвечали и сколько раз — вместо назначенной (запасные).
+        by_model = conn.execute(
+            """
+            SELECT model, model_class, COUNT(*) AS n, COUNT(*) FILTER (WHERE fallback_from <> '') AS subs,
+                   SUM(charged) AS charged, SUM(cost_rub) AS cost
+            FROM ai_usage WHERE kind = 'model' AND created_at >= %s AND created_at < %s
+            GROUP BY model, model_class ORDER BY COUNT(*) DESC LIMIT 30
+            """,
+            (start, end),
+        ).fetchall()
+        subs = conn.execute(
+            """
+            SELECT created_at, task, model_class, model, fallback_from, fallback_reason, user_id
+            FROM ai_usage WHERE fallback_from <> '' AND created_at >= %s AND created_at < %s
+            ORDER BY id DESC LIMIT 30
+            """,
+            (start, end),
+        ).fetchall()
 
     def money(v) -> float:
         return round(float(v or 0), 2)
@@ -394,6 +419,30 @@ def service_usage(month: str | None = None) -> dict:
                 "cost_rub": money(r["cost"]),
             }
             for r in by_user
+        ],
+        "by_model": [
+            {
+                "model": r["model"] or "",
+                "model_class": r["model_class"] or "",
+                "class_name": classes.get(r["model_class"]) or r["model_class"] or "",
+                "calls": int(r["n"]),
+                "substitutes": int(r["subs"]),
+                "units": money(r["charged"]),
+                "cost_rub": money(r["cost"]),
+            }
+            for r in by_model
+        ],
+        "substitutions": [
+            {
+                "created_at": r["created_at"].isoformat(),
+                "task": ai.TASK_LABELS.get(r["task"], r["task"]),
+                "class_name": classes.get(r["model_class"]) or r["model_class"] or "",
+                "model": r["model"] or "",
+                "from": r["fallback_from"],
+                "reason": r["fallback_reason"],
+                "user_id": r["user_id"],
+            }
+            for r in subs
         ],
     }
 

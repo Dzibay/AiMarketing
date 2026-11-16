@@ -8344,9 +8344,40 @@ _BOARD_HISTORY = (
 )
 
 
+_OLD_NOTE = "старый ответ укорочен (было {n} знаков): из списков убраны строки (см. «… ещё N»), длинные тексты обрезаны. Нужны данные — вызови инструмент снова"
+
+
+def _cut_strings(value, limit: int):
+    """Длинные строки в JSON — до limit знаков с «…»."""
+    if isinstance(value, dict):
+        return {k: _cut_strings(v, limit) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_cut_strings(v, limit) for v in value]
+    if isinstance(value, str) and len(value) > limit:
+        return value[:limit] + "…"
+    return value
+
+
 def _shorten_result(content: str, limit: int = OLD_RESULT_CHARS) -> str:
+    """Старый ответ инструмента — короче limit. JSON остаётся целым JSON: сначала укорачиваются списки
+    (с «… ещё N»), потом длинные строки; не JSON или не вышло — обрезка текста."""
     if len(content) <= limit:
         return content
+    note = _OLD_NOTE.format(n=len(content))
+    try:
+        data = json.loads(content)
+    except ValueError:
+        data = None
+    if isinstance(data, (dict, list)):
+        if isinstance(data, dict):
+            data.pop("_сокращено", None)
+        room = limit - len(note) - 40
+        for value in (data, _cut_strings(data, 160), _cut_strings(data, 60)):
+            fitted = _fit_lists(value, room)
+            if fitted is not None:
+                small = fitted[0]
+                small = {"_сокращено": note, **small} if isinstance(small, dict) else {"_сокращено": note, "items": small}
+                return json.dumps(small, ensure_ascii=False)
     return f"{content[:limit]}… [сокращено: было {len(content)} символов; нужны данные — вызови инструмент снова]"
 
 

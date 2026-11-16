@@ -1,5 +1,6 @@
 """Новая кампания по этапам, таблицы propose_items и строки с галочками в карточках — без БД."""
 
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -520,6 +521,23 @@ def test_history_shortens_read_results_of_earlier_turns(monkeypatch):
     assert tools["c"] == big  # ход в работе — целиком
     # Строка ошибки — след для людей, модели её не показываем.
     assert [m["role"] for m in history] == ["user", "assistant", "tool", "tool", "user", "assistant", "tool"]
+
+
+def test_shorten_result_keeps_json_whole():
+    ads = [{"id": i, "title": f"Заголовок {i}", "text": "т" * 300} for i in range(60)]
+    content = json.dumps({"ok": True, "campaign": "Окна", "ads": ads}, ensure_ascii=False)
+    short = ai_agent._shorten_result(content)
+    data = json.loads(short)  # целый JSON, а не обрывок
+    assert len(short) <= ai_agent.OLD_RESULT_CHARS and data["campaign"] == "Окна" and data["ok"] is True
+    assert data["ads"][0]["id"] == 0 and data["ads"][-1].startswith("… ещё ")
+    assert f"было {len(content)} знаков" in data["_сокращено"]
+    # Одна длинная строка — обрезается внутри JSON.
+    one = json.dumps({"page": "с" * 5000, "url": "https://x.ru"}, ensure_ascii=False)
+    data = json.loads(ai_agent._shorten_result(one))
+    assert data["url"] == "https://x.ru" and data["page"].endswith("…")
+    # Не JSON — как раньше, обрезкой текста; короткое — без изменений.
+    assert ai_agent._shorten_result("x" * 5000).endswith("вызови инструмент снова]")
+    assert ai_agent._shorten_result('{"ok": true}') == '{"ok": true}'
 
 
 def test_end_with_error_keeps_it_in_the_feed(monkeypatch):

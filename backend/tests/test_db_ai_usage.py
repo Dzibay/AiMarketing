@@ -81,6 +81,42 @@ def _spend(db, user, units, *, days_ago=0, kind="model", model_class="standard",
         )
 
 
+def test_reserve_model_answers_and_is_logged_for_admin(db, monkeypatch):
+    user, ws = _seed(db)
+    monkeypatch.setattr(ai, "_down", {})
+    saved = ai.save_service_settings(provider="openai", classes=[{
+        "id": "standard", "model": "gpt-smart", "enabled": True, **PRICES["standard"],
+        "reserves": [{"model": "gpt-reserve", "cost_in": 1, "cost_out": 2}],
+    }])
+    standard = next(c for c in saved["classes"] if c["id"] == "standard")
+    assert standard["reserves"] == [{"model": "gpt-reserve", "vision": False, "cost_in": 1.0, "cost_out": 2.0, "cost_cache": None}]
+    # Форма без поля резервов их не стирает.
+    ai.save_service_settings(provider="openai", classes=[{"id": "standard", "model": "gpt-smart", "enabled": True, **PRICES["standard"]}])
+    cfg = ai.load_config(user, "chat", ws)
+    assert [f["model"] for f in cfg["fallbacks"]] == ["gpt-reserve", "gpt-fast"]
+
+    def post(url, **kw):
+        model = kw["json"]["model"]
+        if model == "gpt-smart":
+            return httpx.Response(404, json={"error": {"code": "model_not_found", "message": "нет модели"}},
+                                  request=httpx.Request("POST", url))
+        data = {"choices": [{"message": {"content": "готов"}}],
+                "usage": {"prompt_tokens": 1_000_000, "completion_tokens": 1_000_000}}
+        return httpx.Response(200, json=data, request=httpx.Request("POST", url))
+
+    monkeypatch.setattr(ai.httpx, "post", post)
+    assert ai.complete(cfg, [{"role": "user", "content": "привет"}])["content"] == "готов"
+    row = _usage_rows(db, user)[-1]
+    # Цена — стандартного класса (100 + 400), себестоимость — резерва (1 + 2).
+    assert (row["model"], row["model_class"], float(row["charged"]), float(row["cost_rub"])) == ("gpt-reserve", "standard", 500.0, 3.0)
+    assert row["fallback_from"] == "gpt-smart" and "нет модели" in row["fallback_reason"]
+
+    usage = billing.service_usage()
+    assert usage["substitutions"][0]["from"] == "gpt-smart" and usage["substitutions"][0]["model"] == "gpt-reserve"
+    assert usage["substitutions"][0]["task"] == "ИИ-чат" and usage["substitutions"][0]["class_name"] == "Стандартная"
+    assert {(m["model"], m["substitutes"]) for m in usage["by_model"]} == {("gpt-reserve", 1)}
+
+
 def test_class_per_task_prices_and_keep(db):
     user, _ws = _seed(db)
     chat = ai.load_config(user, "chat")

@@ -134,6 +134,17 @@ def _class_public(row: dict) -> dict:
         "enabled": bool(row.get("enabled")),
         "vision": bool(row.get("vision")),
         "dots": CLASS_DOTS.get(row["id"], 2),
+        "reserves": [
+            {
+                "model": str(r.get("model") or ""),
+                "vision": bool(r.get("vision")),
+                "cost_in": _num(r.get("cost_in")),
+                "cost_out": _num(r.get("cost_out")),
+                "cost_cache": _num(r.get("cost_cache")),
+            }
+            for r in row.get("reserves") or []
+            if isinstance(r, dict) and r.get("model")
+        ],
     }
 
 
@@ -276,14 +287,52 @@ def _save_classes(conn, classes: list[dict]) -> None:
                 raise YandexError("ai-price", f"{name}: укажите обе {what} — за вход и за выход")
         if enabled and not model:
             raise YandexError("ai-class", f"{name}: укажите модель или выключите класс")
+        if item.get("reserves") is None:  # форма без резервов — прежние остаются
+            reserves = known[cid].get("reserves") or []
+        else:
+            reserves = _clean_reserves(name, model, item["reserves"])
         conn.execute(
             """
             UPDATE ai_model_classes SET name = %s, model = %s, units_in = %s, units_out = %s, cost_in = %s,
-                   cost_out = %s, units_cache = %s, cost_cache = %s, enabled = %s, vision = %s, updated_at = NOW()
+                   cost_out = %s, units_cache = %s, cost_cache = %s, enabled = %s, vision = %s, reserves = %s,
+                   updated_at = NOW()
             WHERE id = %s
             """,
-            (name, model, units_in, units_out, cost_in, cost_out, units_cache, cost_cache, enabled, vision, cid),
+            (name, model, units_in, units_out, cost_in, cost_out, units_cache, cost_cache, enabled, vision,
+             json.dumps(reserves), cid),
         )
+
+
+MAX_RESERVES = 5
+
+
+def _clean_reserves(name: str, model: str, items) -> list[dict]:
+    """Резервные модели класса из формы: по порядку, без пустых и повторов. Себестоимость — своя у каждой."""
+    out: list[dict] = []
+    seen = {model}
+    for n, item in enumerate(items or [], 1):
+        item = item or {}
+        rmodel = str(item.get("model") or "").strip()[:200]
+        if not rmodel:
+            continue
+        what = f"{name}, резерв {n}"
+        if rmodel in seen:
+            raise YandexError("ai-class", f"{what}: модель {rmodel} уже есть в классе")
+        seen.add(rmodel)
+        cost_in = amount(item.get("cost_in"), f"{what}: себестоимость входа, ₽", digits=2)
+        cost_out = amount(item.get("cost_out"), f"{what}: себестоимость выхода, ₽", digits=2)
+        if (cost_in is None) != (cost_out is None):
+            raise YandexError("ai-price", f"{what}: укажите обе себестоимости — за вход и за выход")
+        out.append({
+            "model": rmodel,
+            "vision": bool(item.get("vision")),
+            "cost_in": cost_in,
+            "cost_out": cost_out,
+            "cost_cache": amount(item.get("cost_cache"), f"{what}: себестоимость кэша, ₽", digits=2),
+        })
+    if len(out) > MAX_RESERVES:
+        raise YandexError("ai-class", f"{name}: не больше {MAX_RESERVES} резервных моделей")
+    return out
 
 
 def save_service_settings(
@@ -332,6 +381,35 @@ def save_service_settings(
     return get_service_settings()
 
 
+def _class_cost(c: dict) -> float | None:
+    if c.get("cost_in") is None or c.get("cost_out") is None:
+        return None
+    return c["cost_in"] + c["cost_out"]
+
+
+def _fallback_chain(cls: dict, classes: dict[str, dict], primary: str, vision: bool) -> list[dict]:
+    """Запасные модели по порядку: резервы класса, затем классы дешевле — от дорогих к самому дешёвому
+    (каждый со своими резервами), затем классы дороже — от дешёвых. Дешевле — по себестоимости модели класса
+    (вход + выход); у какого-то класса она не задана — по точкам ●○○…●●●. vision — только видящие картинки.
+    → [{"id": класс, "model", "vision", "cost_in", "cost_out", "cost_cache"}]."""
+    others = [c for c in classes.values() if c["id"] != cls["id"] and _usable(c)]
+    if all(_class_cost(c) is not None for c in [cls, *others]):
+        price = _class_cost
+    else:
+        price = lambda c: CLASS_DOTS.get(c["id"], 2)  # noqa: E731
+    base = price(cls)
+    cheaper = sorted((c for c in others if price(c) <= base), key=price, reverse=True)
+    dearer = sorted((c for c in others if price(c) > base), key=price)
+    out, seen = [], {primary}
+    for c in [cls, *cheaper, *dearer]:
+        main = {k: c.get(k) for k in ("model", "vision", "cost_in", "cost_out", "cost_cache")}
+        for option in [main, *(c.get("reserves") or [])]:
+            if option["model"] and option["model"] not in seen and (not vision or option["vision"]):
+                seen.add(option["model"])
+                out.append({"id": c["id"], **option})
+    return out
+
+
 def load_config(
     user_id: int | None,
     task: str = "chat",
@@ -365,14 +443,7 @@ def load_config(
     model = (model or "").strip() or cls["model"]
     model_name = model
     # Запасные модели — на случай, если провайдер эту не отдаст. Проверка подключения проверяет каждую саму.
-    fallbacks: list[dict] = []
-    if task != "test":
-        seen = {model_name}
-        for cid in [cls["id"], _task_classes(row).get(task), *CLASS_FALLBACK_ORDER]:
-            c = classes.get(cid or "")
-            if _usable(c) and (not vision or c["vision"]) and c["model"] not in seen:
-                seen.add(c["model"])
-                fallbacks.append({"id": c["id"], "model": c["model"]})
+    fallbacks = _fallback_chain(cls, classes, model_name, vision) if task != "test" else []
     headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
     if provider == "yandexgpt":
         folder = row["folder_id"]
@@ -608,6 +679,8 @@ def _record(cfg: dict, usage: dict) -> None:
         estimated=usage["estimated"],
         charged=usage["charged"],
         cost_rub=usage["cost_rub"],
+        fallback_from=cfg.get("fallback_from") or "",
+        fallback_reason=cfg.get("fallback_reason") or "",
     )
 
 
@@ -1085,13 +1158,27 @@ def _is_down(model: str) -> bool:
     return bool(until and until > time.monotonic())
 
 
-def _fallback_cfg(cfg: dict, class_id: str) -> dict:
-    """cfg запасного класса; настройки вызова (поток, таймаут, ключ кэша, пачка) — те же."""
+def _fallback_cfg(cfg: dict, entry: dict, *, reason: str = "", rest: list[dict] | None = None) -> dict:
+    """cfg запасной модели entry (из cfg["fallbacks"]). Адрес, заголовки и мост — под её модель; настройки
+    вызова (поток, таймаут, ключ кэша, пачка), класс и цена в единицах — исходного класса: пользователь
+    платит за выбранный класс. Себестоимость — запасной модели. rest — что пробовать, если откажет и она."""
     fresh = load_config(
         cfg.get("user_id"), cfg.get("task") or "chat", cfg.get("workspace_id"),
-        model_class=class_id, vision=bool(cfg.get("vision")),
+        model_class=entry["id"], model=entry["model"],
     )
-    return {**cfg, **fresh, "fallbacks": []}
+    keep = ("model_class", "class_name", "units_in", "units_out", "units_cache", "vision")
+    return {
+        **cfg,
+        **fresh,
+        **{k: cfg.get(k) for k in keep},
+        "cost_in": entry.get("cost_in"),
+        "cost_out": entry.get("cost_out"),
+        "cost_cache": entry.get("cost_cache"),
+        "fallbacks": list(rest or []),
+        # Назначенная модель и причина подмены — для журнала расхода в админке.
+        "fallback_from": cfg.get("fallback_from") or cfg.get("model_name") or "",
+        "fallback_reason": reason[:300],
+    }
 
 
 def complete(cfg: dict, messages: list[dict], tools: list[dict] | None = None) -> dict:
@@ -1099,7 +1186,8 @@ def complete(cfg: dict, messages: list[dict], tools: list[dict] | None = None) -
 
     Причины перехода — FALLBACK_CODES: неверный id или модель не подключена у источника, кончились деньги
     или квота, регион. Модель, которая так отказала, следующие MODEL_DOWN_SECONDS зовётся последней.
-    Ответила запасная — в ответе "fallback": её cfg (для следующих шагов хода) и "fallback_from".
+    Ответила запасная — в ответе "fallback": её cfg (для следующих шагов хода, с оставшимися запасными)
+    и "fallback_from". В чате подмену не видно: класс и цена в единицах — выбранного класса.
     """
     chain: list[dict | None] = [None, *(cfg.get("fallbacks") or [])]
     names = [cfg.get("model_name") or cfg.get("model") or "", *(f["model"] for f in chain[1:])]
@@ -1107,7 +1195,12 @@ def complete(cfg: dict, messages: list[dict], tools: list[dict] | None = None) -
     first: YandexError | None = None
     for n, i in enumerate(order):
         try:
-            current = cfg if chain[i] is None else _fallback_cfg(cfg, chain[i]["id"])
+            if chain[i] is None:
+                current = cfg
+            else:
+                why = first or YandexError("ai-model", f"модель {names[0]} недавно не отвечала")
+                rest = [chain[k] for k in order[n + 1 :] if chain[k] is not None]
+                current = _fallback_cfg(cfg, chain[i], reason=f"{names[0]}: {why.message or why.code}", rest=rest)
             reply = _complete_once(current, messages, tools)
         except YandexError as exc:
             final = exc.code not in FALLBACK_CODES or (exc.code == "ai-limit" and getattr(exc, "transient", False))
@@ -1260,10 +1353,17 @@ def check_connection() -> dict:
     if not usable:
         raise YandexError("ai-not-configured", "Включите хотя бы один класс модели и укажите модель")
     models, bridge = [], False
-    for cls in usable:
-        cfg = load_config(None, task="test", model_class=cls["id"])
+    # Модели классов, потом их резервы: (ключ, подпись, класс, модель; None — модель класса).
+    tries = [(cls["id"], cls["name"], cls["id"], None) for cls in usable]
+    tries += [
+        (f"{cls['id']}:{n}", f"{cls['name']} · резерв {n}", cls["id"], r["model"])
+        for cls in usable
+        for n, r in enumerate(cls.get("reserves") or [], 1)
+    ]
+    for key, label, class_id, model in tries:
+        cfg = load_config(None, task="test", model_class=class_id, model=model)
         bridge = bridge or cfg["bridge"]
-        item = {"id": cls["id"], "label": cls["name"], "model": cfg["model_name"], "sent": cfg["model"]}
+        item = {"id": key, "label": label, "model": cfg["model_name"], "sent": cfg["model"]}
         try:
             reply = complete(cfg, ping)
             item.update(reply=(reply["content"] or "").strip()[:200], answered_by=reply.get("model") or "")

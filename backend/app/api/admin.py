@@ -224,6 +224,16 @@ def admin_plan_upgrade(body: UpgradeBody) -> dict:
 # --- ИИ: ключ и классы моделей -------------------------------------------------------------------
 
 
+class ReserveModelBody(BaseModel):
+    """Резервная модель класса: себестоимость своя, цена для пользователя — класса."""
+
+    model: str = ""
+    vision: bool = False
+    cost_in: float | None = None
+    cost_out: float | None = None
+    cost_cache: float | None = None
+
+
 class ModelClassBody(BaseModel):
     id: str
     name: str = ""
@@ -239,6 +249,8 @@ class ModelClassBody(BaseModel):
     enabled: bool = True
     # Модель понимает картинки: сообщения с картинками уходят ей.
     vision: bool = False
+    # None — резервы не трогать (старый клиент), [] — убрать все.
+    reserves: list[ReserveModelBody] | None = None
 
 
 class AiServiceBody(BaseModel):

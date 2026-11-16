@@ -66,6 +66,55 @@
             </tbody>
           </table>
         </div>
+        <template v-if="data.by_model?.length">
+          <h3 class="subhead">Какие модели отвечали</h3>
+          <div v-scroll-x class="table-scroll">
+            <table class="table usage-table">
+              <thead>
+                <tr>
+                  <th>Модель</th>
+                  <th>Класс (цена)</th>
+                  <th class="num" title="Сколько из этих вызовов модель сделала вместо назначенной">Вызовов · подменой</th>
+                  <th class="num">Единиц</th>
+                  <th class="num">₽</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="row in data.by_model" :key="`${row.model}:${row.model_class}`">
+                  <td>{{ row.model || '—' }}</td>
+                  <td>{{ row.class_name || '—' }}</td>
+                  <td class="num">{{ num(row.calls) }}<template v-if="row.substitutes"> · {{ num(row.substitutes) }}</template></td>
+                  <td class="num">{{ num(row.units, 2) }}</td>
+                  <td class="num">{{ rubAi(row.cost_rub) }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </template>
+        <template v-if="data.substitutions?.length">
+          <h3 class="subhead">Подмены моделей</h3>
+          <p class="hint">Назначенная модель не ответила — ответила запасная. Пользователь этого не видит.</p>
+          <div v-scroll-x class="table-scroll">
+            <table class="table usage-table">
+              <thead>
+                <tr>
+                  <th>Когда</th>
+                  <th>Задача</th>
+                  <th>Назначена → ответила</th>
+                  <th>Почему</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="(row, i) in data.substitutions" :key="i">
+                  <td>{{ formatDateTime(row.created_at) }}</td>
+                  <td>{{ row.task }}<small v-if="row.class_name" class="cell-note">{{ row.class_name }}</small></td>
+                  <td>{{ row.from }} → {{ row.model }}</td>
+                  <td class="usage-reason">{{ row.reason }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </template>
         <h3 class="subhead">Больше всего расходуют</h3>
         <div v-scroll-x class="table-scroll">
           <table class="table usage-table">
@@ -103,7 +152,7 @@ import UiSelect from '../../components/ui/UiSelect.vue'
 import { adminApi } from '../../api/admin'
 import { errorText } from '../../api/web'
 import { pushToast } from '../../composables/useToasts'
-import { num, rubAi } from '../../utils/format'
+import { formatDateTime, num, rubAi } from '../../utils/format'
 
 const data = ref(null)
 const busy = ref(false)

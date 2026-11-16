@@ -579,6 +579,29 @@ button.stat-card[aria-pressed='true'] {
   text-align: right;
 }
 
+/* Резервные модели класса — блок на всю ширину формы. */
+.reserve-block {
+  grid-column: 1 / -1;
+  margin-bottom: 0.9rem;
+}
+
+.reserve-block .table-scroll {
+  margin-bottom: 0.4rem;
+}
+
+.reserve-block__head {
+  margin: 0 0 0.4rem;
+}
+
+.reserve-block__head .cell-note {
+  margin-left: 0.4rem;
+}
+
+.usage-reason {
+  min-width: 18rem;
+  white-space: normal;
+}
+
 .model-dots {
   letter-spacing: 0.08em;
   color: var(--accent);
