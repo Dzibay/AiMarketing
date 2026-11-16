@@ -219,6 +219,16 @@
               <p id="dhead-back" class="dhead__back"></p>
               <div class="dhead__h">
                 <h1>{{ pageTitleOverride || title }}</h1>
+                <button
+                  v-if="helpArticle"
+                  class="dhead__help"
+                  type="button"
+                  :aria-label="`Справка: ${helpArticle.title}`"
+                  v-tip="'Справка по разделу'"
+                  @click="openHelp(helpArticle.slug)"
+                >
+                  <BookOpen aria-hidden="true" />
+                </button>
                 <!-- Телефон: кнопка «⋯» с второстепенными действиями страницы (слот more в PageHeader). -->
                 <div id="dhead-more" class="dhead__more"></div>
               </div>
@@ -313,6 +323,7 @@
     <UndoHost />
     <UiCoach />
     <SupportWidget />
+    <HelpPanel />
   </div>
 </template>
 
@@ -321,6 +332,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { RouterLink, RouterView, useRoute, useRouter } from 'vue-router'
 import {
   ArrowLeft,
+  BookOpen,
   ChevronDown,
   Layers,
   Lock,
@@ -343,6 +355,7 @@ import PlanOffers from './PlanOffers.vue'
 import ProfileMenu from './ProfileMenu.vue'
 import ProjectSwitcher from './ProjectSwitcher.vue'
 import SupportWidget from './SupportWidget.vue'
+import HelpPanel from './HelpPanel.vue'
 import Modal from './ui/Modal.vue'
 import { SECTIONS, pageMatches, sectionTabs, sectionTo } from './shellNav'
 import { useExpert } from '../composables/useExpert'
@@ -355,6 +368,8 @@ import { featureLocked, loadProfile, resetProfile, useProfile } from '../composa
 import { resetProjectFilter, useProjectFilter } from '../composables/useProjectFilter'
 import { clearSession, getSession } from '../composables/useSession'
 import { closeSupport, openSupport } from '../composables/useSupport'
+import { closeHelp, openHelp } from '../composables/useHelp'
+import { sectionArticle } from '../utils/help'
 import { useTheme } from '../composables/useTheme'
 import { useViewport } from '../composables/useViewport'
 import { revealInStrip, useScrollStrip } from '../composables/useScrollStrip'
@@ -509,6 +524,8 @@ const projectGroups = computed(() =>
 
 const currentSection = computed(() => SECTIONS.find((s) => s.key === route.meta.section) || null)
 const title = computed(() => route.meta.title || currentSection.value?.title || currentSection.value?.label || '')
+// Кнопка «?» у заголовка: статья справки про этот раздел, если она есть (на самой справке — нет).
+const helpArticle = computed(() => (route.meta.section === 'help' ? null : sectionArticle(route.meta.section)))
 const tabs = computed(() =>
   sectionTabs(route.meta.section, route.params.wsId ? projectId.value : null).filter(
     (t) => expert.value || !t.expert || pageMatches(t, route.path),
@@ -568,6 +585,7 @@ watch(
 
 function logout() {
   closeSupport()
+  closeHelp()
   clearSession()
   resetWorkspaces()
   resetLoads()

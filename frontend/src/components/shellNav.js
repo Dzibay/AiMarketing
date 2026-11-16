@@ -1,4 +1,4 @@
-import { ChartLine, CreditCard, History, House, ListFilter, Megaphone, PlugZap, Settings, Sparkles, Workflow } from '@lucide/vue'
+import { BookOpen, ChartLine, CreditCard, History, House, ListFilter, Megaphone, PlugZap, Settings, Sparkles, Workflow } from '@lucide/vue'
 
 /**
  * Одно меню, которое не меняется от выбора проекта. Список проектов в меню — фильтр: тот же раздел открывается
@@ -75,6 +75,7 @@ export const SERVICE = [
   { key: 'settings', label: 'Настройки', icon: Settings, to: '/cabinet/settings', hint: 'Профиль, уведомления, интерфейс' },
   { key: 'connections', label: 'Подключения', icon: PlugZap, to: '/cabinet/connections', hint: 'Сайты, Директ и Метрика' },
   { key: 'plan', label: 'Тариф и лимит', icon: CreditCard, to: '/cabinet/plan', hint: 'Срок тарифа и остаток лимита ИИ' },
+  { key: 'help', label: 'Справка', icon: BookOpen, to: '/cabinet/help', hint: 'Статьи, словарь и что нового' },
 ]
 
 /** Адрес раздела при выбранном проекте (id) или «Все проекты» (null); null — раздел без версии «по всем». */

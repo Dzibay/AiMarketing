@@ -10,6 +10,8 @@ export default defineConfig({
     host: true,
     port: 5173,
     strictPort: true,
+    // Статьи справки лежат в docs/help (их читает и бэкенд) — разрешаем dev-серверу отдавать их.
+    fs: { allow: ['.', '../docs/help'] },
     proxy: {
       '/api': proxy,
     },

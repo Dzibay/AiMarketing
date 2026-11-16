@@ -9,6 +9,8 @@ COPY frontend/package.json frontend/package-lock.json* ./
 RUN npm install
 
 COPY frontend/ ./
+# Статьи справки (utils/help.js) — из docs/help, на уровень выше frontend/.
+COPY docs/help /app/docs/help
 # On small VPSes the build can exceed RAM; cap the V8 heap so it spills into swap instead of being OOM-killed.
 ENV NODE_OPTIONS=--max-old-space-size=1536
 # index.html кабинета → spa.html: корень отдаёт сайт, а nginx отправляет в spa.html только адреса кабинета.

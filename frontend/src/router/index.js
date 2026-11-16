@@ -127,6 +127,12 @@ const router = createRouter({
           component: () => import('../views/WelcomeView.vue'),
           meta: neutral('welcome', 'Начало работы'),
         },
+        {
+          path: 'cabinet/help/:slug?',
+          name: 'help',
+          component: () => import('../views/HelpView.vue'),
+          meta: neutral('help', 'Справка'),
+        },
 
         // Проект (счётчик Метрики): те же разделы, но по одному сайту.
         {

@@ -10,6 +10,7 @@
     >
       <Bell aria-hidden="true" />
       <span v-if="notifCount > 0" class="nbell__count" aria-hidden="true">{{ notifCount > 99 ? '99+' : notifCount }}</span>
+      <span v-else-if="whatsNewFresh" class="nbell__mark" aria-hidden="true"></span>
     </button>
 
     <div v-if="open && !sheet" class="nbell__menu" role="dialog" aria-label="Уведомления">
@@ -18,7 +19,7 @@
         <small>{{ summary }}</small>
       </div>
       <div class="nbell__list">
-        <NotificationItems :items="items" :loading="loading" :error="error" @pick="pick" />
+        <NotificationItems :items="shown" :loading="loading" :error="error" @pick="pick" />
       </div>
       <div class="nbell__footer">
         <RouterLink to="/cabinet/settings/notifications" @click="open = false">Что присылать и куда</RouterLink>
@@ -26,7 +27,7 @@
     </div>
 
     <UiSheet :open="open && sheet" title="Уведомления" @close="open = false">
-      <NotificationItems :items="items" :loading="loading" :error="error" @pick="pick" />
+      <NotificationItems :items="shown" :loading="loading" :error="error" @pick="pick" />
       <template #footer>
         <RouterLink class="nbell__sheet-link" to="/cabinet/settings/notifications" @click="open = false">
           Что присылать и куда
@@ -39,8 +40,9 @@
 <script setup>
 import { computed, defineComponent, h, onBeforeUnmount, onMounted, ref } from 'vue'
 import { RouterLink, useRouter } from 'vue-router'
-import { Bell, CloudOff, CreditCard, Gauge, LifeBuoy, MessageSquare, TrendingDown, Zap } from '@lucide/vue'
+import { Bell, CloudOff, CreditCard, Gauge, LifeBuoy, MessageSquare, Sparkles, TrendingDown, Zap } from '@lucide/vue'
 import { errorText, notifyApi } from '../api/web'
+import { useHelp } from '../composables/useHelp'
 import { setNotifCount, usePending } from '../composables/usePending'
 import { openSupport } from '../composables/useSupport'
 import { useViewport } from '../composables/useViewport'
@@ -58,6 +60,7 @@ const { phone: sheet } = useViewport()
 
 const router = useRouter()
 const { notifCount } = usePending()
+const { whatsNew, whatsNewFresh } = useHelp()
 
 const root = ref(null)
 const open = ref(false)
@@ -65,10 +68,28 @@ const items = ref([])
 const loading = ref(false)
 const error = ref('')
 
-const buttonLabel = computed(() =>
-  notifCount.value
-    ? `Уведомления: ${notifCount.value} ${plural(notifCount.value, 'новое', 'новых', 'новых')}`
-    : 'Уведомления',
+const buttonLabel = computed(() => {
+  if (notifCount.value) return `Уведомления: ${notifCount.value} ${plural(notifCount.value, 'новое', 'новых', 'новых')}`
+  return whatsNewFresh.value ? 'Уведомления: есть новое в кабинете' : 'Уведомления'
+})
+
+// Свежая запись «Что нового» — первой в списке, пока её не открыли (точка на колокольчике гаснет тогда же).
+const shown = computed(() =>
+  whatsNewFresh.value && whatsNew
+    ? [
+        {
+          id: `whats-new-${whatsNew.id}`,
+          kind: 'whats_new',
+          severity: 'info',
+          title: `Что нового: ${whatsNew.title}`,
+          body: 'Коротко о том, что появилось в кабинете',
+          created_at: `${whatsNew.date}T09:00:00`,
+          link: '/cabinet/help/changelog',
+          read: false,
+        },
+        ...items.value,
+      ]
+    : items.value,
 )
 
 const fresh = computed(() => items.value.filter((i) => !i.read).length)
@@ -127,6 +148,7 @@ const ICONS = {
   limit: Gauge,
   plan: CreditCard,
   support: LifeBuoy,
+  whats_new: Sparkles,
 }
 
 /** Список записей — общий для выпадающего окна и шторки. */

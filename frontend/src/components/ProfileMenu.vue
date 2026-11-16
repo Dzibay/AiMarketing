@@ -36,6 +36,10 @@
           <CreditCard aria-hidden="true" />
           Тариф и лимит<small v-if="planName" class="menu-item__note">{{ planName }}</small>
         </RouterLink>
+        <RouterLink class="menu-item" role="menuitem" to="/cabinet/help" @click="open = false">
+          <BookOpen aria-hidden="true" />
+          Справка
+        </RouterLink>
         <button class="menu-item" type="button" role="menuitem" @click="support">
           <LifeBuoy aria-hidden="true" />
           Поддержка<small v-if="supportUnread" class="menu-item__note">новый ответ</small>
@@ -79,7 +83,7 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { RouterLink } from 'vue-router'
-import { ChevronDown, CreditCard, LifeBuoy, LogOut, Moon, PlugZap, Settings, SlidersHorizontal } from '@lucide/vue'
+import { BookOpen, ChevronDown, CreditCard, LifeBuoy, LogOut, Moon, PlugZap, Settings, SlidersHorizontal } from '@lucide/vue'
 import UiSheet from './ui/UiSheet.vue'
 import { useExpert } from '../composables/useExpert'
 import { useProfile } from '../composables/useProfile'
