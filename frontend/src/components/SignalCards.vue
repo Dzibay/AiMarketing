@@ -1,6 +1,6 @@
 <template>
   <h2 v-if="!bare" class="section-h">
-    Сервис заметил <span class="cgroup__n">{{ visible.length }}</span>
+    <span class="hico" aria-hidden="true"><Radar /></span>Сервис заметил <span class="cgroup__n">{{ visible.length }}</span>
     <small class="section-h__note">по цифрам, без ИИ — лимит не тратится</small>
   </h2>
   <div v-if="visible.length" class="sigs">
@@ -46,7 +46,7 @@
 <script setup>
 import { computed, ref } from 'vue'
 import { RouterLink, useRouter } from 'vue-router'
-import { Sparkles, TriangleAlert, X } from '@lucide/vue'
+import { Radar, Sparkles, TriangleAlert, X } from '@lucide/vue'
 import EmptyState from './ui/EmptyState.vue'
 import { errorDetail } from '../api/web'
 import { putHomeQuestion } from '../composables/useHomeAsk'

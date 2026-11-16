@@ -91,7 +91,7 @@
           <tbody>
             <tr v-for="p in data.projects" :key="p.id">
               <td>
-                <RouterLink :to="`/w/${p.id}/analytics`">{{ niceQuotes(p.name) }}</RouterLink>
+                <RouterLink class="pname" :to="`/w/${p.id}/analytics`"><ProjectAva :project="p" :status="false" /><span class="pname__t">{{ niceQuotes(p.name) }}</span></RouterLink>
                 <small class="cell-note">
                   {{ [niceQuotes(p.client_name), p.site].filter(Boolean).join(' · ') }}<template v-if="p.client_name || p.site"> · </template
                   >{{ p.campaigns }} {{ plural(p.campaigns, 'кампания', 'кампании', 'кампаний') }} ·
@@ -190,6 +190,7 @@ import TrendChart from '../components/TrendChart.vue'
 import SimpleReport from '../components/SimpleReport.vue'
 import EmptyState from '../components/ui/EmptyState.vue'
 import UiDateRange from '../components/ui/UiDateRange.vue'
+import ProjectAva from '../components/ui/ProjectAva.vue'
 import { useExpert } from '../composables/useExpert'
 import { errorText, webApi } from '../api/web'
 import {

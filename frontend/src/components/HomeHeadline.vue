@@ -73,14 +73,17 @@ const period = ref(Number(localStorage.getItem(PERIOD_KEY)) === 30 ? 30 : 7)
 const tone = computed(() => (data.value ? data.value.headline.tone : loadError.value ? 'warn' : 'wait'))
 const link = computed(() => data.value?.headline.link || null)
 
-/** «на 12% больше, чем за прошлые 7 дней»; inverse — рост это плохо (расход, цена). */
-function versus(value, more, less, inverse = false) {
+/**
+ * «на 12% больше, чем за прошлые 7 дней»; inverse — рост это плохо (цена, доля расходов); neutral — без оценки
+ * (расход: меньше тратить — не всегда хорошо). Цвета те же, что у бейджей изменений в плитках (DeltaChip).
+ */
+function versus(value, more, less, inverse = false, neutral = false) {
   const before = `за прошлые ${data.value.numbers.period} дней`
   if (value == null) return { note: `${before} не с чем сравнить`, tone: '' }
   const v = Math.round(value)
   if (!v) return { note: `как ${before}`, tone: '' }
   const bad = inverse ? v > 0 : v < 0
-  return { note: `на ${pct(Math.abs(v), 0)} ${v > 0 ? more : less}, чем ${before}`, tone: Math.abs(v) < 5 ? '' : bad ? 'is-warn' : 'is-ok' }
+  return { note: `на ${pct(Math.abs(v), 0)} ${v > 0 ? more : less}, чем ${before}`, tone: neutral || Math.abs(v) < 5 ? '' : bad ? 'is-warn' : 'is-ok' }
 }
 
 const tiles = computed(() => {
@@ -100,7 +103,7 @@ const tiles = computed(() => {
     third.goalLink = data.value.goal_link
   }
   return [
-    { label: 'Потрачено', value: rub(n.cost), ...versus(n.change.cost, 'больше', 'меньше', true) },
+    { label: 'Потрачено', value: rub(n.cost), ...versus(n.change.cost, 'больше', 'меньше', false, true) },
     { label: 'Заявки', term: 'leads', value: num(n.conversions), ...versus(n.change.conversions, 'больше', 'меньше') },
     third,
   ]

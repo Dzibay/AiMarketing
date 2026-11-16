@@ -78,6 +78,19 @@ export function projectDotA11y(ws) {
   return projectTone(ws) === 'warn' ? { role: 'img', 'aria-label': 'счётчик Метрики недоступен' } : { 'aria-hidden': 'true' }
 }
 
+// Цвет кружка проекта: постоянный для проекта (по id), из спокойной палитры, одинаковой в обеих темах.
+const AVA_COLORS = ['#5b8def', '#e08a4f', '#3fa36b', '#a66fd6', '#d4a72c', '#2fa7a7', '#d9667a', '#7d8a3a']
+
+export function projectColor(id) {
+  return AVA_COLORS[Math.abs(Number(id) || 0) % AVA_COLORS.length]
+}
+
+/** Первая буква или цифра названия — для кружка проекта. */
+export function projectInitial(name) {
+  const letter = String(name || '').trim().match(/[\p{L}\p{N}]/u)
+  return letter ? letter[0].toUpperCase() : '•'
+}
+
 /** Подсказка к проекту: что не так, а если всё в порядке — адрес сайта. */
 export function projectHint(ws) {
   if (ws.locked) return 'Проект не входит в тариф'

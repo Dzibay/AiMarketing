@@ -63,9 +63,7 @@
               v-tip.right="[niceQuotes(ws.name), projectHint(ws)].filter(Boolean).join(' — ')"
               @click="selectProject(ws.id)"
             >
-              <span class="pava" :class="`pava--${projectTone(ws)}`" :style="avaStyle(ws)" aria-hidden="true">
-                {{ initial(ws.name) }}
-              </span>
+              <ProjectAva :project="ws" :size="30" :status="false" :class="`pava--${projectTone(ws)}`" />
               <span class="srow__t">{{ niceQuotes(ws.name) }}</span>
               <span v-if="projectTone(ws) === 'warn'" class="srow__t">— счётчик Метрики недоступен</span>
               <span v-else-if="ws.locked" class="srow__t">— не входит в тариф</span>
@@ -93,7 +91,7 @@
                 v-tip.right="projectHint(ws)"
                 @click="selectProject(ws.id)"
               >
-                <span class="sdot" :class="`sdot--${projectTone(ws)}`" v-bind="dotA11y(ws)"></span>
+                <ProjectAva :project="ws" />
                 <span class="srow__t">{{ niceQuotes(ws.name) }}</span>
                 <Lock v-if="ws.locked" class="srow__lock" aria-label="не входит в тариф" />
               </button>
@@ -357,6 +355,7 @@ import ProjectSwitcher from './ProjectSwitcher.vue'
 import SupportWidget from './SupportWidget.vue'
 import HelpPanel from './HelpPanel.vue'
 import Modal from './ui/Modal.vue'
+import ProjectAva from './ui/ProjectAva.vue'
 import { SECTIONS, pageMatches, sectionTabs, sectionTo } from './shellNav'
 import { useExpert } from '../composables/useExpert'
 import { pageTitleOverride } from '../composables/usePageTitle'
@@ -375,7 +374,6 @@ import { useViewport } from '../composables/useViewport'
 import { revealInStrip, useScrollStrip } from '../composables/useScrollStrip'
 import {
   loadWorkspaces,
-  projectDotA11y as dotA11y,
   projectFolders,
   projectHint,
   projectTone,
@@ -430,17 +428,6 @@ function tip(text) {
   return sideCollapsed.value ? text : undefined
 }
 
-// Кружок проекта: цвет постоянный для проекта (по id), буква — первая буква названия.
-const AVA_COLORS = ['#5b8def', '#e08a4f', '#3fa36b', '#a66fd6', '#d4a72c', '#2fa7a7', '#d9667a', '#7d8a3a']
-
-function avaStyle(ws) {
-  return { '--ava': AVA_COLORS[Math.abs(Number(ws.id) || 0) % AVA_COLORS.length] }
-}
-
-function initial(name) {
-  const letter = String(name || '').trim().match(/[\p{L}\p{N}]/u)
-  return letter ? letter[0].toUpperCase() : '•'
-}
 // --- Чаты в меню: общие для «Все проекты», чаты проекта — внутри проекта ---
 
 const RECENT_LIMIT = 5

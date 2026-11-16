@@ -1,7 +1,7 @@
 <template>
   <template v-if="items.length">
     <h2 class="section-h">
-      Ждут вашего решения <span class="cgroup__n">{{ total }}</span>
+      <span class="hico" aria-hidden="true"><ListChecks /></span>Ждут вашего решения <span class="cgroup__n">{{ total }}</span>
       <small v-if="total > items.length" class="home-link">
         <RouterLink to="/cabinet/pending">Все предложения</RouterLink>
       </small>
@@ -49,7 +49,7 @@
 <script setup>
 import { nextTick, onMounted, reactive, ref } from 'vue'
 import { RouterLink } from 'vue-router'
-import { Check, MessageSquare } from '@lucide/vue'
+import { Check, ListChecks, MessageSquare } from '@lucide/vue'
 import { aiApi, errorText } from '../api/web'
 import { refreshPending } from '../composables/usePending'
 import { pushToast } from '../composables/useToasts'

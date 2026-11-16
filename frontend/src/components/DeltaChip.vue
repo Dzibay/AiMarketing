@@ -29,7 +29,8 @@ const rounded = computed(() => Math.round(props.value))
 const tone = computed(() => {
   if (!props.good || Math.abs(rounded.value) < NOISE_PCT) return ''
   const better = props.good === 'up' ? rounded.value > 0 : rounded.value < 0
-  return better ? 'tone-ok' : 'tone-bad'
+  // Хуже прошлого — «обратите внимание» (жёлтый), как в сводке и чипах кампаний; красный — только для поломок.
+  return better ? 'tone-ok' : 'tone-warn'
 })
 const spoken = computed(() => {
   const v = rounded.value

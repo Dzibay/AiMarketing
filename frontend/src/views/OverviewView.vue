@@ -30,10 +30,10 @@
       <PendingDecisions />
       <SignalCards :problems="data.problems" show-project />
 
-      <h2 class="section-h">Проекты <span class="cgroup__n">{{ projectCards.length }}</span></h2>
+      <h2 class="section-h"><span class="hico" aria-hidden="true"><Layers /></span>Проекты <span class="cgroup__n">{{ projectCards.length }}</span></h2>
       <div class="pstrip">
         <RouterLink v-for="w in projectCards" :key="w.id" class="pcard" :to="`/w/${w.id}/summary`">
-          <b>{{ niceQuotes(w.name) }}</b>
+          <b class="pname"><ProjectAva :project="w" :size="24" :status="false" /><span class="pname__t">{{ niceQuotes(w.name) }}</span></b>
           <span class="st" :class="`st--${w.status.tone}`">
             <component :is="w.status.icon" :size="14" aria-hidden="true" />
             {{ w.status.text }}
@@ -102,7 +102,7 @@
 
       <section class="panel overview-spaces">
         <div class="panel__head">
-          <h2>Проекты <span class="cgroup__n">{{ projectCount }}</span></h2>
+          <h2><span class="hico" aria-hidden="true"><Layers /></span>Проекты <span class="cgroup__n">{{ projectCount }}</span></h2>
         </div>
         <div class="ltools" role="search">
           <label class="ltools__search">
@@ -248,7 +248,7 @@
 
       <section ref="problemsPanel" class="panel overview-problems">
         <div class="panel__head">
-          <h2>Где горит <span class="cgroup__n">{{ fireCount }}</span></h2>
+          <h2><span class="hico" aria-hidden="true"><Flame /></span>Где горит <span class="cgroup__n">{{ fireCount }}</span></h2>
           <div class="filters filters--inline">
             <UiSelect
               v-model="severityFilter"
@@ -288,7 +288,7 @@
 <script setup>
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { RouterLink, useRouter } from 'vue-router'
-import { CircleCheck, Lock, RefreshCw, Search, TriangleAlert } from '@lucide/vue'
+import { CircleCheck, Flame, Layers, Lock, RefreshCw, Search, TriangleAlert } from '@lucide/vue'
 import ExpertHint from '../components/ExpertHint.vue'
 import HomeAsk from '../components/HomeAsk.vue'
 import HomeHeadline from '../components/HomeHeadline.vue'
@@ -304,6 +304,7 @@ import PageHeader from '../components/ui/PageHeader.vue'
 import UiRibbon from '../components/ui/UiRibbon.vue'
 import UiSelect from '../components/ui/UiSelect.vue'
 import UiSwitch from '../components/ui/UiSwitch.vue'
+import ProjectAva from '../components/ui/ProjectAva.vue'
 import { errorText, jobProgressText, webApi } from '../api/web'
 import { useExpert } from '../composables/useExpert'
 import { pushToast } from '../composables/useToasts'

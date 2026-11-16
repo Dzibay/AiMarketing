@@ -30,7 +30,7 @@
           </button>
         </template>
         <template v-else>
-          <RouterLink v-if="g.project" :to="`/w/${g.project.id}/summary`">{{ niceQuotes(g.project.name) }}</RouterLink>
+          <RouterLink v-if="g.project" class="pname" :to="`/w/${g.project.id}/summary`"><ProjectAva :project="g.project" :status="false" /><span class="pname__t">{{ niceQuotes(g.project.name) }}</span></RouterLink>
           <span v-else>Все сайты</span>
           <span class="cgroup__n">{{ g.items.filter((a) => !doneIds[a.id]).length }}</span>
         </template>
@@ -116,6 +116,7 @@ import { Check, Clock, MessageSquare, Undo2 } from '@lucide/vue'
 import EmptyState from '../components/ui/EmptyState.vue'
 import UiMenu from '../components/ui/UiMenu.vue'
 import UiMenuItem from '../components/ui/UiMenuItem.vue'
+import ProjectAva from '../components/ui/ProjectAva.vue'
 import { aiApi, errorText } from '../api/web'
 import { refreshPending, usePending } from '../composables/usePending'
 import { useProjectFilter } from '../composables/useProjectFilter'

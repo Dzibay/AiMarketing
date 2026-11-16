@@ -110,8 +110,8 @@
               <small class="ctab__meta">{{ metaOf(c) }}</small>
             </td>
             <td v-if="projectCol" class="ctab__project ctab__c-project" data-label="Проект">
-              <RouterLink :to="`/w/${c.project.id}/campaigns`" v-tip.truncate="niceQuotes(c.project.name)">
-                {{ niceQuotes(c.project.name) }}
+              <RouterLink class="pname" :to="`/w/${c.project.id}/campaigns`" v-tip.truncate="niceQuotes(c.project.name)">
+                <ProjectAva :project="c.project" :size="18" :status="false" /><span class="pname__t">{{ niceQuotes(c.project.name) }}</span>
               </RouterLink>
             </td>
             <td class="tc-tag">
@@ -227,6 +227,7 @@ import UiSelect from './ui/UiSelect.vue'
 import UiStatus from './ui/UiStatus.vue'
 import UiSwitch from './ui/UiSwitch.vue'
 import TermHint from './TermHint.vue'
+import ProjectAva from './ui/ProjectAva.vue'
 import { isPhone } from '../composables/useViewport'
 import { campaignStatus, campaignTypeShort, niceQuotes, num, pct, rub, rubles } from '../utils/format'
 

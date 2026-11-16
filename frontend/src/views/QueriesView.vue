@@ -28,7 +28,7 @@
         <div v-for="p in queue" :key="p.id" class="prow">
           <div class="prow__main">
             <small v-if="showClient(p)">{{ niceQuotes(p.client_name) }}</small>
-            <b>{{ niceQuotes(p.name) }}</b>
+            <b class="pname"><ProjectAva :project="p" :status="false" /><span class="pname__t">{{ niceQuotes(p.name) }}</span></b>
             <p>{{ p.line.text }}</p>
           </div>
           <div class="prow__acts">
@@ -293,6 +293,7 @@ import UiCheckbox from '../components/ui/UiCheckbox.vue'
 import UiListTools from '../components/ui/UiListTools.vue'
 import UiSelect from '../components/ui/UiSelect.vue'
 import UiSwitch from '../components/ui/UiSwitch.vue'
+import ProjectAva from '../components/ui/ProjectAva.vue'
 import { CircleCheck, CloudOff, ListX, Search, TriangleAlert } from '@lucide/vue'
 import { useExpert } from '../composables/useExpert'
 

@@ -78,7 +78,24 @@ const PAGES = [
   ['ws-settings', `/w/${ws}/settings`],
   ['promo-summary', `/w/${stand.workspaces.promo}/summary`],
   ['promo-analytics', `/w/${stand.workspaces.promo}/analytics`],
+  ['help', '/cabinet/help'],
+  // Шторки и панели: третий элемент — выражение, которое их открывает (false — на этой ширине их нет, снимка нет).
+  ['help-panel', `/w/${ws}/summary`, `(() => { const b = document.querySelector('.dhead__help'); b?.click(); return !!b })()`],
+  ['more-sheet', '/cabinet', `(${openMore.toString()})()`],
+  ['bell', '/cabinet', `(() => { const b = document.querySelector('.nbell__toggle'); b?.click(); return !!b })()`],
+  ['support', '/cabinet', `(async () => { const fab = document.querySelector('.sup-fab'); if (fab) { fab.click(); return true }
+    if (!(${openMore.toString()})()) return false
+    await new Promise((r) => setTimeout(r, 400))
+    const row = [...document.querySelectorAll('.more__row')].find((b) => b.textContent.includes('Поддержка'))
+    row?.click(); return !!row })()`],
 ].filter(([name]) => !only || only.includes(name))
+
+// Нижняя панель есть только на узком экране: там «Ещё» открывает шторку.
+function openMore() {
+  const b = [...document.querySelectorAll('.bbar__item')].find((x) => x.textContent.includes('Ещё') && x.offsetParent)
+  b?.click()
+  return !!b
+}
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 const port = 9300 + Math.floor(Math.random() * 400)
@@ -185,10 +202,14 @@ for (const width of widths) {
         localStorage.setItem('aimarketing-expert', '${mode === 'expert' ? 1 : 0}');
         localStorage.setItem('aimarketing-theme', '${theme}');
         localStorage.setItem('aimarketing-cookies', '1'); 1`)
-      for (const [name, path] of PAGES) {
+      for (const [name, path, open] of PAGES) {
         await send('Page.navigate', { url: BASE + path })
         await waitLoaded()
         await sleep(WAIT)
+        if (open) {
+          if (!(await evaluate(open))) continue
+          await sleep(700)
+        }
         // Vite мог закэшировать пустой css, если файл читали посреди перезаписи: такие снимки бессмысленны.
         if (!(await evaluate(`!!getComputedStyle(document.documentElement).getPropertyValue('--ink').trim()`))) {
           console.error(`${name}: стили не загрузились (нет токена --ink) — прогон остановлен`)

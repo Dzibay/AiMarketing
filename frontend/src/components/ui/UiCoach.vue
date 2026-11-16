@@ -5,7 +5,7 @@
       v-if="coach.id"
       ref="box"
       class="ui-coach"
-      :class="`is-${side}`"
+      :class="[`is-${side}`, { 'is-covered': covered }]"
       role="dialog"
       aria-modal="false"
       aria-labelledby="ui-coach-title"
@@ -38,7 +38,15 @@ const box = ref(null)
 const style = ref({})
 const side = ref('bottom')
 const arrow = ref(20)
+// Открыта панель, меню или шторка — подсказка прячется (не считаясь увиденной) и вернётся, когда их закроют.
+const covered = ref(false)
+const OVERLAYS = '[role="dialog"]:not(.ui-coach), [role="menu"], [role="listbox"]'
 let frame = 0
+
+function overlayOpen() {
+  for (const el of document.querySelectorAll(OVERLAYS)) if (el.getClientRects().length) return true
+  return false
+}
 
 function place() {
   frame = 0
@@ -49,6 +57,7 @@ function place() {
     hideCoach()
     return
   }
+  covered.value = overlayOpen()
   const r = el.getBoundingClientRect()
   const w = pop.offsetWidth
   const h = pop.offsetHeight
@@ -104,6 +113,10 @@ onBeforeUnmount(() => {
   background: var(--surface);
   color: var(--ink);
   box-shadow: 0 12px 32px rgba(0, 0, 0, 0.16);
+}
+
+.ui-coach.is-covered {
+  visibility: hidden;
 }
 
 .ui-coach strong {

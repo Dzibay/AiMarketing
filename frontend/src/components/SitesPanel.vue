@@ -11,7 +11,7 @@
       <div v-for="w in sites" :key="w.id" class="prow" :class="{ 'prow--wrap': w.locked }">
         <div class="prow__main">
           <b class="site-name">
-            <span class="sdot" :class="`sdot--${tone(w)}`" aria-hidden="true"></span>{{ niceQuotes(w.name) }}
+            <ProjectAva :project="w" :size="24" :status="false" :class="{ 'pava--off': w.locked }" />{{ niceQuotes(w.name) }}
           </b>
           <p>{{ siteLine(w) }}</p>
         </div>
@@ -144,6 +144,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { RouterLink } from 'vue-router'
 import { Archive, ChevronRight, Ellipsis, EyeOff, Lock, Plus, Settings, Trash2, TriangleAlert, Undo2 } from '@lucide/vue'
 import YandexConnectButton from './YandexConnectButton.vue'
+import ProjectAva from './ui/ProjectAva.vue'
 import { errorText, wsApi } from '../api/web'
 import { askConfirm } from '../composables/useConfirm'
 import { useExpert } from '../composables/useExpert'
@@ -178,10 +179,6 @@ const candidates = computed(() =>
   data.value.items.filter((c) => c.state in ORDER).sort((a, b) => ORDER[a.state] - ORDER[b.state]),
 )
 
-function tone(w) {
-  if (w.locked) return 'off'
-  return w.counter_ok === false ? 'warn' : 'ok'
-}
 
 function siteLine(w) {
   const n = w.campaigns_count || 0

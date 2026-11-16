@@ -15,7 +15,7 @@
     <SignalCards :problems="data.problems" :ws-id="ws.id" />
 
     <h2 class="section-h">
-      Кампании проекта
+      <span class="hico" aria-hidden="true"><Megaphone /></span>Кампании проекта
       <small class="home-link"><RouterLink :to="`/w/${ws.id}/campaigns`">Все кампании</RouterLink></small>
     </h2>
     <div v-if="topCampaigns.length" class="ccard">
@@ -110,7 +110,7 @@
     <section class="panel">
       <div class="panel__head">
         <div>
-          <h2>Неделя к неделе</h2>
+          <h2><span class="hico" aria-hidden="true"><ChartLine /></span>Неделя к неделе</h2>
           <p class="hint">{{ formatDate(week.date_from) }} — {{ formatDate(week.date_to) }} против предыдущих 7 дней.</p>
         </div>
         <div class="filters filters--inline">
@@ -148,7 +148,7 @@
 
     <section class="panel">
       <div class="panel__head">
-        <h2>Что требует внимания <span class="cgroup__n">{{ data.problems.length }}</span></h2>
+        <h2><span class="hico" aria-hidden="true"><TriangleAlert /></span>Что требует внимания <span class="cgroup__n">{{ data.problems.length }}</span></h2>
         <RouterLink
           v-if="data.problems.length"
           class="btn btn--ghost btn--sm"
@@ -165,7 +165,7 @@
     <div class="split">
       <section class="panel">
         <div class="panel__head">
-          <h2>Топ кампаний за неделю</h2>
+          <h2><span class="hico" aria-hidden="true"><Megaphone /></span>Топ кампаний за неделю</h2>
           <RouterLink class="btn btn--ghost" :to="`/w/${ws.id}/campaigns`">Все кампании</RouterLink>
         </div>
         <p v-if="!data.top_campaigns.length" class="empty">
@@ -200,7 +200,7 @@
 
       <section class="panel">
         <div class="panel__head">
-          <h2>Последние действия</h2>
+          <h2><span class="hico" aria-hidden="true"><History /></span>Последние действия</h2>
           <RouterLink class="btn btn--ghost" :to="`/w/${ws.id}/history`">История</RouterLink>
         </div>
         <p v-if="!data.recent_actions.length" class="empty">Пока ничего не меняли.</p>
@@ -226,10 +226,13 @@
 import { computed, onMounted, ref } from 'vue'
 import { RouterLink } from 'vue-router'
 import {
+  ChartLine,
   ChevronRight,
   CircleCheck,
   CirclePause,
   CircleDashed,
+  History,
+  Megaphone,
   OctagonAlert,
   RefreshCw,
   Sparkles,

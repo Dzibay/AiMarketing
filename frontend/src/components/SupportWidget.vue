@@ -42,7 +42,7 @@
 </template>
 
 <script setup>
-import { computed, defineComponent, h, nextTick, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, defineComponent, h, nextTick, onBeforeUnmount, ref, resolveDirective, watch, withDirectives } from 'vue'
 import { useRoute } from 'vue-router'
 import { CircleHelp, ImagePlus, LoaderCircle, Send, X } from '@lucide/vue'
 import { errorText, supportApi } from '../api/web'
@@ -338,10 +338,14 @@ const SupportBody = defineComponent({
                 e.target.value = ''
               },
             }),
-            h(
-              'button',
-              { type: 'button', class: 'dicon', 'aria-label': 'Приложить скриншот', title: 'Приложить скриншот', onClick: () => fileInput.value?.click() },
-              h(ImagePlus, { 'aria-hidden': 'true' }),
+            // Подсказка — общая v-tip, как у остальных кнопок-значков, а не системный title.
+            withDirectives(
+              h(
+                'button',
+                { type: 'button', class: 'dicon', 'aria-label': 'Приложить скриншот', onClick: () => fileInput.value?.click() },
+                h(ImagePlus, { 'aria-hidden': 'true' }),
+              ),
+              [[resolveDirective('tip'), 'Приложить скриншот']],
             ),
             h('small', { class: 'sup-attach' }, attachLine.value),
             h(

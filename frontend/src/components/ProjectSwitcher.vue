@@ -14,7 +14,7 @@
     >
       <template v-if="row">
         <span v-if="project" class="more__dot" aria-hidden="true">
-          <span class="sdot" :class="`sdot--${projectTone(project)}`"></span>
+          <ProjectAva :project="project" :size="22" />
         </span>
         <Layers v-else aria-hidden="true" />
         <span class="more__t">
@@ -24,7 +24,7 @@
         <ChevronRight class="more__go" aria-hidden="true" />
       </template>
       <template v-else-if="project">
-        <span class="sdot" :class="`sdot--${projectTone(project)}`" aria-hidden="true"></span>
+        <ProjectAva :project="project" :size="18" aria-hidden="true" />
         <span class="dchip__t">{{ niceQuotes(project.name) }}</span>
       </template>
       <template v-else>
@@ -87,7 +87,7 @@
               v-tip="[niceQuotes(ws.name), projectHint(ws)].filter(Boolean).join(' — ')"
               @click="pick(ws.id)"
             >
-              <span class="sdot" :class="`sdot--${projectTone(ws)}`" v-bind="projectDotA11y(ws)"></span>
+              <ProjectAva :project="ws" />
               <span class="menu-item__text">{{ niceQuotes(ws.name) }}</span>
               <Lock v-if="ws.locked" class="pswitch__lock" aria-label="не входит в тариф" />
               <Check v-if="ws.id === projectId" class="pswitch__check" aria-hidden="true" />
@@ -125,8 +125,8 @@ import { useExpert } from '../composables/useExpert'
 import { usePopover } from '../composables/usePopover'
 import { useProjectFilter } from '../composables/useProjectFilter'
 import { niceQuotes } from '../utils/format'
+import ProjectAva from './ui/ProjectAva.vue'
 import {
-  projectDotA11y,
   projectFolders,
   projectHint,
   projectTone,
