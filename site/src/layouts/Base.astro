@@ -67,6 +67,43 @@ const metrikaId = import.meta.env.PUBLIC_METRIKA_ID || ''
       })()
     </script>
     <script is:inline>
+      // Визит сайта — как useVisitor.js кабинета: тот же ключ посетителя и тот же запрос. Стоит до реф-скрипта:
+      // реф-код и метки читаем из адреса, пока их не убрали.
+      ;(function () {
+        try {
+          var KEY = 'tolk-visitor'
+          var id = localStorage.getItem(KEY) || ''
+          if (!/^[A-Za-z0-9_-]{16,64}$/.test(id)) {
+            var bytes = new Uint8Array(16)
+            crypto.getRandomValues(bytes)
+            id = Array.prototype.map
+              .call(bytes, function (b) {
+                return (b < 16 ? '0' : '') + b.toString(16)
+              })
+              .join('')
+            localStorage.setItem(KEY, id)
+          }
+          var params = new URLSearchParams(location.search)
+          var utm = {}
+          ;['utm_source', 'utm_medium', 'utm_campaign', 'utm_content', 'utm_term'].forEach(function (k) {
+            if (params.get(k)) utm[k] = String(params.get(k)).slice(0, 200)
+          })
+          fetch('/api/site/visit', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              visitor: id,
+              path: location.pathname,
+              referrer: document.referrer || '',
+              utm: utm,
+              ref: String(params.get('ref') || '').slice(0, 40),
+            }),
+            keepalive: true,
+          }).catch(function () {})
+        } catch (e) {}
+      })()
+    </script>
+    <script is:inline>
       // Реф-ссылка ?ref=код — как useReferral.js кабинета: тот же ключ, 90 дней, первая ссылка не перебивается.
       ;(function () {
         var params = new URLSearchParams(location.search)

@@ -101,8 +101,19 @@ def share(user_id: int, units: float) -> float | None:
     return round(units * 100 / limit, 2)
 
 
+# Задачи лендинга: вызов без пользователя, расход сервиса (source = 'landing').
+LANDING_TASKS = {"site_check", "site_tools"}
+
+
+def usage_source(user_id: int | None, task: str) -> str | None:
+    """Откуда расход: 'cabinet' — пользователь, 'landing' — задача лендинга; None — не писать (админка)."""
+    if user_id:
+        return "cabinet"
+    return "landing" if task in LANDING_TASKS else None
+
+
 def record(
-    user_id: int,
+    user_id: int | None,
     *,
     kind: str,
     task: str,
@@ -120,11 +131,16 @@ def record(
     cost_rub: float | None = None,
     fallback_from: str = "",
     fallback_reason: str = "",
+    chat_id: int | None = None,
+    duration_ms: int | None = None,
 ) -> None:
     """Строка списания. Ошибка учёта не роняет операцию: результат уже получен и оплачен сервисом.
 
-    fallback_from / fallback_reason — ответила запасная модель: какая была назначена и почему заменили."""
-    if not user_id:
+    fallback_from / fallback_reason — ответила запасная модель: какая была назначена и почему заменили.
+    Без пользователя пишутся только задачи лендинга (LANDING_TASKS, source = 'landing'): в лимиты они
+    не попадают. Остальные вызовы без пользователя — проверки в админке — не пишутся."""
+    source = usage_source(user_id, task)
+    if source is None:
         return
     try:
         with pool.connection() as conn:
@@ -132,11 +148,11 @@ def record(
                 """
                 INSERT INTO ai_usage (user_id, workspace_id, kind, task, model, model_class, tokens_in, tokens_out,
                                       tokens_cached, chars_in, chars_out, units, estimated, charged, cost_rub,
-                                      fallback_from, fallback_reason)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                                      fallback_from, fallback_reason, source, chat_id, duration_ms)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """,
                 (
-                    user_id,
+                    user_id or None,
                     workspace_id,
                     kind,
                     task,
@@ -153,12 +169,15 @@ def record(
                     cost_rub,
                     (fallback_from or "")[:200],
                     (fallback_reason or "")[:300],
+                    source,
+                    chat_id,
+                    int(duration_ms) if duration_ms is not None else None,
                 ),
             )
     except Exception:  # noqa: BLE001
         log.exception("Не удалось записать списание (%s, %s)", kind, task)
         return
-    if charged:
+    if charged and user_id:
         from app.notifications import notify_limit  # лениво: notifications зовёт billing
 
         try:

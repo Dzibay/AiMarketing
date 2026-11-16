@@ -517,11 +517,12 @@ def test_yandex_signup_keeps_ref(db, monkeypatch):
 
     referrals.save_link(None, {"code": "tg"})
     monkeypatch.setattr(yandex, "build_authorize_url", lambda state, **kw: f"https://oauth/?state={state}")
-    url = yandex.start_oauth(purpose="login", ref="TG")
+    visitor = "v" * 32  # посетитель сайта — для первого источника регистрации
+    url = yandex.start_oauth(purpose="login", ref="TG", visitor=visitor)
     state = url.split("state=")[1]
     row = _sql(db, "SELECT signup FROM oauth_states WHERE state = %s", (state,)).fetchone()
-    assert row["signup"] == {"ref": "TG"}
-    assert yandex.consume_oauth_state(state)["signup"] == {"ref": "TG"}
+    assert row["signup"] == {"ref": "TG", "visitor": visitor}
+    assert yandex.consume_oauth_state(state)["signup"] == {"ref": "TG", "visitor": visitor}
 
 
 # --- Напоминания --------------------------------------------------------------------------------

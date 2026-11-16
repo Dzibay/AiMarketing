@@ -33,6 +33,11 @@ KINDS = {
 }
 
 
+# События, которые считаются действием пользователя в активности дня (app.activity). Проект, созданный
+# автоматически при подключении Яндекса (auto=True), действием не считается.
+ACTION_KINDS = {"ai_question", "action_applied", "project_created"}
+
+
 def record(user_id: int | None, kind: str, **meta) -> None:
     if not user_id:
         return
@@ -44,6 +49,10 @@ def record(user_id: int | None, kind: str, **meta) -> None:
             )
     except Exception:  # noqa: BLE001
         log.exception("Не удалось записать событие %s пользователя %s", kind, user_id)
+    if kind in ACTION_KINDS and not meta.get("auto"):
+        from app import activity
+
+        activity.action(user_id)
 
 
 def recorded_since(user_id: int, kind: str, since) -> bool:

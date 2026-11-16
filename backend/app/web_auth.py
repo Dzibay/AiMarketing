@@ -52,6 +52,9 @@ def require_web_identity(authorization: str = Header(default="")) -> int:
         raise HTTPException(status_code=401, detail="unauthorized")
     if user.get("blocked_at"):
         raise HTTPException(status_code=403, detail="blocked")
+    from app import activity
+
+    activity.touch(user_id)
     return user_id
 
 

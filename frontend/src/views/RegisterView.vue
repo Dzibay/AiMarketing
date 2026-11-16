@@ -67,6 +67,7 @@ import SiteFooter from '../components/SiteFooter.vue'
 import SiteHeader from '../components/SiteHeader.vue'
 import { errorText, webApi } from '../api/web'
 import { clearRef, currentRef } from '../composables/useReferral'
+import { visitorId } from '../composables/useVisitor'
 import { useSession } from '../composables/useSession'
 import { useSiteConfig } from '../composables/useSiteConfig'
 import { pushToast } from '../composables/useToasts'
@@ -100,6 +101,7 @@ async function submit() {
       password: password.value,
       promo: promo.value.trim(),
       ref: currentRef(),
+      visitor: visitorId(),
     })
     clearRef()
     setSession(data.token)

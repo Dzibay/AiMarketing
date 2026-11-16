@@ -8920,6 +8920,8 @@ def run_chat(user_id: int, chat_id: int, progress=None) -> dict:
             "stream": True,
             # Шаги одного чата — к одному серверу OpenAI, где лежит кэш их общего начала.
             "cache_key": f"tolk-chat-{chat_id}",
+            # Расход хода — к этому чату («самые дорогие чаты» в админке).
+            "chat_id": chat_id,
         }
         ctx = Context(user_id, chat["workspace_id"])
         ctx.chat_id = chat_id

@@ -681,7 +681,79 @@ def _record(cfg: dict, usage: dict) -> None:
         cost_rub=usage["cost_rub"],
         fallback_from=cfg.get("fallback_from") or "",
         fallback_reason=cfg.get("fallback_reason") or "",
+        chat_id=cfg.get("chat_id"),
+        duration_ms=usage.get("duration_ms"),
     )
+
+
+# --- Журнал ошибок вызова (ai_errors) -----------------------------------------------------------
+# complete() открывает список попыток; _send_retrying дописывает в него каждую неудачную; в конце цепочки
+# повторов и подмен попытки уходят в ai_errors вместе с итогом: ответил ли кто-то и кто.
+
+_attempts: ContextVar[list | None] = ContextVar("ai_attempts", default=None)
+ERRORS_KEEP_DAYS = 90
+
+
+def _note_attempt(cfg: dict, exc: YandexError, *, retried: bool) -> None:
+    attempts = _attempts.get()
+    if attempts is None:
+        return
+    attempts.append(
+        {
+            "model": cfg.get("model_name") or cfg.get("model") or "",
+            "model_class": cfg.get("model_class") or "",
+            "code": exc.code or "",
+            "message": (exc.message or "")[:500],
+            "retried": retried,
+            "fallback": False,
+        }
+    )
+
+
+def _save_attempts(cfg: dict, attempts: list[dict], answered_by: str) -> None:
+    """Неудачные попытки одного вызова → ai_errors. Проверки в админке не пишутся. Ошибка учёта глотается."""
+    if not attempts:
+        return
+    source = billing.usage_source(cfg.get("user_id"), cfg.get("task") or "chat")
+    if source is None:
+        return
+    try:
+        with pool.connection() as conn:
+            with conn.cursor() as cur:
+                cur.executemany(
+                    """
+                    INSERT INTO ai_errors (user_id, source, task, model, model_class, code, message, retried,
+                                           fallback, answered, answered_by)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    [
+                        (
+                            cfg.get("user_id") or None,
+                            source,
+                            cfg.get("task") or "chat",
+                            a["model"],
+                            a["model_class"],
+                            a["code"],
+                            a["message"],
+                            a["retried"],
+                            a["fallback"],
+                            bool(answered_by),
+                            answered_by,
+                        )
+                        for a in attempts
+                    ],
+                )
+    except Exception:  # noqa: BLE001
+        log.exception("Не удалось записать ошибки ИИ")
+
+
+def purge_errors() -> int:
+    """Ошибки ИИ старше ERRORS_KEEP_DAYS — прочь (раз в сутки из планировщика)."""
+    with pool.connection() as conn:
+        cur = conn.execute(
+            "DELETE FROM ai_errors WHERE created_at < NOW() - make_interval(days => %s)", (ERRORS_KEEP_DAYS,)
+        )
+        return cur.rowcount or 0
 
 
 _GATEWAY_TEXT = {
@@ -1124,6 +1196,9 @@ def _send_retrying(cfg: dict, url: str, body: dict, timeout: float, native: bool
             return _send(cfg, url, body, timeout, native)
         except YandexError as exc:
             wait = _retry_wait(exc, pauses)
+            # Отказ родного API Claude в самом запросе тоже повторяется — через совместимый слой.
+            rejected = bool(native and getattr(exc, "native_rejected", False))
+            _note_attempt(cfg, exc, retried=wait is not None or rejected)
             if wait is None:
                 if attempt > 1 and exc.message:
                     exc.message = f"{exc.message} (попыток: {attempt})"
@@ -1189,6 +1264,19 @@ def complete(cfg: dict, messages: list[dict], tools: list[dict] | None = None) -
     Ответила запасная — в ответе "fallback": её cfg (для следующих шагов хода, с оставшимися запасными)
     и "fallback_from". В чате подмену не видно: класс и цена в единицах — выбранного класса.
     """
+    attempts: list[dict] = []
+    token = _attempts.set(attempts)
+    answered_by = ""
+    try:
+        reply = _complete_chain(cfg, messages, tools, attempts)
+        answered_by = (reply.get("fallback") or cfg).get("model_name") or cfg.get("model") or ""
+        return reply
+    finally:
+        _attempts.reset(token)
+        _save_attempts(cfg, attempts, answered_by)
+
+
+def _complete_chain(cfg: dict, messages: list[dict], tools: list[dict] | None, attempts: list[dict]) -> dict:
     chain: list[dict | None] = [None, *(cfg.get("fallbacks") or [])]
     names = [cfg.get("model_name") or cfg.get("model") or "", *(f["model"] for f in chain[1:])]
     order = [i for i in range(len(chain)) if not _is_down(names[i])] + [i for i in range(len(chain)) if _is_down(names[i])]
@@ -1214,6 +1302,8 @@ def complete(cfg: dict, messages: list[dict], tools: list[dict] | None = None) -
                     ) from exc
                 raise
             first = first or exc
+            if attempts:
+                attempts[-1]["fallback"] = True
             log.warning("ИИ: модель %s не ответила (%s), пробую запасную", names[i], exc.message or exc.code)
             continue
         _down.pop(names[i], None)
@@ -1244,6 +1334,7 @@ def _complete_once(cfg: dict, messages: list[dict], tools: list[dict] | None = N
         body["prompt_cache_key"] = cfg["cache_key"]
     url = f"{cfg['base_url']}/chat/completions"
     timeout = cfg.get("timeout") or TIMEOUT_SECONDS
+    started = time.monotonic()
     data = None
     native = cfg.get("anthropic")
     if native:
@@ -1268,6 +1359,7 @@ def _complete_once(cfg: dict, messages: list[dict], tools: list[dict] | None = N
         calls.append({"id": call.get("id") or f"call_{i}", "name": fn.get("name") or "", "arguments": args})
     content = message.get("content") or ""
     usage = _usage(cfg, data, messages, tools, content, calls)
+    usage["duration_ms"] = int((time.monotonic() - started) * 1000)
     _record(cfg, usage)
     # Какая модель ответила по словам провайдера: бывает точнее настроенной (алиас → версия).
     answered_by = str(data.get("model") or "") if isinstance(data, dict) else ""

@@ -223,6 +223,11 @@ def log_action(
     log_id = int(row["id"])
     if undo is not None:
         note_undoable(log_id)
+    if _source.get() == "user" and status != "error":
+        # Правка самим пользователем — действие дня. ИИ и правила — нет: их ход уже засчитан вопросом ИИ.
+        from app import activity
+
+        activity.action(user_id)
     return log_id
 
 

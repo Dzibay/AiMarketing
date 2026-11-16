@@ -363,11 +363,12 @@ export const webApi = {
   resendVerify: () => post('/api/web/verify-email/resend'),
   // purpose=audience — второе приложение (Яндекс Аудитории) логину connectionId.
   // ref — реф-код для входа через Яндекс: сохранится, если это регистрация.
-  yandexStart: (purpose = 'login', mode = '', connectionId = null, ref = '') =>
+  // visitor — идентификатор посетителя сайта: первый источник нового пользователя.
+  yandexStart: (purpose = 'login', mode = '', connectionId = null, ref = '', visitor = '') =>
     request(
       `/api/web/yandex/start?purpose=${encodeURIComponent(purpose)}${mode ? `&mode=${encodeURIComponent(mode)}` : ''}${
         connectionId ? `&connection_id=${encodeURIComponent(connectionId)}` : ''
-      }${ref ? `&ref=${encodeURIComponent(ref)}` : ''}`,
+      }${ref ? `&ref=${encodeURIComponent(ref)}` : ''}${visitor ? `&visitor=${encodeURIComponent(visitor)}` : ''}`,
     ),
   syncConnection: (id, onProgress) => runJob(`/api/web/connections/${id}/sync`, undefined, onProgress),
   patchConnection: (id, payload) =>

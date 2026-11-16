@@ -4,7 +4,7 @@ import time
 from fastapi import APIRouter, BackgroundTasks, Body, HTTPException, Request
 from pydantic import BaseModel
 
-from app import payments, plans, referrals, site_check, site_extras
+from app import payments, plans, referrals, site_check, site_extras, site_visits
 
 from app.config import settings
 from app.legal import legal_consent_data, legal_cookies_data, legal_offer_data, legal_privacy_data
@@ -24,6 +24,30 @@ def site_ref(body: RefBody) -> dict:
     """Первый заход по ?ref=код: +1 переход. Неизвестный или выключенный код — 404, сайт его забудет."""
     if not referrals.visit(body.code):
         raise HTTPException(status_code=404, detail="not-found")
+    return {"ok": True}
+
+
+class VisitBody(BaseModel):
+    visitor: str = ""
+    path: str = ""
+    referrer: str = ""
+    utm: dict = {}
+    ref: str = ""
+
+
+@router.post("/site/visit")
+def site_visit(body: VisitBody, request: Request) -> dict:
+    """Просмотр страницы лендинга или открытой страницы кабинета — для визитов и источников. Ответ всегда ok."""
+    site_visits.record(
+        visitor_id=body.visitor,
+        path=body.path,
+        referrer=body.referrer,
+        utm=body.utm if isinstance(body.utm, dict) else {},
+        ref=body.ref,
+        user_agent=request.headers.get("user-agent", ""),
+        ip=_client_ip(request),
+        own_host=request.headers.get("x-forwarded-host") or request.headers.get("host", ""),
+    )
     return {"ok": True}
 
 

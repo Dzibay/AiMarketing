@@ -18,6 +18,7 @@ import secrets
 from datetime import datetime
 
 from app import plans
+from app.clock import today_msk
 from app.db import pool
 from app.settings_store import get_setting, public_base_url, set_setting
 from app.yandex import YandexError
@@ -31,7 +32,7 @@ def normalize(code: str) -> str:
 
 
 def visit(code: str) -> bool:
-    """Переход по ссылке: +1 к счётчику активной ссылки."""
+    """Переход по ссылке: +1 к счётчику активной ссылки и к её кликам за день (по Москве)."""
     code = normalize(code)
     if not CODE_RE.match(code):
         return False
@@ -39,6 +40,14 @@ def visit(code: str) -> bool:
         row = conn.execute(
             "UPDATE ref_links SET visits = visits + 1 WHERE code = %s AND active RETURNING id", (code,)
         ).fetchone()
+        if row is not None:
+            conn.execute(
+                """
+                INSERT INTO ref_link_clicks_daily (link_id, day, clicks) VALUES (%s, %s, 1)
+                ON CONFLICT (link_id, day) DO UPDATE SET clicks = ref_link_clicks_daily.clicks + 1
+                """,
+                (row["id"], today_msk()),
+            )
     return row is not None
 
 

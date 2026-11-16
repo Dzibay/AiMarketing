@@ -8,6 +8,7 @@ import OAuthDoneView from '../views/OAuthDoneView.vue'
 import { ACCESS_EVENT } from '../api/web'
 import { accessRedirect, loadProfile, useProfile } from '../composables/useProfile'
 import { captureRef } from '../composables/useReferral'
+import { trackVisit } from '../composables/useVisitor'
 import { captureCheck, claimCheck, hasCheck } from '../composables/useSiteCheck'
 import { getSession } from '../composables/useSession'
 
@@ -351,5 +352,14 @@ if (typeof window !== 'undefined') {
     if (target) router.replace(target)
   })
 }
+
+// Открытые страницы кабинета — часть сайта: просмотр идёт в визиты (источник, воронка). Метки и реф-код
+// берём из исходного адреса — beforeEach их уже убрал.
+const VISIT_PAGES = new Set(['login', 'register'])
+
+router.afterEach((to, _from, failure) => {
+  if (failure || !VISIT_PAGES.has(to.name)) return
+  trackVisit(to.path, { ...(to.redirectedFrom?.query || {}), ...to.query })
+})
 
 export default router

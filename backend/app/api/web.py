@@ -8,7 +8,19 @@ from pydantic import BaseModel, Field
 
 log = logging.getLogger("app.api.web")
 
-from app import ad_extras, billing, email_verify, events, notifications, payments, plans, promos, referrals, support
+from app import (
+    ad_extras,
+    billing,
+    email_verify,
+    events,
+    notifications,
+    payments,
+    plans,
+    promos,
+    referrals,
+    site_visits,
+    support,
+)
 from app.actions import (
     _account_creds,
     bulk_campaign_action,
@@ -117,6 +129,8 @@ class RegisterBody(BaseModel):
     # Промокод и реф-код (?ref= с первого захода на сайт) — необязательно.
     promo: str = ""
     ref: str = ""
+    # Идентификатор посетителя сайта (localStorage) — первый источник и визиты до регистрации.
+    visitor: str = ""
 
 
 class PayBody(BaseModel):
@@ -429,6 +443,7 @@ def web_register(body: RegisterBody) -> dict:
     ref = referrals.normalize(body.ref)
     attached = bool(ref) and referrals.attach(user["id"], ref)
     events.record(user["id"], "register", via="email", **({"ref": ref} if attached else {}))
+    site_visits.attach_user(user["id"], body.visitor)
     promo = None
     if promo_code:
         try:
@@ -704,6 +719,7 @@ def web_yandex_start(
     mode: str = "",
     connection_id: int | None = None,
     ref: str = "",
+    visitor: str = "",
     authorization: str = Header(default=""),
 ) -> dict:
     """mode: "" — Метрика и Директ, "metrika" / "direct" — одна роль. ref — реф-код для нового пользователя.
@@ -722,7 +738,7 @@ def web_yandex_start(
         if user_id is None:
             raise HTTPException(status_code=401, detail="unauthorized")
     try:
-        url = start_oauth(purpose=purpose, user_id=user_id, mode=mode, connection_id=connection_id, ref=ref)
+        url = start_oauth(purpose=purpose, user_id=user_id, mode=mode, connection_id=connection_id, ref=ref, visitor=visitor)
     except YandexError as exc:
         raise _http(exc) from exc
     return {"url": url}

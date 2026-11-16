@@ -212,7 +212,8 @@ def build_authorize_url(state: str, *, audience: bool = False, login_hint: str =
 
 
 def start_oauth(
-    *, purpose: str, user_id: int | None = None, mode: str = "", connection_id: int | None = None, ref: str = ""
+    *, purpose: str, user_id: int | None = None, mode: str = "", connection_id: int | None = None, ref: str = "",
+    visitor: str = "",
 ) -> str:
     if purpose == "audience":
         _client(audience=True)
@@ -221,7 +222,9 @@ def start_oauth(
         row = _audience_connection(user_id, connection_id)
         state = create_oauth_state(purpose=purpose, user_id=user_id, connection_id=row["id"])
         return build_authorize_url(state, audience=True, login_hint=row["yandex_login"] or "")
-    signup = {"ref": ref.strip()[:40]} if ref and purpose == "login" else None
+    signup = None
+    if purpose == "login" and (ref or visitor):
+        signup = {"ref": ref.strip()[:40], "visitor": visitor.strip()[:64]}
     state = create_oauth_state(purpose=purpose, user_id=user_id, mode=mode, signup=signup)
     return build_authorize_url(state)
 
@@ -1119,6 +1122,9 @@ def complete_oauth(*, code: str, state: str) -> tuple[dict, dict | None]:
 
             referrals.attach(user["id"], ref)
         events.record(user["id"], "register", via="yandex", **({"ref": ref} if ref else {}))
+        from app import site_visits
+
+        site_visits.attach_user(user["id"], str((oauth_state.get("signup") or {}).get("visitor") or ""))
     events.record(user["id"], "yandex_connected", login=profile.get("login") or "", mode=oauth_state.get("mode") or "")
     return user, job
 

@@ -108,6 +108,11 @@ def _purge_jobs() -> None:
     n = purge_notifications()
     if n:
         log.info("Удалено старых уведомлений: %d", n)
+    from app.ai import purge_errors
+
+    n = purge_errors()
+    if n:
+        log.info("Удалено старых ошибок ИИ: %d", n)
 
 
 def _support_emails() -> None:
