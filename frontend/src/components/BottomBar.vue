@@ -8,10 +8,19 @@
       <Megaphone aria-hidden="true" />
       <span>Кампании</span>
     </RouterLink>
-    <RouterLink v-if="accessOk" v-coach="'ai'" class="bbar__item bbar__ai" :to="chatTo" aria-label="Новый чат с ИИ">
+    <button
+      v-if="accessOk"
+      v-coach="'ai'"
+      class="bbar__item bbar__ai"
+      type="button"
+      aria-label="ИИ-помощник"
+      aria-haspopup="dialog"
+      :aria-expanded="aiPanelOpen"
+      @click="openAiPanel"
+    >
       <span class="bbar__orb" aria-hidden="true"><Sparkles /></span>
       <span aria-hidden="true">ИИ</span>
-    </RouterLink>
+    </button>
     <RouterLink
       v-if="accessOk"
       class="bbar__item"
@@ -109,6 +118,7 @@ import { ChevronRight, Ellipsis, House, LifeBuoy, ListChecks, LogOut, Megaphone,
 import ProjectSwitcher from './ProjectSwitcher.vue'
 import UiSheet from './ui/UiSheet.vue'
 import { SECTIONS, SERVICE, pageMatches, sectionTo } from './shellNav'
+import { aiPanelOpen, openAiPanel } from '../composables/useAiPanel'
 import { useExpert } from '../composables/useExpert'
 import { usePending } from '../composables/usePending'
 import { useProfile } from '../composables/useProfile'
@@ -119,7 +129,7 @@ import { useViewport } from '../composables/useViewport'
 
 /**
  * Нижняя панель кабинета на узком экране (до 900 px) — вместо бокового меню: «Главная», «Кампании», крупная кнопка
- * «ИИ» (новый чат выбранного проекта или общий), «Решения» со счётчиком и «Ещё». В шторке «Ещё» — остальные разделы
+ * «ИИ» (панель ИИ на весь экран: чат выбранного проекта или общий), «Решения» со счётчиком и «Ещё». В шторке «Ещё» — остальные разделы
  * с пояснениями, выбор проекта, служебные страницы, тема и выход.
  *
  * Панель прячется, пока открыта экранная клавиатура, и на странице чата: там внизу поле ввода, а выйти можно
@@ -128,7 +138,6 @@ import { useViewport } from '../composables/useViewport'
  */
 const props = defineProps({
   accessOk: { type: Boolean, default: true },
-  chatTo: { type: String, required: true },
   /** Тариф и лимит из оболочки: { percent, percentText, text } или null. */
   limitChip: { type: Object, default: null },
 })
@@ -143,7 +152,8 @@ const { isDark, toggleTheme } = useTheme()
 const { typing } = useViewport()
 
 const section = computed(() => route.meta.section)
-const shown = computed(() => section.value !== 'chat' && !typing.value)
+// Панель ИИ на телефоне — на весь экран, нижняя панель под ней не нужна.
+const shown = computed(() => section.value !== 'chat' && !typing.value && !aiPanelOpen.value)
 
 watchEffect(() => document.documentElement.classList.toggle('has-bbar', shown.value))
 onBeforeUnmount(() => document.documentElement.classList.remove('has-bbar'))

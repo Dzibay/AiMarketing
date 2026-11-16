@@ -1,5 +1,5 @@
 <template>
-  <div class="dshell" :class="{ 'is-expert': expert, 'is-collapsed': sideCollapsed }">
+  <div class="dshell" :class="{ 'is-expert': expert, 'is-collapsed': sideCollapsed, 'has-aip': aipMode === 'dock' }">
     <!-- До 900 px бокового меню нет: разделы — в нижней панели (BottomBar). -->
     <aside v-if="!narrow" id="dside" class="dside" aria-label="Меню">
       <div class="dside__scroll">
@@ -201,6 +201,19 @@
           Ждёт решения: {{ pendingCount }}
         </RouterLink>
         <LoadsIndicator v-if="accessOk" :quiet="!expert" />
+        <!-- ИИ рядом: панель справа на любой странице, кроме самого чата. На телефоне — кнопка «ИИ» внизу. -->
+        <button
+          v-if="!narrow && accessOk && !inChat"
+          class="dicon dbar__ai"
+          :class="{ active: aiPanelOpen }"
+          type="button"
+          :aria-pressed="aiPanelOpen"
+          :aria-label="aiPanelOpen ? 'Скрыть ИИ-помощника' : 'ИИ-помощник рядом'"
+          v-tip="aiPanelOpen ? 'Скрыть ИИ-помощника' : 'ИИ-помощник рядом'"
+          @click="toggleAiPanel"
+        >
+          <Sparkles aria-hidden="true" />
+        </button>
         <button v-if="!narrow" class="dicon" type="button" :aria-label="themeLabel" v-tip="themeLabel" @click="toggleTheme">
           <Sun v-if="isDark" aria-hidden="true" />
           <Moon v-else aria-hidden="true" />
@@ -283,7 +296,9 @@
       </div>
     </div>
 
-    <BottomBar v-if="narrow" :access-ok="accessOk" :chat-to="chatTo" :limit-chip="limitChip" @logout="logout" />
+    <AiPanel v-if="aipMode" :mode="aipMode" />
+
+    <BottomBar v-if="narrow" :access-ok="accessOk" :limit-chip="limitChip" @logout="logout" />
 
     <Modal :open="!!upgrade" :title="upgrade?.title || ''" wide @close="upgrade = null">
       <template v-if="upgrade">
@@ -340,9 +355,11 @@ import {
   Plus,
   Settings,
   SlidersHorizontal,
+  Sparkles,
   Sun,
   X,
 } from '@lucide/vue'
+import AiPanel from './AiPanel.vue'
 import BottomBar from './BottomBar.vue'
 import TolkMark from './TolkMark.vue'
 import UndoHost from './UndoHost.vue'
@@ -357,6 +374,7 @@ import HelpPanel from './HelpPanel.vue'
 import Modal from './ui/Modal.vue'
 import ProjectAva from './ui/ProjectAva.vue'
 import { SECTIONS, pageMatches, sectionTabs, sectionTo } from './shellNav'
+import { aiPanelOpen, closeAiPanel, toggleAiPanel } from '../composables/useAiPanel'
 import { useExpert } from '../composables/useExpert'
 import { pageTitleOverride } from '../composables/usePageTitle'
 import { resetLoads } from '../composables/useLoads'
@@ -535,6 +553,25 @@ watch(
 
 // Телефон, страница чата: «назад» — туда, откуда пришли; открыли чат по ссылке — на главную.
 const inChat = computed(() => route.meta.section === 'chat')
+
+// Панель ИИ: от 1280 px — колонкой справа (страница сужается), 901–1279 — поверх страницы, на телефоне — на весь
+// экран. На странице чата её нет: там тот же чат во всю ширину.
+const aipMode = computed(() => {
+  if (!aiPanelOpen.value || !accessOk.value || inChat.value) return ''
+  return narrow.value ? 'full' : mid.value ? 'over' : 'dock'
+})
+
+// Отступы справа у кнопки поддержки и всплывающих сообщений — по классу у <html>.
+watch(aipMode, (mode) => document.documentElement.classList.toggle('has-aip-dock', mode === 'dock'), { immediate: true })
+onBeforeUnmount(() => document.documentElement.classList.remove('has-aip-dock'))
+
+// На телефоне панель закрывает страницу целиком: ссылка из неё ведёт на другую страницу — показываем её.
+watch(
+  () => route.path,
+  () => {
+    if (narrow.value && aiPanelOpen.value) closeAiPanel()
+  },
+)
 
 function leaveChat() {
   if (window.history.state?.back) router.back()

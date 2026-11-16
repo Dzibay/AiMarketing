@@ -88,7 +88,26 @@ const PAGES = [
     await new Promise((r) => setTimeout(r, 400))
     const row = [...document.querySelectorAll('.more__row')].find((b) => b.textContent.includes('Поддержка'))
     row?.click(); return !!row })()`],
+  // Панель ИИ рядом со страницей: на кампании (чип «Про: …») и с чатом картинок (узкие карточки).
+  ['ai-panel', `/w/${ws}/campaigns/${stand.campaign_row}`, `(${openAiPanel.toString()})()`],
+  ...(stand.chats.images
+    ? [['ai-panel-cards', `/w/${ws}/campaigns`, `(async () => { if (!(${openAiPanel.toString()})()) return false
+    await new Promise((r) => setTimeout(r, 500))
+    document.querySelector('.aip__head [aria-label="Все чаты"]')?.click()
+    await new Promise((r) => setTimeout(r, 900))
+    const rows = [...document.querySelectorAll('.aip__list .srow')]
+    ;(rows.find((b) => /картин/i.test(b.textContent)) || rows[0])?.click(); return !!rows.length })()`]]
+    : []),
 ].filter(([name]) => !only || only.includes(name))
+
+// Панель ИИ: кнопка в верхней строке, на телефоне — «ИИ» в нижней панели.
+function openAiPanel() {
+  // Открытая панель запоминается шире 900 px — второй щелчок её бы закрыл.
+  if (document.querySelector('.aip')) return true
+  const b = [...document.querySelectorAll('.dbar__ai, .bbar__ai')].find((x) => x.offsetParent)
+  b?.click()
+  return !!b
+}
 
 // Нижняя панель есть только на узком экране: там «Ещё» открывает шторку.
 function openMore() {

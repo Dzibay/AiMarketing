@@ -273,6 +273,7 @@
 </template>
 
 <script setup>
+import { usePageContext } from '../composables/usePageContext'
 import UiSkeleton from '../components/ui/UiSkeleton.vue'
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { RouterLink } from 'vue-router'
@@ -541,6 +542,25 @@ onMounted(() => {
   loadHighlights()
 })
 watch(expert, loadHighlights)
+
+/** Фильтр запросов строкой для чипа «Про: …» и для ИИ. */
+function queriesFilterText(sel, where) {
+  return [
+    filters.search && `поиск «${filters.search}»`,
+    where,
+    filters.minCost && `расход от ${filters.minCost} ₽`,
+    filters.noConv && 'без конверсий',
+    sel && `выбрано запросов: ${sel}`,
+  ]
+    .filter(Boolean)
+    .join(', ')
+}
+
+// Панель ИИ знает, что открыто: запросы и фильтр.
+usePageContext(() => {
+  const project = filters.project ? projectOptions.value.find((o) => o.value === filters.project)?.label : ''
+  return { view: 'queries', filter: queriesFilterText(selected.value.size, project && `проект «${project}»`) }
+})
 </script>
 
 <style scoped>

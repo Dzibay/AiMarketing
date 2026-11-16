@@ -59,12 +59,7 @@
       @pick="toggle"
     />
     <ExpertHint v-if="data && simpleRows.length">Фильтры, архив, массовые действия и таблица со всеми цифрами</ExpertHint>
-    <CampaignAsk
-      v-if="data && simpleRows.length"
-      :rows="simpleRows"
-      :selected="selected"
-      @unselect="toggle($event, false)"
-    />
+    <CampaignAsk v-if="data && simpleRows.length" :selected="selected" />
   </template>
 
   <section v-else class="panel">
@@ -145,6 +140,7 @@ import { pushToast } from '../composables/useToasts'
 import { undoAction } from '../composables/useUndo'
 import { useWorkspaces } from '../composables/useWorkspaces'
 import { useExpert } from '../composables/useExpert'
+import { usePageContext } from '../composables/usePageContext'
 import { confirmCampaignArchive, confirmCampaignsBulk, confirmCampaignToggle } from '../utils/campaignConfirm'
 import { campaignTypeShort, formatDate, lastDays, niceQuotes } from '../utils/format'
 import { useHead } from '../utils/useHead'
@@ -173,6 +169,19 @@ const loadError = ref('')
 const days = ref(7)
 const busy = ref(false)
 const selected = ref(new Set())
+
+// Панель ИИ знает, что открыто: список кампаний, период и отмеченные галочкой.
+usePageContext(() => {
+  const range = lastDays(days.value)
+  const rows = data.value?.campaigns || []
+  return {
+    view: 'campaigns',
+    period: { from: range.date_from, to: range.date_to },
+    selected: rows
+      .filter((c) => selected.value.has(c.campaign_row_id))
+      .map((c) => ({ type: 'campaign', id: c.campaign_row_id, name: c.name })),
+  }
+})
 const bulkErrors = ref([])
 const duplicate = reactive({ open: false, campaign: null, workspace: null })
 let seq = 0

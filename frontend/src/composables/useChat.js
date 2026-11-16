@@ -76,8 +76,11 @@ export function mentionParts(item) {
  *
  * general — общий чат по всем проектам; ws — ref проекта (у общего чата — заглушка); basePath — адрес раздела
  * без номера чата; reloadWs — перечитать проект после «Больше не спрашивать».
+ *
+ * panel — чат в боковой панели (AiPanel.vue): открытый чат — свой ref panelChat, а не адрес страницы, окно не
+ * прокручивается, адрес не меняется. context — ref с тем, что открыто в кабинете: уходит вместе с сообщением.
  */
-export function provideChat({ general, ws, basePath, reloadWs }) {
+export function provideChat({ general, ws, basePath, reloadWs, panel = false, panelChat = null, context = null }) {
   const route = useRoute()
   const router = useRouter()
   const answers = useAnswerWatch()
@@ -103,7 +106,17 @@ export function provideChat({ general, ws, basePath, reloadWs }) {
   let pollTimer = null
   let stickToBottom = true
 
-  const chatId = computed(() => Number(route.params.chatId) || null)
+  const localChat = panelChat || ref(null)
+  const chatId = computed(() => (panel ? localChat.value : Number(route.params.chatId) || null))
+
+  /** Открыть чат: на странице — переходом по адресу (push или replace), в панели — у себя. */
+  function goChat(id, replace = false) {
+    if (panel) {
+      localChat.value = id
+      return Promise.resolve()
+    }
+    return (replace ? router.replace : router.push)({ path: id ? `${basePath.value}/${id}` : basePath.value })
+  }
   const chat = computed(() => (data.value && data.value.chat.id === chatId.value ? data.value.chat : null))
   const status = computed(() => chat.value?.status || 'idle')
   // Ошибка хода уже стоит в ленте последней строкой (с размером запроса) — плашку с тем же текстом не дублируем.
@@ -244,7 +257,7 @@ export function provideChat({ general, ws, basePath, reloadWs }) {
       if (m.role === 'user') {
         closeTurn()
         turn = { question: m.content || '', item: null, help: 0, found: false }
-        out.push({ key: `m${m.id}`, id: m.id, role: 'user', content: m.content, refs: m.refs || [], created: m.created_at || '' })
+        out.push({ key: `m${m.id}`, id: m.id, role: 'user', content: m.content, refs: m.refs || [], context: m.context || null, created: m.created_at || '' })
       }
       if (m.role === 'error') out.push({ key: `m${m.id}`, role: 'error', content: m.content })
       if (m.role === 'assistant') {
@@ -436,7 +449,7 @@ export function provideChat({ general, ws, basePath, reloadWs }) {
   }
 
   // Переход из поиска по чатам: ?m=<id сообщения> — показать это сообщение и ненадолго подсветить.
-  const jumpId = computed(() => Number(route.query.m) || null)
+  const jumpId = computed(() => (panel ? null : Number(route.query.m) || null))
   let foundTimer = 0
 
   async function revealMessage(id) {
@@ -453,9 +466,25 @@ export function provideChat({ general, ws, basePath, reloadWs }) {
       scrollDown(true)
     }
     // Метку убираем из адреса: обновление страницы не должно снова прыгать к сообщению.
+    if (panel) return
     const query = { ...route.query }
     delete query.m
     router.replace({ query })
+  }
+
+  // «Развернуть» в панели ведёт сюда с #a<id действия> — показать эту карточку.
+  const jumpAction = () => (panel ? null : Number(/^#a(\d+)$/.exec(route.hash)?.[1]) || null)
+
+  async function revealAction(id) {
+    await nextTick()
+    const el = document.querySelector(`.action-card[data-action="${id}"], [data-action="${id}"]`)
+    if (el) {
+      stickToBottom = false
+      el.scrollIntoView({ block: 'center' })
+    } else {
+      scrollDown(true)
+    }
+    router.replace({ query: route.query, hash: '' })
   }
 
   async function loadChat(id, quiet = false) {
@@ -469,6 +498,7 @@ export function provideChat({ general, ws, basePath, reloadWs }) {
       fillModels(res.ai)
       const count = res.messages.length + res.actions.length
       if (!quiet && jumpId.value) revealMessage(jumpId.value)
+      else if (!quiet && jumpAction()) revealAction(jumpAction())
       else if (!quiet || count !== prevCount) scrollDown(!quiet)
       const justAnswered = prevStatus === 'running' && res.chat.status !== 'running'
       if (justAnswered) answers.answeredHidden(res.chat, `${basePath.value}/${id}`)
@@ -525,10 +555,11 @@ export function provideChat({ general, ws, basePath, reloadWs }) {
           : await aiApi.createChat(ws.value.id, '', pickedClass.value)
         id = created.id
         chats.value = [created, ...chats.value]
-        await router.replace({ path: `${basePath.value}/${id}` })
+        await goChat(id, true)
       }
       // Подсказки-стартеры — готовый текст без упоминаний.
-      await aiApi.send(id, message, text == null ? usedMentions(message).map((m) => m.id) : [], pending || 'reject')
+      const refs = text == null ? usedMentions(message).map((m) => m.id) : []
+      await aiApi.send(id, message, refs, pending || 'reject', context?.value || null)
       if (text == null || text === draft.value) {
         draft.value = ''
         mentions.value = []
@@ -595,10 +626,7 @@ export function provideChat({ general, ws, basePath, reloadWs }) {
       const id = res.chat.id
       chats.value = [res.chat, ...chats.value.filter((c) => c.id !== id)]
       stickToBottom = true
-      if (id !== chatId.value) {
-        const go = chatId.value ? router.push : router.replace
-        await go({ path: `${basePath.value}/${id}` })
-      }
+      if (id !== chatId.value) await goChat(id, !chatId.value)
       await loadChat(id)
     } catch (err) {
       if (err?.code === 'ai-not-configured') aiConfigured.value = false
@@ -667,7 +695,7 @@ export function provideChat({ general, ws, basePath, reloadWs }) {
     stopPolling()
     data.value = null
     draft.value = ''
-    router.push(basePath.value)
+    goChat(null)
     nextTick(() => input.value?.focus())
   }
 
@@ -719,8 +747,11 @@ export function provideChat({ general, ws, basePath, reloadWs }) {
   }
 
   watch(chatId, (id, old) => {
-    leaveChat(old)
-    answers.chatOpened(id)
+    // Панель живёт на всех страницах и опрашивает свой чат сама — ответ в фоне ждёт только страница чата.
+    if (!panel) {
+      leaveChat(old)
+      answers.chatOpened(id)
+    }
     stopPolling()
     pendingAsk.value = null
     loadError.value = ''
@@ -736,14 +767,16 @@ export function provideChat({ general, ws, basePath, reloadWs }) {
   })
 
   onMounted(() => {
+    if (panel) return
     answers.chatOpened(chatId.value)
     window.addEventListener('scroll', onScroll, { passive: true })
   })
   onBeforeUnmount(() => {
+    stopPolling()
+    if (panel) return
     // Адрес к этому моменту уже новый — чат берём из загруженных данных.
     leaveChat(data.value?.chat?.id)
     answers.chatOpened(null)
-    stopPolling()
     window.removeEventListener('scroll', onScroll)
   })
 
@@ -751,6 +784,9 @@ export function provideChat({ general, ws, basePath, reloadWs }) {
     general,
     ws,
     basePath,
+    panel,
+    context,
+    goChat,
     // Список чатов и открытый чат
     chats,
     chatsError,

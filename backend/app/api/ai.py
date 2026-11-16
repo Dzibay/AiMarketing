@@ -30,6 +30,8 @@ class MessageBody(BaseModel):
     refs: list[int] = []
     # Что делать с ждущими предложениями ИИ: reject — отклонить, keep — оставить ждать решения.
     pending: str = "reject"
+    # Что открыто в кабинете, когда пишут из панели ИИ: {view, label, object, period, filter, selected}.
+    context: dict | None = None
 
 
 class FeedbackBody(BaseModel):
@@ -268,7 +270,9 @@ def chat_delete(chat_id: int, user_id: int = Depends(require_web_user)) -> dict:
 
 @router.post("/ai/chats/{chat_id}/messages")
 def chat_message(chat_id: int, body: MessageBody, user_id: int = Depends(require_web_user)) -> dict:
-    out = _call(ai_agent.post_message, user_id, chat_id, body.text, refs=body.refs, pending=body.pending)
+    out = _call(
+        ai_agent.post_message, user_id, chat_id, body.text, refs=body.refs, pending=body.pending, context=body.context
+    )
     events.record(user_id, "ai_question", chat_id=chat_id)
     return out
 

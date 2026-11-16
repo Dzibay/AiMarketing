@@ -12,6 +12,7 @@
       <template v-for="item in items" :key="item.key">
         <div v-if="item.role === 'user'" class="msg msg--user" :data-msg="item.id">
           <div class="msg__bubble"><template v-for="(part, i) in mentionParts(item)" :key="i"><RouterLink v-if="part.ref" class="mention" :to="`/w/${part.ref.id}/summary`">{{ part.text }}</RouterLink><template v-else>{{ part.text }}</template></template></div>
+          <p v-if="item.context?.label" class="msg__context">Про: {{ item.context.label }}</p>
           <div v-if="item.created || item.content" class="msg__meta">
             <time v-if="item.created" class="msg__time" :datetime="item.created">{{ formatDateTime(item.created) }}</time>
             <UiMenu v-if="item.content" class="msg__menu" size="sm" label="Действия с сообщением">
@@ -69,7 +70,7 @@
             <div v-if="a.plaque" class="board-plaque" :class="`is-${a.status}`" :data-action="a.id">
               <span>{{ a.plaque }}</span>
               <small v-if="a.result?.comment">Комментарий: {{ a.result.comment }}</small>
-              <button class="ai-check__link" type="button" @click="emit('to-board', a.id)">К доске</button>
+              <button class="ai-check__link" type="button" @click="toBoard(a.id)">{{ panel ? 'Открыть доску' : 'К доске' }}</button>
             </div>
             <AiPlanCard
               v-else-if="a.tool === 'propose_plan'"
@@ -78,6 +79,18 @@
               :disabled="deciding || status === 'running'"
               @submit="respond(() => aiApi.plan(a.id, $event))"
             />
+            <!-- В панели таблица и картинки не помещаются: сводка и «Развернуть» — чат на весь экран. -->
+            <div v-else-if="a.tool === 'propose_items' && panel" class="action-card action-card--brief" :class="`is-${a.status}`" :data-action="a.id">
+              <div class="action-card__head">
+                <strong class="action-card__title">{{ a.args?.title || a.label }}</strong>
+                <UiStatus v-if="a.status !== 'pending'" :tone="STATUS_UI[a.status] || 'off'" :label="STATUS_LABELS[a.status] || a.status" />
+              </div>
+              <p class="action-card__summary">{{ itemsBrief(a) }}</p>
+              <button class="btn btn--ghost btn--sm" type="button" @click="expand(a.id)">
+                <Maximize2 aria-hidden="true" />
+                Развернуть
+              </button>
+            </div>
             <AiItemsCard
               v-else-if="a.tool === 'propose_items'"
               :data-action="a.id"
@@ -98,7 +111,7 @@
           <template v-for="a in item.writes" :key="a.key">
             <div v-if="a.plaque" class="board-plaque" :class="`is-${a.status}`" :data-action="a.id">
               <span>{{ a.plaque }}</span>
-              <button class="ai-check__link" type="button" @click="emit('to-board', a.id)">К доске</button>
+              <button class="ai-check__link" type="button" @click="toBoard(a.id)">{{ panel ? 'Открыть доску' : 'К доске' }}</button>
             </div>
             <div v-else-if="isLater(a)" class="action-card action-card--later" :data-action="a.id">
               <div class="action-card__head">
@@ -155,7 +168,11 @@
               </p>
               <p class="action-card__summary">{{ a.summary }}</p>
               <AiChanges v-if="a.changes?.length" :changes="a.changes" />
-              <div v-if="a.status === 'pending' && a.picks" class="ai-picks">
+              <p v-if="a.status === 'pending' && a.picks && panel" class="ai-picks ai-picks--brief">
+                <span>{{ picksBrief(a) }}</span>
+                <button class="ai-check__link" type="button" @click="expand(a.id)">Развернуть</button>
+              </p>
+              <div v-else-if="a.status === 'pending' && a.picks" class="ai-picks">
                 <p class="hint">Снимите галочки с того, что не нужно, — этого не будет в действии.</p>
                 <AiCheckTable
                   v-model:off="excluded[a.id]"
@@ -187,7 +204,7 @@
               <div v-if="a.status === 'pending' && a.id" class="action-card__buttons action-card__buttons--split">
                 <!-- На телефоне этот ряд прилипает к низу экрана: «Выполнить» во всю ширину, «Позже» — в «⋯». -->
                 <div class="action-card__acts">
-                  <p v-if="phone && offCount(a)" class="action-card__acts-note">
+                  <p v-if="(phone || panel) && offCount(a)" class="action-card__acts-note">
                     {{ allOff(a) ? 'Сняты все строки — отклоните действие' : `Снято строк: ${offCount(a)} — выполню без них` }}
                   </p>
                   <button
@@ -198,10 +215,10 @@
                     @click="decide(a, true)"
                   >
                     <Check aria-hidden="true" />
-                    {{ offCount(a) && !phone ? `Выполнить без снятых (${offCount(a)})` : 'Выполнить' }}
+                    {{ offCount(a) && !phone && !panel ? `Выполнить без снятых (${offCount(a)})` : 'Выполнить' }}
                   </button>
                   <button class="btn btn--ghost" type="button" :disabled="deciding" @click="decide(a, false)">Отклонить</button>
-                  <UiMenu v-if="phone" :disabled="deciding">
+                  <UiMenu v-if="phone || panel" :disabled="deciding">
                     <UiMenuItem :icon="Clock" hint="решить можно здесь или в «Ждёт решения»" @click="setLater(a, true)">
                       Позже
                     </UiMenuItem>
@@ -217,7 +234,7 @@
                     Позже
                   </button>
                 </div>
-                <span v-if="allOff(a) && !phone" class="hint">Сняты все строки — отклоните действие</span>
+                <span v-if="allOff(a) && !phone && !panel" class="hint">Сняты все строки — отклоните действие</span>
                 <UiCheckbox
                   v-if="!general && a.categories?.length && !a.categories.some((c) => c.id === 'destructive')"
                   v-model="remember[a.id]"
@@ -225,7 +242,7 @@
                 >
                   Больше не спрашивать для «{{ a.categories.map((c) => c.label).join('», «') }}»
                 </UiCheckbox>
-                <p v-if="!expert" class="action-card__note">
+                <p v-if="!expert && !panel" class="action-card__note">
                   Ничего не изменится, пока вы не нажмёте «Выполнить». Вернуть как было можно в «Истории».
                 </p>
               </div>
@@ -285,7 +302,7 @@
 </template>
 
 <script setup>
-import { BookmarkPlus, Check, Clock, CornerDownRight, LifeBuoy, PencilLine, RotateCcw, Sparkles } from '@lucide/vue'
+import { BookmarkPlus, Check, Clock, CornerDownRight, LifeBuoy, Maximize2, PencilLine, RotateCcw, Sparkles } from '@lucide/vue'
 import { nextTick, onBeforeUnmount, reactive, ref, watch } from 'vue'
 import { RouterLink, useRouter } from 'vue-router'
 import { openSupport } from '../../composables/useSupport'
@@ -296,7 +313,7 @@ import { pushToast } from '../../composables/useToasts'
 import { STATUS_LABELS, mentionParts, useChat } from '../../composables/useChat'
 import { useExpert } from '../../composables/useExpert'
 import { useViewport } from '../../composables/useViewport'
-import { formatDateTime } from '../../utils/format'
+import { formatDateTime, plural } from '../../utils/format'
 import { foldFrom, heightOf } from '../../utils/foldAnim'
 import { renderMarkdown } from '../../utils/markdown'
 import AiChanges from '../../views/workspace/AiChanges.vue'
@@ -328,6 +345,8 @@ function onTextClick(event) {
 
 const {
   general,
+  panel,
+  basePath,
   ws,
   chatId,
   chat,
@@ -375,6 +394,37 @@ onBeforeUnmount(() => clearTimeout(longTimer))
 
 const { expert } = useExpert()
 const { phone } = useViewport()
+
+/** Чат на весь экран — страницей, к нужной карточке (из панели, где таблицы и картинки не помещаются). */
+function expand(actionId) {
+  if (!chatId.value) return
+  router.push({ path: `${basePath.value}/${chatId.value}`, hash: actionId ? `#a${actionId}` : '' })
+}
+
+/** «К доске»: на странице чата — раздел доски рядом; в панели доски нет — открываем чат страницей. */
+function toBoard(actionId) {
+  if (panel) expand(actionId)
+  else emit('to-board', actionId)
+}
+
+const rowsText = (n) => `${n} ${plural(n, 'строка', 'строки', 'строк')}`
+
+/** Сводка карточки «выбор строк и картинок» для узкой панели. */
+function itemsBrief(a) {
+  const rows = a.args?.rows || []
+  const pics = rows.filter((r) => r.image).length
+  const head = a.args?.intro || a.summary || ''
+  if (a.status !== 'pending' || !rows.length) return head
+  const what = a.args?.stage === 'images' && pics ? `${pics} ${plural(pics, 'картинка', 'картинки', 'картинок')}` : rowsText(rows.length)
+  return [head, `${what} на выбор`].filter(Boolean).join(' · ')
+}
+
+/** Сводка таблицы с галочками в карточке действия: сколько строк и сколько снято. */
+function picksBrief(a) {
+  const total = a.picks?.rows?.length || 0
+  const off = offCount(a)
+  return off ? `${rowsText(total)}, снято ${off}` : `${rowsText(total)} — все войдут в действие`
+}
 
 // После «Выполнить» карточка сворачивается в строку с галочкой — главный момент продукта, он должен ощущаться.
 // Раскрыть подробности можно кнопкой; ошибка и отказ не сворачиваются — там есть что прочитать.

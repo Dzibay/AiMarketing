@@ -825,6 +825,47 @@ def test_refs_note_names_projects_with_ids():
     assert "менять их нельзя" in note
 
 
+def test_clean_context_keeps_known_fields_only():
+    ctx = ai_agent._clean_context(
+        {
+            "view": "campaign",
+            "label": "кампания «Окна —\nпоиск» · 7 дней",
+            "object": {"type": "campaign", "id": "12", "name": "Окна — поиск"},
+            "period": {"from": "2026-11-09", "to": "2026-11-15"},
+            "filter": "",
+            "selected": [{"id": 3, "name": "A"}, {"id": "x"}, "мусор"],
+            "extra": "drop",
+        }
+    )
+    assert ctx == {
+        "view": "campaign",
+        "label": "кампания «Окна — поиск» · 7 дней",
+        "object": {"type": "campaign", "id": 12, "name": "Окна — поиск"},
+        "period": {"from": "2026-11-09", "to": "2026-11-15"},
+        "selected": [{"type": "campaign", "id": 3, "name": "A"}],
+    }
+    assert ai_agent._clean_context({"view": "settings"}) is None
+    assert ai_agent._clean_context("campaign") is None
+    assert "period" not in ai_agent._clean_context({"view": "analytics", "period": {"from": "вчера", "to": "сегодня"}})
+
+
+def test_context_note_goes_before_question():
+    note = ai_agent._context_note(
+        {
+            "view": "campaign",
+            "object": {"type": "campaign", "id": 12, "name": "Окна — поиск"},
+            "period": {"from": "2026-11-09", "to": "2026-11-15"},
+        }
+    )
+    assert note.startswith("[Открыто в кабинете: кампания «Окна — поиск» (campaign_row_id 12) · период 2026-11-09 — 2026-11-15.")
+    assert note.endswith("]\n\n")
+    picked = ai_agent._context_note(
+        {"view": "campaigns", "selected": [{"type": "campaign", "id": 1, "name": "A"}, {"type": "campaign", "id": 2, "name": "B"}]}
+    )
+    assert "список кампаний · выбраны: «A» (campaign_row_id 1), «B» (campaign_row_id 2)" in picked
+    assert ai_agent._context_note(None) == ""
+
+
 class RefsConn:
     """conn.execute(...).fetchall() для _clean_refs: проекты пользователя по id."""
 

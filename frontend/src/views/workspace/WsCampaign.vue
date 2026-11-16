@@ -267,6 +267,8 @@
 </template>
 
 <script setup>
+import { usePageContext } from '../../composables/usePageContext'
+import { lastDays as ctxDays } from '../../utils/format'
 import UiSkeleton from '../../components/ui/UiSkeleton.vue'
 import { askConfirm } from '../../composables/useConfirm'
 import { computed, ref, watch } from 'vue'
@@ -572,6 +574,16 @@ watch(
 
 watch(expert, (on) => {
   if (!on && !structure.value) loadSimple()
+})
+
+// Панель ИИ знает, какая кампания открыта: «почему подорожали заявки?» — про неё и про цифры страницы (7 дней).
+usePageContext(() => {
+  const range = ctxDays(7)
+  return {
+    view: 'campaign',
+    object: name.value ? { type: 'campaign', id: campaignId.value, name: name.value } : null,
+    period: { from: range.date_from, to: range.date_to },
+  }
 })
 </script>
 

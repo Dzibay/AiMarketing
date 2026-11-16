@@ -64,13 +64,7 @@
     <ExpertHint v-if="data && simpleRows.length">
       Фильтры, архив, бюджеты, копии и массовые действия
     </ExpertHint>
-    <CampaignAsk
-      v-if="data && simpleRows.length"
-      :rows="simpleRows"
-      :selected="selected"
-      :ws-id="ws.id"
-      @unselect="toggle($event, false)"
-    />
+    <CampaignAsk v-if="data && simpleRows.length" :selected="selected" />
   </template>
 
   <section v-else class="panel">
@@ -229,6 +223,7 @@ import CampaignTable from '../../components/CampaignTable.vue'
 import CampaignAsk from '../../components/CampaignAsk.vue'
 import ExpertHint from '../../components/ExpertHint.vue'
 import { useExpert } from '../../composables/useExpert'
+import { usePageContext } from '../../composables/usePageContext'
 
 const { expert } = useExpert()
 
@@ -252,6 +247,19 @@ const syncing = ref(false)
 const syncText = ref('')
 const busy = ref(false)
 const selected = ref(new Set())
+
+// Панель ИИ знает, что открыто: список кампаний, период и отмеченные галочкой.
+usePageContext(() => {
+  const range = lastDays(days.value)
+  const rows = data.value?.items || []
+  return {
+    view: 'campaigns',
+    period: { from: range.date_from, to: range.date_to },
+    selected: rows
+      .filter((c) => selected.value.has(c.campaign_row_id))
+      .map((c) => ({ type: 'campaign', id: c.campaign_row_id, name: c.name })),
+  }
+})
 const bulkErrors = ref([])
 const wizardOpen = ref(false)
 const duplicate = reactive({ open: false, campaign: null })

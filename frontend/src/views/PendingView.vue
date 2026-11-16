@@ -109,6 +109,7 @@
 </template>
 
 <script setup>
+import { usePageContext } from '../composables/usePageContext'
 import UiSkeleton from '../components/ui/UiSkeleton.vue'
 import { computed, nextTick, reactive, ref, watch } from 'vue'
 import { RouterLink } from 'vue-router'
@@ -277,6 +278,9 @@ const { pendingCount } = usePending()
 watch(pendingCount, () => {
   if (!loading.value) load()
 })
+
+// Панель ИИ знает, что открыт список предложений, ждущих решения.
+usePageContext(() => ({ view: 'pending' }))
 </script>
 
 <style scoped>

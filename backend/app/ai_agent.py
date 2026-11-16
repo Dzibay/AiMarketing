@@ -5574,6 +5574,7 @@ def _message_out(row: dict) -> dict:
         "tool_name": row.get("tool_name") or "",
         "refs": row.get("refs") or [],
         "followups": (row.get("meta") or {}).get("followups") or [],
+        "context": (row.get("meta") or {}).get("context") if row["role"] == "user" else None,
         "feedback": ai_feedback.feedback_out(row),
         "model": row.get("model") or "",
         "created_at": _iso(row.get("created_at")),
@@ -7092,11 +7093,99 @@ def _refs_note(refs, *, general: bool = False) -> str:
     )
 
 
+# Что открыто в кабинете, когда маркетолог пишет из панели ИИ (frontend: composables/usePageContext.js).
+CONTEXT_VIEWS = {
+    "campaign": "кампания",
+    "campaigns": "список кампаний",
+    "queries": "поисковые запросы",
+    "analytics": "аналитика",
+    "history": "история изменений",
+    "pending": "предложения, ждущие решения",
+}
+# Чем называется id объекта в инструментах.
+CONTEXT_ID_NAMES = {"campaign": "campaign_row_id", "project": "project_id"}
+MAX_CONTEXT_ITEMS = 30
+_DAY_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
+
+
+def _context_item(raw) -> dict | None:
+    if not isinstance(raw, dict):
+        return None
+    try:
+        item_id = int(raw.get("id"))
+    except (TypeError, ValueError):
+        return None
+    kind = _line(raw.get("type"), 20) or "campaign"
+    return {"type": kind, "id": item_id, "name": _line(raw.get("name"), 160)}
+
+
+def _clean_context(context) -> dict | None:
+    """Контекст страницы из панели ИИ: только известные поля, короткие строки. Непонятный — None, без ошибки:
+    это подсказка модели, а не данные — инструменты всё равно читают только проекты маркетолога."""
+    if not isinstance(context, dict):
+        return None
+    view = str(context.get("view") or "")
+    if view not in CONTEXT_VIEWS:
+        return None
+    out: dict = {"view": view}
+    label = _line(context.get("label"), 200)
+    if label:
+        out["label"] = label
+    obj = _context_item(context.get("object"))
+    if obj:
+        out["object"] = obj
+    period = context.get("period")
+    if isinstance(period, dict):
+        start, end = str(period.get("from") or ""), str(period.get("to") or "")
+        if _DAY_RE.fullmatch(start) and _DAY_RE.fullmatch(end):
+            out["period"] = {"from": start, "to": end}
+    flt = _line(context.get("filter"), 200)
+    if flt:
+        out["filter"] = flt
+    raw_selected = context.get("selected")
+    selected = [i for i in map(_context_item, raw_selected[:MAX_CONTEXT_ITEMS] if isinstance(raw_selected, list) else []) if i]
+    if selected:
+        out["selected"] = selected
+    return out
+
+
+def _context_ref(item: dict) -> str:
+    id_name = CONTEXT_ID_NAMES.get(item.get("type") or "")
+    name = f"«{item['name']}»" if item.get("name") else ""
+    ref = f"{id_name} {item['id']}" if id_name else ""
+    return f"{name} ({ref})" if name and ref else name or ref
+
+
+def _context_note(context) -> str:
+    """Строка для модели перед вопросом: что было открыто в кабинете. Как пометка об @-упоминаниях."""
+    if not isinstance(context, dict) or context.get("view") not in CONTEXT_VIEWS:
+        return ""
+    parts = [CONTEXT_VIEWS[context["view"]]]
+    if context.get("object"):
+        parts[0] += f" {_context_ref(context['object'])}"
+    if context.get("period"):
+        parts.append(f"период {context['period']['from']} — {context['period']['to']}")
+    if context.get("filter"):
+        parts.append(f"фильтр: {context['filter']}")
+    if context.get("selected"):
+        parts.append("выбраны: " + ", ".join(_context_ref(i) for i in context["selected"]))
+    return (
+        f"[Открыто в кабинете: {' · '.join(parts)}. Вопрос — про это, если в нём не сказано другое: "
+        "не переспрашивай, о какой кампании и каком периоде речь]\n\n"
+    )
+
+
 def post_message(
-    user_id: int, chat_id: int, text: str, refs: list[int] | None = None, pending: str = "reject"
+    user_id: int,
+    chat_id: int,
+    text: str,
+    refs: list[int] | None = None,
+    pending: str = "reject",
+    context: dict | None = None,
 ) -> dict:
     """Сообщение маркетолога. pending — что делать с ждущими предложениями ИИ: reject — отклонить,
-    keep — оставить ждать решения. Вопросы, план и таблицы закрываются сообщением всегда: текст и есть ответ."""
+    keep — оставить ждать решения. Вопросы, план и таблицы закрываются сообщением всегда: текст и есть ответ.
+    context — что открыто в кабинете (панель ИИ); хранится в meta сообщения и уходит модели строкой перед вопросом."""
     from app.jobs import public_job
 
     text = (text or "").strip()
@@ -7116,7 +7205,8 @@ def post_message(
         if pending == "keep":
             _detach_open_writes(conn, chat_id)
         _skip_open_actions(conn, chat_id, "Пропущено: пользователь написал новое сообщение", by_message=True)
-        message = _insert_message(conn, chat_id, "user", text, refs=cleaned)
+        page = _clean_context(context)
+        message = _insert_message(conn, chat_id, "user", text, refs=cleaned, meta={"context": page} if page else None)
         conn.execute(
             """
             UPDATE ai_chats SET status = 'running', error = '', updated_at = NOW(),
@@ -7871,6 +7961,8 @@ def _history(chat_id: int, *, general: bool = False) -> list[dict]:
             out.append({"role": "user", "content": _DETACHED_NOTE.format(label=label, result=r["content"])})
         elif r["role"] in ("user", "assistant"):
             content = r["content"]
+            if r["role"] == "user" and (r.get("meta") or {}).get("context"):
+                content = _context_note(r["meta"]["context"]) + content
             if r["role"] == "user" and r.get("refs"):
                 content += _refs_note(r["refs"], general=general)
             out.append({"role": r["role"], "content": content})

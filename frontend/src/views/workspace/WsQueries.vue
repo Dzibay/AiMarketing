@@ -720,6 +720,8 @@
 </template>
 
 <script setup>
+import { usePageContext } from '../../composables/usePageContext'
+import { lastDays as ctxDays } from '../../utils/format'
 import UiSkeleton from '../../components/ui/UiSkeleton.vue'
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import EmptyState from '../../components/ui/EmptyState.vue'
@@ -1540,6 +1542,30 @@ onBeforeUnmount(() => {
   clearTimeout(filterTimer)
   clearTimeout(memTimer)
   clearTimeout(checkTimer)
+})
+
+/** Фильтр запросов строкой для чипа «Про: …» и для ИИ. */
+function queriesFilterText(sel, where) {
+  return [
+    filters.search && `поиск «${filters.search}»`,
+    where,
+    filters.minCost && `расход от ${filters.minCost} ₽`,
+    filters.noConv && 'без конверсий',
+    sel && `выбрано запросов: ${sel}`,
+  ]
+    .filter(Boolean)
+    .join(', ')
+}
+
+// Панель ИИ знает, что открыто: запросы проекта, период и фильтр.
+usePageContext(() => {
+  const range = ctxDays(days.value)
+  const campaign = filters.campaign ? campaignOptions.value.find((o) => o.value === filters.campaign)?.label : ''
+  return {
+    view: 'queries',
+    period: { from: range.date_from, to: range.date_to },
+    filter: queriesFilterText(selected.value.size, campaign && `кампания «${campaign}»`),
+  }
 })
 </script>
 

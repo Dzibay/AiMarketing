@@ -200,6 +200,7 @@
 </template>
 
 <script setup>
+import { usePageContext } from '../../composables/usePageContext'
 import { computed, onMounted, reactive, ref } from 'vue'
 import { RouterLink } from 'vue-router'
 import { RefreshCw } from '@lucide/vue'
@@ -340,6 +341,9 @@ async function syncStats() {
 }
 
 onMounted(load)
+
+// Панель ИИ знает, что открыто: отчёт за выбранный период.
+usePageContext(() => ({ view: 'analytics', period: { from: range.date_from, to: range.date_to } }))
 </script>
 
 <style scoped>

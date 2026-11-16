@@ -1,5 +1,5 @@
 <template>
-  <form class="composer" :class="{ 'composer--big': showIntro, 'is-off': inputOff }" @submit.prevent="send()">
+  <form class="composer" :class="{ 'composer--big': showIntro && !panel, 'is-off': inputOff }" @submit.prevent="send()">
     <div v-if="pendingAsk" class="composer__ask" role="group" aria-label="Ждущие предложения">
       <p class="composer__ask-text" role="status">{{ askText }}</p>
       <div class="composer__ask-btns">
@@ -134,6 +134,7 @@ const INPUT_MAX = 200
 
 const {
   general,
+  panel,
   ws,
   draft,
   mentions,

@@ -256,7 +256,9 @@ export const aiApi = {
   deleteChat: (id) => del(`/api/web/ai/chats/${id}`),
   // refs — id других проектов, упомянутых через @: ИИ читает их, но не меняет.
   // pending: что делать с ждущими предложениями ИИ — 'reject' отклонить, 'keep' оставить ждать решения.
-  send: (id, text, refs = [], pending = 'reject') => post(`/api/web/ai/chats/${id}/messages`, { text, refs, pending }),
+  /** context — что открыто в кабинете, когда пишут из панели ИИ (usePageContext); null — без него. */
+  send: (id, text, refs = [], pending = 'reject', context = null) =>
+    post(`/api/web/ai/chats/${id}/messages`, { text, refs, pending, ...(context ? { context } : {}) }),
   /** Оценка ответа ИИ: { rating: 1 | -1 | 0, reasons, comment } → { feedback } (null — снята). */
   rate: (messageId, payload) => post(`/api/web/ai/messages/${messageId}/feedback`, payload),
   /** Повтор оборвавшегося хода ИИ: модель продолжит с места сбоя, без нового сообщения. */

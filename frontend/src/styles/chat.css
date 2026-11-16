@@ -2196,3 +2196,287 @@
     transition: none;
   }
 }
+
+/* ===================== Панель ИИ рядом со страницей (components/AiPanel.vue, chat/PanelChat.vue) =====================
+   От 1280 px — колонка справа, страница сужается; 901–1279 — поверх страницы; на телефоне — на весь экран.
+   Внутри тот же чат, что на странице, только лента прокручивается сама, а поле ввода стоит внизу панели. */
+
+:root {
+  --aip-w: clamp(420px, 32vw, 480px);
+}
+
+.dshell.has-aip {
+  grid-template-columns: var(--side-w) minmax(0, 1fr) var(--aip-w);
+}
+
+html.has-aip-dock .sup-fab {
+  right: calc(var(--aip-w) + 1.25rem);
+}
+
+html.has-aip-dock .toast-host {
+  right: calc(var(--aip-w) + 1rem);
+}
+
+.dicon.active {
+  background: var(--lime-soft);
+  color: var(--ink);
+}
+
+.aip {
+  --chat-text: 100%;
+  --chat-wide: 100%;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  background: var(--bg);
+}
+
+.aip--dock {
+  grid-column: 3;
+  grid-row: 1;
+  position: sticky;
+  top: 0;
+  z-index: 45;
+  height: 100vh;
+  border-left: 1px solid var(--line);
+}
+
+.aip--over {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 56;
+  width: min(var(--aip-w), calc(100vw - 72px));
+  border-left: 1px solid var(--line);
+  box-shadow: var(--shadow-pop);
+  animation: aip-in 0.18s ease both;
+}
+
+.aip--full {
+  position: fixed;
+  inset: 0;
+  z-index: 56;
+  height: 100dvh;
+  padding-top: env(safe-area-inset-top);
+  animation: aip-up 0.2s ease both;
+}
+
+@keyframes aip-in {
+  from {
+    transform: translateX(24px);
+    opacity: 0;
+  }
+}
+
+@keyframes aip-up {
+  from {
+    transform: translateY(24px);
+    opacity: 0;
+  }
+}
+
+.aip__inner {
+  --chat-bg: var(--bg);
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.aip__head {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 10px 8px 10px 16px;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
+}
+
+.aip__title {
+  display: grid;
+  flex: 1;
+  min-width: 0;
+  margin-right: 6px;
+}
+
+.aip__title strong,
+.aip__title small {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.aip__title strong {
+  font-size: 15px;
+}
+
+.aip__title small {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.aip__notice {
+  margin: 12px 14px 0;
+}
+
+.aip__list {
+  display: grid;
+  flex: 1 1 0;
+  align-content: start;
+  gap: 2px;
+  min-height: 0;
+  padding: 10px;
+  overflow-y: auto;
+}
+
+.aip__list .srow {
+  height: 40px;
+}
+
+.aip__list .srow.active {
+  background: var(--side);
+  color: var(--ink);
+}
+
+.aip__hello {
+  flex: 1 1 0;
+  min-height: 0;
+  padding: 22px 16px;
+  overflow-y: auto;
+}
+
+.aip__hello p {
+  margin: 0 0 14px;
+  color: var(--ink-2);
+}
+
+.aip__starters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.aip .chat__messages {
+  flex: 1 1 0;
+  min-height: 0;
+  padding: 0 14px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.aip .chat__thread {
+  gap: 16px;
+  padding: 14px 0 16px;
+}
+
+.aip .chat__foot {
+  position: static;
+  padding: 10px 14px 12px;
+  border-top: 1px solid var(--line);
+  background: var(--bg);
+}
+
+.aip--full .chat__foot {
+  padding-bottom: calc(12px + env(safe-area-inset-bottom));
+}
+
+/* Кнопки карточек в панели не прилипают к низу: поле ввода и так рядом, а лента прокручивается внутри. */
+.aip .action-card.is-pending > .action-card__buttons:not(.action-card__buttons--split),
+.aip .action-card__acts {
+  position: static;
+}
+
+.aip .action-card {
+  padding: 14px;
+}
+
+.aip .action-card__acts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+/* Чип «Про: …» — что открыто на странице; уходит с сообщением, крестик — не учитывать. */
+.aip__ctx {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  width: fit-content;
+  max-width: 100%;
+  margin: 0 0 8px;
+  padding: 3px 3px 3px 11px;
+  border-radius: 14px;
+  background: var(--surface-2);
+  box-shadow: inset 0 0 0 1px var(--line);
+  color: var(--ink-2);
+  font-size: 13px;
+}
+
+/* Длинное название кампании — в две строки: период и фильтр в конце не должны пропадать. */
+.aip__ctx span {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-height: 1.35;
+}
+
+.aip__ctx button {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border: 0;
+  border-radius: 50%;
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.aip__ctx button:hover {
+  background: var(--side);
+  color: var(--ink);
+}
+
+.aip__ctx svg {
+  width: 14px;
+  height: 14px;
+}
+
+/* Под своим сообщением — про что оно было (страница, с которой спросили). */
+.msg__context {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  text-align: right;
+}
+
+/* Широкая карточка (таблица, картинки) в панели — сводкой; целиком — «Развернуть», чат страницей. */
+.action-card--brief {
+  display: grid;
+  justify-items: start;
+  gap: 8px;
+}
+
+.action-card--brief .action-card__summary {
+  margin: 0;
+}
+
+.ai-picks--brief {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+  margin: 8px 0;
+  color: var(--ink-2);
+  font-size: 14px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .aip--over,
+  .aip--full {
+    animation: none;
+  }
+}

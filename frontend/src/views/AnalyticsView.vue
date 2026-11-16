@@ -181,6 +181,7 @@
 </template>
 
 <script setup>
+import { usePageContext } from '../composables/usePageContext'
 import { computed, onMounted, reactive, ref } from 'vue'
 import { RouterLink } from 'vue-router'
 import MetricGrid from '../components/MetricGrid.vue'
@@ -265,6 +266,9 @@ function setRange({ date_from, date_to, preset: p }) {
 }
 
 onMounted(load)
+
+// Панель ИИ знает, что открыто: отчёт за выбранный период.
+usePageContext(() => ({ view: 'analytics', period: { from: range.date_from, to: range.date_to } }))
 </script>
 
 <style scoped>
