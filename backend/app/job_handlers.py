@@ -24,6 +24,7 @@ from app.jobs import PRIORITY_BACKGROUND, PRIORITY_USER, complete, enqueue, fail
 from app.keywords import sync_campaign_keywords
 from app.metrika_sync import canonical_counters, sync_counter_goals
 from app.negative_lists import apply_negative_list
+from app.notifications import notify, notify_signals
 from app.query_cleaning import apply_decisions, classify_queries, sync_workspace_queries
 from app.rules import run_enabled_rules_for_user
 from app.search_queries import sync_campaign_search_queries
@@ -189,7 +190,69 @@ def _duplicate_campaign(user_id: int, payload: dict, progress: Progress) -> dict
 def _ai_chat(user_id: int, payload: dict, progress: Progress) -> dict:
     from app.ai_agent import run_chat
 
-    return run_chat(user_id, _int(payload, "chat_id"), progress)
+    chat_id = _int(payload, "chat_id")
+    result = run_chat(user_id, chat_id, progress)
+    _notify_answer(user_id, chat_id, result)
+    return result
+
+
+def _notify_answer(user_id: int, chat_id: int, result: dict) -> None:
+    """Ответ ИИ готов — запись в колокольчике. Открытый чат сразу отмечает её прочитанной (по ссылке),
+    так что в ленте остаются только ответы в закрытых чатах."""
+    with pool.connection() as conn:
+        chat = conn.execute("SELECT title, workspace_id FROM ai_chats WHERE id = %s", (chat_id,)).fetchone()
+        last = conn.execute(
+            """
+            SELECT content FROM ai_messages WHERE chat_id = %s AND role = 'assistant' AND content <> ''
+            ORDER BY id DESC LIMIT 1
+            """,
+            (chat_id,),
+        ).fetchone()
+    if chat is None:
+        return
+    ws_id = chat["workspace_id"]
+    waiting = (result or {}).get("status") == "waiting"
+    text = " ".join(((last or {}).get("content") or "").split())
+    notify(
+        user_id,
+        "ai_answer",
+        ("ИИ ждёт вашего решения: " if waiting else "ИИ ответил: ") + (chat["title"] or "Новый чат"),
+        body=text[:160] + ("…" if len(text) > 160 else ""),
+        link=f"/w/{ws_id}/chat/{chat_id}" if ws_id else f"/cabinet/chat/{chat_id}",
+        workspace_id=ws_id,
+        dedup_key=f"ai_answer:{chat_id}",
+    )
+
+
+def _notify_signals(user_id: int, payload: dict, progress: Progress) -> dict:
+    return {"sent": notify_signals(user_id)}
+
+
+LOAD_KINDS = ("load_account", "load_counter", "sync_connection")
+
+
+def _notify_load_failed(job: dict, error: str) -> None:
+    """Загрузка данных не удалась окончательно (попытки кончились) — запись в колокольчике."""
+    payload = job.get("payload") or {}
+    user_id = int(job["user_id"])
+    what, key = "Подключение к Яндексу", f"connection:{payload.get('connection_id')}"
+    with pool.connection() as conn:
+        if job["kind"] == "load_account":
+            row = conn.execute(
+                "SELECT client_login FROM direct_accounts WHERE id = %s AND user_id = %s", (payload.get("account_id"), user_id)
+            ).fetchone()
+            what, key = f"Кабинет Директа {(row or {}).get('client_login') or ''}".strip(), f"account:{payload.get('account_id')}"
+        elif job["kind"] == "load_counter":
+            what, key = "Счётчик Метрики", f"counter:{payload.get('counter_row_id')}"
+    notify(
+        user_id,
+        "load_error",
+        f"Не удалось загрузить данные: {what}",
+        body=error[:300] or "Попробуем снова по расписанию. Если повторится — переподключите Яндекс.",
+        link="/cabinet/connections",
+        severity="error",
+        dedup_key=f"load:{key}",
+    )
 
 
 def _sync_workspace_queries(user_id: int, payload: dict, progress: Progress) -> dict:
@@ -330,6 +393,7 @@ HANDLERS: dict[str, Handler] = {
     "ads_ab": _ads_ab,
     "fix_links": _fix_links,
     "plan_reminder": _plan_reminder,
+    "notify_signals": _notify_signals,
 }
 
 
@@ -389,10 +453,15 @@ def run_job(job: dict, worker_id: str) -> str:
     except YandexError as exc:
         status = fail(job, worker_id, error_code=exc.code, error=exc.message or "")
         log.warning("job %s %s: %s → %s", job["id"], job["kind"], exc.code, status)
+        if status == "error" and job["kind"] in LOAD_KINDS:
+            _notify_load_failed(job, exc.message or "")
         return status
     except Exception as exc:
         log.exception("job %s %s", job["id"], job["kind"])
-        return fail(job, worker_id, error_code="internal", error=str(exc)[:300])
+        status = fail(job, worker_id, error_code="internal", error=str(exc)[:300])
+        if status == "error" and job["kind"] in LOAD_KINDS:
+            _notify_load_failed(job, "")
+        return status
     finally:
         done.set()
     undo_log_id = single_undoable(undoable)

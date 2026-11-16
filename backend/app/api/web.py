@@ -8,7 +8,7 @@ from pydantic import BaseModel, Field
 
 log = logging.getLogger("app.api.web")
 
-from app import ad_extras, billing, email_verify, events, payments, plans, promos, referrals
+from app import ad_extras, billing, email_verify, events, notifications, payments, plans, promos, referrals
 from app.actions import (
     _account_creds,
     bulk_campaign_action,
@@ -501,6 +501,46 @@ def web_patch_me_ui(body: dict, user_id: int = Depends(require_web_identity)) ->
         return {"user": set_ui(user_id, body)}
     except UsersError as exc:
         raise _http(exc) from exc
+
+
+class NotificationsReadBody(BaseModel):
+    ids: list[int] = Field(default_factory=list, max_length=500)
+    link: str = Field(default="", max_length=500)
+    all: bool = False
+
+
+@router.get("/me/badges")
+def web_badges(user_id: int = Depends(require_web_user)) -> dict:
+    """Счётчики шапки одним запросом: «Ждёт решения», колокольчик, поддержка."""
+    return notifications.badges(user_id)
+
+
+@router.get("/notifications")
+def web_notifications(limit: int = 50, user_id: int = Depends(require_web_user)) -> dict:
+    return notifications.list_notifications(user_id, limit)
+
+
+@router.post("/notifications/read")
+def web_notifications_read(body: NotificationsReadBody, user_id: int = Depends(require_web_user)) -> dict:
+    """Прочитано: выбранные записи (ids), всё, что ведёт на открытую страницу (link), или всё (all)."""
+    try:
+        return notifications.mark_read(user_id, ids=body.ids, link=body.link, everything=body.all)
+    except notifications.NotificationsError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/notifications/settings")
+def web_notification_settings(user_id: int = Depends(require_web_user)) -> dict:
+    return notifications.get_prefs(user_id)
+
+
+@router.patch("/notifications/settings")
+def web_notification_settings_save(body: dict, user_id: int = Depends(require_web_user)) -> dict:
+    """{kind: {cabinet?: bool, telegram?: bool}} — где показывать событие."""
+    try:
+        return notifications.set_prefs(user_id, body)
+    except notifications.NotificationsError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.get("/me")

@@ -58,6 +58,50 @@
 
     </template>
 
+    <section v-if="tab === 'notifications'" class="panel">
+      <h2>Что и куда присылать</h2>
+      <p class="hint">
+        «В кабинете» — запись в колокольчике в верхней строке, «В Telegram» — сообщение от бота. Повторы одного события
+        склеиваются: один и тот же сигнал приходит не чаще раза в неделю.
+      </p>
+      <p v-if="!notifyPrefs" class="empty">{{ notifyError || 'Загружаем…' }}</p>
+      <div v-else v-scroll-x class="table-scroll">
+        <table class="table notify-prefs">
+          <thead>
+            <tr>
+              <th>Событие</th>
+              <th>В кабинете</th>
+              <th>В Telegram</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="e in notifyPrefs.events" :key="e.kind">
+              <td>{{ e.label }}</td>
+              <td>
+                <UiSwitch
+                  :checked="e.cabinet"
+                  :disabled="notifyBusy"
+                  :aria-label="`${e.label}: в кабинете`"
+                  @change="saveNotify(e.kind, 'cabinet', $event.target.checked)"
+                />
+              </td>
+              <td>
+                <UiSwitch
+                  :checked="e.telegram && tgReady"
+                  :disabled="notifyBusy || !tgReady"
+                  :aria-label="`${e.label}: в Telegram`"
+                  @change="saveNotify(e.kind, 'telegram', $event.target.checked)"
+                />
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <p v-if="notifyPrefs && !tgReady" class="hint">
+        {{ notifyPrefs.telegram_available ? 'Чтобы получать события в Telegram, подключите бота ниже.' : 'Telegram-бот пока не настроен на сервере.' }}
+      </p>
+    </section>
+
     <section v-if="tab === 'notifications'" class="panel" id="telegram">
       <h2>Telegram</h2>
       <p class="hint">
@@ -190,14 +234,14 @@
 </template>
 
 <script setup>
-import { onMounted, reactive, ref, watch, watchEffect } from 'vue'
+import { computed, onMounted, reactive, ref, watch, watchEffect } from 'vue'
 import { RouterLink } from 'vue-router'
 import FeatureLockNotice from '../components/FeatureLockNotice.vue'
 import RoleChoice from '../components/RoleChoice.vue'
 import UiSelect from '../components/ui/UiSelect.vue'
 import UiStatus from '../components/ui/UiStatus.vue'
 import UiSwitch from '../components/ui/UiSwitch.vue'
-import { errorText, webApi } from '../api/web'
+import { errorText, notifyApi, webApi } from '../api/web'
 import { useExpert } from '../composables/useExpert'
 import { loadProfile, setUser, useProfile } from '../composables/useProfile'
 import { useTheme } from '../composables/useTheme'
@@ -207,7 +251,10 @@ import { formatDate } from '../utils/format'
 
 const HOURS = Array.from({ length: 24 }, (_, h) => ({ value: h, label: `${String(h).padStart(2, '0')}:00` }))
 
-/** tab: profile — почта, вход, пароль; notifications — Telegram и утренний дайджест; interface — режим и тема. */
+/**
+ * tab: profile — почта, вход, пароль; notifications — что и куда присылать, Telegram и утренний дайджест;
+ * interface — режим и тема.
+ */
 const props = defineProps({ tab: { type: String, default: 'profile' } })
 
 const TAB_TITLES = { profile: 'Профиль', notifications: 'Уведомления', interface: 'Интерфейс' }
@@ -250,6 +297,30 @@ async function saveName() {
   }
 }
 const telegram = ref({ configured: false, linked: false })
+const notifyPrefs = ref(null)
+const notifyError = ref('')
+const notifyBusy = ref(false)
+/** Переключатели «В Telegram» доступны, когда бот настроен и привязан. */
+const tgReady = computed(() => !!(notifyPrefs.value?.telegram_available && telegram.value.linked))
+
+async function loadNotify() {
+  try {
+    notifyPrefs.value = await notifyApi.settings()
+  } catch (err) {
+    notifyError.value = errorText(err)
+  }
+}
+
+async function saveNotify(kind, where, value) {
+  notifyBusy.value = true
+  try {
+    notifyPrefs.value = await notifyApi.saveSettings({ [kind]: { [where]: value } })
+  } catch (err) {
+    pushToast(errorText(err), 'error')
+  } finally {
+    notifyBusy.value = false
+  }
+}
 const tgLink = ref('')
 const tgCode = ref('')
 const tgBusy = ref(false)
@@ -381,7 +452,7 @@ async function changePassword() {
 
 onMounted(async () => {
   try {
-    await Promise.all([loadProfile(true), loadTelegram()])
+    await Promise.all([loadProfile(true), loadTelegram(), loadNotify()])
   } catch (err) {
     pushToast(errorText(err), 'error')
   } finally {

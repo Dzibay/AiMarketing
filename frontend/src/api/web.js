@@ -188,6 +188,21 @@ export const wsApi = {
   briefDraft: (id, site, onProgress) => runJob(`${WS(id)}/brief/draft`, { site }, onProgress),
 }
 
+/** Колокольчик: лента уведомлений, счётчики шапки одним запросом и настройки «событие × куда». */
+export const notifyApi = {
+  /** { pending, notifications, support } — решения, непрочитанные уведомления, ответы поддержки. */
+  badges: () => request('/api/web/me/badges'),
+  /** { items: [{ id, kind, severity, title, body, link, created_at, read }], unread }. */
+  list: (limit = 50) => request(`/api/web/notifications${query({ limit })}`),
+  /** Отметить прочитанными: { ids } | { link } | { all: true } → { marked, unread }. */
+  read: (payload) => request('/api/web/notifications/read', { method: 'POST', body: JSON.stringify(payload) }),
+  /** { events: [{ kind, label, cabinet, telegram }], telegram_available, telegram_linked }. */
+  settings: () => request('/api/web/notifications/settings'),
+  /** { kind: { cabinet?, telegram? } } → те же настройки. */
+  saveSettings: (changes) =>
+    request('/api/web/notifications/settings', { method: 'PATCH', body: JSON.stringify(changes) }),
+}
+
 /** Откат действия из журнала: предпросмотр шагов и запуск задачей. */
 export const undoApi = {
   preview: (logId) => request(`/api/web/actions/${logId}/undo`),

@@ -2223,3 +2223,229 @@ html.has-bbar {
   margin: 0;
   color: var(--muted);
 }
+
+/* Колокольчик в верхней строке: значок со счётчиком, список уведомлений (на телефоне — шторка). */
+.nbell {
+  position: relative;
+}
+
+.nbell__toggle {
+  position: relative;
+}
+
+.nbell.is-open .nbell__toggle {
+  background: var(--side);
+  color: var(--ink);
+}
+
+.nbell__count {
+  position: absolute;
+  top: 1px;
+  right: 0;
+  min-width: 17px;
+  height: 17px;
+  padding: 0 4px;
+  border-radius: 9px;
+  background: var(--lime);
+  color: #141413;
+  font-size: 10.5px;
+  font-weight: 700;
+  line-height: 17px;
+  text-align: center;
+  box-shadow: 0 0 0 2px var(--bg, var(--surface));
+}
+
+.nbell__menu {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 40;
+  width: min(400px, calc(100vw - 1.5rem));
+  overflow: hidden;
+  border-radius: 20px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  box-shadow: var(--shadow-pop);
+  animation: rise-in 0.18s ease both;
+}
+
+.nbell__head {
+  padding: 0.85rem 1rem 0.7rem;
+  border-bottom: 1px solid var(--line);
+}
+
+.nbell__head strong,
+.nbell__head small {
+  display: block;
+}
+
+.nbell__head strong {
+  font-weight: 600;
+}
+
+.nbell__head small {
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.nbell__list {
+  max-height: min(60vh, 460px);
+  overflow-y: auto;
+}
+
+.nbell__items {
+  margin: 0;
+  padding: 0.25rem 0;
+  list-style: none;
+}
+
+.nbell__items li + li {
+  border-top: 1px solid var(--line);
+}
+
+.nbell__item {
+  appearance: none;
+  display: flex;
+  align-items: flex-start;
+  gap: 0.7rem;
+  width: 100%;
+  padding: 0.65rem 1rem;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.nbell__item:hover {
+  background: var(--surface-2);
+}
+
+.nbell__item.is-static {
+  cursor: default;
+}
+
+.nbell__item.is-new {
+  background: var(--lime-soft);
+}
+
+.nbell__icon {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 30px;
+  height: 30px;
+  border-radius: 9px;
+  background: var(--side);
+  color: var(--ink);
+}
+
+.nbell__icon svg {
+  width: 16px;
+  height: 16px;
+}
+
+.nbell__item.is-warn .nbell__icon {
+  background: var(--warn-soft);
+  color: var(--warn);
+}
+
+.nbell__item.is-error .nbell__icon {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.nbell__item.is-ok .nbell__icon {
+  background: var(--ok-soft);
+  color: var(--ok);
+}
+
+.nbell__text {
+  display: grid;
+  gap: 0.12rem;
+  min-width: 0;
+  flex: 1;
+}
+
+.nbell__text strong {
+  font-size: 0.9rem;
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.nbell__body {
+  display: -webkit-box;
+  overflow: hidden;
+  color: var(--ink-soft, var(--ink));
+  font-size: 0.84rem;
+  line-height: 1.35;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.nbell__text small {
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.nbell__dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  margin-top: 0.4rem;
+  border-radius: 50%;
+  background: var(--ink);
+}
+
+.nbell__empty {
+  margin: 0;
+  padding: 1.4rem 1rem;
+  color: var(--muted);
+  font-size: 0.88rem;
+  text-align: center;
+}
+
+.nbell__empty.is-error {
+  color: var(--danger);
+}
+
+.nbell__footer {
+  padding: 0.7rem 1rem;
+  border-top: 1px solid var(--line);
+  background: var(--surface-2);
+  font-size: 0.86rem;
+  font-weight: 540;
+}
+
+.nbell__footer a,
+.nbell__sheet-link {
+  color: var(--accent);
+}
+
+.ui-sheet .nbell__items {
+  margin: 0 -1rem;
+}
+
+@media (max-width: 900px) {
+  .nbell {
+    position: static;
+  }
+
+  .nbell__menu {
+    left: 0.75rem;
+    right: 0.75rem;
+    width: auto;
+  }
+}
+
+/* Настройки → Уведомления: «событие × куда». */
+.notify-prefs th:not(:first-child),
+.notify-prefs td:not(:first-child) {
+  width: 120px;
+  text-align: center;
+}
+
+.notify-prefs td:not(:first-child) .ui-switch {
+  justify-content: center;
+}

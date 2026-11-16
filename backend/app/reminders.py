@@ -56,6 +56,25 @@ def _fmt(day: str) -> str:
     return date.fromisoformat(day).strftime("%d.%m.%Y")
 
 
+def _notify(user_id: int, sub: dict, days: int) -> None:
+    """То же напоминание — в колокольчик (и в Telegram, если включено)."""
+    from app.notifications import notify
+
+    plan = sub["plan"]
+    when = "завтра" if days == 1 else f"через {days} дня"
+    title = f"Пробный период закончится {when}" if plan["is_trial"] else f"Тариф «{plan['name']}» закончится {when}"
+    notify(
+        user_id,
+        "plan",
+        title,
+        body=f"Последний день — {_fmt(plans.last_day(sub['ends_at']))}. Без тарифа ИИ перестанет отвечать, "
+        "а статистика — обновляться.",
+        link="/cabinet/plan",
+        severity="warn",
+        dedup_key=f"plan:{sub['ends_at'].date().isoformat()}:{days}",
+    )
+
+
 def send(user_id: int, ends_at: str, days: int, *, now: datetime | None = None) -> dict:
     """Письмо-напоминание. Подписку за это время продлили — молчим."""
     from app.users import get_user
@@ -75,6 +94,7 @@ def send(user_id: int, ends_at: str, days: int, *, now: datetime | None = None) 
         ).fetchone()
     if row is None:
         return {"sent": False, "reason": "already"}
+    _notify(user_id, sub, days)
     user = get_user(user_id) or {}
     email = user.get("email") or ""
     last = plans.last_day(sub["ends_at"])

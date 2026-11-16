@@ -237,7 +237,7 @@
         <span class="spinner" aria-hidden="true" />
         <span class="msg__thinking">
           {{ thinkingText }}
-          <small v-if="longWait">Можно уйти со страницы: ответ сохранится в чате, а мы подскажем, когда он будет готов.</small>
+          <small v-if="longWait">Можно уйти со страницы: ответ придёт в уведомления.</small>
         </span>
       </div>
       <UiNotice v-if="status === 'error' && chat?.error && !errorInFeed" tone="error" class="chat-error">

@@ -16,7 +16,8 @@ from app.journal import acting_as
 from app.keywords import bulk_keyword_action
 from app.search_queries import bulk_search_query_action
 from app.strategy_info import budget_brief
-from app.telegram_notify import format_rule_alert, notify_user
+from app.notifications import notify
+from app.telegram_notify import format_rule_alert
 from app.yandex import YandexError
 
 
@@ -962,22 +963,27 @@ def _run_rule(user_id: int, rule_id: int, *, force_dry_run: bool | None = None) 
             (rule_id,),
         )
 
-    # Алерты: при совпадениях вне dry-run, либо всегда для action=notify
+    # Колокольчик и Telegram: при совпадениях вне dry-run, либо всегда для action=notify
     if matched and (not dry or action == "notify"):
-        try:
-            notify_user(
-                user_id,
-                format_rule_alert(
-                    rule_name=rule.get("name") or str(rule_id),
-                    action=action,
-                    dry_run=dry,
-                    matched=matched,
-                    applied=applied,
-                    error=error,
-                ),
-            )
-        except Exception:
-            log.exception("telegram notify rule %s", rule_id)
+        name = rule.get("name") or str(rule_id)
+        what = "нашло" if dry or action == "notify" else "применило"
+        count = applied if what == "применило" else len(matched)
+        names = ", ".join(str(m.get("name") or m.get("campaign_id") or "") for m in matched[:3])
+        notify(
+            user_id,
+            "rule",
+            f"Правило «{name}» {what}: {count}",
+            body=(f"Не всё применилось: {error}. " if error else "")
+            + names
+            + (f" и ещё {len(matched) - 3}" if len(matched) > 3 else ""),
+            link="/cabinet/autopilot",
+            workspace_id=rule.get("scope_workspace_id"),
+            severity="error" if error else "info",
+            dedup_key=f"rule:{rule_id}",
+            telegram_text=format_rule_alert(
+                rule_name=name, action=action, dry_run=dry, matched=matched, applied=applied, error=error
+            ),
+        )
 
     return {
         "rule_id": rule_id,

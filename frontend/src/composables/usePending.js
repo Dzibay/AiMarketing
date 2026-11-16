@@ -1,9 +1,11 @@
 import { ref } from 'vue'
-import { aiApi } from '../api/web'
+import { aiApi, notifyApi } from '../api/web'
 
 // «Ждёт решения»: неподтверждённые предложения ИИ по всем проектам — счётчик в шапке и общая страница.
 // Отложенные «Позже» хранятся на сервере (ai_actions.snoozed_at) и в счётчик не входят.
+// Тем же запросом (/me/badges) приходит число непрочитанных уведомлений для колокольчика.
 const pendingCount = ref(0)
+const notifCount = ref(0)
 let pending = null
 
 // Раньше «Позже» помнил только браузер — номера из него один раз переносим на сервер.
@@ -29,9 +31,10 @@ async function moveOldLater() {
 export function loadPending() {
   if (!pending) {
     pending = moveOldLater()
-      .then(() => aiApi.pendingCount())
+      .then(() => notifyApi.badges())
       .then((data) => {
-        pendingCount.value = Number(data?.count || 0)
+        pendingCount.value = Number(data?.pending || 0)
+        notifCount.value = Number(data?.notifications || 0)
         return pendingCount.value
       })
       .catch(() => pendingCount.value)
@@ -49,8 +52,32 @@ export function refreshPending() {
 
 export function resetPending() {
   pendingCount.value = 0
+  notifCount.value = 0
+}
+
+/** Колокольчик сам знает точное число после прочтения — без лишнего запроса. */
+export function setNotifCount(value) {
+  notifCount.value = Math.max(0, Number(value) || 0)
+}
+
+/**
+ * Открыта страница (чат) — уведомления, ведущие на неё, прочитаны: ответ ИИ в открытом чате
+ * в колокольчике не висит.
+ */
+export async function readNotificationsAt(link, force = false) {
+  // force — ответ только что пришёл в открытый чат: счётчик в шапке о нём ещё не знает.
+  if (!link) return
+  // Счётчик ещё грузится (страницу открыли сразу по адресу чата) — дождёмся его.
+  if (!force && pending) await pending
+  if (!force && !notifCount.value) return
+  try {
+    const data = await notifyApi.read({ link })
+    if (data?.marked) setNotifCount(data.unread)
+  } catch {
+    // Не страшно: запись останется непрочитанной до следующего раза.
+  }
 }
 
 export function usePending() {
-  return { pendingCount }
+  return { pendingCount, notifCount }
 }

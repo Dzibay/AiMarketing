@@ -2,7 +2,7 @@ import { computed, inject, nextTick, onBeforeUnmount, onMounted, provide, reacti
 import { useRoute, useRouter } from 'vue-router'
 import { aiApi, errorText } from '../api/web'
 import { useAnswerWatch } from './useAnswerWatch'
-import { refreshPending } from './usePending'
+import { readNotificationsAt, refreshPending } from './usePending'
 import { pushToast } from './useToasts'
 import { loadWorkspaces, useWorkspaces } from './useWorkspaces'
 
@@ -453,7 +453,10 @@ export function provideChat({ general, ws, basePath, reloadWs }) {
       const count = res.messages.length + res.actions.length
       if (!quiet && jumpId.value) revealMessage(jumpId.value)
       else if (!quiet || count !== prevCount) scrollDown(!quiet)
-      if (prevStatus === 'running' && res.chat.status !== 'running') answers.answeredHidden(res.chat, `${basePath.value}/${id}`)
+      const justAnswered = prevStatus === 'running' && res.chat.status !== 'running'
+      if (justAnswered) answers.answeredHidden(res.chat, `${basePath.value}/${id}`)
+      // Чат на экране — его записи в колокольчике прочитаны (в том числе ответ, пришедший только что).
+      if (!document.hidden && (!quiet || justAnswered)) readNotificationsAt(`${basePath.value}/${id}`, justAnswered)
       if (prevStatus && prevStatus !== res.chat.status) loadChats()
       else if (!quiet) {
         const inList = chats.value.find((c) => c.id === id)

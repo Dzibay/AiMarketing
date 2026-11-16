@@ -17,6 +17,7 @@ from app.digest import users_due_for_digest
 from app.job_handlers import run_job, submit
 from app.jobs import claim, claim_schedule, purge_finished, requeue_stale
 from app.metrika_sync import canonical_counters
+from app.notifications import purge as purge_notifications
 from app.plans import active_user_ids, has_feature
 from app.rules import list_users_with_rules
 from app.stats import list_user_ids_with_accounts
@@ -83,6 +84,14 @@ def _enqueue_reminders() -> None:
         submit("plan_reminder", item["user_id"], {"ends_at": item["ends_at"], "days": item["days"]})
 
 
+def _enqueue_signals() -> None:
+    """Новые сигналы по рекламе — в колокольчик; повтор одного сигнала не чаще раза в неделю (notifications)."""
+    active = active_user_ids()
+    for user_id in list_user_ids_with_accounts():
+        if user_id in active:
+            submit("notify_signals", user_id)
+
+
 def _sync_payments() -> None:
     """Сверка с ЮKassa: на случай, если уведомление не дошло, и чтобы подтянуть возвраты."""
     from app.payments import sync_open
@@ -96,6 +105,9 @@ def _purge_jobs() -> None:
     n = purge_finished()
     if n:
         log.info("Удалено старых задач: %d", n)
+    n = purge_notifications()
+    if n:
+        log.info("Удалено старых уведомлений: %d", n)
 
 
 # Имя → (период в секундах, постановка задач). Время последнего запуска — в job_schedules,
@@ -111,6 +123,7 @@ SCHEDULES: dict[str, tuple[int, Callable[[], None]]] = {
     "rules": (3600, _enqueue_rules),
     "purge_jobs": (86400, _purge_jobs),
     "plan_reminders": (3600, _enqueue_reminders),
+    "signals": (6 * 3600, _enqueue_signals),
     "payments": (600, _sync_payments),
 }
 

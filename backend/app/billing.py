@@ -150,6 +150,14 @@ def record(
             )
     except Exception:  # noqa: BLE001
         log.exception("Не удалось записать списание (%s, %s)", kind, task)
+        return
+    if charged:
+        from app.notifications import notify_limit  # лениво: notifications зовёт billing
+
+        try:
+            notify_limit(user_id)
+        except Exception:  # noqa: BLE001
+            log.exception("Уведомление о лимите (%s)", user_id)
 
 
 # --- Что видит пользователь ---------------------------------------------------------------------

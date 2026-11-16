@@ -207,6 +207,7 @@
           <Sun v-if="isDark" aria-hidden="true" />
           <Moon v-else aria-hidden="true" />
         </button>
+        <NotificationBell v-if="accessOk" />
         <ProfileMenu @logout="logout" />
       </header>
 
@@ -336,6 +337,7 @@ import TolkMark from './TolkMark.vue'
 import UndoHost from './UndoHost.vue'
 import UiCoach from './ui/UiCoach.vue'
 import LoadsIndicator from './LoadsIndicator.vue'
+import NotificationBell from './NotificationBell.vue'
 import PlanOffers from './PlanOffers.vue'
 import ProfileMenu from './ProfileMenu.vue'
 import ProjectSwitcher from './ProjectSwitcher.vue'

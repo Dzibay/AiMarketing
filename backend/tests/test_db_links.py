@@ -67,7 +67,7 @@ def test_rule_run_keeps_partial_apply_error(db, monkeypatch):
     monkeypatch.setattr(rules, "_matching_campaigns", lambda user_id, r: [{"campaign_row_id": camp, "name": "К"}])
     monkeypatch.setattr(rules, "_apply", lambda *a: (0, "«К»: кампания в архиве"))
     sent = []
-    monkeypatch.setattr(rules, "notify_user", lambda user_id, text: sent.append(text))
+    monkeypatch.setattr(rules, "notify", lambda user_id, kind, title, **kw: sent.append(kw["telegram_text"]))
     out = rules.run_rule(user, rule["id"])
     assert out["error"] == "«К»: кампания в архиве"
     [run] = rules.list_rule_runs(user)
