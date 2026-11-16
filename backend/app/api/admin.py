@@ -9,6 +9,7 @@ from pydantic import BaseModel
 
 from app import ai, ai_bridge, ai_feedback, auth, billing, events, image_gen, mailer, payments, plans, promos, referrals, site_check, site_extras, support, wordstat
 from app.api.web import _http
+from app import admin_ai_costs as admin_ai_costs_mod
 from app import admin_dashboard as admin_dashboard_mod
 from app import admin_refs as admin_refs_mod
 from app import admin_users as admin_users_mod
@@ -501,7 +502,87 @@ def admin_usage(month: str = "") -> dict:
     return out
 
 
+# --- Расходы на ИИ: вкладки страницы -------------------------------------------------------------
+
+
+def _costs_args(p: str, date_from: str, date_to: str, step: str, kind: str, source: str) -> dict:
+    return {
+        "p": p[:8],
+        "date_from": date_from[:10] or None,
+        "date_to": date_to[:10] or None,
+        "step": step[:8],
+        "kind": kind[:10],
+        "source": source[:10],
+    }
+
+
+@router.get("/ai-costs/overview")
+def admin_ai_costs_overview(
+    p: str = "30d", date_from: str = Query("", alias="from"), date_to: str = Query("", alias="to"),
+    step: str = "", kind: str = "", source: str = "", split: str = "class",
+) -> dict:
+    return _call(admin_ai_costs_mod.overview, split=split[:8], **_costs_args(p, date_from, date_to, step, kind, source))
+
+
+@router.get("/ai-costs/models")
+def admin_ai_costs_models(
+    p: str = "30d", date_from: str = Query("", alias="from"), date_to: str = Query("", alias="to"),
+    step: str = "", kind: str = "", source: str = "",
+) -> dict:
+    return _call(admin_ai_costs_mod.models, **_costs_args(p, date_from, date_to, step, kind, source))
+
+
+@router.get("/ai-costs/tasks")
+def admin_ai_costs_tasks(
+    p: str = "30d", date_from: str = Query("", alias="from"), date_to: str = Query("", alias="to"),
+    step: str = "", kind: str = "", source: str = "",
+) -> dict:
+    return _call(admin_ai_costs_mod.tasks, **_costs_args(p, date_from, date_to, step, kind, source))
+
+
+@router.get("/ai-costs/people")
+def admin_ai_costs_people(
+    p: str = "30d", date_from: str = Query("", alias="from"), date_to: str = Query("", alias="to"),
+    step: str = "", kind: str = "", source: str = "", sort: str = "cost", desc: bool = True, page: int = 1,
+    loss: bool = False,
+) -> dict:
+    return _call(
+        admin_ai_costs_mod.people, sort=sort[:10], desc=desc, page=page, loss=loss,
+        **_costs_args(p, date_from, date_to, step, kind, source),
+    )
+
+
+@router.get("/ai-costs/reliability")
+def admin_ai_costs_reliability(
+    p: str = "30d", date_from: str = Query("", alias="from"), date_to: str = Query("", alias="to"),
+    step: str = "", kind: str = "", source: str = "",
+) -> dict:
+    return _call(admin_ai_costs_mod.reliability, **_costs_args(p, date_from, date_to, step, kind, source))
+
+
+@router.get("/ai-costs/journal")
+def admin_ai_costs_journal(
+    p: str = "30d", date_from: str = Query("", alias="from"), date_to: str = Query("", alias="to"),
+    step: str = "", kind: str = "", source: str = "", user: str = "", task: str = "", model: str = "",
+    subs: bool = False, sort: str = "time", page: int = 1,
+) -> dict:
+    return _call(
+        admin_ai_costs_mod.journal, user=user[:120], task=task[:40], model=model[:200], subs=subs,
+        sort=sort[:8], page=page, **_costs_args(p, date_from, date_to, step, kind, source),
+    )
+
+
 # --- Оценки ответов ИИ ---------------------------------------------------------------------------
+
+
+@router.get("/feedback/summary")
+def admin_feedback_summary(p: str = "30d", date_from: str = Query("", alias="from"), date_to: str = Query("", alias="to")) -> dict:
+    """Доля ответов «вниз» по классам моделей за период — карточка страницы «Качество ИИ»."""
+    per = _call(admin_dashboard_mod.period, p[:8] or "30d", date_from[:10] or None, date_to[:10] or None, "")
+    return {
+        "period": {"preset": per["preset"], "from": per["from"], "to": per["to"], "days": per["days"]},
+        "models": ai_feedback.stats(per["start"], per["end"]),
+    }
 
 
 @router.get("/feedback")

@@ -1,11 +1,36 @@
 <template>
+  <div>
+  <section class="panel fb-summary">
+    <div class="panel__head">
+      <h2>Ответы «вниз»</h2>
+      <UiSelect v-model="summaryPeriod" :options="SUMMARY_PERIODS" size="sm" aria-label="Период" @change="loadSummary()" />
+    </div>
+    <p v-if="!summary" class="empty">Загружаем…</p>
+    <template v-else>
+      <div class="fb-summary__main">
+        <strong :class="downTone">{{ summaryTotal ? share(downShare) : '—' }}</strong>
+        <span class="cell-note">
+          {{ summaryTotal ? `«вниз» среди ${num(summaryTotal)} ${plural(summaryTotal, 'оценки', 'оценок', 'оценок')}` : 'оценок за период нет' }}
+        </span>
+      </div>
+      <ul v-if="summary.models.length" class="fb-summary__models">
+        <li v-for="m in summary.models" :key="m.model">
+          <span>{{ m.model || 'без модели' }}</span>
+          <strong :class="toneFor(m.down_share)">{{ share(m.down_share) }}</strong>
+          <span class="cell-note">{{ num(m.down) }} из {{ num(m.total) }}</span>
+        </li>
+      </ul>
+      <p class="hint">Больше трети «вниз» — жёлтым, повод разобраться; больше половины — красным.</p>
+    </template>
+  </section>
+
   <section class="panel">
     <div class="panel__head">
       <h2>Оценки ответов ИИ</h2>
     </div>
     <p class="hint">
       «Палец вверх / вниз» под ответами в чатах. Причины и комментарий пользователь оставляет у «вниз». Оценки удалённых
-      чатов исчезают вместе с ними. Доля «вниз» по моделям за месяц — на странице «Расходы на ИИ».
+      чатов исчезают вместе с ними.
     </p>
     <div class="fb-filters">
       <UiSelect v-model="rating" :options="RATINGS" aria-label="Оценка" @change="load()" />
@@ -54,6 +79,7 @@
 
     <AdminChatModal :chat="reading" :highlight="readingMessage" @close="reading = null" />
   </section>
+  </div>
 </template>
 
 <script setup>
@@ -118,10 +144,67 @@ async function openChat(f) {
   }
 }
 
-onMounted(() => load())
+// Доля «вниз» за период по моделям (раньше была карточкой на странице расходов).
+const SUMMARY_PERIODS = [
+  { value: '7d', label: '7 дней' },
+  { value: '30d', label: '30 дней' },
+  { value: '90d', label: '90 дней' },
+  { value: 'all', label: 'Всё время' },
+]
+const summaryPeriod = ref('30d')
+const summary = ref(null)
+const summaryTotal = computed(() => (summary.value?.models || []).reduce((s, m) => s + m.total, 0))
+const downShare = computed(() =>
+  summaryTotal.value ? summary.value.models.reduce((s, m) => s + m.down, 0) / summaryTotal.value : 0,
+)
+// Больше трети «вниз» — повод разобраться: жёлтым; больше половины — красным.
+const toneFor = (v) => (v > 0.5 ? 'tone-bad' : v > 0.33 ? 'tone-warn' : 'tone-ok')
+const downTone = computed(() => (summaryTotal.value ? toneFor(downShare.value) : ''))
+const share = (v) => `${Math.round(v * 100)}%`
+
+async function loadSummary() {
+  try {
+    summary.value = await adminApi.feedbackSummary(summaryPeriod.value)
+  } catch (err) {
+    pushToast(errorText(err), 'error')
+  }
+}
+
+onMounted(() => {
+  load()
+  loadSummary()
+})
 </script>
 
 <style scoped>
+.fb-summary {
+  margin-bottom: 16px;
+}
+.fb-summary__main {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 12px;
+}
+.fb-summary__main strong {
+  font-size: 28px;
+  font-weight: 800;
+  letter-spacing: -0.03em;
+}
+.fb-summary__models {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 20px;
+  margin: 12px 0 0;
+  padding: 0;
+  list-style: none;
+  font-size: 14px;
+}
+.fb-summary__models li {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
 .fb-filters {
   display: flex;
   flex-wrap: wrap;

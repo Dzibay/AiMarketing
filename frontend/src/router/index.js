@@ -255,7 +255,7 @@ const router = createRouter({
         { path: 'payments', meta: { title: 'Платежи' }, component: () => import('../views/admin/AdminPayments.vue') },
         { path: 'site', meta: { title: 'Сайт' }, component: () => import('../views/admin/AdminWaitlist.vue') },
         { path: 'refs', meta: { title: 'Реф-ссылки' }, component: () => import('../views/admin/AdminRefs.vue') },
-        { path: 'ai-costs', meta: { title: 'Расходы на ИИ' }, component: () => import('../views/admin/AdminUsage.vue') },
+        { path: 'ai-costs', meta: { title: 'Расходы на ИИ' }, component: () => import('../views/admin/AdminAiCosts.vue') },
         { path: 'ai-quality', meta: { title: 'Качество ИИ' }, component: () => import('../views/admin/AdminFeedback.vue') },
         {
           path: 'settings',

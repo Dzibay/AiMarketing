@@ -173,6 +173,21 @@ export const adminApi = {
   usage: (month = '') => call(`/usage${month ? `?month=${encodeURIComponent(month)}` : ''}`),
 
   /**
+   * Расходы на ИИ, вкладка tab (overview | models | tasks | people | reliability | journal). Общие params: p или
+   * from/to, step, kind (model | wordstat | image), source (cabinet | landing). Свои: overview — split (class | kind);
+   * people — sort, desc, page, loss; journal — user, task, model, subs, sort (time | cost), page.
+   * Поля ответов — в app/admin_ai_costs.py.
+   */
+  aiCosts: (tab, params = {}) => {
+    const q = new URLSearchParams(
+      Object.entries(params)
+        .filter(([, v]) => v !== '' && v != null && v !== false)
+        .map(([k, v]) => [k, String(v)]),
+    )
+    return call(`/ai-costs/${tab}?${q}`)
+  },
+
+  /**
    * Оценки ответов ИИ, новые сверху: { rating (-1 | 1 | 0 — все), model, reason, limit, offset } →
    * { total, items: [{ rating, reasons, comment, model, user, chat_id, message_id, question, answer }], models, reasons }.
    */
@@ -180,6 +195,8 @@ export const adminApi = {
     const q = new URLSearchParams(Object.entries(params).filter(([, v]) => v !== '' && v != null).map(([k, v]) => [k, String(v)]))
     return call(`/feedback?${q}`)
   },
+  /** Доля «вниз» по классам моделей за период (p): { period, models: [{ model, total, down, down_share }] }. */
+  feedbackSummary: (p = '30d') => call(`/feedback/summary?p=${encodeURIComponent(p)}`),
   /** Чат пользователя на чтение: { chat, messages: [{ role, content, model, feedback }] }. */
   chat: (id) => call(`/chats/${id}`),
 }

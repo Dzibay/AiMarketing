@@ -58,9 +58,13 @@
 
       <div v-if="active" class="trend-chart__tip" :style="tipStyle">
         <strong>{{ bucketText(points[active.i].day) }}</strong>
-        <div v-for="s in series" :key="s.key">
+        <div v-for="s in tipSeries" :key="s.key">
           <span><i :style="{ background: s.color }"></i>{{ s.label }}</span>
           <b>{{ fmt(s, points[active.i][s.key]) }}</b>
+        </div>
+        <div v-if="stacked">
+          <span>Всего</span>
+          <b>{{ formatValue(stackTotals[active.i]) }}</b>
         </div>
         <div v-if="prevSeries && prevPoints[active.i]">
           <span><i style="background: var(--faint)"></i>Было, {{ bucketText(prevPoints[active.i].day) }}</span>
@@ -97,6 +101,8 @@ const props = defineProps({
   lastDay: { type: String, default: '' },
   formatValue: { type: Function, default: (v) => String(v) },
   height: { type: Number, default: 200 },
+  /** Столбики рядов — друг на друге (части одного целого), шкала — по сумме; в подсказке — «Всего». */
+  stacked: { type: Boolean, default: false },
 })
 
 const plotEl = ref(null)
@@ -127,8 +133,14 @@ const prevValues = computed(() =>
   prevSeries.value ? seriesValues(props.prevPoints, prevSeries.value.key).slice(0, props.points.length) : [],
 )
 
+const stackTotals = computed(() =>
+  props.points.map((p) => props.series.filter((s) => s.type === 'bar').reduce((a, s) => a + Number(p[s.key] || 0), 0)),
+)
+
 const ticks = computed(() => {
-  const all = props.series.flatMap((s) => seriesValues(props.points, s.key))
+  const all = props.stacked
+    ? [...stackTotals.value, ...props.series.filter((s) => s.type !== 'bar').flatMap((s) => seriesValues(props.points, s.key))]
+    : props.series.flatMap((s) => seriesValues(props.points, s.key))
   const list = niceTicks(Math.max(0, ...all.filter((v) => v !== null), ...prevValues.value.filter((v) => v !== null)))
   const top = list[list.length - 1] || 1
   return list.map((value) => ({ value, label: props.formatValue(value), y: yFor(value, top) }))
@@ -164,6 +176,22 @@ const bars = computed(() => {
   const k = barSeries.value.length
   if (!k) return []
   const inner = Math.min(band.value * 0.7, 48)
+  if (props.stacked) {
+    const acc = props.points.map(() => 0)
+    return barSeries.value.map((s) => ({
+      key: s.key,
+      color: s.color,
+      rects: seriesValues(props.points, s.key)
+        .map((v, i) => {
+          if (!v) return null
+          const y0 = yFor(acc[i])
+          acc[i] += v
+          const y = yFor(acc[i])
+          return { i, x: xAt(i) - inner / 2, y, w: Math.max(inner, 1), h: Math.max(y0 - y, 1) }
+        })
+        .filter(Boolean),
+    }))
+  }
   const w = Math.max(inner / k - (k > 1 ? 2 : 0), 1)
   return barSeries.value.map((s, j) => ({
     key: s.key,
@@ -247,6 +275,13 @@ const active = computed(() => {
   const pv = prevValues.value[i]
   if (prevSeries.value && pv !== null && pv !== undefined) dots.unshift({ key: '_prev', color: 'var(--faint)', y: yFor(pv), prev: true })
   return { i, dots }
+})
+
+/** В подсказке сложенного графика — только части с ненулевым значением в этой корзине, сверху вниз. */
+const tipSeries = computed(() => {
+  if (!props.stacked || !active.value) return props.series
+  const p = props.points[active.value.i]
+  return props.series.filter((s) => Number(p[s.key] || 0) !== 0).reverse()
 })
 
 const tipStyle = computed(() => {
