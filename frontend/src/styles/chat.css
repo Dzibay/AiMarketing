@@ -2212,6 +2212,12 @@ a.aib-card:hover {
   font-weight: 700;
 }
 
+/* Своя рамка выше перебивает рамку фокуса из ui.css — возвращаем её. */
+.composer__model .ui-select__btn:focus-visible,
+.composer__model .ui-select.is-open .ui-select__btn {
+  border-color: var(--ink);
+}
+
 .composer__tip {
   min-width: 0;
   overflow: hidden;
@@ -2601,6 +2607,25 @@ a.aib-card:hover {
     min-height: 44px;
     font-size: 16px;
   }
+
+  /* Дни календаря в «@ период» — палец, а не курсор: 44 px на любом сенсорном экране.
+     Месяц на всю ширину окна, иначе колонка дня — 252 / 7 = 36 px. */
+  .mention-pop .ui-cal {
+    flex-direction: column;
+  }
+
+  .mention-pop .ui-cal__month {
+    width: 100%;
+  }
+
+  .mention-pop .ui-cal__grid td {
+    height: 46px;
+  }
+
+  .mention-pop .ui-cal__day {
+    height: 44px;
+    font-size: 15px;
+  }
 }
 .chat__item mark {
   border-radius: 3px;
@@ -2869,15 +2894,6 @@ a.aib-card:hover {
   .composer__model {
     flex: 0 1 auto;
     min-width: 0;
-  }
-
-  .mention-pop .ui-cal__grid td {
-    height: 44px;
-  }
-
-  .mention-pop .ui-cal__day {
-    height: 42px;
-    font-size: 15px;
   }
 
   .chat--hello .chat__main {

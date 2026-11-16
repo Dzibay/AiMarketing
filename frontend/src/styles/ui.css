@@ -794,7 +794,7 @@ body.has-sheet {
 
 .ui-cal__day.is-off {
   color: var(--line-2);
-  cursor: default;
+  cursor: not-allowed;
 }
 
 /* Период: полоса от первого дня до последнего, края — цветом кнопки. */
@@ -948,11 +948,11 @@ body.has-sheet {
 }
 
 .ui-pop.is-sheet .ui-cal__grid td {
-  height: 44px;
+  height: 46px;
 }
 
 .ui-pop.is-sheet .ui-cal__day {
-  height: 42px;
+  height: 44px;
   font-size: 15px;
 }
 

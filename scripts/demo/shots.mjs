@@ -298,6 +298,8 @@ for (const width of widths) {
         localStorage.setItem('aimarketing-theme', '${theme}');
         localStorage.setItem('aimarketing-cookies', '1'); 1`)
       for (const [name, path, open] of PAGES) {
+        // Каждая страница — с закрытой ИИ-панелью: открытая на ai-panel-* запоминается и сузила бы следующие.
+        await evaluate(`localStorage.setItem('aimarketing-ai-panel', 'closed'); 1`)
         await send('Page.navigate', { url: BASE + path })
         await waitLoaded()
         await sleep(WAIT)
@@ -424,13 +426,14 @@ function snapshotStyles() {
   window.__auditChain = chainOf
   window.__auditBase = new Map()
   window.__auditIds = new Map()
+  // Сначала снять фокус: иначе рамка уже сфокусированного поля (:focus-within) попадёт в «стили до».
+  document.activeElement?.blur?.()
   const focusable = 'a[href], button, input, select, textarea, summary, [tabindex]:not([tabindex="-1"]), [contenteditable="true"]'
   for (const el of document.querySelectorAll(focusable)) {
     for (const n of chainOf(el)) {
       if (n && !window.__auditBase.has(n)) window.__auditBase.set(n, style(n))
     }
   }
-  document.activeElement?.blur?.()
   return 1
 }
 
@@ -538,7 +541,10 @@ function inspect() {
     const bg = backgroundOf(el)
     const fg0 = parse(s.color)
     if (!bg || !fg0) continue
-    const fg = over({ ...fg0, a: fg0.a * opacityOf(el) }, bg)
+    // Совсем прозрачный текст (время, раскрывающееся по наведению) сейчас не виден — не меряем.
+    const op = opacityOf(el)
+    if (op < 0.05) continue
+    const fg = over({ ...fg0, a: fg0.a * op }, bg)
     const [l1, l2] = [lum(fg), lum(bg)].sort((a, b) => b - a)
     const ratio = (l1 + 0.05) / (l2 + 0.05)
     const size = parseFloat(s.fontSize)
@@ -566,7 +572,7 @@ function inspect() {
     .filter((el) => !el.closest('svg'))
     .map((el) => `${label(el)} «${el.getAttribute('title').slice(0, 30)}»`)
   // 7. Кликабельное без курсора-руки.
-  const cursor = [...document.querySelectorAll('a[href], button:not(:disabled), .is-link')]
+  const cursor = [...document.querySelectorAll('a[href], button:not(:disabled):not([aria-disabled="true"]), .is-link')]
     .filter((el) => shown(el) && !el.closest('[inert]') && cs(el).cursor !== 'pointer')
     .map((el) => `${label(el)} (${cs(el).cursor})`)
   // 8. Лайм в фоне неактивной кнопки: оттенок 55–110°, насыщенный, не серый (#c6f04a — 75°, --lime-soft тоже).
