@@ -280,6 +280,24 @@
   gap: 8px;
 }
 
+/* Справка не ответила — предложение написать в поддержку под ответом ИИ. */
+.chat-support {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  padding: 10px 12px;
+  border: 1px dashed var(--line);
+  border-radius: 14px;
+  color: var(--muted);
+  font-size: 13.5px;
+}
+
+.chat-support .btn svg {
+  width: 15px;
+  height: 15px;
+}
+
 .chat-next__btn {
   appearance: none;
   display: inline-flex;

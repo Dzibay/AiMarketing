@@ -234,17 +234,33 @@ export function provideChat({ general, ws, basePath, reloadWs }) {
       if (a.tool === 'board_edit') edits.set(a.message_id, [...(edits.get(a.message_id) || []), a])
     }
     const out = []
+    // Справка не ответила (каждый help_search хода вернул found: false) — под последним ответом хода кнопка
+    // «Написать в поддержку» с вопросом пользователя. Решает лента, а не модель: ссылку она могла бы исказить.
+    let turn = { question: '', item: null, help: 0, found: false }
+    const closeTurn = () => {
+      if (turn.item && turn.help && !turn.found) turn.item.supportAsk = turn.question || ' '
+    }
     for (const m of data.value.messages) {
       if (m.role === 'user') {
+        closeTurn()
+        turn = { question: m.content || '', item: null, help: 0, found: false }
         out.push({ key: `m${m.id}`, id: m.id, role: 'user', content: m.content, refs: m.refs || [], created: m.created_at || '' })
       }
       if (m.role === 'error') out.push({ key: `m${m.id}`, role: 'error', content: m.content })
       if (m.role === 'assistant') {
+        for (const call of m.tool_calls || []) {
+          if (call.name !== 'help_search') continue
+          turn.help += 1
+          const raw = results.get(call.id)
+          if (raw == null || !/"found":\s*false/.test(raw)) turn.found = true
+        }
         const item = assistantItem(m, results, byCall)
         if (item) out.push(item)
+        if (item?.content) turn.item = item
       }
       for (const e of edits.get(m.id) || []) out.push({ key: `e${e.id}`, role: 'note', content: e.summary })
     }
+    if (status.value !== 'running') closeTurn()
     return out
   })
 
@@ -298,6 +314,7 @@ export function provideChat({ general, ws, basePath, reloadWs }) {
       created: m.created_at || '',
       followups: m.followups || [],
       feedback: m.feedback || null,
+      supportAsk: '', // вопрос для поддержки, когда справка не ответила (см. items)
       reads,
       asks,
       writes,

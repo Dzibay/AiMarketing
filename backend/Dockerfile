@@ -14,6 +14,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY backend/app ./app
 COPY backend/alembic.ini ./alembic.ini
 COPY backend/migrations ./migrations
+# Статьи справки: их читает инструмент ИИ help_search (app/help.py), тот же текст показывает фронтенд.
+COPY docs/help ./docs/help
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \

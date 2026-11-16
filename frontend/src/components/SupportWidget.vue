@@ -60,7 +60,7 @@ import UiSheet from './ui/UiSheet.vue'
  * Ответ поддержки приходит сюда, в колокольчик и в Telegram, если он привязан, — иначе письмом.
  * Пока виджет открыт, переписка обновляется каждые 20 секунд.
  */
-const { supportOpen, supportUnread } = useSupport()
+const { supportOpen, supportUnread, supportDraft } = useSupport()
 const { phone, narrow } = useViewport()
 const { project } = useProjectFilter()
 const route = useRoute()
@@ -267,12 +267,24 @@ function onKey(event) {
 
 // --- Открытие ---
 
+// Виджет уже открыт, а из чата пришёл ещё вопрос — тоже в поле, если оно пустое.
+watch(supportDraft, (draft) => {
+  if (!draft || !supportOpen.value) return
+  if (!text.value.trim()) text.value = draft
+  supportDraft.value = ''
+})
+
 watch(
   supportOpen,
   async (open) => {
     clearInterval(timer)
     timer = null
     if (!open) return
+    // Вопрос из чата с ИИ — в поле, если человек ещё ничего не начал писать сам.
+    if (supportDraft.value) {
+      if (!text.value.trim()) text.value = supportDraft.value
+      supportDraft.value = ''
+    }
     load()
     timer = setInterval(() => document.visibilityState === 'visible' && load({ quiet: true }), POLL_MS)
     await nextTick()

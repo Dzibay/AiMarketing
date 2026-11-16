@@ -4,8 +4,12 @@ import { ref } from 'vue'
 // (usePending) и обновляется самим виджетом, когда он открыт.
 const supportOpen = ref(false)
 const supportUnread = ref(0)
+// Текст, который виджет впишет в поле при открытии, — вопрос, на который ИИ не нашёл ответа в справке.
+const supportDraft = ref('')
 
-export function openSupport() {
+/** Открыть поддержку; draft — готовый текст сообщения. Как обработчик клика получает событие — его не берём. */
+export function openSupport(draft) {
+  if (typeof draft === 'string' && draft.trim()) supportDraft.value = draft.trim()
   supportOpen.value = true
 }
 
@@ -18,5 +22,5 @@ export function setSupportUnread(value) {
 }
 
 export function useSupport() {
-  return { supportOpen, supportUnread }
+  return { supportOpen, supportUnread, supportDraft }
 }

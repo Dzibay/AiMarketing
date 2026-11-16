@@ -17,6 +17,7 @@ from datetime import date, datetime, timedelta, timezone
 from psycopg.types.json import Jsonb
 
 from app import ai, ai_feedback, audiences, context_files, experiments, image_gen, plans
+from app import help as help_docs
 from app.actions import BULK_ACTIONS, SETTINGS_LABELS, campaign_options
 from app.brief import brief_filled, normalize_brief
 from app.clock import today_msk
@@ -1175,6 +1176,20 @@ def _t_project(ctx: Context, args: dict) -> dict:
     return out
 
 
+def _t_help(ctx: Context, args: dict) -> dict:
+    query = _line(args.get("query"), 300)
+    if not query:
+        raise YandexError("help", "Нужен query — вопрос о сервисе своими словами")
+    out = help_docs.search(query)
+    if not out["found"]:
+        out["note"] = (
+            "В справке ответа нет. Не придумывай ответ про сервис: так и скажи и предложи написать в поддержку — "
+            "под твоим ответом будет кнопка «Написать в поддержку» с уже вписанным вопросом. Можно попробовать ещё "
+            "раз другими словами, если вопрос явно про одну из статей all_titles."
+        )
+    return out
+
+
 def _read(ctx: Context, name: str, args: dict) -> dict:
     """Инструмент чтения; с project_id — на данных другого проекта, ответ подписан его названием."""
     raw = args.get("project_id") if name in CROSS_PROJECT_TOOLS else None
@@ -1215,6 +1230,7 @@ READ_TOOLS = {
     "get_ad_extras": _t_ad_extras,
     "list_ad_images": _t_ad_images,
     "generate_images": _t_generate_images,
+    "help_search": _t_help,
 }
 
 
@@ -4244,6 +4260,7 @@ TOOL_LABELS = {
     "get_ad_extras": "Расширения объявления",
     "list_ad_images": "Картинки объявлений",
     "generate_images": "Генерация картинок",
+    "help_search": "Справка сервиса",
     "ask_questions": "Вопросы перед работой",
     "propose_plan": "План работ",
     "propose_items": "Таблица на согласование",
@@ -4336,6 +4353,14 @@ _AD_EDIT = {
 }
 
 TOOLS = [
+    _fn(
+        "help_search",
+        "Справка сервиса «Толк»: статьи о кабинете — как что сделать, где какой экран, тарифы и лимит, "
+        "подключения, Telegram, отмена изменений, режимы, безопасность, что нового. Поиск по словам; ответ — "
+        "текст подходящих статей и ссылки на них. found=false — в справке ответа нет.",
+        {"query": {"type": "string", "description": "вопрос пользователя о сервисе или ключевые слова"}},
+        ["query"],
+    ),
     _fn(
         "list_projects",
         "Другие проекты пользователя: project_id, название, сайт, клиент, число кампаний. Только "
@@ -5071,7 +5096,7 @@ GENERAL_WRITE_TOOLS = (
 )
 GENERAL_ASK_TOOLS = ("ask_questions", "propose_plan")
 GENERAL_TOOL_NAMES = frozenset(
-    {"list_projects", "get_project", *CROSS_PROJECT_TOOLS, *GENERAL_WRITE_TOOLS, *GENERAL_ASK_TOOLS, SUGGEST_TOOL}
+    {"help_search", "list_projects", "get_project", *CROSS_PROJECT_TOOLS, *GENERAL_WRITE_TOOLS, *GENERAL_ASK_TOOLS, SUGGEST_TOOL}
 )
 
 
@@ -5233,9 +5258,22 @@ def _role_rule(ctx: Context) -> str:
     return "- " + ROLE_RULES.get(role, ROLE_RULES["owner"])
 
 
+# Вопросы о самом сервисе: отвечать только по справке, со ссылкой на экран — общее правило обоих чатов.
+HELP_RULE = (
+    "Вопросы о самом сервисе «Толк» (как что сделать в кабинете, где экран или кнопка, тариф и лимит, оплата, "
+    "подключения Яндекса, Telegram, отмена изменений, режимы, безопасность, что нового):\n"
+    "- Сначала вызови help_search и отвечай только по найденным статьям, коротко и своими словами. Экраны, кнопки "
+    "и настройки, которых нет в статьях, не придумывай.\n"
+    "- Давай ссылку на нужный экран кабинета markdown-ссылкой из статьи, например [Подключения](/cabinet/connections); "
+    "на подробности — ссылкой на статью ([Как вернуть как было](/cabinet/help/undo)). Другие адреса не сочиняй.\n"
+    "- Если help_search ответа не нашёл, так и скажи: «В справке этого нет» — и предложи написать в поддержку; "
+    "кнопка «Написать в поддержку» появится под ответом сама, ссылку на неё не пиши."
+)
+
+
 def _system_prompt(ctx: Context) -> str:
     prompt = _general_prompt(ctx) if ctx.general else _project_prompt(ctx)
-    return prompt + "\n\nКак говорить с пользователем:\n" + _role_rule(ctx)
+    return prompt + "\n\n" + HELP_RULE + "\n\nКак говорить с пользователем:\n" + _role_rule(ctx)
 
 
 def _project_prompt(ctx: Context) -> str:

@@ -38,7 +38,7 @@
         </UiNotice>
 
         <div v-else class="msg msg--ai" :data-msg="item.id">
-          <div v-if="item.content" class="msg__text md" v-html="renderMarkdown(item.content)" />
+          <div v-if="item.content" class="msg__text md" @click="onTextClick" v-html="renderMarkdown(item.content)" />
 
           <details v-if="item.reads.length" class="chat-steps">
             <summary>
@@ -217,6 +217,14 @@
             <ChatRate :message-id="item.id" :feedback="item.feedback" />
           </div>
 
+          <div v-if="item.supportAsk" class="chat-support">
+            <span>В справке ответа нет — спросите команду, ответим здесь же.</span>
+            <button class="btn btn--ghost btn--sm" type="button" @click="openSupport(item.supportAsk)">
+              <LifeBuoy aria-hidden="true" />
+              Написать в поддержку
+            </button>
+          </div>
+
           <div v-if="item.key === followupKey" class="chat-next" role="group" aria-label="Что дальше">
             <button
               v-for="f in item.followups"
@@ -254,9 +262,10 @@
 </template>
 
 <script setup>
-import { BookmarkPlus, Check, Clock, CornerDownRight, PencilLine, RotateCcw, Sparkles } from '@lucide/vue'
+import { BookmarkPlus, Check, Clock, CornerDownRight, LifeBuoy, PencilLine, RotateCcw, Sparkles } from '@lucide/vue'
 import { onBeforeUnmount, ref, watch } from 'vue'
-import { RouterLink } from 'vue-router'
+import { RouterLink, useRouter } from 'vue-router'
+import { openSupport } from '../../composables/useSupport'
 import { aiApi, errorText } from '../../api/web'
 import { askText } from '../../composables/useConfirm'
 import { saveOwnPrompt } from '../../composables/usePrompts'
@@ -283,6 +292,15 @@ const STATUS_UI = { pending: 'wait', approved: 'info', done: 'ok', rejected: 'of
 
 // to-board — показать на доске раздел, где решается действие (id действия).
 const emit = defineEmits(['to-board'])
+const router = useRouter()
+
+/** Ссылка ИИ на экран кабинета (/cabinet/…, /w/12/settings) — переход роутера, без перезагрузки страницы. */
+function onTextClick(event) {
+  const link = event.target instanceof Element ? event.target.closest('a[data-route]') : null
+  if (!link || event.ctrlKey || event.metaKey || event.shiftKey || event.button) return
+  event.preventDefault()
+  router.push(link.getAttribute('href'))
+}
 
 const {
   general,
