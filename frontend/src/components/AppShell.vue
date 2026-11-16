@@ -398,7 +398,7 @@ import {
   resetWorkspaces,
   useWorkspaces,
 } from '../composables/useWorkspaces'
-import { ACCESS_EVENT, ApiError, aiApi, errorText } from '../api/web'
+import { ACCESS_EVENT, ApiError, CHATS_EVENT, aiApi, errorText } from '../api/web'
 import { pushToast } from '../composables/useToasts'
 import { formatDay, groupChats, niceQuotes, pct } from '../utils/format'
 
@@ -466,11 +466,11 @@ async function loadSideChats() {
   }
 }
 
-// Ждущие решения — все, остальные — до RECENT_LIMIT в сумме; и те и другие по группам давности, как в списке чатов.
+// Закреплённые и ждущие решения — все, остальные — до RECENT_LIMIT в сумме; группы — как в списке чатов.
 const chatBlocks = computed(() => {
-  const waiting = chats.value.filter((c) => c.pending_actions > 0)
-  const rest = chats.value.filter((c) => !c.pending_actions).slice(0, Math.max(0, RECENT_LIMIT - waiting.length))
-  return groupChats([...waiting, ...rest])
+  const kept = chats.value.filter((c) => c.pinned || c.pending_actions > 0)
+  const rest = chats.value.filter((c) => !c.pinned && !c.pending_actions).slice(0, Math.max(0, RECENT_LIMIT - kept.length))
+  return groupChats([...kept, ...rest])
 })
 const shownChats = computed(() => chatBlocks.value.reduce((n, b) => n + b.items.length, 0))
 
@@ -833,6 +833,7 @@ function onHotkey(event) {
 
 onMounted(() => {
   window.addEventListener(ACCESS_EVENT, onAccess)
+  window.addEventListener(CHATS_EVENT, loadSideChats)
   document.addEventListener('visibilitychange', pollPending)
   document.addEventListener('keydown', onKey)
   midQuery.addEventListener('change', onMid)
@@ -842,6 +843,7 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   window.removeEventListener(ACCESS_EVENT, onAccess)
+  window.removeEventListener(CHATS_EVENT, loadSideChats)
   document.removeEventListener('visibilitychange', pollPending)
   document.removeEventListener('keydown', onKey)
   midQuery.removeEventListener('change', onMid)

@@ -21,7 +21,7 @@
           v-tip="'Права ИИ в этом проекте'"
           @change="setAccessMode"
         />
-        <button v-if="chats.length || chatsError" class="btn btn--ghost btn--sm" type="button" @click="chatsOpen = true">
+        <button v-if="chats.length || chatsError || archivedCount" class="btn btn--ghost btn--sm" type="button" @click="chatsOpen = true">
           <History aria-hidden="true" />
           Все чаты
         </button>
@@ -36,6 +36,11 @@
             Разбор проекта
           </UiMenuItem>
           <UiMenuItem :icon="Pencil" @click="renameChat">Переименовать</UiMenuItem>
+          <UiMenuItem v-if="!chat.archived" :icon="chat.pinned ? PinOff : Pin" @click="togglePin">
+            {{ chat.pinned ? 'Открепить' : 'Закрепить' }}
+          </UiMenuItem>
+          <UiMenuItem v-if="chat.archived" :icon="ArchiveRestore" @click="restoreChat()">Вернуть из архива</UiMenuItem>
+          <UiMenuItem v-else :icon="Archive" :disabled="status === 'running'" @click="toArchive">В архив</UiMenuItem>
           <UiMenuItem :icon="Trash2" danger @click="deleteChat">Удалить чат</UiMenuItem>
         </UiMenu>
       </template>
@@ -75,6 +80,10 @@
           <button class="btn btn--ghost btn--sm" type="button" :disabled="deciding" @click="decideAll(false)">Отклонить все</button>
         </div>
 
+        <div v-if="chat?.archived" class="chat__pending chat__pending--quiet" role="status">
+          <span>Чат в архиве — новое сообщение вернёт его в список.</span>
+          <button class="btn btn--ghost btn--sm" type="button" @click="restoreChat()">Вернуть из архива</button>
+        </div>
         <ChatComposer ref="composer" />
         <p class="chat__access">
           {{ accessText }}
@@ -177,7 +186,7 @@
 
 <script setup>
 import { askConfirm, askText } from '../../composables/useConfirm'
-import { History, Pencil, ScanSearch, Sparkles, Trash2 } from '@lucide/vue'
+import { Archive, ArchiveRestore, History, Pencil, Pin, PinOff, ScanSearch, Sparkles, Trash2 } from '@lucide/vue'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
 import { aiApi, errorText, wsApi } from '../../api/web'
@@ -233,6 +242,7 @@ const chatCtx = provideChat({ general: props.general, ws, basePath, reloadWs })
 const {
   chats,
   chatsError,
+  archivedCount,
   chatId,
   chat,
   status,
@@ -414,6 +424,54 @@ async function renameChat() {
   if (title == null || !title.trim() || title.trim() === chat.value.title) return
   try {
     await chatCtx.renameChat(title.trim())
+  } catch (err) {
+    pushToast(errorText(err), 'error')
+  }
+}
+
+async function togglePin() {
+  try {
+    await chatCtx.pinChat(!chat.value.pinned)
+  } catch (err) {
+    pushToast(errorText(err), 'error')
+  }
+}
+
+/** В архив. Ждущие решения предложения не бросаем молча: спрашиваем, отклонить их или оставить ждать. */
+async function toArchive() {
+  const waiting = chat.value.pending_actions
+  let pending = ''
+  if (waiting) {
+    const answer = await askConfirm(
+      `В чате ждут решения предложения: ${waiting}. Если их не отклонить, они останутся в «Ждёт решения», ` +
+        'и чат будет открываться оттуда.',
+      {
+        title: `Убрать «${chat.value.title}» в архив?`,
+        confirmText: 'В архив',
+        danger: false,
+        check: {
+          label: 'Отклонить ждущие предложения',
+          hint: 'В Директе ничего не изменится, ИИ узнает об отказе.',
+          confirmText: 'Отклонить и в архив',
+          value: true,
+        },
+      },
+    )
+    if (!answer) return
+    pending = answer.checked ? 'reject' : 'keep'
+  }
+  const id = chat.value.id
+  try {
+    await chatCtx.archiveChat(true, pending)
+    pushToast('Чат в архиве', 'info', { action: { label: 'Вернуть', run: () => restoreChat(id) } })
+  } catch (err) {
+    pushToast(errorText(err), 'error')
+  }
+}
+
+async function restoreChat(id = chat.value?.id) {
+  try {
+    await chatCtx.archiveChat(false, '', id)
   } catch (err) {
     pushToast(errorText(err), 'error')
   }

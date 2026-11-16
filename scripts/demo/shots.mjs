@@ -85,6 +85,15 @@ const PAGES = [
   // Картинки: в ленте (скриншот «Показать ИИ», баннер «В объявления») и в поле ввода — вставкой из буфера.
   ...(stand.chats.files ? [['ws-chat-files', `/w/${ws}/chat/${stand.chats.files}`]] : []),
   ['ws-chat-attach', `/w/${ws}/chat`, `(${pasteImages.toString()})()`],
+  // Список чатов: группа «Закреплённые» сверху, ссылка «Архив» внизу; и сам архив.
+  ['ws-chat-list', `/w/${ws}/chat/${stand.chats.flowers}?chats=1`,
+    `(async () => { for (let i = 0; i < 40 && !document.querySelector('.chat__archive-link'); i++)
+      await new Promise((r) => setTimeout(r, 100)); return !!document.querySelector('.chat__archive-link') })()`],
+  ['ws-chat-archive', `/w/${ws}/chat/${stand.chats.flowers}?chats=1`,
+    `(async () => { const wait = async (sel) => { for (let i = 0; i < 40 && !document.querySelector(sel); i++)
+      await new Promise((r) => setTimeout(r, 100)); return document.querySelector(sel) }
+      const link = await wait('.chat__archive-link'); if (!link) return false
+      link.click(); return !!(await wait('.chat__side-back')) })()`],
   ['ws-campaigns', `/w/${ws}/campaigns`],
   ['ws-campaign', `/w/${ws}/campaigns/${stand.campaign_row}`],
   ['ws-queries', `/w/${ws}/queries`],

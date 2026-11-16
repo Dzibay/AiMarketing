@@ -11,6 +11,8 @@ export class ApiError extends Error {
 
 /** Событие окна: доступ закрыт (подписка, почта) или нужен тариф выше (лимит, функция, проекты). */
 export const ACCESS_EVENT = 'aim:access'
+// Чат переименовали, закрепили, убрали в архив или удалили — боковое меню перечитывает список.
+export const CHATS_EVENT = 'aim:chats'
 const ACCESS_CODES = new Set([
   'subscription-expired',
   'email-unverified',
@@ -240,19 +242,25 @@ export const aiApi = {
   usage: () => request('/api/web/ai/usage'),
   /** Класс модели чата (fast | standard | thinking) → { chat, ai }. */
   setChatModel: (id, modelClass) => put(`/api/web/ai/chats/${id}/model`, { model_class: modelClass }),
-  chats: (workspaceId) => request(`${WS(workspaceId)}/chats`),
+  /** Чаты проекта { items, archived_count }; archived — архив вместо обычного списка. */
+  chats: (workspaceId, archived = false) => request(`${WS(workspaceId)}/chats${archived ? '?archived=true' : ''}`),
   createChat: (workspaceId, title = '', modelClass = '') =>
     post(`${WS(workspaceId)}/chats`, { title, model_class: modelClass }),
   /** Общие чаты по всем проектам: ИИ читает любой проект, правки — только после подтверждения. */
-  generalChats: () => request('/api/web/ai/chats'),
+  generalChats: (archived = false) => request(`/api/web/ai/chats${archived ? '?archived=true' : ''}`),
   /** Поиск по чатам раздела (null — общие): у каждого match { message_id, role, snippet }. */
-  searchChats: (workspaceId, q) =>
-    request(`${workspaceId ? `${WS(workspaceId)}/chats` : '/api/web/ai/chats'}?q=${encodeURIComponent(q)}`),
+  searchChats: (workspaceId, q, archived = false) =>
+    request(
+      `${workspaceId ? `${WS(workspaceId)}/chats` : '/api/web/ai/chats'}?q=${encodeURIComponent(q)}${archived ? '&archived=true' : ''}`,
+    ),
   createGeneralChat: (title = '', modelClass = '') => post('/api/web/ai/chats', { title, model_class: modelClass }),
   /** Проверка сайта с лендинга → чат с полным результатом: { status, chat_id, workspace_id }. */
   claimSiteCheck: (id) => post('/api/web/ai/site-check/claim', { id }),
   chat: (id) => request(`/api/web/ai/chats/${id}`),
   renameChat: (id, title) => patch(`/api/web/ai/chats/${id}`, { title }),
+  pinChat: (id, pinned) => patch(`/api/web/ai/chats/${id}`, { pinned }),
+  /** В архив / из архива. pending — что делать с ждущими предложениями: reject | keep (иначе ошибка chat-pending). */
+  archiveChat: (id, archived, pending = '') => patch(`/api/web/ai/chats/${id}`, { archived, pending }),
   deleteChat: (id) => del(`/api/web/ai/chats/${id}`),
   // refs — id других проектов, упомянутых через @: ИИ читает их, но не меняет.
   // pending: что делать с ждущими предложениями ИИ — 'reject' отклонить, 'keep' оставить ждать решения.

@@ -15,6 +15,7 @@ import ipaddress
 import json
 import logging
 import math
+import re
 import socket
 import time
 from contextlib import contextmanager
@@ -584,6 +585,14 @@ _GATEWAY_TEXT = {
 
 
 def _error_text(response: httpx.Response) -> str:
+    text = _error_text_raw(response)
+    # HTML-страница шлюза может прийти и внутри JSON-поля: разметку в чат не пускаем.
+    if re.search(r"<!doctype|<html", text, re.I):
+        return _GATEWAY_TEXT.get(response.status_code, "вместо ответа API пришла html-страница ошибки")
+    return text
+
+
+def _error_text_raw(response: httpx.Response) -> str:
     try:
         data = response.json()
     except ValueError:

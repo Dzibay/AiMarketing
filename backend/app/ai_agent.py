@@ -49,6 +49,8 @@ HISTORY_MESSAGES = 60
 # Ответы чтения из прошлых ходов в запрос идут укороченными: полный вызов с ~100 тыс. токенов не укладывался во
 # время ответа. Нужны данные — модель читает заново; согласования, ответы на вопросы и записи не сокращаются.
 OLD_RESULT_CHARS = 1500
+# Внутри текущего хода полными остаются последние 3–5 шагов с чтениями (см. _history).
+FULL_TURN_STEPS = 3
 # Один вызов модели в чате: запросы большие, на обычные 90 с хватает не всегда. Задача шлёт heartbeat — 5 минут запаса.
 CHAT_TIMEOUT_SECONDS = 150
 TOOL_RESULT_LIMIT = 12_000
@@ -88,9 +90,55 @@ def _for_ai(value):
     return value
 
 
+_CUT_NOTE = "… ещё {n} — не показаны: ответ слишком большой"
+
+
+def _fit_lists(value, limit: int) -> tuple[object, int] | None:
+    """Укорачивает самые длинные списки, пока JSON не влезет в limit. JSON остаётся целым, в конце
+    укороченного списка — строка «… ещё N». → (значение, сколько строк убрано) или None — не вышло."""
+    value = _jsonable(value)
+    removed = 0
+    for _ in range(40):
+        total = len(json.dumps(value, ensure_ascii=False))
+        if total <= limit:
+            return value, removed
+        # Самый «тяжёлый» список, где ещё есть что убрать.
+        best, best_size = None, 0
+        stack = [value]
+        while stack:
+            node = stack.pop()
+            items = node.values() if isinstance(node, dict) else node if isinstance(node, list) else ()
+            if isinstance(node, list):
+                real = [x for x in node if not (isinstance(x, str) and x.startswith("… ещё "))]
+                size = len(json.dumps(node, ensure_ascii=False))
+                if len(real) > 1 and size > best_size:
+                    best, best_size = node, size
+            stack.extend(x for x in items if isinstance(x, (dict, list)))
+        if best is None:
+            return None
+        real = [x for x in best if not (isinstance(x, str) and x.startswith("… ещё "))]
+        hidden = len(best) - len(real)
+        prev = int(best[-1].split()[2]) if hidden else 0
+        # Сколько строк убрать, чтобы влезть: по среднему размеру строки списка, но не больше половины за раз.
+        per_item = best_size / len(real)
+        keep = max(1, len(real) // 2, len(real) - math.ceil((total - limit) / per_item) - 1)
+        removed += len(real) - keep
+        best[:] = [*real[:keep], _CUT_NOTE.format(n=prev + len(real) - keep)]
+    return None
+
+
 def _dump(value, limit: int = TOOL_RESULT_LIMIT) -> str:
     text = json.dumps(_for_ai(value), ensure_ascii=False, default=str)
     if len(text) > limit:
+        fitted = _fit_lists(_for_ai(value), limit - 300)
+        if fitted is not None:
+            data, removed = fitted
+            note = (
+                f"ответ сокращён: из списков убрано {removed} строк (см. «… ещё N»). Об убранном выводов не "
+                "делай — запроси по частям или скажи, что видел не всё"
+            )
+            data = {"_сокращено": note, **data} if isinstance(data, dict) else {"_сокращено": note, "items": data}
+            return json.dumps(data, ensure_ascii=False)
         text = (
             text[:limit] + f"… [ответ обрезан: показано {limit} из {len(text)} знаков — об остальном выводов не "
             "делай, запроси по частям или скажи, что видел не всё]"
@@ -656,9 +704,52 @@ def _t_actions(ctx: Context, args: dict) -> dict:
     }
 
 
+def _options_for_ai() -> dict:
+    """Справочник кампаний для модели — без повторов: форма получает его целиком (~16 тыс. знаков, ответ
+    обрезался), модели хватает стратегий один раз, параметров ключами и отличий по типам кампаний."""
+    full = campaign_options()
+    labels: dict[str, str] = {}
+
+    def strategies(items: list[dict]) -> list[dict]:
+        out = []
+        for s in items:
+            for p in s.get("params") or []:
+                labels[p["key"]] = p["label"]
+            params = [p["key"] + ("*" if p["required"] else "") for p in s.get("params") or []]
+            out.append({"id": s["id"], "label": s["label"], **({"params": params} if params else {})})
+        return out
+
+    base = strategies(full["search_strategies"])
+    auto_ids = [s["id"] for s in full["search_strategies"] if not s.get("manual") and s["id"] != "SERVING_OFF"]
+    networks: dict[str, list[str]] = {}
+    for search, allowed in full["network_by_search"].items():
+        ids = [n["id"] for n in allowed]
+        networks[search] = ["любая автостратегия из search_strategies"] if ids == auto_ids else ids
+    by_type: dict[str, list[dict]] = {}
+    for kind, spec in full["by_type"].items():
+        diff = [s for s in strategies(spec["search_strategies"]) if s not in base]
+        if diff:
+            by_type[kind] = diff
+    return {
+        "types": full["types"],
+        "search_strategies": base,
+        "params": {**labels, "*": "обязательный параметр"},
+        "network_by_search": {
+            **networks,
+            "_": "AUTO — при автостратегии на поиске; ключ — стратегия поиска, значение — допустимые в сетях",
+        },
+        "search_strategies_differ_by_type": by_type,
+        "settings": full["settings"],
+        "attribution_models": full["attribution_models"],
+        "schedule_presets": full["schedule_presets"],
+        "min_daily_budget_rub": full["min_daily_budget_rub"],
+        "min_weekly_budget_rub": full["min_weekly_budget_rub"],
+    }
+
+
 def _t_options(ctx: Context, args: dict) -> dict:
     return {
-        "options": campaign_options(),
+        "options": _options_for_ai(),
         "accounts": [
             {
                 "id": a["id"],
@@ -5627,6 +5718,8 @@ def _chat_out(row: dict) -> dict:
         "updated_at": _iso(updated),
         "pending_actions": int(row.get("pending_actions") or 0),
         "model_class": row.get("model_class") or "",
+        "pinned": row.get("pinned_at") is not None,
+        "archived": row.get("archived_at") is not None,
     }
 
 
@@ -6818,17 +6911,37 @@ _CHAT_SELECT = """
 """
 
 
-def list_chats(user_id: int, workspace_id: int | None) -> list[dict]:
-    """Чаты проекта; workspace_id None — общие чаты по всем проектам."""
+def list_chats(user_id: int, workspace_id: int | None, *, archived: bool = False) -> list[dict]:
+    """Чаты проекта; workspace_id None — общие чаты по всем проектам.
+
+    Без archived — чаты не из архива, закреплённые первыми (новые закреплённые выше); archived — только архив.
+    """
     if workspace_id is not None:
         require_workspace(user_id, workspace_id)
+    order = "ch.archived_at DESC" if archived else "ch.pinned_at DESC NULLS LAST"
     with pool.connection() as conn:
         rows = conn.execute(
             _CHAT_SELECT
-            + " WHERE ch.user_id = %s AND ch.workspace_id IS NOT DISTINCT FROM %s ORDER BY ch.updated_at DESC, ch.id DESC",
+            + " WHERE ch.user_id = %s AND ch.workspace_id IS NOT DISTINCT FROM %s"
+            + f" AND ch.archived_at IS {'NOT ' if archived else ''}NULL"
+            + f" ORDER BY {order}, ch.updated_at DESC, ch.id DESC",
             (user_id, workspace_id),
         ).fetchall()
     return [_chat_out(r) for r in rows]
+
+
+def archived_count(user_id: int, workspace_id: int | None) -> int:
+    """Сколько чатов раздела в архиве — для ссылки «Архив» внизу списка."""
+    with pool.connection() as conn:
+        return int(
+            conn.execute(
+                """
+                SELECT COUNT(*) AS n FROM ai_chats
+                WHERE user_id = %s AND workspace_id IS NOT DISTINCT FROM %s AND archived_at IS NOT NULL
+                """,
+                (user_id, workspace_id),
+            ).fetchone()["n"]
+        )
 
 
 SEARCH_MIN = 2
@@ -6865,11 +6978,12 @@ def _snippet(text: str, q: str) -> str:
     return ("…" if start else "") + plain[start:end] + ("…" if end < len(plain) else "")
 
 
-def search_chats(user_id: int, workspace_id: int | None, q: str) -> list[dict]:
+def search_chats(user_id: int, workspace_id: int | None, q: str, *, archived: bool = False) -> list[dict]:
     """
     Поиск по чатам раздела: название и текст реплик пользователя и ответов ИИ (служебные ответы инструментов
     не ищутся). У каждого чата — match: последнее найденное сообщение и отрывок вокруг слова; нашлось только
     название — match без message_id. Подстрока через ILIKE: чатов у одного человека немного.
+    Архив — отдельно: без archived ищем вне архива, с archived — только в нём.
     """
     q = re.sub(r"\s+", " ", q or "").strip()
     if len(q) < SEARCH_MIN:
@@ -6892,11 +7006,12 @@ def search_chats(user_id: int, workspace_id: int | None, q: str) -> list[dict]:
                    (SELECT COUNT(*) FROM ai_actions a WHERE a.chat_id = ch.id AND a.status = 'pending') AS pending_actions
             FROM ai_chats ch LEFT JOIN hits h ON h.chat_id = ch.id
             WHERE ch.user_id = %(user)s AND ch.workspace_id IS NOT DISTINCT FROM %(ws)s
+              AND (ch.archived_at IS NOT NULL) = %(archived)s
               AND (ch.title ILIKE %(like)s OR h.chat_id IS NOT NULL)
             ORDER BY ch.updated_at DESC, ch.id DESC
             LIMIT %(limit)s
             """,
-            {"user": user_id, "ws": workspace_id, "like": like, "limit": SEARCH_LIMIT},
+            {"user": user_id, "ws": workspace_id, "like": like, "limit": SEARCH_LIMIT, "archived": bool(archived)},
         ).fetchall()
     out = []
     for r in rows:
@@ -6970,6 +7085,8 @@ def set_chat_model(user_id: int, chat_id: int, model_class: str) -> dict:
 def get_chat(user_id: int, chat_id: int) -> dict:
     with pool.connection() as conn:
         _require_chat(conn, user_id, chat_id)
+        # Карточка «выполняется» после падения процесса иначе висела бы вечно.
+        _recover_stale_actions(conn, chat_id)
         chat = conn.execute(_CHAT_SELECT + " WHERE ch.id = %s", (chat_id,)).fetchone()
         messages = conn.execute(
             """
@@ -7020,6 +7137,77 @@ def rename_chat(user_id: int, chat_id: int, title: str) -> dict:
         conn.execute("UPDATE ai_chats SET title = %s WHERE id = %s", ((title or "").strip()[:120], chat_id))
         row = conn.execute(_CHAT_SELECT + " WHERE ch.id = %s", (chat_id,)).fetchone()
     return _chat_out(row)
+
+
+def pin_chat(user_id: int, chat_id: int, pinned: bool) -> dict:
+    """Закрепить чат над остальными или открепить. Чат из архива закрепить нельзя — сначала вернуть."""
+    with pool.connection() as conn:
+        chat = _require_chat(conn, user_id, chat_id, lock=True)
+        if pinned and chat["archived_at"] is not None:
+            raise YandexError("archived", "Чат в архиве — сначала верните его")
+        conn.execute(
+            "UPDATE ai_chats SET pinned_at = CASE WHEN %s THEN COALESCE(pinned_at, NOW()) END WHERE id = %s",
+            (bool(pinned), chat_id),
+        )
+        row = conn.execute(_CHAT_SELECT + " WHERE ch.id = %s", (chat_id,)).fetchone()
+    return _chat_out(row)
+
+
+ARCHIVE_PENDING = ("reject", "keep")
+
+
+def archive_chat(user_id: int, chat_id: int, archived: bool, pending: str = "") -> dict:
+    """
+    Убрать чат в архив или вернуть. Закрепление при уходе в архив снимается.
+
+    Если в чате ждут решения предложения, без ответа «что с ними делать» в архив не уходит (код
+    chat-pending): pending="reject" — отклонить их тихо (модель получает отказ, нового ответа ИИ нет),
+    "keep" — оставить ждать: они остаются в «Ждёт решения», чат открывается оттуда.
+    """
+    with pool.connection() as conn:
+        chat = _require_chat(conn, user_id, chat_id, lock=True)
+        if not archived:
+            conn.execute("UPDATE ai_chats SET archived_at = NULL WHERE id = %s", (chat_id,))
+        else:
+            if _chat_out(chat)["status"] == "running":
+                raise YandexError("busy", "ИИ ещё отвечает — дождитесь ответа")
+            waiting = conn.execute(
+                "SELECT COUNT(*) AS n FROM ai_actions WHERE chat_id = %s AND status = 'pending'", (chat_id,)
+            ).fetchone()["n"]
+            if waiting and pending not in ARCHIVE_PENDING:
+                raise YandexError(
+                    "chat-pending", f"В чате ждут решения предложения ({waiting}) — отклонить их или оставить ждать?"
+                )
+            if waiting and pending == "reject":
+                _reject_quietly(conn, chat_id, "Пользователь убрал чат в архив и отклонил действие")
+            conn.execute(
+                "UPDATE ai_chats SET archived_at = COALESCE(archived_at, NOW()), pinned_at = NULL WHERE id = %s",
+                (chat_id,),
+            )
+        row = conn.execute(_CHAT_SELECT + " WHERE ch.id = %s", (chat_id,)).fetchone()
+    return _chat_out(row)
+
+
+def _reject_quietly(conn, chat_id: int, reason: str) -> int:
+    """Все ждущие карточки чата — отклонены, модели — отказ результатом вызова; ход не запускаем."""
+    rows = conn.execute(
+        """
+        UPDATE ai_actions SET status = 'rejected', decided_at = NOW()
+        WHERE chat_id = %s AND status = 'pending' RETURNING *
+        """,
+        (chat_id,),
+    ).fetchall()
+    for r in sorted(rows, key=lambda r: r["id"]):
+        _insert_message(
+            conn,
+            chat_id,
+            "tool",
+            json.dumps({"ok": False, "error": reason}, ensure_ascii=False),
+            tool_call_id=r["tool_call_id"],
+            tool_name=r["tool"],
+            meta={"detached": True} if r["detached_at"] else None,
+        )
+    return len(rows)
 
 
 def delete_chat(user_id: int, chat_id: int) -> None:
@@ -7482,9 +7670,10 @@ def post_message(
             ai_attachments.link(
                 conn, [i["id"] for i in images], chat_id=chat_id, workspace_id=chat["workspace_id"], message_id=message["id"]
             )
+        # Новое сообщение возвращает чат из архива.
         conn.execute(
             """
-            UPDATE ai_chats SET status = 'running', error = '', updated_at = NOW(),
+            UPDATE ai_chats SET status = 'running', error = '', updated_at = NOW(), archived_at = NULL,
                    title = CASE WHEN title = '' THEN %s ELSE title END
             WHERE id = %s
             """,
@@ -8235,6 +8424,13 @@ def _history(
     rows = rows[start:]
     # Что было до последней реплики маркетолога — прошлый ход: чтения оттуда укорачиваем.
     last_user = max((i for i, r in enumerate(rows) if r["role"] == "user"), default=-1)
+    # Долгий ход (одобрения не начинают новый) копит десятки тысяч знаков чтений — старые шаги хода
+    # тоже укорачиваем. Срезаем пачками по FULL_TURN_STEPS: граница сдвигается раз в несколько шагов,
+    # и начало запроса остаётся тем же — кэш провайдера им пользуется. Полными — последние 3–5 шагов.
+    turn_steps = [i for i, r in enumerate(rows) if i > last_user and r["role"] == "assistant" and r.get("tool_calls")]
+    over = len(turn_steps) - FULL_TURN_STEPS
+    cut = (over // FULL_TURN_STEPS) * FULL_TURN_STEPS if over > 0 else 0
+    old_steps = set(turn_steps[:cut])
     with_images = [r["id"] for r in rows if r["role"] == "user" and (r.get("meta") or {}).get("attachments")]
     shown_ids = set(with_images[-HISTORY_IMAGE_MESSAGES:]) if images else set()
     pictures = ai_attachments.data_urls(
@@ -8264,7 +8460,7 @@ def _history(
                 j += 1
             for c in calls:
                 content = answered.get(c["id"], json.dumps({"ok": False, "error": "нет результата"}, ensure_ascii=False))
-                if i < last_user and c["name"] in READ_TOOLS:
+                if (i < last_user or i in old_steps) and c["name"] in READ_TOOLS:
                     content = _shorten_result(content)
                 out.append({"role": "tool", "tool_call_id": c["id"], "content": content})
             out += board_notes(rows[j - 1]["id"])
@@ -8317,7 +8513,51 @@ def _touch(chat_id: int) -> None:
         conn.execute("UPDATE ai_chats SET updated_at = NOW() WHERE id = %s", (chat_id,))
 
 
+STALE_ACTION_ERROR = (
+    "Выполнение прервалось (перезапуск сервера) — неизвестно, дошло ли изменение до Директа. "
+    "Проверь текущее состояние, прежде чем предлагать это снова"
+)
+
+
+def _recover_stale_actions(conn, chat_id: int) -> int:
+    """Одобренное, которое давно начато или давно одобрено и не начато, — ошибкой, с заметкой модели.
+
+    Процесс мог упасть посреди выполнения: без этого действие оставалось «approved», и следующий ход
+    выполнял его ещё раз (вторая копия кампании). → сколько закрыто.
+    """
+    rows = conn.execute(
+        """
+        UPDATE ai_actions SET status = 'error', error = %s
+        WHERE chat_id = %s AND status = 'approved'
+          AND COALESCE(started_at, decided_at, created_at) < NOW() - %s
+        RETURNING *
+        """,
+        (STALE_ACTION_ERROR, chat_id, STALE_RUNNING),
+    ).fetchall()
+    for r in rows:
+        _insert_message(
+            conn,
+            chat_id,
+            "tool",
+            json.dumps({"ok": False, "error": STALE_ACTION_ERROR}, ensure_ascii=False),
+            tool_call_id=r["tool_call_id"],
+            tool_name=r["tool"],
+            meta={"detached": True} if r["detached_at"] else None,
+        )
+    return len(rows)
+
+
 def _run_action(ctx: Context, action: dict) -> None:
+    # Метка начала — до вызова Директа; взять одобренное может только один ход.
+    with pool.connection() as conn:
+        claimed = conn.execute(
+            "UPDATE ai_actions SET started_at = NOW() WHERE id = %s AND status = 'approved' AND started_at IS NULL"
+            " RETURNING id",
+            (action["id"],),
+        ).fetchone()
+    if claimed is None:
+        log.warning("ИИ-действие %s уже выполняется или закрыто — пропускаю", action["id"])
+        return
     _prepare, execute = WRITE_TOOLS[action["tool"]]
     args = dict(action["args"] or {})
     args.pop("_diff", None)
@@ -8345,6 +8585,9 @@ def _run_action(ctx: Context, action: dict) -> None:
     finally:
         ctx.action = None
     with pool.connection() as conn:
+        # Если действие успели закрыть как прерванное, модель уже получила ответ на вызов —
+        # настоящий итог уйдёт ей служебной заметкой.
+        late = conn.execute("SELECT status FROM ai_actions WHERE id = %s", (action["id"],)).fetchone()["status"] != "approved"
         conn.execute(
             "UPDATE ai_actions SET status = %s, result = %s, error = %s WHERE id = %s",
             (status, Jsonb(_jsonable(_for_ai(result))) if result is not None else None, error, action["id"]),
@@ -8357,7 +8600,7 @@ def _run_action(ctx: Context, action: dict) -> None:
             _dump(payload),
             tool_call_id=action["tool_call_id"],
             tool_name=action["tool"],
-            meta={"detached": True} if action.get("detached_at") else None,
+            meta={"detached": True} if action.get("detached_at") or late else None,
         )
 
 
@@ -8618,8 +8861,10 @@ def run_chat(user_id: int, chat_id: int, progress=None) -> dict:
 
     with acting_as("ai"):
         with pool.connection() as conn:
+            _recover_stale_actions(conn, chat_id)
             approved = conn.execute(
-                "SELECT * FROM ai_actions WHERE chat_id = %s AND status = 'approved' ORDER BY id", (chat_id,)
+                "SELECT * FROM ai_actions WHERE chat_id = %s AND status = 'approved' AND started_at IS NULL ORDER BY id",
+                (chat_id,),
             ).fetchall()
         for action in approved:
             step(0, "Выполняю одобренные действия…")

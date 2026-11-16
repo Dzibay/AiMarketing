@@ -444,6 +444,21 @@ with pool.connection() as conn:
         f"(hash {ai_attachments.pseudo_hash(files[1]['id'])}) — в библиотеку кабинета он загрузится после «Выполнить».",
     )
 
+# Закреплённый чат минус-слов и два старых чата в архиве — группа «Закреплённые» и ссылка «Архив» в списке.
+with pool.connection() as conn:
+    conn.execute("UPDATE ai_chats SET pinned_at = NOW() WHERE id = %s", (chats[1],))
+    for days, title, question in ((40, "Бюджет на 8 Марта", "Сколько поднять бюджет к 8 Марта?"),
+                                  (55, "Ставки в РСЯ", "Почему дорогие клики в РСЯ?")):
+        old = conn.execute(
+            """
+            INSERT INTO ai_chats (user_id, workspace_id, title, status, updated_at, archived_at)
+            VALUES (%s, %s, %s, 'idle', NOW() - make_interval(days => %s), NOW() - make_interval(days => %s))
+            RETURNING id
+            """,
+            (uid, ws_r, title, days, days - 5),
+        ).fetchone()["id"]
+        ai_agent._insert_message(conn, old, "user", question)
+
 env.TOKEN_FILE.write_text(make_session(uid), encoding="utf-8")
 env.save_stand({
     "user_id": uid,

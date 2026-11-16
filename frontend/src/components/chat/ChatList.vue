@@ -1,22 +1,26 @@
 <template>
-  <aside class="chat__side" :class="{ 'is-open': open }" :aria-label="general ? 'Общие чаты' : 'Чаты проекта'">
+  <!-- role="dialog", пока открыт: выезжает поверх чата, и подсказки-коучи под ним прячутся. -->
+  <aside class="chat__side" :class="{ 'is-open': open }" :role="open ? 'dialog' : undefined" :aria-label="general ? 'Общие чаты' : 'Чаты проекта'">
     <div class="chat__side-head">
-      <strong>{{ general ? 'Общие чаты' : 'Чаты проекта' }}</strong>
+      <button v-if="inArchive" class="chat__side-back" type="button" aria-label="Назад к чатам" @click="leaveArchive">
+        <ArrowLeft aria-hidden="true" />
+      </button>
+      <strong>{{ inArchive ? 'Архив' : general ? 'Общие чаты' : 'Чаты проекта' }}</strong>
       <button ref="closeButton" class="chat__side-x" type="button" aria-label="Закрыть список чатов" @click="emit('close')">
         <X aria-hidden="true" />
       </button>
     </div>
-    <button class="btn btn--accent chat__new" type="button" :disabled="sending" @click="emit('new')">
+    <button v-if="!inArchive" class="btn btn--accent chat__new" type="button" :disabled="sending" @click="emit('new')">
       <Plus aria-hidden="true" />
       Новый чат
     </button>
-    <label v-if="chats.length || query" class="chat-search">
+    <label v-if="shown.length || query" class="chat-search">
       <Search aria-hidden="true" />
       <input
         v-model="query"
         type="search"
-        placeholder="Найти в чатах"
-        aria-label="Найти в чатах"
+        :placeholder="inArchive ? 'Найти в архиве' : 'Найти в чатах'"
+        :aria-label="inArchive ? 'Найти в архиве' : 'Найти в чатах'"
         maxlength="100"
         @keydown.esc.stop="query = ''"
       />
@@ -43,6 +47,27 @@
         </RouterLink>
       </nav>
     </template>
+    <template v-else-if="inArchive">
+      <p v-if="archived === null" class="hint" role="status">Загружаем…</p>
+      <p v-else-if="archiveError" class="hint">{{ archiveError }}</p>
+      <p v-else-if="!archived.length" class="hint">В архиве пусто.</p>
+      <nav v-else class="chat__list" aria-label="Чаты в архиве">
+        <RouterLink
+          v-for="c in archived"
+          :key="c.id"
+          :to="`${basePath}/${c.id}`"
+          class="chat__item"
+          :class="{ active: c.id === chatId }"
+          @click="emit('close')"
+        >
+          <span class="chat__item-title">{{ c.title }}</span>
+          <small>
+            <span v-if="c.pending_actions" class="chat__item-wait">ждёт решения: {{ c.pending_actions }}</span>
+            {{ formatDateTime(c.updated_at) }}
+          </small>
+        </RouterLink>
+      </nav>
+    </template>
     <p v-else-if="chatsError" class="hint">{{ chatsError }}</p>
     <p v-else-if="!chats.length" class="hint">Чатов пока нет.</p>
     <nav v-else class="chat__list" aria-label="Чаты">
@@ -65,12 +90,18 @@
         </RouterLink>
       </section>
     </nav>
+    <!-- Архив — внизу: в списке, меню слева и поиске его чатов нет. -->
+    <button v-if="!inArchive && !searching && archivedCount" class="chat__archive-link" type="button" @click="openArchive">
+      <Archive aria-hidden="true" />
+      <span>Архив</span>
+      <span class="chat__archive-n">{{ archivedCount }}</span>
+    </button>
   </aside>
   <div v-if="open" class="chat-backdrop" @click="emit('close')" />
 </template>
 
 <script setup>
-import { Plus, Search, X } from '@lucide/vue'
+import { Archive, ArrowLeft, Plus, Search, X } from '@lucide/vue'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { RouterLink } from 'vue-router'
 import { aiApi, errorText } from '../../api/web'
@@ -87,10 +118,36 @@ const props = defineProps({
 // close — закрыть панель (крестик, затемнение, Esc); new — «Новый чат».
 const emit = defineEmits(['close', 'new'])
 
-const { general, ws, basePath, chats, chatsError, chatId, sending } = useChat()
+const { general, ws, basePath, chats, chatsError, archivedCount, archivedChats, chatId, sending } = useChat()
 const closeButton = ref(null)
 
-// Ждут решения · Сегодня · Вчера · На этой неделе · В этом месяце · Раньше.
+// --- Архив: тот же список, вместо обычных чатов ---
+const inArchive = ref(false)
+const archived = ref(null) // null — ещё загружается
+const archiveError = ref('')
+// Что сейчас в списке: от этого зависит, показывать ли поиск.
+const shown = computed(() => (inArchive.value ? archived.value || [] : chats.value))
+
+async function openArchive() {
+  inArchive.value = true
+  query.value = ''
+  archived.value = null
+  archiveError.value = ''
+  try {
+    archived.value = (await archivedChats()).items || []
+  } catch (err) {
+    archiveError.value = errorText(err)
+    archived.value = []
+  }
+}
+
+function leaveArchive() {
+  inArchive.value = false
+  query.value = ''
+  nextTick(() => closeButton.value?.focus())
+}
+
+// Закреплённые · Ждут решения · Сегодня · Вчера · На этой неделе · В этом месяце · Раньше.
 const groups = computed(() => groupChats(chats.value))
 
 // --- Поиск ---
@@ -110,7 +167,7 @@ watch(term, (q) => {
   if (q.length < 2) return
   searchTimer = setTimeout(async () => {
     try {
-      const res = await aiApi.searchChats(general ? null : ws.value.id, q)
+      const res = await aiApi.searchChats(general ? null : ws.value.id, q, inArchive.value)
       if (seq === searchSeq) found.value = res.items
     } catch (err) {
       if (seq !== searchSeq) return
@@ -143,6 +200,11 @@ watch(
   () => props.open,
   (open) => {
     if (open) nextTick(() => closeButton.value?.focus())
+    // Закрыли панель — в следующий раз она открывается обычным списком.
+    else if (inArchive.value) {
+      inArchive.value = false
+      query.value = ''
+    }
   },
 )
 

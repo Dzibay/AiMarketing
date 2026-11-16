@@ -147,15 +147,19 @@ export function dateGroup(iso, now = new Date()) {
 }
 
 /**
- * Чаты по группам: «Ждут решения» (есть действия на согласовании) первыми, остальные — по давности updated_at.
- * Порядок внутри группы — как пришёл с сервера. Пустые группы не возвращаются.
+ * Чаты по группам: «Закреплённые» первыми, затем «Ждут решения» (есть действия на согласовании), остальные —
+ * по давности updated_at. Порядок внутри группы — как пришёл с сервера. Пустые группы не возвращаются.
  */
 export function groupChats(chats, now = new Date()) {
-  const waiting = chats.filter((c) => c.pending_actions > 0)
-  const groups = [{ key: 'waiting', title: 'Ждут решения', items: waiting }]
+  const pinned = chats.filter((c) => c.pinned)
+  const loose = chats.filter((c) => !c.pinned)
+  const groups = [
+    { key: 'pinned', title: 'Закреплённые', items: pinned },
+    { key: 'waiting', title: 'Ждут решения', items: loose.filter((c) => c.pending_actions > 0) },
+  ]
   for (const g of DATE_GROUPS) groups.push({ ...g, items: [] })
   const byKey = Object.fromEntries(groups.map((g) => [g.key, g]))
-  for (const c of chats) if (!(c.pending_actions > 0)) byKey[dateGroup(c.updated_at, now)].items.push(c)
+  for (const c of loose) if (!(c.pending_actions > 0)) byKey[dateGroup(c.updated_at, now)].items.push(c)
   return groups.filter((g) => g.items.length)
 }
 

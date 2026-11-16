@@ -1,6 +1,6 @@
 import { computed, inject, nextTick, onBeforeUnmount, onMounted, provide, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { aiApi, errorText } from '../api/web'
+import { CHATS_EVENT, aiApi, errorText } from '../api/web'
 import { useAnswerWatch } from './useAnswerWatch'
 import { readNotificationsAt, refreshPending } from './usePending'
 import { pushToast } from './useToasts'
@@ -110,6 +110,8 @@ export function provideChat({ general, ws, basePath, reloadWs, panel = false, pa
 
   const chats = ref([])
   const chatsError = ref('')
+  // Сколько чатов раздела в архиве — ссылка «Архив» внизу списка.
+  const archivedCount = ref(0)
   const data = ref(null)
   const loadError = ref('')
   const aiConfigured = ref(true)
@@ -459,9 +461,17 @@ export function provideChat({ general, ws, basePath, reloadWs, panel = false, pa
     try {
       const res = general ? await aiApi.generalChats() : await aiApi.chats(ws.value.id)
       chats.value = res.items || []
+      archivedCount.value = res.archived_count || 0
     } catch (err) {
       chatsError.value = errorText(err)
     }
+  }
+
+  /** Чаты из архива раздела { items } — для списка «Архив»; q — поиск в нём. */
+  function archivedChats(q = '') {
+    const wsId = general ? null : ws.value.id
+    if (q) return aiApi.searchChats(wsId, q, true)
+    return general ? aiApi.generalChats(true) : aiApi.chats(wsId, true)
   }
 
   /** Что прокручивается: лента сама — рядом с доской, иначе вся страница (поле ввода прилипает к низу окна). */
@@ -744,6 +754,35 @@ export function provideChat({ general, ws, basePath, reloadWs, panel = false, pa
     const updated = await aiApi.renameChat(chat.value.id, title)
     data.value = { ...data.value, chat: updated }
     chats.value = chats.value.map((c) => (c.id === updated.id ? updated : c))
+    chatsChanged()
+  }
+
+  function chatsChanged() {
+    window.dispatchEvent(new Event(CHATS_EVENT))
+  }
+
+  /** Закрепить открытый чат или открепить. Ошибку показывает тот, кто вызвал. */
+  async function pinChat(pinned) {
+    const updated = await aiApi.pinChat(chat.value.id, pinned)
+    data.value = { ...data.value, chat: updated }
+    await loadChats()
+    chatsChanged()
+  }
+
+  /**
+   * Чат (по умолчанию открытый) в архив или обратно. pending — что делать с ждущими предложениями
+   * (reject | keep); при отклонении карточки в ленте закрываются — чат перечитываем.
+   * Ошибку показывает тот, кто вызвал.
+   */
+  async function archiveChat(archived, pending = '', id = chat.value?.id) {
+    const updated = await aiApi.archiveChat(id, archived, pending)
+    if (pending) refreshPending()
+    if (chat.value?.id === id) {
+      if (pending === 'reject') await loadChat(id, true)
+      else data.value = { ...data.value, chat: updated }
+    }
+    await loadChats()
+    chatsChanged()
   }
 
   /** Оценка ответа ИИ { rating, reasons?, comment? }: на сервере и в ленте. Ошибку показывает тот, кто вызвал. */
@@ -761,6 +800,7 @@ export function provideChat({ general, ws, basePath, reloadWs, panel = false, pa
     const id = chat.value.id
     await aiApi.deleteChat(id)
     chats.value = chats.value.filter((c) => c.id !== id)
+    chatsChanged()
   }
 
   // Пустой открытый чат или новый: вместо ленты — приветствие и подсказки.
@@ -830,6 +870,8 @@ export function provideChat({ general, ws, basePath, reloadWs, panel = false, pa
     // Список чатов и открытый чат
     chats,
     chatsError,
+    archivedCount,
+    archivedChats,
     chatId,
     chat,
     status,
@@ -900,6 +942,8 @@ export function provideChat({ general, ws, basePath, reloadWs, panel = false, pa
     loadChat,
     newChat,
     renameChat,
+    pinChat,
+    archiveChat,
     deleteChat,
   }
   provide(CHAT_KEY, ctx)

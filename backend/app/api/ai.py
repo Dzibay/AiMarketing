@@ -19,6 +19,15 @@ class ChatBody(BaseModel):
     model_class: str = ""
 
 
+class ChatPatchBody(BaseModel):
+    # Что не передано — не меняется.
+    title: str | None = None
+    pinned: bool | None = None
+    archived: bool | None = None
+    # В архив с ждущими предложениями: reject — отклонить, keep — оставить ждать (см. ai_agent.archive_chat).
+    pending: str = ""
+
+
 class ChatModelBody(BaseModel):
     # fast | standard | thinking; пусто — класс по умолчанию.
     model_class: str = ""
@@ -180,11 +189,19 @@ def ai_usage(user_id: int = Depends(require_web_user)) -> dict:
 
 
 @router.get("/workspaces/{workspace_id}/chats")
-def chats_list(workspace_id: int, q: str = "", user_id: int = Depends(require_web_user)) -> dict:
-    """Чаты проекта; q — поиск по названию и тексту сообщений."""
+def chats_list(
+    workspace_id: int, q: str = "", archived: bool = False, user_id: int = Depends(require_web_user)
+) -> dict:
+    """Чаты проекта; q — поиск по названию и тексту сообщений; archived — архив вместо обычного списка."""
+    return _chats(user_id, workspace_id, q, archived)
+
+
+def _chats(user_id: int, workspace_id: int | None, q: str, archived: bool) -> dict:
     if q.strip():
-        return {"items": _call(ai_agent.search_chats, user_id, workspace_id, q)}
-    return {"items": _call(ai_agent.list_chats, user_id, workspace_id)}
+        items = _call(ai_agent.search_chats, user_id, workspace_id, q, archived=archived)
+    else:
+        items = _call(ai_agent.list_chats, user_id, workspace_id, archived=archived)
+    return {"items": items, "archived_count": ai_agent.archived_count(user_id, workspace_id)}
 
 
 @router.post("/workspaces/{workspace_id}/chats")
@@ -232,11 +249,9 @@ def workspace_forget_fact(workspace_id: int, body: ForgetFactBody, user_id: int 
 
 
 @router.get("/ai/chats")
-def general_chats_list(q: str = "", user_id: int = Depends(require_web_user)) -> dict:
-    """Общие чаты по всем проектам; q — поиск по названию и тексту сообщений."""
-    if q.strip():
-        return {"items": _call(ai_agent.search_chats, user_id, None, q)}
-    return {"items": _call(ai_agent.list_chats, user_id, None)}
+def general_chats_list(q: str = "", archived: bool = False, user_id: int = Depends(require_web_user)) -> dict:
+    """Общие чаты по всем проектам; q — поиск по названию и тексту сообщений; archived — архив."""
+    return _chats(user_id, None, q, archived)
 
 
 @router.post("/ai/chats")
@@ -296,8 +311,16 @@ def chat_get(chat_id: int, user_id: int = Depends(require_web_user)) -> dict:
 
 
 @router.patch("/ai/chats/{chat_id}")
-def chat_rename(chat_id: int, body: ChatBody, user_id: int = Depends(require_web_user)) -> dict:
-    return _call(ai_agent.rename_chat, user_id, chat_id, body.title)
+def chat_patch(chat_id: int, body: ChatPatchBody, user_id: int = Depends(require_web_user)) -> dict:
+    """Название, закрепление, архив — что передано."""
+    out = None
+    if body.title is not None:
+        out = _call(ai_agent.rename_chat, user_id, chat_id, body.title)
+    if body.archived is not None:
+        out = _call(ai_agent.archive_chat, user_id, chat_id, body.archived, body.pending)
+    if body.pinned is not None:
+        out = _call(ai_agent.pin_chat, user_id, chat_id, body.pinned)
+    return out if out is not None else _call(ai_agent.get_chat, user_id, chat_id)["chat"]
 
 
 @router.put("/ai/chats/{chat_id}/model")

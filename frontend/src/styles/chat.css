@@ -1795,6 +1795,13 @@ a.aib-card:hover {
   margin-right: auto;
 }
 
+/* Чат в архиве: спокойная плашка вместо лаймовой. */
+.chat__pending--quiet {
+  background: var(--surface-2);
+  box-shadow: inset 0 0 0 1px var(--line);
+  font-weight: 500;
+}
+
 .composer {
   position: relative;
   padding: 12px 12px 10px 16px;
@@ -2412,7 +2419,8 @@ a.aib-card:hover {
   font-weight: 800;
 }
 
-.chat__side-x {
+.chat__side-x,
+.chat__side-back {
   appearance: none;
   display: grid;
   place-items: center;
@@ -2426,12 +2434,23 @@ a.aib-card:hover {
   cursor: pointer;
 }
 
-.chat__side-x:hover {
+.chat__side-x:hover,
+.chat__side-back:hover {
   background: var(--surface-2);
   color: var(--ink);
 }
 
-.chat__side-x svg {
+/* «Архив»: стрелка назад, название — сразу за ней, крестик справа. */
+.chat__side-back {
+  margin-left: -4px;
+}
+
+.chat__side-back + strong {
+  margin-right: auto;
+}
+
+.chat__side-x svg,
+.chat__side-back svg {
   width: 18px;
   height: 18px;
 }
@@ -2510,6 +2529,41 @@ a.aib-card:hover {
 .chat__item-wait {
   color: var(--ink);
   font-weight: 700;
+}
+
+/* Ссылка «Архив» внизу списка чатов. */
+.chat__archive-link {
+  appearance: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: auto;
+  padding: 9px 10px;
+  border: 0;
+  border-top: 1px solid var(--line);
+  border-radius: 0;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+
+.chat__archive-link:hover {
+  color: var(--ink);
+}
+
+.chat__archive-link svg {
+  width: 16px;
+  height: 16px;
+}
+
+.chat__archive-n {
+  margin-left: auto;
+  color: var(--faint);
+  font-variant-numeric: tabular-nums;
 }
 
 /* Поиск по чатам */
