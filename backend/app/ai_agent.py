@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import copy
+import functools
 import json
 import logging
 import math
@@ -415,7 +416,11 @@ class Context:
         found = {r["id"] for r in rows}
         missing = [i for i in ids if i not in found]
         if missing:
-            raise YandexError("not-found", f"{what} {missing} не найдены")
+            raise YandexError(
+                "not-found",
+                f"{what} {missing} не найдены. Номера строк не идут подряд и не совпадают с номерами Директа: "
+                "бери их только из ответов инструментов (get_campaign, list_ads), не подбирай",
+            )
         foreign = [r["id"] for r in rows if r["campaign_row_id"] not in allowed]
         if foreign:
             raise YandexError("scope", f"{what} {foreign} — из кампаний вне проекта")
@@ -843,6 +848,10 @@ def _t_wordstat(ctx: Context, args: dict) -> dict:
     out: dict = {"period": "последние 30 дней", "regions": regions or "все", "device": device, "items": items}
     if errors:
         out["errors"] = errors
+        out["hint"] = (
+            "Вордстат принимает только настоящие поисковые фразы, как их вводят люди: без шаблонов "
+            "(«проблема + решение», «опечатки бренда»), плюсов между словами и пояснений"
+        )
     if note:
         out["note"] = note
     return out
@@ -1251,7 +1260,8 @@ def _t_projects(ctx: Context, args: dict) -> dict:
 
 def _t_project(ctx: Context, args: dict) -> dict:
     """Профиль проекта: цель, KPI, бриф и то, что маркетолог о нём ответил. Статистика — инструменты с project_id."""
-    other = ctx.project(_int(args, "project_id"))
+    # В чате проекта без project_id — текущий проект.
+    other = ctx if not ctx.general and args.get("project_id") in (None, "") else ctx.project(_int(args, "project_id"))
     ws = other.ws
     brief = normalize_brief(ws.get("brief"))
     out: dict = {
@@ -1847,7 +1857,7 @@ def _check_spec_money(ctx: Context, spec: dict) -> None:
     if ctx.ws.get("goal_id") and not strategy.get("goal_id"):
         strategy["goal_id"] = ctx.ws["goal_id"]
     actions.build_bidding_strategy(strategy, str(spec.get("type") or "TEXT_CAMPAIGN").upper())
-    actions._priority_goals(spec.get("priority_goals"))
+    actions.check_multi_goals(strategy, actions._priority_goals(spec.get("priority_goals")))
 
 
 def _p_create_campaign(ctx: Context, args: dict) -> Plan:
@@ -8604,10 +8614,34 @@ def _run_action(ctx: Context, action: dict) -> None:
         )
 
 
+@functools.cache
+def _tool_props() -> dict[str, dict]:
+    """Имя инструмента → свойства его схемы (TOOLS и GENERAL_TOOLS)."""
+    out: dict[str, dict] = {}
+    for tool in [*TOOLS, *GENERAL_TOOLS]:
+        fn = tool.get("function") or {}
+        out.setdefault(fn.get("name"), (fn.get("parameters") or {}).get("properties") or {})
+    return out
+
+
 def _normalize_call(name: str, args: dict) -> dict:
     """Аргументы модели к виду, который ждут карточка и галочки: без служебных полей, списки — списками."""
     for key in ("_diff", "_items", "_removed"):  # служебные поля карточки, не от модели
         args.pop(key, None)
+    # Модель иногда пишет project_id: 0 вместо «без проекта» — это значит «текущий проект».
+    if "project_id" in args and str(args["project_id"]).strip() in ("", "0", "None", "null", "-1"):
+        args.pop("project_id")
+    # Объект или список, переданный JSON-строкой (spec: "{...}"), — разбираем по схеме инструмента.
+    props = _tool_props().get(name) or {}
+    for key, value in list(args.items()):
+        kind = (props.get(key) or {}).get("type")
+        if kind in ("object", "array") and isinstance(value, str) and value.strip()[:1] in ("{", "["):
+            try:
+                decoded = json.loads(value)
+            except ValueError:
+                continue
+            if isinstance(decoded, dict if kind == "object" else list):
+                args[key] = decoded
     if name in ("add_keywords", "add_campaign_negatives") and isinstance(args.get("phrases"), str):
         args["phrases"] = args["phrases"].splitlines()
     spec = args.get("spec")

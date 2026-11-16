@@ -111,6 +111,8 @@ def test_clean_retargeting_short_form():
 
 def test_clean_list_and_interests():
     assert audiences.clean_audience({"name": "LAL", "list_id": "501"}) == {"type": "list", "name": "LAL", "list_id": 501}
+    # Условие кабинета без названия — название из его номера.
+    assert audiences.clean_audience({"type": "list", "list_id": 7})["name"] == "Условие кабинета №7"
     # Полный id справочника (10 + ключ) — тот же интерес, повторы убираются.
     aud = audiences.clean_audience({"name": "Х", "interest_ids": ["100000000007", 7, 8]}, name="Путешественники")
     assert aud == {"type": "interests", "name": "Путешественники", "interest_ids": [7, 8]}
@@ -120,7 +122,7 @@ def test_clean_list_and_interests():
     "raw, text",
     [
         ("ретаргетинг", "объект"),
-        ({"type": "list", "list_id": 1}, "нет названия"),
+        ({"type": "retargeting", "goal_ids": [1]}, "нет названия"),
         ({"type": "lal", "name": "А"}, "retargeting, list, interests или lookalike"),
         ({"type": "lookalike", "name": "А"}, "источник LAL — одно из goal_id"),
         ({"name": "А", "source": {"goal_id": 1, "counter_id": 2}}, "источник LAL — одно из goal_id"),

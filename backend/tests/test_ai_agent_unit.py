@@ -822,8 +822,8 @@ def test_project_profile_is_compact_and_has_no_secrets():
     assert out["brief"] == {"product": "Статьи", "geo": "Москва", "not_ours": ["вакансии"]}
     assert out["answers"] == [{"question": "Что успех?", "answer": "Заявки дешевле 400 ₽"}]
     assert out["notes"] == "Сезон — осень"
-    with pytest.raises(YandexError):
-        ai_agent._t_project(ctx, {})
+    # В чате проекта без project_id — профиль текущего проекта.
+    assert ai_agent._t_project(ctx, {})["project_id"] == ctx.ws_id
 
 
 def test_refs_note_names_projects_with_ids():

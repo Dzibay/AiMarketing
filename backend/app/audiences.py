@@ -391,6 +391,9 @@ def clean_audience(raw, *, name: str | None = None) -> dict:
     if not isinstance(raw, dict):
         raise YandexError("args", "Аудитория — объект {type, name, …}")
     title = " ".join(str(name if name is not None else raw.get("name") or "").split())[:NAME_MAX]
+    if not title and _int(raw.get("list_id")) is not None and str(raw.get("type") or "list").strip().lower() == "list":
+        # Готовое условие кабинета модель часто передаёт одним номером — название по нему.
+        title = f"Условие кабинета №{_int(raw.get('list_id'))}"
     if not title:
         raise YandexError("args", "У аудитории нет названия")
     kind = str(raw.get("type") or "").strip().lower()

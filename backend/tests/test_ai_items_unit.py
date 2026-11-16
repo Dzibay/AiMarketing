@@ -310,6 +310,27 @@ def test_normalize_call():
     assert ai_agent._normalize_call("add_keywords", {"phrases": "а\nб"}) == {"phrases": ["а", "б"]}
 
 
+def test_normalize_call_fixes_model_slips():
+    # project_id: 0 — «текущий проект», а не проект №0.
+    assert ai_agent._normalize_call("get_campaign", {"campaign_row_id": 5, "project_id": 0}) == {"campaign_row_id": 5}
+    assert ai_agent._normalize_call("get_campaign", {"campaign_row_id": 5, "project_id": 9})["project_id"] == 9
+    # spec строкой JSON — разбирается в объект и дальше нормализуется как обычно.
+    args = ai_agent._normalize_call("create_campaign", {"account_id": 3, "spec": '{"name": "X", "group": {"name": "А"}}'})
+    assert args["spec"] == {"name": "X", "groups": [{"name": "А"}]}
+    # Обычная строка там, где ждут строку, и битый JSON не трогаются.
+    assert ai_agent._normalize_call("create_campaign", {"spec": "{не json"})["spec"] == "{не json"
+
+
+def test_check_multi_goals():
+    from app import actions
+
+    actions.check_multi_goals({"search": "PAY_FOR_CONVERSION_MULTIPLE_GOALS"}, [{"goal_id": 1}, {"goal_id": 2}])
+    actions.check_multi_goals({"search": "PAY_FOR_CONVERSION"}, [{"goal_id": 1}])
+    with pytest.raises(YandexError) as err:
+        actions.check_multi_goals({"search": "PAY_FOR_CONVERSION_MULTIPLE_GOALS"}, [{"goal_id": 1}])
+    assert "от 2 ключевых целей" in err.value.message
+
+
 # --- Строки с галочками в карточке действия --------------------------------------------------------
 
 

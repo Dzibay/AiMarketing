@@ -553,6 +553,17 @@ def _priority_goals(values) -> list[dict]:
     return out
 
 
+def check_multi_goals(strategy: dict, goals: list) -> None:
+    """Стратегии *_MULTIPLE_GOALS Директ принимает только с 2+ ключевыми целями — иначе ошибка уже после всего остального."""
+    kinds = [str(strategy.get(k) or "").upper() for k in ("search", "network")]
+    if any(k.endswith("_MULTIPLE_GOALS") for k in kinds) and len(goals) < 2:
+        raise YandexError(
+            "goals",
+            f"Стратегии по нескольким целям нужно от 2 ключевых целей в priority_goals (сейчас {len(goals)}). "
+            "Для одной цели — PAY_FOR_CONVERSION или AVERAGE_CPA с goal_id",
+        )
+
+
 # --- Создание ----------------------------------------------------------------------------------
 
 
@@ -616,6 +627,7 @@ def create_campaign(user_id: int, *, account_id: int, spec: dict, workspace_id: 
     if counters:
         block["CounterIds"] = {"Items": counters}
     goals = _priority_goals(spec.get("priority_goals"))
+    check_multi_goals(strategy, goals)
     if goals:
         block["PriorityGoals"] = {"Items": goals}
     attribution = attribution_for_api(spec.get("attribution_model"))
