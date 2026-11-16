@@ -165,10 +165,9 @@ import Modal from '../../components/ui/Modal.vue'
 import { adminApi } from '../../api/admin'
 import { errorText } from '../../api/web'
 import { askConfirm } from '../../composables/useConfirm'
+import { reloadAdminSummary } from '../../composables/useAdminSummary'
 import { pushToast } from '../../composables/useToasts'
 import { num, rubles } from '../../utils/format'
-
-const emit = defineEmits(['changed'])
 
 const loading = ref(true)
 const items = ref([])
@@ -271,7 +270,7 @@ async function save() {
     form.value = null
     pushToast('Тариф сохранён')
     await load()
-    emit('changed')
+    reloadAdminSummary()
   } catch (err) {
     error.value = errorText(err)
   } finally {
@@ -289,7 +288,7 @@ async function remove() {
     form.value = null
     pushToast('Тариф удалён')
     await load()
-    emit('changed')
+    reloadAdminSummary()
   } catch (err) {
     error.value = errorText(err)
   } finally {

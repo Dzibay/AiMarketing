@@ -46,8 +46,8 @@
 
       <h3 class="form-sub">ИИ-генераторы</h3>
       <p class="field-hint">
-        Кнопка «Подобрать с ИИ» в генераторах минус-слов и объявлений. Модель — та же, что у проверки сайта (раздел «ИИ и
-        сервисы»), расход — в «Расход» без пользователя. Сегодня: {{ num(data.tools.stats.today) }} · за 7 дней:
+        Кнопка «Подобрать с ИИ» в генераторах минус-слов и объявлений. Модель — та же, что у проверки сайта (Настройки → «Проверка
+        сайта»), расход — в «Расходах на ИИ» без пользователя. Сегодня: {{ num(data.tools.stats.today) }} · за 7 дней:
         {{ num(data.tools.stats.week) }}.
       </p>
       <UiCheckbox v-model="form.tools_enabled" class="check-row">
@@ -66,39 +66,6 @@
       </div>
     </form>
   </section>
-
-  <section class="panel" id="site-waitlist">
-    <div class="panel__head">
-      <h2>Лист ожидания</h2>
-      <span v-for="c in waitlist.channels" :key="c.id" class="chip">{{ c.label }}: {{ num(c.count) }}</span>
-    </div>
-    <p class="hint">Почты со страниц интеграций «скоро». Напишите им, когда раздел запустится.</p>
-    <p v-if="!waitlist.items.length" class="empty">Заявок пока нет.</p>
-    <div v-else v-scroll-x class="table-scroll">
-      <table class="table">
-        <thead>
-          <tr>
-            <th>Когда</th>
-            <th>Раздел</th>
-            <th>Почта</th>
-            <th></th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-for="w in waitlist.items" :key="w.id">
-            <td>{{ formatDateTime(w.created_at) }}</td>
-            <td>{{ w.label }}</td>
-            <td><a :href="`mailto:${w.email}`">{{ w.email }}</a></td>
-            <td>
-              <button class="btn btn--ghost btn--xs" type="button" :disabled="rowBusy === w.id" @click="remove(w)">
-                Удалить
-              </button>
-            </td>
-          </tr>
-        </tbody>
-      </table>
-    </div>
-  </section>
 </template>
 
 <script setup>
@@ -106,7 +73,6 @@ import { onMounted, reactive, ref } from 'vue'
 import UiCheckbox from '../../components/ui/UiCheckbox.vue'
 import { adminApi } from '../../api/admin'
 import { errorText } from '../../api/web'
-import { askConfirm } from '../../composables/useConfirm'
 import { pushToast } from '../../composables/useToasts'
 import { formatDateTime, num } from '../../utils/format'
 
@@ -122,9 +88,7 @@ const form = reactive({
   tools_ip_daily: 10,
   tools_daily: 500,
 })
-const waitlist = ref({ channels: [], items: [] })
 const busy = ref(false)
-const rowBusy = ref(null)
 
 function fill(value) {
   data.value = { ...value, tools: { ...value.tools, stats: value.tools?.stats || {} } }
@@ -162,23 +126,9 @@ async function save() {
   }
 }
 
-async function remove(w) {
-  if (!(await askConfirm(`Удалить ${w.email} из листа ожидания «${w.label}»?`, { danger: true }))) return
-  rowBusy.value = w.id
-  try {
-    waitlist.value = await adminApi.deleteWaitlist(w.id)
-  } catch (err) {
-    pushToast(errorText(err), 'error')
-  } finally {
-    rowBusy.value = null
-  }
-}
-
 onMounted(async () => {
   try {
-    const [settings, list] = await Promise.all([adminApi.site(), adminApi.waitlist()])
-    fill(settings)
-    waitlist.value = list
+    fill(await adminApi.site())
   } catch (err) {
     pushToast(errorText(err), 'error')
   }

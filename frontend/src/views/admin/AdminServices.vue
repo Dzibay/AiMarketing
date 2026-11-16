@@ -1,5 +1,5 @@
 <template>
-  <section class="panel" id="ai">
+  <section v-if="part === 'ai'" class="panel" id="ai">
     <div class="panel__head">
       <h2>ИИ и модели</h2>
       <span class="chip" :class="ai.configured ? 'chip--ok' : 'chip--warning'">
@@ -20,7 +20,7 @@
         <input v-model.number="aiForm.temperature" type="range" min="0" max="1" step="0.1" />
       </div>
       <p v-if="aiForm.provider === 'openai' && bridgeChat" class="field-hint">
-        Запросы идут через <a href="#bridge">мост Cloudflare</a>, адрес API не нужен. Провайдер определяется по имени
+        Запросы идут через <RouterLink to="/admin-panel/settings/bridge">мост Cloudflare</RouterLink>, адрес API не нужен. Провайдер определяется по имени
         модели: claude-… → Anthropic, gemini-… → Google, остальное → OpenAI. Ключ — того же провайдера.
       </p>
       <div v-else-if="aiForm.provider === 'openai'" v-field class="field field--wide">
@@ -46,7 +46,7 @@
       <h3>Классы моделей</h3>
       <p class="field-hint">
         Цена — единиц за 1 млн токенов: столько спишется с лимита пользователя. Себестоимость — ₽ за 1 млн токенов по
-        тарифу провайдера, для маржи в «Расходе». Кэш — повторяющийся вход (инструменты, промпт, история), который
+        тарифу провайдера, для маржи в «Расходах на ИИ». Кэш — повторяющийся вход (инструменты, промпт, история), который
         провайдер берёт дешевле; пусто — кэш считается как обычный вход. Выключенный класс в чате не показывается.
         «Зрение» — модель понимает картинки: сообщение с картинкой уйдёт ей, даже если в чате выбрана другая. Без
         зрения у всех классов картинку можно приложить только для объявлений.
@@ -91,7 +91,7 @@
         Если провайдер не отдаёт модель класса (нет такой модели, кончились деньги или квота, регион), ход идёт её
         резервами по порядку, потом классами дешевле — до самого дешёвого (каждый со своими резервами), и только потом
         дороже. Пользователь платит по цене выбранного класса и подмены не видит; себестоимость — модели, которая
-        ответила. Подмены видны в «Расходе». Отказавшая модель 10 минут зовётся последней.
+        ответила. Подмены видны в «Расходах на ИИ». Отказавшая модель 10 минут зовётся последней.
       </p>
       <div v-for="c in aiForm.classes" :key="`r-${c.id}`" class="reserve-block">
         <p class="reserve-block__head">
@@ -169,9 +169,7 @@
     </template>
   </section>
 
-  <AdminSiteCheck :key="aiVersion" />
-
-  <section class="panel" id="wordstat">
+  <section v-if="part === 'wordstat'" class="panel" id="wordstat">
     <div class="panel__head">
       <h2>Вордстат</h2>
       <span class="chip" :class="wordstat.configured && !wordstat.check_error ? 'chip--ok' : 'chip--warning'">
@@ -229,7 +227,7 @@
     </p>
   </section>
 
-  <section class="panel" id="images">
+  <section v-if="part === 'images'" class="panel" id="images">
     <div class="panel__head">
       <h2>Генерация картинок</h2>
       <span class="chip" :class="images.configured && !images.check_error ? 'chip--ok' : 'chip--warning'">
@@ -247,7 +245,7 @@
         <input v-model.trim="igForm.model" type="text" :placeholder="igDefaultModel" autocomplete="off" />
       </div>
       <p v-if="igForm.provider === 'openai' && bridgeImages" class="field-hint">
-        Запросы идут через <a href="#bridge">мост Cloudflare</a> в OpenAI, адрес API не нужен.
+        Запросы идут через <RouterLink to="/admin-panel/settings/bridge">мост Cloudflare</RouterLink> в OpenAI, адрес API не нужен.
       </p>
       <div v-else-if="igForm.provider === 'openai'" v-field class="field field--wide">
         <label>Адрес API</label>
@@ -301,21 +299,20 @@ import { computed, onMounted, reactive, ref } from 'vue'
 import UiCheckbox from '../../components/ui/UiCheckbox.vue'
 import UiSelect from '../../components/ui/UiSelect.vue'
 import { adminApi } from '../../api/admin'
-import AdminSiteCheck from './AdminSiteCheck.vue'
 import { errorText } from '../../api/web'
 import { askConfirm } from '../../composables/useConfirm'
+import { loadAdminBridge, reloadAdminSummary, useAdminSummary } from '../../composables/useAdminSummary'
 import { pushToast } from '../../composables/useToasts'
 import { formatDateTime, num } from '../../utils/format'
 
 /** Пункты выпадающего списка из [{ id, label }] (или другого поля с названием). */
 const choices = (list, key = 'label') => (list || []).map((x) => ({ value: x.id, label: x[key] }))
 
+// Какой раздел настроек показать: ИИ и модели, Вордстат или генерацию картинок.
 const props = defineProps({
-  // Настройки моста из AdminBridge: через него ли ходят чат и картинки.
-  bridge: { type: Object, default: null },
+  part: { type: String, default: 'ai', validator: (v) => ['ai', 'wordstat', 'images'].includes(v) },
 })
-const emit = defineEmits(['changed'])
-
+const { bridge } = useAdminSummary()
 const PRICE_FIELDS = ['units_in', 'units_cache', 'units_out', 'cost_in', 'cost_cache', 'cost_out']
 const RESERVE_COST_FIELDS = ['cost_in', 'cost_cache', 'cost_out']
 const MAX_RESERVES = 5
@@ -338,8 +335,6 @@ const aiForm = reactive({
 const aiBusy = ref(false)
 const aiTesting = ref(false)
 const aiTest = ref(null)
-// Модель проверки сайта по умолчанию — модель класса: после сохранения ИИ перечитываем её раздел.
-const aiVersion = ref(0)
 
 const wordstat = ref({ configured: false, has_key: false, key_hint: '', price_rub_per_1000: 20, hourly_quota: 100 })
 const wsForm = reactive({ folder_id: '', api_key: '', units_per_request: '', cost_per_request: '' })
@@ -352,8 +347,8 @@ const igBusy = ref(false)
 const igTesting = ref(false)
 const igTest = ref(null)
 
-const bridgeChat = computed(() => !!(props.bridge?.active && props.bridge?.use_chat))
-const bridgeImages = computed(() => !!(props.bridge?.active && props.bridge?.use_images))
+const bridgeChat = computed(() => !!(bridge.value?.active && bridge.value?.use_chat))
+const bridgeImages = computed(() => !!(bridge.value?.active && bridge.value?.use_images))
 const defaultModel = computed(() => ai.value.providers.find((p) => p.id === aiForm.provider)?.default_model || '')
 const igDefaultModel = computed(() => images.value.providers.find((p) => p.id === igForm.provider)?.default_model || '')
 const classNames = computed(() => aiForm.classes.map((c) => `«${c.name}»`).join(', ') || 'быструю, стандартную или думающую')
@@ -412,8 +407,7 @@ async function saveAi() {
         task_classes: aiForm.task_classes,
       }),
     )
-    aiVersion.value += 1
-    emit('changed')
+    reloadAdminSummary()
     pushToast(ai.value.configured ? 'Настройки ИИ сохранены' : 'Сохранено — осталось указать ключ и модель')
     if (ai.value.configured && apiKey) await testAi()
   } catch (err) {
@@ -438,7 +432,7 @@ async function deleteAiKey() {
       }),
     )
     aiTest.value = null
-    emit('changed')
+    reloadAdminSummary()
     pushToast('Ключ ИИ удалён')
   } catch (err) {
     pushToast(errorText(err), 'error')
@@ -485,7 +479,7 @@ async function saveWordstat() {
         cost_per_request: money(wsForm.cost_per_request),
       }),
     )
-    emit('changed')
+    reloadAdminSummary()
     pushToast(wordstat.value.configured ? 'Вордстат сохранён' : 'Сохранено — осталось указать ключ и каталог')
     if (wordstat.value.configured && apiKey) await testWordstat()
   } catch (err) {
@@ -501,7 +495,7 @@ async function deleteWordstatKey() {
   try {
     fillWordstat(await adminApi.saveWordstat({ folder_id: wordstat.value.folder_id, api_key: '' }))
     wsTest.value = null
-    emit('changed')
+    reloadAdminSummary()
     pushToast('Ключ Вордстата удалён')
   } catch (err) {
     pushToast(errorText(err), 'error')
@@ -551,7 +545,7 @@ async function saveImages() {
         cost_per_image: money(igForm.cost_per_image),
       }),
     )
-    emit('changed')
+    reloadAdminSummary()
     // Проверка рисует настоящую картинку за деньги — сами не запускаем.
     pushToast(images.value.configured ? 'Генерация картинок сохранена — проверьте её' : 'Сохранено — осталось указать ключ')
   } catch (err) {
@@ -568,7 +562,7 @@ async function deleteImagesKey() {
     const g = images.value
     fillImages(await adminApi.saveImages({ provider: g.provider, model: g.model, base_url: g.base_url, folder_id: g.folder_id, api_key: '' }))
     igTest.value = null
-    emit('changed')
+    reloadAdminSummary()
     pushToast('Ключ генерации картинок удалён')
   } catch (err) {
     pushToast(errorText(err), 'error')
@@ -595,10 +589,10 @@ async function testImages() {
 
 onMounted(async () => {
   try {
-    const [aiData, wsData, igData] = await Promise.all([adminApi.ai(), adminApi.wordstat(), adminApi.images()])
-    fillAi(aiData)
-    fillWordstat(wsData)
-    fillImages(igData)
+    if (props.part === 'ai') fillAi(await adminApi.ai())
+    else if (props.part === 'wordstat') fillWordstat(await adminApi.wordstat())
+    else fillImages(await adminApi.images())
+    if (props.part !== 'wordstat') loadAdminBridge()
   } catch (err) {
     pushToast(errorText(err), 'error')
   }

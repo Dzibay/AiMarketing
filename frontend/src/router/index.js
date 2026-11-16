@@ -233,7 +233,50 @@ const router = createRouter({
     { path: '/offer', name: 'offer', component: LegalView, props: { page: 'offer' } },
     { path: '/cookies', name: 'cookies', component: LegalView, props: { page: 'cookies' } },
     { path: '/admin', redirect: '/admin-panel' },
-    { path: '/admin-panel', name: 'admin', component: () => import('../views/AdminView.vue') },
+    // Админка: оболочка с меню, страницы — вложенные маршруты. meta.title — заголовок страницы (у «Настроек» — общий).
+    // Пункты меню и старые адреса ?tab=… — views/admin/adminNav.js, план разделов — docs/admin-plan.md.
+    {
+      path: '/admin-panel',
+      component: () => import('../views/AdminView.vue'),
+      children: [
+        {
+          path: '',
+          name: 'admin',
+          meta: { title: 'Дашборд' },
+          component: () => import('../views/admin/AdminDashboard.vue'),
+          beforeEnter: async (to) => {
+            if (!to.query.tab) return true
+            const { OLD_TABS } = await import('../views/admin/adminNav')
+            return { path: OLD_TABS[to.query.tab] || '/admin-panel', replace: true }
+          },
+        },
+        { path: 'users', meta: { title: 'Пользователи' }, component: () => import('../views/admin/AdminUsers.vue') },
+        { path: 'payments', meta: { title: 'Платежи' }, component: () => import('../views/admin/AdminPayments.vue') },
+        { path: 'site', meta: { title: 'Сайт' }, component: () => import('../views/admin/AdminWaitlist.vue') },
+        { path: 'refs', meta: { title: 'Реф-ссылки' }, component: () => import('../views/admin/AdminRefs.vue') },
+        { path: 'ai-costs', meta: { title: 'Расходы на ИИ' }, component: () => import('../views/admin/AdminUsage.vue') },
+        { path: 'ai-quality', meta: { title: 'Качество ИИ' }, component: () => import('../views/admin/AdminFeedback.vue') },
+        {
+          path: 'settings',
+          meta: { title: 'Настройки' },
+          component: () => import('../views/admin/AdminSettings.vue'),
+          children: [
+            { path: '', component: () => import('../views/admin/AdminSettingsHome.vue') },
+            { path: 'plans', component: () => import('../views/admin/AdminPlans.vue') },
+            { path: 'promos', component: () => import('../views/admin/AdminPromos.vue') },
+            { path: 'payments', component: () => import('../views/admin/AdminYookassa.vue') },
+            { path: 'referral', component: () => import('../views/admin/AdminRefBonus.vue') },
+            { path: 'ai', component: () => import('../views/admin/AdminServices.vue'), props: { part: 'ai' } },
+            { path: 'bridge', component: () => import('../views/admin/AdminBridge.vue') },
+            { path: 'wordstat', component: () => import('../views/admin/AdminServices.vue'), props: { part: 'wordstat' } },
+            { path: 'images', component: () => import('../views/admin/AdminServices.vue'), props: { part: 'images' } },
+            { path: 'site-check', component: () => import('../views/admin/AdminSiteCheck.vue') },
+            { path: 'site', component: () => import('../views/admin/AdminSite.vue') },
+          ],
+        },
+        { path: ':rest(.*)*', redirect: '/admin-panel' },
+      ],
+    },
     { path: '/:pathMatch(.*)*', redirect: '/cabinet' },
   ],
   scrollBehavior(to, from, savedPosition) {

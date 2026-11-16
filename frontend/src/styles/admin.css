@@ -1,0 +1,246 @@
+/* ===================== Админка ===================== */
+/* Своя оболочка: меню слева на всю высоту (как в кабинете, те же строки .srow), справа страница.
+   Только компьютер: на узком окне страница прокручивается вбок. План разделов — docs/admin-plan.md. */
+
+.admin-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  font-size: 16px;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+}
+
+.admin-brand > span {
+  font-size: 19px;
+  letter-spacing: -0.045em;
+}
+
+.admin-brand em {
+  padding: 2px 7px;
+  border-radius: var(--pill);
+  background: var(--ink);
+  color: var(--bg);
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 700;
+  letter-spacing: 0;
+}
+
+/* ---- вход ---- */
+
+.admin-login {
+  width: min(1320px, 100%);
+  min-height: 100vh;
+  margin: 0 auto;
+  padding: 10px 1.25rem 4rem;
+}
+
+.admin-login__top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--line);
+}
+
+.admin-login .auth-card {
+  margin-top: 8vh;
+}
+
+/* ---- оболочка ---- */
+
+.adm {
+  --adm-side-w: 236px;
+  display: grid;
+  grid-template-columns: var(--adm-side-w) minmax(0, 1fr);
+  min-width: 1080px;
+  min-height: 100vh;
+}
+
+.adm-side {
+  position: sticky;
+  top: 0;
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  height: 100vh;
+  padding: 14px 10px 12px;
+  overflow-y: auto;
+  background: var(--side);
+  scrollbar-width: thin;
+}
+
+.adm-side__brand {
+  padding: 4px 8px 14px;
+}
+
+.adm-side__nav {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.adm-side__h {
+  margin: 16px 10px 4px;
+  color: var(--faint);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.adm-side__foot {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: auto;
+  padding-top: 16px;
+}
+
+.adm-side__tools {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+}
+
+.adm-side .sdot--warn {
+  margin-right: 4px;
+}
+
+.adm-main {
+  width: 100%;
+  max-width: 1600px;
+  min-width: 0;
+  padding: 24px clamp(20px, 2.5vw, 40px) 64px;
+}
+
+.admin-head {
+  margin-bottom: 20px;
+}
+
+.admin-head h1 {
+  margin: 0 0 4px;
+  font-size: 26px;
+  font-weight: 800;
+  letter-spacing: -0.025em;
+}
+
+.admin-head p {
+  max-width: 44rem;
+  margin: 0;
+  color: var(--muted);
+}
+
+/* ---- настройки: подменю слева, раздел справа ---- */
+
+.adm-settings {
+  display: grid;
+  grid-template-columns: 220px minmax(0, 1fr);
+  gap: 24px;
+  align-items: start;
+}
+
+.adm-settings__nav {
+  position: sticky;
+  top: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.adm-settings__nav .adm-side__h:first-of-type {
+  margin-top: 12px;
+}
+
+.adm-settings__page {
+  min-width: 0;
+}
+
+/* Карточки разделов в обзоре настроек. */
+.adm-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 10px;
+}
+
+.adm-card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--bg);
+  color: var(--ink);
+  transition: border-color 0.15s;
+}
+
+a.adm-card:hover {
+  border-color: var(--faint);
+}
+
+.adm-card__t {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 700;
+}
+
+.adm-card small {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.adm-card small[class*='tone-'] {
+  font-weight: 700;
+}
+
+/* ---- дашборд ---- */
+
+a.adm-stat {
+  color: inherit;
+  transition: border-color 0.15s;
+}
+
+a.adm-stat:hover {
+  border-color: var(--faint);
+}
+
+.adm-health {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.adm-health__item {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--pill);
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.adm-health__item:hover {
+  border-color: var(--faint);
+}
+
+.adm-health__item small {
+  font-size: 12px;
+  font-weight: 700;
+}
+
+/* ---- части страниц ---- */
+
+/* Переписка с пользователем в окне поддержки (список пользователей). */
+.admin-sup {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  max-height: 50vh;
+  margin-bottom: 0.75rem;
+  overflow-y: auto;
+}

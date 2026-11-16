@@ -2222,65 +2222,6 @@ html.has-bbar {
   }
 }
 
-/* Админка: та же плоская шапка и знак, что в кабинете. */
-/* Шапки таблиц липнут под панель админки: 10 + кнопка 44 + 10 + линия 1px. */
-.admin-shell {
-  --bar-h: 65px;
-}
-
-.admin-top {
-  top: 0;
-  margin: 0 -1.25rem 24px;
-  padding: 10px 1.25rem;
-  border: 0;
-  border-bottom: 1px solid var(--line);
-  border-radius: 0;
-  background: var(--bg);
-  box-shadow: none;
-  backdrop-filter: none;
-}
-.admin-shell {
-  padding-top: 0;
-}
-.admin-top__brand {
-  gap: 9px;
-  font-size: 16px;
-  font-weight: 800;
-  letter-spacing: -0.02em;
-}
-.admin-top__brand em {
-  padding: 2px 7px;
-  border-radius: var(--pill);
-  background: var(--ink);
-  color: var(--bg);
-  font-size: 11px;
-  font-style: normal;
-  font-weight: 700;
-  letter-spacing: 0;
-}
-@media (max-width: 480px) {
-  .admin-top__brand {
-    gap: 7px;
-  }
-  .admin-top__out span {
-    display: none;
-  }
-}
-.admin-head {
-  margin-bottom: 20px;
-}
-.admin-head h1 {
-  margin: 0 0 4px;
-  font-size: 26px;
-  font-weight: 800;
-  letter-spacing: -0.025em;
-}
-.admin-head p {
-  max-width: 44rem;
-  margin: 0;
-  color: var(--muted);
-}
-
 /* Колокольчик в верхней строке: значок со счётчиком, список уведомлений (на телефоне — шторка). */
 .nbell {
   position: relative;
@@ -2804,15 +2745,6 @@ html.has-bbar {
   to {
     transform: rotate(360deg);
   }
-}
-
-.admin-sup {
-  display: flex;
-  flex-direction: column;
-  gap: 0.6rem;
-  max-height: 50vh;
-  margin-bottom: 0.75rem;
-  overflow-y: auto;
 }
 
 /* --- Справка (4.2): страница, кнопка у заголовка раздела, боковая панель, точка «Что нового» --- */

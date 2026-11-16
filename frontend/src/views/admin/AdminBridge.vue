@@ -200,9 +200,9 @@ import { computed, onMounted, reactive, ref } from 'vue'
 import UiCheckbox from '../../components/ui/UiCheckbox.vue'
 import { adminApi } from '../../api/admin'
 import { errorText } from '../../api/web'
+import { setAdminBridge } from '../../composables/useAdminSummary'
 import { pushToast } from '../../composables/useToasts'
 
-const emit = defineEmits(['update'])
 
 const bridge = ref({
   enabled: false,
@@ -259,7 +259,7 @@ function fillBridge(data) {
   brForm.token = ''
   brForm.worker_token = ''
   brForm.api_token = ''
-  emit('update', data)
+  setAdminBridge(data)
 }
 
 async function saveBridge() {

@@ -1,181 +1,123 @@
 <template>
-  <div class="admin-shell">
-    <header class="admin-top">
-      <span class="admin-top__brand">
+  <!-- Вход: без меню, одна форма по центру. -->
+  <div v-if="!isLoggedIn" class="admin-login">
+    <header class="admin-login__top">
+      <span class="admin-brand">
         <TolkMark :size="26" />
         <span>толк</span>
         <em>админка</em>
       </span>
-
-      <div class="admin-top__tools">
-        <button class="icon-btn" type="button" :aria-label="isDark ? 'Светлая тема' : 'Тёмная тема'" @click="toggleTheme">
-          <Sun v-if="isDark" aria-hidden="true" />
-          <Moon v-else aria-hidden="true" />
-        </button>
-        <button v-if="isLoggedIn" class="btn btn--ghost admin-top__out" type="button" aria-label="Выйти" @click="logout">
-          <LogOut aria-hidden="true" />
-          <span>Выйти</span>
-        </button>
-      </div>
+      <button class="icon-btn" type="button" :aria-label="isDark ? 'Светлая тема' : 'Тёмная тема'" @click="toggleTheme">
+        <Sun v-if="isDark" aria-hidden="true" />
+        <Moon v-else aria-hidden="true" />
+      </button>
     </header>
+    <form class="auth-card" @submit.prevent="login">
+      <h1>Вход в админку</h1>
+      <p class="sub">Пароль владельца сервиса — ADMIN_PASSWORD в настройках сервера.</p>
+      <p v-if="error" class="form-error">{{ error }}</p>
+      <div class="field">
+        <label for="admin-password">Пароль</label>
+        <input id="admin-password" v-model="password" type="password" autocomplete="current-password" required autofocus />
+      </div>
+      <button class="btn btn--wide btn--accent" type="submit" :disabled="busy">Войти</button>
+    </form>
+  </div>
 
-    <main class="admin-shell__main">
-      <form v-if="!isLoggedIn" class="auth-card" @submit.prevent="login">
-        <h1>Вход в админку</h1>
-        <p class="sub">Пароль владельца сервиса — ADMIN_PASSWORD в настройках сервера.</p>
-        <p v-if="error" class="form-error">{{ error }}</p>
-        <div class="field">
-          <label for="admin-password">Пароль</label>
-          <input
-            id="admin-password"
-            v-model="password"
-            type="password"
-            autocomplete="current-password"
-            required
-            autofocus
-          />
-        </div>
-        <button class="btn btn--wide btn--accent" type="submit" :disabled="busy">Войти</button>
-      </form>
+  <!-- Админка: меню слева на всю высоту, справа страница. -->
+  <div v-else class="adm">
+    <aside class="adm-side" aria-label="Меню админки">
+      <RouterLink class="admin-brand adm-side__brand" :to="ADMIN_BASE">
+        <TolkMark :size="26" />
+        <span>толк</span>
+        <em>админка</em>
+      </RouterLink>
 
-      <template v-else>
-        <div class="admin-head">
-          <h1>Админка</h1>
-          <p>Пользователи и подписки, тарифы и оплата, промокоды и реф-ссылки, общие ИИ, Вордстат и картинки, расход сервиса и оценки ответов ИИ.</p>
-        </div>
-
-        <div v-if="!summary" class="panel"><p class="empty">Загружаем…</p></div>
-
-        <template v-else>
-          <div class="stats-grid">
-            <div class="stat-card">
-              <small>Пользователей</small>
-              <strong>{{ num(summary.users_total) }}</strong>
-            </div>
-            <div v-for="s in services" :key="s.key" class="stat-card">
-              <small>{{ s.label }}</small>
-              <strong :class="s.ok ? 'tone-ok' : 'tone-warn'">{{ s.ok ? 'работает' : 'не подключено' }}</strong>
-            </div>
-            <div class="stat-card" v-tip="summary.email_check ? '' : 'Без SMTP письма не уходят — кабинет открыт сразу после регистрации'">
-              <small>Подтверждение почты</small>
-              <strong :class="summary.email_check ? 'tone-ok' : 'tone-warn'">
-                {{ summary.email_check ? 'включено' : 'выкл.: нет SMTP' }}
-              </strong>
-            </div>
-            <div class="stat-card" v-tip="summary.payments?.no_receipt ? `Без чека в «Мой налог»: ${summary.payments.no_receipt}` : ''">
-              <small>Оплаты за месяц</small>
-              <strong>{{ rubles(summary.payments?.month_rub || 0) }}</strong>
-              <span class="cell-note">
-                {{ num(summary.payments?.month_count || 0) }}
-                {{ plural(summary.payments?.month_count || 0, 'оплата', 'оплаты', 'оплат') }}<template
-                  v-if="summary.payments?.no_receipt"> · без чека: {{ num(summary.payments.no_receipt) }}</template>
-              </span>
-            </div>
-            <div class="stat-card">
-              <small>Пробный тариф</small>
-              <strong :class="summary.trial_plan ? 'tone-ok' : 'tone-warn'">{{ summary.trial_plan || 'нет — без ограничений' }}</strong>
-            </div>
-          </div>
-
-          <nav class="seg seg--tabs" aria-label="Разделы админки">
-            <button
-              v-for="t in TABS"
-              :key="t.id"
-              type="button"
-              :class="{ active: tab === t.id }"
-              @click="setTab(t.id)"
-            >
-              {{ t.label }}
-            </button>
-          </nav>
-
-          <AdminUsers v-if="tab === 'users'" />
-          <AdminPlans v-else-if="tab === 'plans'" @changed="loadSummary" />
-          <AdminPayments v-else-if="tab === 'payments'" @changed="loadSummary" />
-          <AdminPromos v-else-if="tab === 'promos'" />
-          <AdminRefs v-else-if="tab === 'refs'" />
-          <template v-else-if="tab === 'services'">
-            <AdminServices :bridge="bridge" @changed="loadSummary" />
-            <AdminBridge @update="bridge = $event" />
-          </template>
-          <AdminSite v-else-if="tab === 'site'" />
-          <AdminUsage v-else-if="tab === 'usage'" />
-          <AdminFeedback v-else-if="tab === 'feedback'" />
+      <nav class="adm-side__nav" aria-label="Разделы">
+        <template v-for="group in NAV" :key="group.title">
+          <h4 v-if="group.title" class="adm-side__h">{{ group.title }}</h4>
+          <RouterLink
+            v-for="item in group.items"
+            :key="item.key"
+            class="srow"
+            :class="{ active: navActive(item, route.path) }"
+            :to="item.to"
+          >
+            <component :is="item.icon" aria-hidden="true" />
+            <span class="srow__t">{{ item.label }}</span>
+            <span v-if="item.badge && item.badge(summary)" class="srow__n" v-tip.right="item.badgeTip">
+              {{ num(item.badge(summary)) }}
+            </span>
+          </RouterLink>
         </template>
-      </template>
+      </nav>
+
+      <div class="adm-side__foot">
+        <RouterLink
+          class="srow"
+          :class="{ active: navActive(SETTINGS_ITEM, route.path) }"
+          :to="SETTINGS_ITEM.to"
+        >
+          <component :is="SETTINGS_ITEM.icon" aria-hidden="true" />
+          <span class="srow__t">{{ SETTINGS_ITEM.label }}</span>
+          <span
+            v-if="SETTINGS_ITEM.warn(summary)"
+            class="sdot sdot--warn"
+            v-tip.right="`Не настроено: ${missingSettings(summary).join(', ')}`"
+          ></span>
+        </RouterLink>
+        <div class="adm-side__tools">
+          <button class="srow" type="button" @click="toggleTheme">
+            <Sun v-if="isDark" aria-hidden="true" />
+            <Moon v-else aria-hidden="true" />
+            <span class="srow__t">{{ isDark ? 'Светлая тема' : 'Тёмная тема' }}</span>
+          </button>
+          <button class="srow" type="button" @click="logout">
+            <LogOut aria-hidden="true" />
+            <span class="srow__t">Выйти</span>
+          </button>
+        </div>
+      </div>
+    </aside>
+
+    <main class="adm-main">
+      <header v-if="route.meta.title" class="admin-head">
+        <h1>{{ route.meta.title }}</h1>
+        <p v-if="route.meta.hint">{{ route.meta.hint }}</p>
+      </header>
+      <RouterView />
     </main>
   </div>
 </template>
 
 <script setup>
-import { computed, ref, watch } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
+import { ref, watch } from 'vue'
+import { useRoute } from 'vue-router'
 import { LogOut, Moon, Sun } from '@lucide/vue'
 import TolkMark from '../components/TolkMark.vue'
-import AdminBridge from './admin/AdminBridge.vue'
-import AdminFeedback from './admin/AdminFeedback.vue'
-import AdminPayments from './admin/AdminPayments.vue'
-import AdminPlans from './admin/AdminPlans.vue'
-import AdminPromos from './admin/AdminPromos.vue'
-import AdminRefs from './admin/AdminRefs.vue'
-import AdminServices from './admin/AdminServices.vue'
-import AdminSite from './admin/AdminSite.vue'
-import AdminUsage from './admin/AdminUsage.vue'
-import AdminUsers from './admin/AdminUsers.vue'
+import { ADMIN_BASE, NAV, SETTINGS_ITEM, missingSettings, navActive } from './admin/adminNav'
 import { adminApi } from '../api/admin'
 import { errorText } from '../api/web'
 import { clearAdminSession, setAdminSession, useAdminSession } from '../composables/useAdminSession'
+import { reloadAdminSummary, resetAdminSummary, useAdminSummary } from '../composables/useAdminSummary'
 import { useTheme } from '../composables/useTheme'
-import { pushToast } from '../composables/useToasts'
 import { useHead } from '../utils/useHead'
-import { num, plural, rubles } from '../utils/format'
-
-useHead('Админка — Толк', true)
-
-const TABS = [
-  { id: 'users', label: 'Пользователи' },
-  { id: 'plans', label: 'Тарифы' },
-  { id: 'payments', label: 'Оплата' },
-  { id: 'promos', label: 'Промокоды' },
-  { id: 'refs', label: 'Реф-ссылки' },
-  { id: 'services', label: 'ИИ и сервисы' },
-  { id: 'site', label: 'Сайт' },
-  { id: 'usage', label: 'Расход' },
-  { id: 'feedback', label: 'Оценки' },
-]
+import { num } from '../utils/format'
+import '../styles/admin.css'
 
 const route = useRoute()
-const router = useRouter()
 const { isLoggedIn } = useAdminSession()
+const { summary } = useAdminSummary()
 const { isDark, toggleTheme } = useTheme()
 const password = ref('')
 const error = ref('')
 const busy = ref(false)
-const summary = ref(null)
-const bridge = ref(null)
-const tab = ref(TABS.some((t) => t.id === route.query.tab) ? route.query.tab : 'users')
 
-const services = computed(() => [
-  { key: 'ai', label: 'ИИ', ok: summary.value?.ai_configured },
-  { key: 'wordstat', label: 'Вордстат', ok: summary.value?.wordstat_configured },
-  { key: 'images', label: 'Картинки', ok: summary.value?.images_configured },
-  { key: 'oauth', label: 'Вход через Яндекс', ok: summary.value?.yandex_oauth },
-  { key: 'payments', label: 'ЮKassa', ok: summary.value?.payments_ready },
-])
-
-function setTab(id) {
-  tab.value = id
-  router.replace({ query: id === 'users' ? {} : { tab: id } })
-}
-
-async function loadSummary() {
-  try {
-    summary.value = await adminApi.me()
-  } catch (err) {
-    // 401 уже сбросил токен — показываем вход.
-    if (err.status !== 401) pushToast(errorText(err), 'error')
-  }
-}
+watch(
+  () => route.meta.title,
+  (title) => useHead(title ? `${title} — админка Толк` : 'Админка — Толк', true),
+  { immediate: true },
+)
 
 async function login() {
   busy.value = true
@@ -200,8 +142,8 @@ function logout() {
 watch(
   isLoggedIn,
   (on) => {
-    summary.value = null
-    if (on) loadSummary()
+    resetAdminSummary()
+    if (on) reloadAdminSummary()
   },
   { immediate: true },
 )

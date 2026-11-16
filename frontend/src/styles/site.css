@@ -1077,52 +1077,6 @@ input[type='radio'] {
   margin: 1.6rem 0 0.7rem;
 }
 
-/* Админка: своя оболочка без меню кабинета — админ не пользователь кабинета. */
-.admin-shell {
-  width: min(1320px, 100%);
-  min-height: 100vh;
-  margin: 0 auto;
-  padding: 0.85rem 1.25rem 4rem;
-}
-
-.admin-top {
-  position: sticky;
-  top: 0.85rem;
-  z-index: 30;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 1rem;
-  margin-bottom: 1.25rem;
-  padding: 0.5rem;
-  border-radius: var(--pill);
-  background: var(--glass);
-  border: 1px solid var(--line);
-  box-shadow: var(--shadow-sm);
-  backdrop-filter: blur(16px);
-}
-
-.admin-top__brand {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.7rem;
-}
-
-.admin-top__tools {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-}
-
-.admin-top .btn svg {
-  width: 17px;
-  height: 17px;
-}
-
-.admin-shell__main .auth-card {
-  margin-top: 8vh;
-}
-
 /* ---------- Таблицы ---------- */
 
 .table {
