@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+import difflib
 import ipaddress
 import json
 import logging
@@ -159,12 +160,15 @@ def _task_classes(row: dict) -> dict:
     return {task: stored.get(task) if stored.get(task) in CLASSES else spec["class"] for task, spec in TASKS.items()}
 
 
+CLASS_FALLBACK_ORDER = ("standard", "fast", "thinking")
+
+
 def _resolve_class(
     wanted: str | None, task: str, classes: dict[str, dict], row: dict, *, vision: bool = False
 ) -> dict | None:
     """Класс для вызова: выбранный, если включён и с моделью, иначе класс задачи, иначе ближайший рабочий.
     vision — в запросе картинки: только класс, модель которого их видит."""
-    order = [wanted, _task_classes(row).get(task) or TASKS["chat"]["class"], "standard", "fast", "thinking"]
+    order = [wanted, _task_classes(row).get(task) or TASKS["chat"]["class"], *CLASS_FALLBACK_ORDER]
     for cid in order:
         if cid and _usable(classes.get(cid)) and (not vision or classes[cid]["vision"]):
             return classes[cid]
@@ -324,6 +328,7 @@ def save_service_settings(
             """,
             (provider, base_url, folder_id, key_enc, temp, json.dumps(stored)),
         )
+    _down.clear()  # модели или ключ могли смениться — прошлые отказы не в счёт
     return get_service_settings()
 
 
@@ -359,6 +364,15 @@ def load_config(
     provider = row["provider"]
     model = (model or "").strip() or cls["model"]
     model_name = model
+    # Запасные модели — на случай, если провайдер эту не отдаст. Проверка подключения проверяет каждую саму.
+    fallbacks: list[dict] = []
+    if task != "test":
+        seen = {model_name}
+        for cid in [cls["id"], _task_classes(row).get(task), *CLASS_FALLBACK_ORDER]:
+            c = classes.get(cid or "")
+            if _usable(c) and (not vision or c["vision"]) and c["model"] not in seen:
+                seen.add(c["model"])
+                fallbacks.append({"id": c["id"], "model": c["model"]})
     headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
     if provider == "yandexgpt":
         folder = row["folder_id"]
@@ -419,6 +433,8 @@ def load_config(
         "cost_out": cls["cost_out"],
         "units_cache": cls.get("units_cache"),
         "cost_cache": cls.get("cost_cache"),
+        "vision": vision,
+        "fallbacks": fallbacks,
     }
 
 
@@ -635,6 +651,15 @@ def _error_text_raw(response: httpx.Response) -> str:
     return str(data)[:300]
 
 
+def _stream_error(text: str, overloaded: bool) -> YandexError:
+    """Ошибка посреди потока: деньги и модель — как у ответа с кодом, перегрузка — временная."""
+    if _NO_BALANCE.search(text):
+        return YandexError("ai-balance", f"У провайдера ИИ кончились деньги или квота: {text}")
+    if _MODEL_MISSING.search(text):
+        return YandexError("ai-model", f"Провайдер ИИ не отдаёт модель: {text}")
+    return (_transient if overloaded else YandexError)("ai-error", f"Ошибка ИИ: {text}")
+
+
 def _post_stream(url: str, body: dict, headers: dict, timeout: float) -> tuple[httpx.Response, dict | None]:
     """chat/completions c stream=true → (ответ, собранное тело в виде обычного ответа).
 
@@ -674,7 +699,7 @@ def _post_stream(url: str, body: dict, headers: dict, timeout: float) -> tuple[h
                 kind = str(err.get("type") or "") if isinstance(err, dict) else ""
                 # Перегрузка провайдера посреди ответа (Anthropic: overloaded_error) — временная.
                 overloaded = kind in ("overloaded_error", "api_error") or "overloaded" in text.lower()
-                raise (_transient if overloaded else YandexError)("ai-error", f"Ошибка ИИ: {text}")
+                raise _stream_error(text, overloaded)
             answered_by = answered_by or str(chunk.get("model") or "")
             if isinstance(chunk.get("usage"), dict):
                 usage = chunk["usage"]
@@ -860,7 +885,7 @@ def _post_anthropic(url: str, body: dict, headers: dict, timeout: float, stream:
                 text = str(err.get("message") if isinstance(err, dict) else err)[:300]
                 err_type = str(err.get("type") or "") if isinstance(err, dict) else ""
                 overloaded = err_type in ("overloaded_error", "api_error") or "overloaded" in text.lower()
-                raise (_transient if overloaded else YandexError)("ai-error", f"Ошибка ИИ: {text}")
+                raise _stream_error(text, overloaded)
             if kind == "message_start":
                 message = event.get("message") or {}
                 model = str(message.get("model") or "")
@@ -922,8 +947,41 @@ def _region_error(cfg: dict, response: httpx.Response) -> YandexError:
     )
 
 
+def _error_code(response: httpx.Response) -> str:
+    """Код ошибки из тела ответа (error.code или error.type), если он есть."""
+    try:
+        data = response.json()
+    except ValueError:
+        return ""
+    err = data.get("error") if isinstance(data, dict) else None
+    if not isinstance(err, dict):
+        return ""
+    return str(err.get("code") or err.get("type") or "")
+
+
+# Провайдер не отдаёт модель: неверный id, модель не подключена у источника или не открыта ключу.
+_MODEL_MISSING = re.compile(
+    r"model_not_found|no such model|unknown model|invalid model|model\b[^.]{0,80}\b(not found|does not exist|"
+    r"not available|not supported|is not served)|модел[ьи]\b[^.]{0,80}(недоступн|не обслуживается|не найден|не поддерживается)",
+    re.I,
+)
+# Кончились деньги или квота у провайдера: повтор не поможет, пока их не пополнят.
+_NO_BALANCE = re.compile(
+    r"credit balance is too low|insufficient[_ ](quota|balance|funds|credits)|quota is not enough|"
+    r"not enough (credits|balance|quota)|недостаточно (средств|баланса|квоты)|пополните баланс",
+    re.I,
+)
+
+
 def _raise_for_status(cfg: dict, response: httpx.Response) -> None:
     status = response.status_code
+    if status >= 400:
+        text = _error_text(response)
+        name = cfg.get("model_name") or cfg.get("model") or ""
+        if _NO_BALANCE.search(text):
+            raise YandexError("ai-balance", f"У провайдера ИИ кончились деньги или квота (модель {name}): {text}")
+        if status != 429 and (_error_code(response) == "model_not_found" or _MODEL_MISSING.search(text)):
+            raise YandexError("ai-model", f"Провайдер ИИ не отдаёт модель {name}: {text}")
     if status in (401, 403):
         text = _error_text(response)
         if cfg.get("bridge") and "request not allowed" in text.lower():
@@ -1015,7 +1073,65 @@ def _retry_wait(exc: YandexError, pauses: list) -> float | None:
     return wait
 
 
+# Модель не ответила по причине, которую повтор не исправит, — ход переходит на запасную.
+FALLBACK_CODES = {"ai-model", "ai-balance", "ai-region", "ai-limit"}
+# Сколько секунд не звать модель первой после такого отказа (до перезапуска процесса или удачного ответа).
+MODEL_DOWN_SECONDS = 600
+_down: dict[str, float] = {}
+
+
+def _is_down(model: str) -> bool:
+    until = _down.get(model)
+    return bool(until and until > time.monotonic())
+
+
+def _fallback_cfg(cfg: dict, class_id: str) -> dict:
+    """cfg запасного класса; настройки вызова (поток, таймаут, ключ кэша, пачка) — те же."""
+    fresh = load_config(
+        cfg.get("user_id"), cfg.get("task") or "chat", cfg.get("workspace_id"),
+        model_class=class_id, vision=bool(cfg.get("vision")),
+    )
+    return {**cfg, **fresh, "fallbacks": []}
+
+
 def complete(cfg: dict, messages: list[dict], tools: list[dict] | None = None) -> dict:
+    """Вызов модели с переходом на запасные (cfg["fallbacks"]), если провайдер её не отдаёт.
+
+    Причины перехода — FALLBACK_CODES: неверный id или модель не подключена у источника, кончились деньги
+    или квота, регион. Модель, которая так отказала, следующие MODEL_DOWN_SECONDS зовётся последней.
+    Ответила запасная — в ответе "fallback": её cfg (для следующих шагов хода) и "fallback_from".
+    """
+    chain: list[dict | None] = [None, *(cfg.get("fallbacks") or [])]
+    names = [cfg.get("model_name") or cfg.get("model") or "", *(f["model"] for f in chain[1:])]
+    order = [i for i in range(len(chain)) if not _is_down(names[i])] + [i for i in range(len(chain)) if _is_down(names[i])]
+    first: YandexError | None = None
+    for n, i in enumerate(order):
+        try:
+            current = cfg if chain[i] is None else _fallback_cfg(cfg, chain[i]["id"])
+            reply = _complete_once(current, messages, tools)
+        except YandexError as exc:
+            final = exc.code not in FALLBACK_CODES or (exc.code == "ai-limit" and getattr(exc, "transient", False))
+            if exc.code in ("ai-model", "ai-balance") or (exc.code == "ai-limit" and not final):
+                _down[names[i]] = time.monotonic() + MODEL_DOWN_SECONDS
+            if final or n == len(order) - 1:
+                if first is not None:
+                    raise YandexError(
+                        first.code,
+                        f"{first.message or first.code}. Запасная модель {names[i]} тоже не ответила: {exc.message or exc.code}",
+                    ) from exc
+                raise
+            first = first or exc
+            log.warning("ИИ: модель %s не ответила (%s), пробую запасную", names[i], exc.message or exc.code)
+            continue
+        _down.pop(names[i], None)
+        if current is not cfg:
+            reply["fallback"] = current
+            reply["fallback_from"] = cfg.get("class_name") or ""
+        return reply
+    raise first or YandexError("ai-not-configured", NOT_CONFIGURED)
+
+
+def _complete_once(cfg: dict, messages: list[dict], tools: list[dict] | None = None) -> dict:
     """Один вызов chat/completions → {"content", "tool_calls": [{"id", "name", "arguments"}], "usage"}.
 
     До вызова — проверка месячного лимита, после — запись расхода (cfg["units"] — объектов в пачке).
@@ -1086,6 +1202,8 @@ def complete_json(cfg: dict, messages: list[dict], *, retries: int = 1) -> dict:
     for attempt in range(retries + 1):
         # Повтор — та же пачка: объекты считаем один раз, чтобы не сбить калибровку оценки.
         reply = complete(cfg if attempt == 0 else {**cfg, "units": 0}, history)
+        if reply.get("fallback"):
+            cfg = reply["fallback"]
         data = parse_json_reply(reply["content"])
         if isinstance(data, dict):
             return data
@@ -1095,6 +1213,40 @@ def complete_json(cfg: dict, messages: list[dict], *, retries: int = 1) -> dict:
                 {"role": "user", "content": "Ответ не разобрался. Верни только JSON-объект по заданной схеме, без текста вокруг."},
             ]
     raise YandexError("ai-json", "ИИ вернул ответ не в том формате — попробуйте ещё раз или смените модель")
+
+
+def provider_models(cfg: dict) -> list[str]:
+    """id моделей, которые отдаёт OpenAI-совместимый API (GET /models); не вышло — пусто."""
+    if cfg.get("provider") != "openai":
+        return []
+    try:
+        if cfg.get("check_host"):
+            _check_url_resolves_public(cfg["base_url"])
+        response = httpx.get(f"{cfg['base_url']}/models", headers=cfg["headers"], timeout=15, follow_redirects=False)
+        data = response.json() if response.status_code == 200 else {}
+    except (httpx.HTTPError, ValueError, YandexError):
+        return []
+    items = data.get("data") if isinstance(data, dict) else None
+    return [str(m["id"]) for m in items or [] if isinstance(m, dict) and m.get("id")]
+
+
+def similar_models(cfg: dict, model: str, limit: int = 3) -> list[str]:
+    """Похожие id из списка провайдера: claude-opus-5.5 → claude-opus-5-5."""
+    ids = provider_models(cfg)
+    if not ids or model in ids:
+        return []
+
+    def key(text: str) -> str:
+        return re.sub(r"[^a-z0-9]+", "-", text.lower().rsplit("/", 1)[-1]).strip("-")
+
+    by_key: dict[str, str] = {}
+    for mid in ids:
+        by_key.setdefault(key(mid), mid)
+    exact = by_key.get(key(model))
+    close = difflib.get_close_matches(key(model), list(by_key), n=limit, cutoff=0.75)
+    out = [exact] if exact else []
+    out += [by_key[k] for k in close if by_key[k] not in out]
+    return out[:limit]
 
 
 def check_connection() -> dict:
@@ -1117,6 +1269,11 @@ def check_connection() -> dict:
             item.update(reply=(reply["content"] or "").strip()[:200], answered_by=reply.get("model") or "")
         except YandexError as exc:
             item["error"] = exc.message or exc.code
+            if exc.code == "ai-model":
+                similar = similar_models(cfg, cfg["model_name"])
+                if similar:
+                    item["similar"] = similar
+                    item["error"] += f". Похожие модели у провайдера: {', '.join(similar)}"
         models.append(item)
     return {"ok": all("error" not in m for m in models), "bridge": bridge, "models": models}
 

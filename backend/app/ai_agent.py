@@ -8933,6 +8933,9 @@ def run_chat(user_id: int, chat_id: int, progress=None) -> dict:
             except Exception:
                 log.exception("ИИ-чат %s", chat_id)
                 return _end_with_error(chat_id, "Сбой при обращении к ИИ", request)
+            if reply.get("fallback"):
+                # Выбранная модель недоступна у провайдера — ход доводит запасная.
+                cfg = reply["fallback"]
             calls = [c for c in reply["tool_calls"] if c.get("name")]
             # Подсказки — только у итогового ответа: рядом с другими вызовами ход ещё не закончен.
             followups = _followups(calls)

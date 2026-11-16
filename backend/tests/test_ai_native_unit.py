@@ -146,7 +146,7 @@ def test_prompt_cache_key_only_for_openai(monkeypatch):
 
 def test_config_routes_claude_natively_and_marks_openai(monkeypatch):
     cls = {"id": "standard", "name": "Стандартная", "model": "claude-opus-5-5", "units_in": 1, "units_out": 1,
-           "cost_in": 1, "cost_out": 1}
+           "cost_in": 1, "cost_out": 1, "enabled": True, "vision": False}
     monkeypatch.setattr(ai, "decrypt_token", lambda cipher: "sk-test")
     monkeypatch.setattr(ai, "model_classes", lambda: [cls])
     monkeypatch.setattr(ai, "_resolve_class", lambda *a, **kw: cls)

@@ -32,6 +32,8 @@ NON_RETRYABLE_CODES = frozenset(
         "feature-locked",
         "project-locked",
         "ai-auth",
+        "ai-model",
+        "ai-balance",
         "ai-url",
         "ai-json",
         "site",
