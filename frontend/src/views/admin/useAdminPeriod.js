@@ -51,18 +51,23 @@ function recall() {
   }
 }
 
-export function useAdminPeriod() {
+/** fallback — период, когда его нет ни в адресе, ни в памяти: дашборд — месяц, реф-ссылки — всё время. */
+export function useAdminPeriod({ fallback = '30d' } = {}) {
   const route = useRoute()
   const router = useRouter()
 
-  /** То, что уйдёт на сервер: { p } или { from, to }, и step, если выбран. Без периода — месяц. */
+  /** То, что уйдёт на сервер: { p } или { from, to }, и step, если выбран. Без периода — fallback. */
   const query = computed(() => {
     const q = clean(route.query)
-    if (!q.p && !q.from) q.p = '30d'
+    if (!q.p && !q.from) q.p = fallback
     return q
   })
 
-  const go = (next) => router.push({ query: clean(next) })
+  // Чужие ключи адреса (например, ?personal=1 на реф-ссылках) не теряются.
+  const go = (next) => {
+    const { p: _p, from: _f, to: _t, step: _s, ...rest } = route.query
+    router.push({ query: { ...rest, ...clean(next) } })
+  }
 
   // Заход без периода в адресе — подставить последний выбранный; период в адресе (и по ссылке) — запомнить.
   const inUrl = clean(route.query)

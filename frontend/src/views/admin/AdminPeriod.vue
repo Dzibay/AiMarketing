@@ -11,7 +11,7 @@
       :disabled="disabled"
       @change="$emit('period', $event)"
     />
-    <div class="seg seg--sm" role="group" aria-label="Шаг графиков">
+    <div v-if="steps" class="seg seg--sm" role="group" aria-label="Шаг графиков">
       <button
         v-for="s in STEPS"
         :key="s.value"
@@ -43,6 +43,8 @@ const props = defineProps({
   /** Что сейчас в адресе: { p } или { from, to } — чтобы кнопка не мигала до ответа. */
   query: { type: Object, required: true },
   disabled: { type: Boolean, default: false },
+  /** Кнопки шага графиков; на страницах без графиков — false. */
+  steps: { type: Boolean, default: true },
 })
 defineEmits(['period', 'step'])
 

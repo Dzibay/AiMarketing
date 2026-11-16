@@ -54,7 +54,7 @@ _COLUMNS = """
     s.plan_id, s.starts_at, s.ends_at, s.overrides, s.bonus_units, s.bonus_period_start,
     p.name AS plan_name, p.price_rub, p.days, p.units_limit, p.projects_limit, p.features, p.is_trial,
     rl.id AS ref_id, rl.code AS ref_code, rl.name AS ref_name, rl.group_id AS ref_group_id,
-    rg.name AS ref_group_name, ro.email AS ref_owner_email,
+    rg.name AS ref_group_name, rg.color AS ref_group_color, ro.email AS ref_owner_email,
     COALESCE(pay.paid_rub, 0) AS paid_rub, COALESCE(pay.pay_count, 0) AS pay_count,
     COALESCE(pay.pay_days, 0) AS pay_days, COALESCE(ai.cost_rub, 0) AS ai_cost_rub
 """
@@ -141,6 +141,7 @@ def _source(r: dict) -> dict | None:
             "name": r["ref_name"] or "",
             "group_id": r["ref_group_id"],
             "group_name": r["ref_group_name"] or "",
+            "group_color": r.get("ref_group_color") or "",
             "owner_email": r["ref_owner_email"] or "",
         }
     utm = r.get("first_utm") or {}
@@ -284,7 +285,7 @@ def filter_options() -> dict:
         for p in plans.list_plans(for_admin=True)
     ]
     with pool.connection() as conn:
-        groups = conn.execute("SELECT id, name FROM ref_link_groups ORDER BY position, id").fetchall()
+        groups = conn.execute("SELECT id, name, color FROM ref_link_groups ORDER BY position, id").fetchall()
         links = conn.execute(
             "SELECT id, code, name, group_id FROM ref_links WHERE owner_user_id IS NULL ORDER BY code"
         ).fetchall()

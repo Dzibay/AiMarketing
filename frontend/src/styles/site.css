@@ -669,25 +669,18 @@ button.stat-card[aria-pressed='true'] {
 }
 
 .admin-payments td,
-.admin-promos td,
-.admin-refs td {
+.admin-promos td {
   vertical-align: top;
 }
 
 .admin-payments .chip + .chip,
-.admin-promos .chip,
-.admin-refs .chip {
+.admin-promos .chip {
   margin-left: 0.35rem;
 }
 
 .admin-payments .cell-note,
-.admin-promos .cell-note,
-.admin-refs .cell-note {
+.admin-promos .cell-note {
   display: block;
-}
-
-.admin-refs td:first-child .cell-note {
-  word-break: break-all;
 }
 
 .check-row--inline {

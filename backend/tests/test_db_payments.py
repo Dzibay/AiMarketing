@@ -500,8 +500,8 @@ def test_ref_visits_and_stats(db, client):
         )
     items = {i["code"]: i for i in client.get("/api/admin/refs", headers=h).json()["items"]}
     vk = items["vk-ads"]
-    assert (vk["visits"], vk["registrations"], vk["verified"], vk["payers"], vk["payments"], vk["revenue_rub"]) == (
-        2, 3, 2, 1, 2, 1700.0,
+    assert (vk["clicks"], vk["registrations"], vk["payers"], vk["payments"], vk["repeat_payments"], vk["revenue_rub"]) == (
+        2, 3, 1, 2, 1, 1700.0,
     )
     assert items["other"]["registrations"] == 0
 
@@ -651,13 +651,19 @@ def test_personal_link_stats_and_bonus_once(db, kassa, client, monkeypatch):
 
     owner = make_user(pool, "Anton.B@example.com")
     plans.set_subscription(owner, plan_id=pro["id"], until=(now_msk() - timedelta(days=2)).date().isoformat())
-    me = client.get("/api/web/referral", headers=_auth(owner)).json()
+    # Условия видны без ссылки; ссылка создаётся, когда пользователь открыл блок.
+    before_open = client.get("/api/web/referral", headers=_auth(owner)).json()
+    assert before_open["code"] is None and before_open["url"] is None
+    assert _sql(pool, "SELECT COUNT(*) AS n FROM ref_links").fetchone()["n"] == 0
+    me = client.post("/api/web/referral", headers=_auth(owner)).json()
     assert me["code"].startswith("anton-b-") and me["url"] == f"https://aim.example/?ref={me['code']}"
     assert (me["registrations"], me["payers"], me["earned_days"]) == (0, 0, 0)
     assert me["bonus"] == {"referrer_days": 0, "invitee_days": 0}
     # Ссылка одна и та же; в админском списке ссылок её нет.
     assert client.get("/api/web/referral", headers=_auth(owner)).json()["code"] == me["code"]
-    assert client.get("/api/admin/refs", headers=h).json()["items"] == []
+    assert client.post("/api/web/referral", headers=_auth(owner)).json()["code"] == me["code"]
+    refs = client.get("/api/admin/refs", headers=h).json()
+    assert refs["items"] == [] and refs["personal_count"] == 1
 
     res = client.put("/api/admin/ref-bonus", headers=h, json={"referrer_days": 30, "invitee_days": 14})
     assert res.json() == {"referrer_days": 30, "invitee_days": 14}
@@ -701,7 +707,7 @@ def test_personal_link_stats_and_bonus_once(db, kassa, client, monkeypatch):
     _notify(client, "payment.succeeded", {"id": pid2})
     assert plans.subscription(owner)["ends_at"] == before
     assert _sql(pool, "SELECT COUNT(*) AS n FROM ref_bonuses").fetchone()["n"] == 1
-    personal = client.get("/api/admin/refs", headers=h).json()["personal"]
+    personal = client.get("/api/admin/ref-bonus", headers=h).json()["personal"]
     assert personal == {"links": 1, "registrations": 2, "bonuses": 1, "bonus_days": 44}
 
 
@@ -711,7 +717,7 @@ def test_test_payment_and_admin_link_give_no_bonus(db, kassa, client):
     referrals.save_bonus_settings({"referrer_days": 30, "invitee_days": 14})
     owner = make_user(pool, "o@example.com")
     plans.set_subscription(owner, plan_id=pro["id"])
-    code = referrals.my_link(owner)["code"]
+    code = referrals.my_link(owner, create=True)["code"]
     friend = make_user(pool, "f@example.com")
     assert referrals.attach(friend, code)
     referrals.save_link(None, {"code": "blog"})

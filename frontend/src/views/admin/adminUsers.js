@@ -46,8 +46,9 @@ export function activityText(iso, now = Date.now()) {
 
 /** Цвет группы ссылок: из номера группы, стабильный (своего цвета у группы в базе нет). */
 const GROUP_HUES = [150, 210, 30, 280, 340, 95, 190, 250, 10, 60]
-export function groupColor(groupId) {
+export function groupColor(groupId, color = '') {
   if (!groupId) return 'var(--faint)'
+  if (color) return color
   return `hsl(${GROUP_HUES[groupId % GROUP_HUES.length]} 55% 45%)`
 }
 
@@ -56,7 +57,7 @@ export function sourceView(src) {
   if (!src) return null
   if (src.kind === 'ref') {
     if (src.owner_email) return { text: `от ${src.owner_email}`, note: `личная ссылка · ${src.code}`, color: 'var(--faint)' }
-    return { text: src.name || src.code, note: [src.code, src.group_name].filter(Boolean).join(' · '), color: groupColor(src.group_id) }
+    return { text: src.name || src.code, note: [src.code, src.group_name].filter(Boolean).join(' · '), color: groupColor(src.group_id, src.group_color) }
   }
   if (src.kind === 'utm') {
     const u = src.utm || {}

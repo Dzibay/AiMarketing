@@ -144,13 +144,30 @@ export const adminApi = {
   deletePromo: (id) => send('DELETE', `/promos/${id}`),
 
   /** { items: [{ id, code, name, active, url, visits, registrations, verified, payers, payments, revenue_rub }] }. */
-  /** { items, bonus: { referrer_days, invitee_days }, personal: { links, registrations, bonuses, bonus_days } }. */
-  refs: () => call('/refs'),
+  /**
+   * Таблица реф-ссылок за период ({ p } или { from, to }; personal: 1 — и личные ссылки):
+   * { period, spark_from, groups: [{ id, name, color, position }], personal_count, items: [{ id, code, name, active,
+   * created_at, group_id, personal, owner_id, owner_email, url, clicks, spark: [7 дней], registrations, payers,
+   * payments, repeat_payments, revenue_rub, cascade, cascade_rub }] }.
+   */
+  refs: (params = {}) => {
+    const q = new URLSearchParams(Object.entries(params).filter(([, v]) => v !== '' && v != null).map(([k, v]) => [k, String(v)]))
+    return call(`/refs?${q}`)
+  },
+  /** Бонус за приглашение и сводка личных ссылок: { bonus, personal: { links, registrations, bonuses, bonus_days } }. */
+  refBonus: () => call('/ref-bonus'),
   /** Дни бонуса за приглашение по личной ссылке: { referrer_days, invitee_days }. */
   saveRefBonus: (payload) => send('PUT', '/ref-bonus', payload),
+  /** { code, name, active, group_id? } — без group_id группа при правке не меняется. */
   createRef: (payload) => send('POST', '/refs', payload),
   updateRef: (id, payload) => send('PUT', `/refs/${id}`, payload),
-  deleteRef: (id) => send('DELETE', `/refs/${id}`),
+  /** Несколько ссылок: action — move (в group_id, null — «Без группы»), activate, deactivate, delete. → { done }. */
+  bulkRefs: (ids, action, groupId = null) => send('POST', '/refs/bulk', { ids, action, group_id: groupId }),
+  createRefGroup: (payload) => send('POST', '/ref-groups', payload),
+  updateRefGroup: (id, payload) => send('PUT', `/ref-groups/${id}`, payload),
+  deleteRefGroup: (id) => send('DELETE', `/ref-groups/${id}`),
+  /** Порядок групп: ids по очереди → { groups }. */
+  orderRefGroups: (ids) => send('PUT', '/ref-groups/order', { ids }),
 
   /** Расход сервиса за месяц (ГГГГ-ММ, по умолчанию текущий): по видам и по пользователям. */
   usage: (month = '') => call(`/usage${month ? `?month=${encodeURIComponent(month)}` : ''}`),

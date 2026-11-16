@@ -698,9 +698,18 @@ def web_payment_check(payment_id: int, user_id: int = Depends(require_web_identi
 
 @router.get("/referral")
 def web_referral(user_id: int = Depends(require_web_identity)) -> dict:
-    """«Ссылка для друзей»: личная реф-ссылка, сколько по ней зарегистрировались и оплатили, бонус."""
+    """«Ссылка для друзей»: условия бонуса, сколько пришло и оплатило; code и url пустые, пока ссылку не открыли."""
     try:
         return referrals.my_link(user_id)
+    except YandexError as exc:
+        raise _http(exc) from exc
+
+
+@router.post("/referral")
+def web_referral_open(user_id: int = Depends(require_web_identity)) -> dict:
+    """Пользователь открыл блок «Ссылка для друзей» — создать личную ссылку (уже есть — вернуть её)."""
+    try:
+        return referrals.my_link(user_id, create=True)
     except YandexError as exc:
         raise _http(exc) from exc
 

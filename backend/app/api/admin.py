@@ -10,6 +10,7 @@ from pydantic import BaseModel
 from app import ai, ai_bridge, ai_feedback, auth, billing, events, image_gen, mailer, payments, plans, promos, referrals, site_check, site_extras, support, wordstat
 from app.api.web import _http
 from app import admin_dashboard as admin_dashboard_mod
+from app import admin_refs as admin_refs_mod
 from app import admin_users as admin_users_mod
 from app.users import UsersError, count_users, mark_email_verified, set_user_blocked
 from app.yandex import YandexError, yandex_configured
@@ -605,6 +606,7 @@ class RefLinkBody(BaseModel):
     code: str = ""
     name: str = ""
     active: bool = True
+    group_id: int | None = None
 
 
 class RefBonusBody(BaseModel):
@@ -612,10 +614,31 @@ class RefBonusBody(BaseModel):
     invitee_days: int = 0
 
 
+class RefGroupBody(BaseModel):
+    name: str = ""
+    color: str = ""
+
+
+class RefGroupOrderBody(BaseModel):
+    ids: list[int] = []
+
+
+class RefBulkBody(BaseModel):
+    ids: list[int] = []
+    action: str = ""
+    group_id: int | None = None
+
+
 @router.get("/refs")
-def admin_refs() -> dict:
-    """Ссылки из админки; личные ссылки пользователей — одной сводкой, и бонус за приглашение."""
-    return {"items": referrals.list_links(), "bonus": referrals.bonus_settings(), "personal": referrals.personal_summary()}
+def admin_refs(p: str = "all", date_from: str = Query("", alias="from"), date_to: str = Query("", alias="to"), personal: bool = False) -> dict:
+    """Таблица реф-ссылок за период (по умолчанию — всё время), группы и число личных ссылок; personal=1 — и они."""
+    return admin_refs_mod.build(p[:8], date_from[:10] or None, date_to[:10] or None, personal)
+
+
+@router.get("/ref-bonus")
+def admin_ref_bonus_get() -> dict:
+    """Бонус за приглашение и сводка по личным ссылкам — для «Настройки → Реф-бонус»."""
+    return {"bonus": referrals.bonus_settings(), "personal": referrals.personal_summary()}
 
 
 @router.put("/ref-bonus")
@@ -625,12 +648,40 @@ def admin_ref_bonus(body: RefBonusBody) -> dict:
 
 @router.post("/refs")
 def admin_ref_create(body: RefLinkBody) -> dict:
-    return _call(referrals.save_link, None, body.model_dump())
+    return _call(referrals.save_link, None, body.model_dump(exclude_unset=True))
 
 
 @router.put("/refs/{link_id}")
 def admin_ref_update(link_id: int, body: RefLinkBody) -> dict:
-    return _call(referrals.save_link, link_id, body.model_dump())
+    """group_id меняется, только если он есть в запросе."""
+    return _call(referrals.save_link, link_id, body.model_dump(exclude_unset=True))
+
+
+@router.post("/refs/bulk")
+def admin_refs_bulk(body: RefBulkBody) -> dict:
+    """Несколько ссылок сразу: move (в group_id, null — «Без группы»), activate, deactivate, delete."""
+    return _call(admin_refs_mod.bulk, body.ids, body.action, body.group_id)
+
+
+@router.post("/ref-groups")
+def admin_ref_group_create(body: RefGroupBody) -> dict:
+    return _call(admin_refs_mod.save_group, None, body.model_dump())
+
+
+@router.put("/ref-groups/order")
+def admin_ref_groups_order(body: RefGroupOrderBody) -> dict:
+    return {"groups": admin_refs_mod.order_groups(body.ids)}
+
+
+@router.put("/ref-groups/{group_id}")
+def admin_ref_group_update(group_id: int, body: RefGroupBody) -> dict:
+    return _call(admin_refs_mod.save_group, group_id, body.model_dump())
+
+
+@router.delete("/ref-groups/{group_id}")
+def admin_ref_group_delete(group_id: int) -> dict:
+    _call(admin_refs_mod.delete_group, group_id)
+    return {"ok": True}
 
 
 @router.delete("/refs/{link_id}")

@@ -217,6 +217,14 @@
         <small class="plan-cap">Ссылка для друзей</small>
         <p v-if="refError" class="form-error">{{ refError }}</p>
         <p v-else-if="!referral" class="plan-muted">Загружаем…</p>
+        <template v-else-if="!referral.url">
+          <p class="plan-muted">
+            {{ bonusText || 'Поделитесь личной ссылкой — мы покажем, сколько человек по ней зарегистрировались и оплатили.' }}
+          </p>
+          <button class="btn" type="button" :disabled="refBusy" @click="openReferral">
+            {{ refBusy ? 'Создаём…' : 'Получить ссылку' }}
+          </button>
+        </template>
         <template v-else>
           <div class="plan-irow">
             <div v-field class="field">
@@ -542,6 +550,7 @@ async function watchPayment(id, tries = 0) {
 
 const referral = ref(null)
 const refError = ref('')
+const refBusy = ref(false)
 
 const daysText = (n) => `${n} ${plural(n, 'день', 'дня', 'дней')}`
 
@@ -562,6 +571,19 @@ async function loadReferral() {
     referral.value = await webApi.referral()
   } catch (err) {
     refError.value = errorText(err)
+  }
+}
+
+// Ссылка создаётся только сейчас — когда пользователь сам открыл блок; до этого видны лишь условия бонуса.
+async function openReferral() {
+  refBusy.value = true
+  refError.value = ''
+  try {
+    referral.value = await webApi.openReferral()
+  } catch (err) {
+    refError.value = errorText(err)
+  } finally {
+    refBusy.value = false
   }
 }
 

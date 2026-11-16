@@ -449,3 +449,207 @@ a.adm-status__item:hover {
   margin-bottom: 0.75rem;
   overflow-y: auto;
 }
+
+/* ---- реф-ссылки ---- */
+
+.adm-refs {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 14px;
+}
+
+.adm-refs.is-loading .adm-refs__wrap {
+  opacity: 0.55;
+  transition: opacity 0.15s;
+}
+
+.adm-refs__bar,
+.adm-refs__sel {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 10px;
+}
+
+.adm-refs__bar small {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.adm-refs__gap {
+  flex: 1;
+}
+
+/* Что делать с выбранными — полоса над таблицей, пока что-то выбрано. */
+.adm-refs__sel {
+  position: sticky;
+  top: 8px;
+  z-index: 5;
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-card);
+  background: var(--surface);
+  box-shadow: 0 6px 18px rgb(0 0 0 / 6%);
+}
+
+.adm-refs__selnote {
+  color: var(--muted);
+  font-size: 12.5px;
+}
+
+.adm-refs__table {
+  width: 100%;
+  font-size: 13.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+.adm-refs__table th,
+.adm-refs__table td {
+  padding: 7px 8px;
+  white-space: nowrap;
+  vertical-align: middle;
+}
+
+.adm-refs__table th {
+  cursor: default;
+}
+
+.adm-refs__table tr.is-selected td {
+  background: color-mix(in srgb, var(--lime) 12%, transparent);
+}
+
+.adm-refs__check {
+  width: 28px;
+}
+
+.adm-refs__id {
+  color: var(--faint);
+}
+
+.adm-refs__code {
+  font-size: 12.5px;
+}
+
+.adm-refs__code + .chip {
+  margin-left: 6px;
+}
+
+.adm-refs__name,
+.adm-refs__url > span {
+  display: inline-block;
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: middle;
+}
+
+.adm-refs__url > span {
+  max-width: 200px;
+  color: var(--muted);
+}
+
+.adm-refs__copy.icon-btn {
+  width: 28px;
+  height: 28px;
+  margin-left: 4px;
+  border-color: transparent;
+  background: transparent;
+  vertical-align: middle;
+}
+
+.adm-refs__copy.icon-btn svg {
+  width: 15px;
+  height: 15px;
+}
+
+.adm-refs__spark {
+  width: 84px;
+  min-width: 84px;
+}
+
+.adm-refs__spark .sparkline {
+  height: 22px;
+}
+
+.adm-refs__date {
+  color: var(--muted);
+}
+
+.adm-refs__gear {
+  width: 40px;
+  text-align: right;
+}
+
+/* Строка группы: цвет, название, число ссылок и итоги по колонкам. */
+.adm-refs__group td {
+  border-top: 1px solid var(--line);
+  background: var(--surface);
+  font-weight: 700;
+}
+
+tbody:first-of-type .adm-refs__group td {
+  border-top: 0;
+}
+
+.adm-refs__toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 32px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--ink);
+  font: inherit;
+  cursor: pointer;
+}
+
+.adm-refs__chev {
+  width: 16px;
+  height: 16px;
+  color: var(--muted);
+  transform: rotate(90deg);
+  transition: transform 0.15s;
+}
+
+.is-collapsed .adm-refs__chev {
+  transform: none;
+}
+
+.adm-refs__dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+}
+
+.adm-refs__count {
+  padding: 1px 7px;
+  border-radius: var(--pill);
+  background: var(--line);
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.adm-refs__empty td {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.adm-refs__swatches {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.adm-refs__swatch {
+  width: 30px;
+  height: 30px;
+  border: 0;
+  border-radius: 8px;
+  cursor: pointer;
+  box-shadow: inset 0 0 0 1px rgb(0 0 0 / 12%);
+}
+
+.adm-refs__swatch.is-on {
+  box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px var(--ink);
+}

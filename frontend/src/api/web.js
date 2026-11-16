@@ -352,8 +352,13 @@ export const webApi = {
     request(`/api/web/payments/quote?plan_id=${encodeURIComponent(planId)}&months=${encodeURIComponent(months)}`),
   /** Платёж в ЮKassa: { payment, confirmation_url } — туда уводим пользователя. */
   createPayment: (planId, months = 1) => post('/api/web/payments', { plan_id: planId, months }),
-  /** «Ссылка для друзей»: { code, url, active, registrations, payers, earned_days, bonus: { referrer_days, invitee_days } }. */
+  /**
+   * «Ссылка для друзей»: { code, url, active, registrations, payers, earned_days, bonus: { referrer_days, invitee_days } }.
+   * Пока пользователь не открыл блок, ссылки нет: code и url — null.
+   */
   referral: () => request('/api/web/referral'),
+  /** Открыли блок «Ссылка для друзей» — создать личную ссылку (или вернуть уже созданную); ответ как у referral. */
+  openReferral: () => post('/api/web/referral'),
   /** Перепроверка платежа после возврата с ЮKassa: { payment }. */
   checkPayment: (id) => post(`/api/web/payments/${id}/check`),
   /** Промокод в кабинете: { kind, message, last_day }. */

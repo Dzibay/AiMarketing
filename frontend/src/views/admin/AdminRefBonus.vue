@@ -55,7 +55,7 @@ async function saveBonus() {
 
 onMounted(async () => {
   try {
-    const data = await adminApi.refs()
+    const data = await adminApi.refBonus()
     Object.assign(bonus, data.bonus || {})
     personal.value = data.personal || null
   } catch (err) {

@@ -5,8 +5,8 @@
 users.ref_link_id. Статистика ссылки: переходы, регистрации, подтверждённые почты, оплаты и выручка
 (без тестовых платежей и за вычетом возвратов).
 
-Личная ссылка «Ссылка для друзей» — та же строка ref_links с owner_user_id: создаётся при первом
-открытии страницы «Тариф», в админском списке ссылок её нет. Когда приглашённый по ней впервые оплатит
+Личная ссылка «Ссылка для друзей» — та же строка ref_links с owner_user_id: создаётся, когда пользователь
+открыл блок «Ссылка для друзей» на странице «Тариф»; в админке личные ссылки — отдельной группой. Когда приглашённый по ней впервые оплатит
 тариф (не тестовым платежом), оба получают дни к подписке — сколько, задаёт админ. Бонус выдаётся один
 раз на приглашённого (ref_bonuses), в той же транзакции, что и продление по платежу.
 """
@@ -75,56 +75,44 @@ def attach(user_id: int, code: str) -> bool:
 # --- Админка ------------------------------------------------------------------------------------
 
 
-_STATS = """
-    SELECT l.id, l.code, l.name, l.visits, l.active, l.created_at,
-           COUNT(u.id) AS registrations,
-           COUNT(u.id) FILTER (WHERE u.email_verified_at IS NOT NULL) AS verified,
-           COUNT(pay.user_id) AS payers,
-           COALESCE(SUM(pay.n), 0) AS payments,
-           COALESCE(SUM(pay.rub), 0) AS revenue_rub
-    FROM ref_links l
-    LEFT JOIN users u ON u.ref_link_id = l.id
-    LEFT JOIN (
-        SELECT user_id, COUNT(*) AS n, SUM(amount_rub - refunded_rub) AS rub
-        FROM payments WHERE status = 'succeeded' AND NOT test AND user_id IS NOT NULL
-        GROUP BY user_id
-    ) pay ON pay.user_id = u.id
-"""
+def link_url(code: str, base: str | None = None) -> str:
+    base = public_base_url() if base is None else base
+    return f"{base}/?ref={code}" if base else f"/?ref={code}"
 
 
-def _out(row: dict, base: str) -> dict:
+def _get(lid: int) -> dict | None:
+    with pool.connection() as conn:
+        row = conn.execute(
+            "SELECT id, code, name, active, created_at, group_id FROM ref_links WHERE id = %s", (lid,)
+        ).fetchone()
+    if row is None:
+        return None
     return {
         "id": int(row["id"]),
         "code": row["code"],
         "name": row["name"] or "",
         "active": bool(row["active"]),
         "created_at": row["created_at"].isoformat(),
-        "url": f"{base}/?ref={row['code']}" if base else f"/?ref={row['code']}",
-        "visits": int(row["visits"]),
-        "registrations": int(row["registrations"]),
-        "verified": int(row["verified"]),
-        "payers": int(row["payers"]),
-        "payments": int(row["payments"]),
-        "revenue_rub": float(row["revenue_rub"]),
+        "group_id": row["group_id"],
+        "url": link_url(row["code"]),
     }
 
 
-def list_links() -> list[dict]:
-    base = public_base_url()
-    with pool.connection() as conn:
-        rows = conn.execute(
-            _STATS + " WHERE l.owner_user_id IS NULL GROUP BY l.id ORDER BY l.created_at DESC, l.id DESC"
-        ).fetchall()
-    return [_out(r, base) for r in rows]
-
-
-def _get(lid: int) -> dict | None:
-    with pool.connection() as conn:
-        row = conn.execute(_STATS + " WHERE l.id = %s GROUP BY l.id", (lid,)).fetchone()
-    return _out(row, public_base_url()) if row else None
+def _group_id(conn, value) -> int | None:
+    """Группа ссылки: None или 0 — «Без группы»; несуществующая — ошибка."""
+    if value in (None, "", 0):
+        return None
+    try:
+        gid = int(value)
+    except (TypeError, ValueError) as exc:
+        raise YandexError("ref-field", "Нет такой группы") from exc
+    if conn.execute("SELECT 1 FROM ref_link_groups WHERE id = %s", (gid,)).fetchone() is None:
+        raise YandexError("not-found", "Группа не найдена")
+    return gid
 
 
 def save_link(lid: int | None, data: dict) -> dict:
+    """Ссылка из админки. group_id меняется, только если передан (None — «Без группы»)."""
     code = normalize(data.get("code"))
     if not CODE_RE.match(code):
         raise YandexError("ref-field", "Код — от 2 до 40 символов: латинские буквы, цифры, «-» и «_»")
@@ -134,14 +122,20 @@ def save_link(lid: int | None, data: dict) -> dict:
         taken = conn.execute("SELECT 1 FROM ref_links WHERE code = %s AND id IS DISTINCT FROM %s", (code, lid)).fetchone()
         if taken:
             raise YandexError("exists", "Такой код уже есть")
+        group = _group_id(conn, data.get("group_id")) if "group_id" in data else None
         if lid is None:
             row = conn.execute(
-                "INSERT INTO ref_links (code, name, active) VALUES (%s, %s, %s) RETURNING id", (code, name, active)
+                "INSERT INTO ref_links (code, name, active, group_id) VALUES (%s, %s, %s, %s) RETURNING id",
+                (code, name, active, group),
             ).fetchone()
         else:
             row = conn.execute(
-                "UPDATE ref_links SET code = %s, name = %s, active = %s WHERE id = %s RETURNING id",
-                (code, name, active, lid),
+                """
+                UPDATE ref_links SET code = %s, name = %s, active = %s,
+                       group_id = CASE WHEN %s THEN %s ELSE group_id END
+                WHERE id = %s RETURNING id
+                """,
+                (code, name, active, "group_id" in data, group, lid),
             ).fetchone()
     if row is None:
         raise YandexError("not-found", NOT_FOUND)
@@ -275,10 +269,16 @@ def _ensure_link(user_id: int) -> dict:
     raise YandexError("ref-busy", "Не удалось создать ссылку — повторите позже")
 
 
-def my_link(user_id: int) -> dict:
-    """«Ссылка для друзей»: ссылка (создаётся при первом обращении), сколько пришло и оплатило, бонус."""
-    link = _ensure_link(user_id)
-    base = public_base_url()
+def my_link(user_id: int, *, create: bool = False) -> dict:
+    """«Ссылка для друзей»: условия бонуса, ссылка, сколько пришло и оплатило.
+
+    Ссылка создаётся только по create=True — когда пользователь открыл блок; до того code и url пустые.
+    """
+    if create:
+        link = _ensure_link(user_id)
+    else:
+        with pool.connection() as conn:
+            link = conn.execute("SELECT * FROM ref_links WHERE owner_user_id = %s", (user_id,)).fetchone()
     with pool.connection() as conn:
         stats = conn.execute(
             """
@@ -289,15 +289,15 @@ def my_link(user_id: int) -> dict:
                    )) AS payers
             FROM users u WHERE u.ref_link_id = %s
             """,
-            (link["id"],),
+            (link["id"] if link else None,),
         ).fetchone()
         earned = conn.execute(
             "SELECT COALESCE(SUM(referrer_days), 0) AS days FROM ref_bonuses WHERE referrer_user_id = %s", (user_id,)
         ).fetchone()
     return {
-        "code": link["code"],
-        "url": f"{base}/?ref={link['code']}" if base else f"/?ref={link['code']}",
-        "active": bool(link["active"]),
+        "code": link["code"] if link else None,
+        "url": link_url(link["code"]) if link else None,
+        "active": bool(link["active"]) if link else False,
         "registrations": int(stats["registrations"]),
         "payers": int(stats["payers"]),
         "earned_days": int(earned["days"]),
