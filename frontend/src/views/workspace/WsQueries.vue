@@ -80,7 +80,7 @@
 
       <template v-if="junkGroups.length">
         <h2 class="section-h">
-          Мусор по минус-фразам <span class="cgroup__n">{{ junkGroups.length }}</span>
+          Мусор по минус-фразам<TermHint term="minus" /> <span class="cgroup__n">{{ junkGroups.length }}</span>
           <small class="tri-note">одна минус-фраза отсекает всю группу</small>
         </h2>
         <div class="rgrid">

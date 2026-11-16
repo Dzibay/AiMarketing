@@ -3,7 +3,8 @@
 Факты собираются одним запросом из уже существующих таблиц (подключения, кабинеты, проекты,
 Telegram, чаты ИИ); шаги из них строят чистые функции build_wizard и build_onboarding — их и тестируем.
 Мастер: кто вы → почта → Яндекс → проекты → загрузка → первый вопрос ИИ. Пока он не пройден и не скрыт,
-Сводка ведёт на него; после — остаются необязательные шаги (кампании, шаблон ссылки, цели, Telegram).
+Сводка ведёт на него; после — чек-лист «Что ещё настроить» (кампании, шаблон ссылки, цели, первый вопрос
+ИИ, первое решение по его предложению, Telegram).
 """
 
 from __future__ import annotations
@@ -20,6 +21,8 @@ SELECT
     (SELECT COUNT(*) FROM yandex_connections y WHERE y.user_id = u.id AND y.use_metrika) AS metrika_connections,
     EXISTS (SELECT 1 FROM ai_messages m JOIN ai_chats c ON c.id = m.chat_id
             WHERE c.user_id = u.id AND m.role = 'user') AS asked_ai,
+    EXISTS (SELECT 1 FROM ai_actions a
+            WHERE a.user_id = u.id AND NOT a.auto AND a.status <> 'pending') AS decided_ai,
     (SELECT COUNT(*) FROM yandex_connections y WHERE y.user_id = u.id AND y.use_direct) AS direct_connections,
     (SELECT COUNT(*) FROM direct_accounts a WHERE a.user_id = u.id AND a.enabled) AS direct_accounts,
     (SELECT COUNT(*) FROM direct_accounts a
@@ -53,6 +56,7 @@ def load_facts(user_id: int) -> dict:
         "telegram_linked": bool(row.get("telegram_linked")),
         "email_verified": bool(row.get("email_verified")),
         "asked_ai": bool(row.get("asked_ai")),
+        "decided_ai": bool(row.get("decided_ai")),
         "role": row.get("role") or "",
     }
     for key in ("metrika_connections", "direct_connections", "direct_accounts", "direct_loaded", "load_errors"):
@@ -257,6 +261,28 @@ def build_onboarding(facts: dict, *, telegram_available: bool) -> dict:
             any(w["has_goal"] for w in workspaces),
             f"/w/{target['id']}/settings" if target else None,
             **({} if has_ws else blocked),
+        )
+    )
+
+    asked = facts.get("asked_ai", False)
+    steps.append(
+        _step(
+            "ask_ai",
+            "Задайте первый вопрос ИИ",
+            "Например, «С чего начать?» — ИИ посмотрит кампании, запросы и статистику",
+            asked,
+            "/cabinet/chat" if has_ws else None,
+            **({} if has_ws else blocked),
+        )
+    )
+    steps.append(
+        _step(
+            "first_decision",
+            "Примите или отклоните первое предложение",
+            "Правки ИИ приходят карточкой «Выполнить / Отклонить»: в Директе ничего не меняется без вашего «да»",
+            facts.get("decided_ai", False),
+            "/cabinet/pending" if asked else None,
+            **({} if asked else {"status": "blocked", "detail": "Сначала задайте вопрос ИИ"}),
         )
     )
 

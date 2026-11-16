@@ -186,7 +186,10 @@
             <span class="tops__num tops__cost">
               <strong>{{ rub(c.cost_kopecks) }}</strong>
             </span>
-            <span class="tops__num tops__conv">
+            <span
+              v-tip="'Конверсии — заявки и покупки из Метрики. CPA — сколько в среднем стоила одна: расход, делённый на конверсии.'"
+              class="tops__num tops__conv"
+            >
               <strong>{{ num(c.conversions) }} конв.</strong>
               <small>CPA {{ c.cpa_kopecks != null ? rub(c.cpa_kopecks) : '—' }}</small>
             </span>

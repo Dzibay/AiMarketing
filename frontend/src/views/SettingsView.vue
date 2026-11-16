@@ -133,7 +133,7 @@
       </section>
       <section class="panel">
         <h2>Экспертный режим</h2>
-        <UiSwitch :checked="expert" @change="setExpert($event.target.checked)">
+        <UiSwitch v-coach="'mode'" :checked="expert" @change="setExpert($event.target.checked)">
           {{ expert ? 'Включён' : 'Выключен' }}
         </UiSwitch>
         <p class="hint">

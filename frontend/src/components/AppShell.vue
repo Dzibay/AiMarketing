@@ -13,12 +13,13 @@
             class="dside__mode"
             to="/cabinet/settings/interface"
             v-tip.right="'Включён экспертный режим — что он добавляет и как выключить'"
+            v-coach="'mode'"
           >
             эксперт
           </RouterLink>
         </div>
 
-        <RouterLink v-if="accessOk" class="dside__newchat" :to="chatTo" v-tip.right="tip('Новый чат')">
+        <RouterLink v-if="accessOk" v-coach="'ai'" class="dside__newchat" :to="chatTo" v-tip.right="tip('Новый чат')">
           <Plus aria-hidden="true" />
           <span class="srow__t">Новый чат</span>
         </RouterLink>
@@ -197,6 +198,7 @@
           :class="{ active: route.meta.section === 'pending' }"
           to="/cabinet/pending"
           v-tip="'Предложения ИИ, которые ждут вашего решения'"
+          v-coach="'pending'"
         >
           Ждёт решения: {{ pendingCount }}
         </RouterLink>
@@ -308,6 +310,7 @@
       <p class="hint">Ctrl + \ работает всегда, остальные — в экспертном режиме, когда курсор не в поле ввода.</p>
     </Modal>
     <UndoHost />
+    <UiCoach />
   </div>
 </template>
 
@@ -331,6 +334,7 @@ import {
 import BottomBar from './BottomBar.vue'
 import TolkMark from './TolkMark.vue'
 import UndoHost from './UndoHost.vue'
+import UiCoach from './ui/UiCoach.vue'
 import LoadsIndicator from './LoadsIndicator.vue'
 import PlanOffers from './PlanOffers.vue'
 import ProfileMenu from './ProfileMenu.vue'

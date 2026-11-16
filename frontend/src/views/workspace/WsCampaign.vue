@@ -43,7 +43,11 @@
 
         <div class="bigstats">
           <div class="bigstat">
-            <span>Потрачено за 7 дней</span>
+            <span
+              >Потрачено за 7 дней<TermHint
+                title="Как списываются деньги"
+                text="Директ берёт деньги только за клики по объявлениям. В отдельные дни расход бывает выше дневного бюджета, но за неделю Директ укладывается в лимит."
+            /></span>
             <b>{{ rub(row.cost_kopecks || 0) }}</b>
             <small v-if="weekBudget">{{ pct(budgetShare, 0) }} недельного бюджета</small>
             <small v-else>{{ num(row.clicks || 0) }} {{ plural(row.clicks || 0, 'клик', 'клика', 'кликов') }}</small>
@@ -63,7 +67,11 @@
         <div class="ccard camp-budget">
           <div class="prow">
             <div class="prow__main">
-              <b>{{ dailyBudget ? `Бюджет ${rubles(dailyBudget)} в день` : 'Бюджет задан стратегией' }}</b>
+              <b>
+                {{ dailyBudget ? `Бюджет ${rubles(dailyBudget)} в день` : 'Бюджет задан стратегией' }}<TermHint
+                  :term="dailyBudget ? 'week_budget' : 'strategy'"
+                />
+              </b>
               <span class="meta-note">
                 <template v-if="weekBudget">
                   За 7 дней потрачено {{ rub(row.cost_kopecks || 0) }} — {{ pct(budgetShare, 0) }} от {{ rubles(weekBudget) }}

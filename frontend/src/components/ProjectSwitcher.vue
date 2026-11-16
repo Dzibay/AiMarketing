@@ -8,6 +8,7 @@
       :aria-expanded="open"
       :aria-label="triggerLabel"
       v-tip="row ? null : 'Сменить проект'"
+      v-coach="row ? null : 'project'"
       @click="toggle"
       @keydown.down.prevent="openPanel"
     >

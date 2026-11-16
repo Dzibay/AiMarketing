@@ -8,7 +8,7 @@
       <Megaphone aria-hidden="true" />
       <span>Кампании</span>
     </RouterLink>
-    <RouterLink v-if="accessOk" class="bbar__item bbar__ai" :to="chatTo" aria-label="Новый чат с ИИ">
+    <RouterLink v-if="accessOk" v-coach="'ai'" class="bbar__item bbar__ai" :to="chatTo" aria-label="Новый чат с ИИ">
       <span class="bbar__orb" aria-hidden="true"><Sparkles /></span>
       <span aria-hidden="true">ИИ</span>
     </RouterLink>
@@ -18,6 +18,7 @@
       :class="{ active: section === 'pending' }"
       to="/cabinet/pending"
       :aria-label="pendingCount ? `Решения, ждут: ${pendingCount}` : 'Решения'"
+      v-coach="'pending'"
     >
       <span class="bbar__ico" aria-hidden="true">
         <ListChecks />

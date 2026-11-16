@@ -32,20 +32,23 @@ def _done_facts() -> dict:
         direct_accounts=2,
         direct_loaded=2,
         workspaces=[_ws(5, campaigns=3, template=True, goal=True)],
+        asked_ai=True,
+        decided_ai=True,
     )
 
 
 def test_new_user_sees_every_step_in_order_and_nothing_done():
     result = build_onboarding(_facts(), telegram_available=True)
     assert [s["id"] for s in result["steps"]] == [
-        "direct", "first_load", "workspace", "campaigns", "link_template", "goals", "telegram",
+        "direct", "first_load", "workspace", "campaigns", "link_template", "goals", "ask_ai", "first_decision",
+        "telegram",
     ]
-    assert result["done"] == 0 and result["total"] == 7
+    assert result["done"] == 0 and result["total"] == 9
     assert result["visible"] and not result["complete"]
     steps = _steps(result)
     assert steps["direct"]["status"] == "todo" and steps["direct"]["to"] == "/cabinet/connections"
     # Шаги, которым нужно проект, ждут его и никуда не ведут.
-    for key in ("campaigns", "link_template", "goals"):
+    for key in ("campaigns", "link_template", "goals", "ask_ai"):
         assert steps[key]["status"] == "blocked" and steps[key]["to"] is None
     assert steps["first_load"]["status"] == "blocked"
     # ИИ — общий для всех клиентов: ключ добавлять не нужно.
@@ -112,6 +115,19 @@ def test_telegram_step_is_hidden_when_bot_is_not_configured():
     assert without_bot["complete"] and not without_bot["visible"]
 
 
+def test_ai_steps_follow_the_first_question_and_decision():
+    ws = [_ws(1, campaigns=1)]
+    steps = _steps(build_onboarding(_facts(workspaces=ws), telegram_available=True))
+    assert steps["ask_ai"]["status"] == "todo" and steps["ask_ai"]["to"] == "/cabinet/chat"
+    assert steps["first_decision"]["status"] == "blocked"
+    assert steps["first_decision"]["detail"] == "Сначала задайте вопрос ИИ"
+    steps = _steps(build_onboarding(_facts(workspaces=ws, asked_ai=True), telegram_available=True))
+    assert steps["ask_ai"]["done"] and steps["first_decision"]["status"] == "todo"
+    assert steps["first_decision"]["to"] == "/cabinet/pending"
+    steps = _steps(build_onboarding(_facts(workspaces=ws, asked_ai=True, decided_ai=True), telegram_available=True))
+    assert steps["first_decision"]["done"]
+
+
 def test_dismissed_card_stays_hidden_but_reports_progress():
     result = build_onboarding(_facts(dismissed=True, direct_connections=1), telegram_available=True)
     assert result["dismissed"] and not result["visible"]
@@ -150,7 +166,7 @@ def test_wizard_names_the_missing_yandex_role():
 
 
 def test_wizard_complete_after_first_question():
-    facts = dict(_done_facts(), email_verified=True, metrika_connections=1)
+    facts = dict(_done_facts(), email_verified=True, metrika_connections=1, asked_ai=False)
     assert build_wizard(facts)["current"] == "role"  # мастер ещё идёт — спросим и роль
     assert build_wizard(dict(facts, role="owner"))["current"] == "ai"
     result = build_wizard(dict(facts, asked_ai=True))

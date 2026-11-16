@@ -167,7 +167,13 @@
                   <p v-if="phone && offCount(a)" class="action-card__acts-note">
                     {{ allOff(a) ? 'Сняты все строки — отклоните действие' : `Снято строк: ${offCount(a)} — выполню без них` }}
                   </p>
-                  <button class="btn btn--accent" type="button" :disabled="deciding || allOff(a)" @click="decide(a, true)">
+                  <button
+                    v-coach="'proposal'"
+                    class="btn btn--accent"
+                    type="button"
+                    :disabled="deciding || allOff(a)"
+                    @click="decide(a, true)"
+                  >
                     <Check aria-hidden="true" />
                     {{ offCount(a) && !phone ? `Выполнить без снятых (${offCount(a)})` : 'Выполнить' }}
                   </button>

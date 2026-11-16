@@ -59,7 +59,13 @@
           </div>
           <div class="prow__acts prow__acts--decide">
             <template v-if="a.kind === 'write'">
-              <button class="btn btn--accent" type="button" :disabled="!!busy[a.id]" @click="decide(a, true)">
+              <button
+                v-coach="'proposal'"
+                class="btn btn--accent"
+                type="button"
+                :disabled="!!busy[a.id]"
+                @click="decide(a, true)"
+              >
                 Выполнить
               </button>
               <button class="btn btn--ghost" type="button" :disabled="!!busy[a.id]" @click="decide(a, false)">

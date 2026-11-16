@@ -101,6 +101,7 @@
               class="btn btn--ghost btn--sm"
               type="button"
               v-tip="a.undo.label"
+              v-coach="'undo'"
               @click="undoId = a.id"
             >
               <Undo2 aria-hidden="true" />{{ expert ? 'Откатить' : 'Вернуть как было' }}

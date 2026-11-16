@@ -15,6 +15,7 @@ def test_facts_come_from_existing_tables(db):
         "telegram_linked": False,
         "email_verified": False,
         "asked_ai": False,
+        "decided_ai": False,
         "metrika_connections": 0,
         "direct_connections": 0,
         "direct_accounts": 0,
@@ -44,12 +45,25 @@ def test_facts_come_from_existing_tables(db):
         chat = conn.execute(
             "INSERT INTO ai_chats (user_id, workspace_id) VALUES (%s, NULL) RETURNING id", (user,)
         ).fetchone()["id"]
-        conn.execute("INSERT INTO ai_messages (chat_id, role, content) VALUES (%s, 'user', 'С чего начать?')", (chat,))
+        msg = conn.execute(
+            "INSERT INTO ai_messages (chat_id, role, content) VALUES (%s, 'user', 'С чего начать?') RETURNING id", (chat,)
+        ).fetchone()["id"]
+        # Сам ИИ выполнил правку (полный доступ) — это не решение пользователя.
+        conn.execute(
+            "INSERT INTO ai_actions (chat_id, message_id, user_id, status, auto) VALUES (%s, %s, %s, 'done', TRUE)",
+            (chat, msg, user),
+        )
+    assert not onboarding.load_facts(user)["decided_ai"]
+    with db.connection() as conn:
+        conn.execute(
+            "INSERT INTO ai_actions (chat_id, message_id, user_id, status) VALUES (%s, %s, %s, 'rejected')",
+            (chat, msg, user),
+        )
 
     facts = onboarding.load_facts(user)
     assert facts["direct_connections"] == 1
     assert facts["direct_accounts"] == 2 and facts["direct_loaded"] == 1 and facts["load_errors"] == 1
-    assert facts["telegram_linked"] and facts["email_verified"] and facts["asked_ai"]
+    assert facts["telegram_linked"] and facts["email_verified"] and facts["asked_ai"] and facts["decided_ai"]
     assert facts["metrika_connections"] == 1
     assert facts["workspaces"] == [
         {"id": ws, "name": "site.ru", "campaigns": 1, "has_template": True, "has_goal": True}
