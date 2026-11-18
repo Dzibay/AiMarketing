@@ -65,7 +65,7 @@ def test_spec_problems_text():
     assert view["sitelinks"] == ["Цены Лучшие цены"] and view["callouts"] == []
     problems = ai_agent._spec_requirement_problems({"titles": 3, "callouts": 1, "banned_words": ["лучш"]}, [view])
     assert "в каждой группе не меньше 3 заголовков — не хватает: «Окна» — 1" in problems
-    assert "у каждого объявления не меньше 1 уточнений" in problems and "«лучш» в «Цены Лучшие цены»" in problems
+    assert "у каждого объявления не меньше 1 уточнения" in problems and "«лучш» в «Цены Лучшие цены»" in problems
     # Расширения взяты у готового объявления — их не посчитать, и это не нарушение.
     copied = ai_agent._spec_view("Окна", ["окна"], False, {"extras_from_ad_row_id": 5}, (["A"], ["B"]))
     assert ai_agent._spec_requirement_problems({"callouts": 1}, [copied]) == ""

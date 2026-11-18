@@ -6689,6 +6689,13 @@ REQ_COUNTS = {
     "sitelinks": ("быстрых ссылок", 8, "у каждого объявления"),
     "callouts": ("уточнений", 50, "у каждого объявления"),
 }
+# «не меньше 1 заголовка», «не меньше 21 текста» — родительный падеж единственного числа.
+_REQ_ONE = {"фраз": "фразы", "заголовков": "заголовка", "текстов": "текста", "быстрых ссылок": "быстрой ссылки",
+            "уточнений": "уточнения"}
+
+
+def _at_least(n: int, word: str) -> str:
+    return f"не меньше {n} {_REQ_ONE[word] if n % 10 == 1 and n % 100 != 11 else word}"
 MAX_BANNED_WORDS = 30
 MAX_REQ_NOTES = 10
 
@@ -6753,7 +6760,7 @@ def requirements_text(req: dict | None) -> str:
     """Требования словами — для модели."""
     if not req:
         return ""
-    parts = [f"{where} не меньше {req[key]} {word}" for key, (word, _l, where) in REQ_COUNTS.items() if req.get(key)]
+    parts = [f"{where} {_at_least(req[key], word)}" for key, (word, _l, where) in REQ_COUNTS.items() if req.get(key)]
     if req.get("banned_words"):
         parts.append("без слов " + ", ".join(f"«{w}»" for w in req["banned_words"]))
     parts += req.get("other") or []
@@ -6774,7 +6781,7 @@ def _requirement_checks(req: dict | None, groups: list[dict], shared: dict | Non
         need = req.get(key)
         if not need:
             continue
-        label = f"ТЗ: {where} не меньше {need} {word}"
+        label = f"ТЗ: {where} {_at_least(need, word)}"
         if shared is not None and key in shared and all(g.get(key) is None for g in groups):
             have = len(shared[key])
             state, note = ("ok", f"на доске {have}") if have >= need else ("bad", f"на доске {have} из {need}")
