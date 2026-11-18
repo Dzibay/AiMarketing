@@ -83,7 +83,7 @@ def _campaign_full(user_id: int, campaign_row_id: int) -> dict:
         row = conn.execute(
             """
             SELECT c.id, c.account_id, c.campaign_id, c.name, c.campaign_type, c.state, c.status,
-                   c.daily_budget_kopecks, c.strategy, a.connection_id, a.client_login, a.enabled
+                   c.daily_budget_kopecks, c.strategy, c.link_params, a.connection_id, a.client_login, a.enabled
             FROM direct_campaigns c
             JOIN direct_accounts a ON a.id = c.account_id
             WHERE c.id = %s AND c.user_id = %s
@@ -679,6 +679,10 @@ def create_campaign(user_id: int, *, account_id: int, spec: dict, workspace_id: 
     if ws:
         attach_campaign(user_id, int(ws["id"]), row["id"])
     _update_local(row["id"], {"tracking_params": block.get("TrackingParams") or ""})
+    # Свой ref кампании (маркетолог выбрал его вместо шаблонного) — до объявлений: их ссылки ставятся уже по нему.
+    choice = links.link_choice(spec.get("link_params"))
+    if choice["own"] or choice["asked"]:
+        links.save_link_choice(user_id, row["id"], own=choice["own"], asked=choice["asked"])
 
     groups_out: list[dict] = []
     for index, group in enumerate(groups):
@@ -2132,7 +2136,9 @@ def duplicate_campaign(
     )
     if not same and ((item.get(block_name) or {}).get("NegativeKeywordSharedSetIds") or {}).get("Items"):
         warnings.append("Наборы минус-фраз живут в исходном кабинете — подключите их к копии вручную")
-    template = _ws_link_template(ws)
+    # Свой ref оригинала переходит к копии: её ссылки остаются такими же.
+    choice = links.link_choice(src.get("link_params"))
+    template = links.with_own(_ws_link_template(ws), choice["own"])
     if template:
         # Копия — сразу по шаблону ссылки сайта: метки в кампании, адреса объявлений с ref.
         body[block_name]["TrackingParams"] = links.merge_tracking(body[block_name].get("TrackingParams"), template)
@@ -2161,6 +2167,8 @@ def duplicate_campaign(
     if ws:
         attach_campaign(user_id, int(ws["id"]), row["id"])
     _update_local(row["id"], {"tracking_params": body[block_name].get("TrackingParams") or ""})
+    if choice["own"] or choice["asked"]:
+        links.save_link_choice(user_id, row["id"], own=choice["own"], asked=choice["asked"])
     out = {"campaign": row, "groups": 0, "group_map": {}, "keywords": 0, "ads": 0, "warnings": warnings, "status": "ok"}
 
     try:

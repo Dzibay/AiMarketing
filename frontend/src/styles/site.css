@@ -4369,6 +4369,20 @@ body.has-modal {
   position: static;
 }
 
+/* Таблица одной доски: без своих кнопок — тонкая строка под разделом, решение одно на всю кампанию. */
+.board-decision.is-held {
+  position: static;
+  padding: 0.45rem 0.7rem;
+  border-style: dashed;
+  background: none;
+  box-shadow: none;
+}
+
+.board-approve .ai-input--area {
+  justify-self: stretch;
+  min-height: 2.4rem;
+}
+
 .board-decision__head {
   display: flex;
   flex-wrap: wrap;

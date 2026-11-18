@@ -513,6 +513,23 @@ def test_campaign_build_only_for_new_campaign_and_latest_one():
     assert {st["status"] for st in build["stages"][1:]} == {"todo"}
 
 
+def test_campaign_build_new_campaign_table_starts_a_fresh_board():
+    old = [
+        _table(1, "goals", [{"cells": ["Что", "Окна"]}]),
+        _table(2, "keywords", [{"section": "Окна", "cells": ["купить окна"]}]),
+    ]
+    again = _table(3, "goals", [{"cells": ["Что", "Двери"]}], status="pending")
+    # Обычная таблица целей продолжает ту же сборку: согласованные ключи остаются на доске.
+    assert [g["name"] for g in ai_agent.campaign_build(old + [again])["groups"]] == ["Окна"]
+    fresh = {**again, "args": {**again["args"], "new_campaign": True}}
+    build = ai_agent.campaign_build(old + [fresh])
+    assert build["groups"] == [] and [g["value"] for g in build["goals"]] == ["Двери"]
+    assert build["stages"][0]["status"] == "pending" and build["stages"][2]["status"] == "todo"
+    # Отклонённая «новая кампания» прежнюю сборку не сбрасывает.
+    rejected = {**fresh, "status": "rejected"}
+    assert [g["name"] for g in ai_agent.campaign_build(old + [rejected])["groups"]] == ["Окна"]
+
+
 def test_campaign_build_groups_by_section():
     build = ai_agent.campaign_build([
         _table(1, "analysis", [{"cells": ["Окна", "12 000"]}]),

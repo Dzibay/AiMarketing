@@ -348,3 +348,10 @@ def test_duplicate_campaign_reads_ads_of_the_source_campaign(monkeypatch):
     out = actions.duplicate_campaign(7, 10, target_account_id=2, exclude_adgroup_ids={3})
     assert (out["groups"], out["keywords"], out["ads"], out["group_map"]) == (1, 1, 2, {1: 2})
     assert [len(a[2]) for a in added] == [1, 1, 1, 1]  # группа, фраза, текстовое и комбинаторное объявления
+
+    # Свой ref оригинала (маркетолог выбрал его вместо шаблонного) переходит к копии.
+    kept: list[tuple] = []
+    source["link_params"] = {"own": {"ref": "Telegram"}, "asked": {"ref": ["Telegram", "Yandex"]}}
+    monkeypatch.setattr(actions.links, "save_link_choice", lambda user_id, row_id, **kw: kept.append((row_id, kw)))
+    actions.duplicate_campaign(7, 10, target_account_id=2, exclude_adgroup_ids={3})
+    assert kept == [(20, {"own": {"ref": "Telegram"}, "asked": {"ref": ["Telegram", "Yandex"]}})]

@@ -299,6 +299,8 @@ export const aiApi = {
   items: (actionId, payload) => post(`/api/web/ai/actions/${actionId}/items`, payload),
   /** Правки на доске сборки: [{ op, kind, group, text, to, to_group }] → чат целиком. */
   board: (chatId, ops) => post(`/api/web/ai/chats/${chatId}/board`, { ops }),
+  /** Одно решение на всю доску: { approve, rows: { id таблицы: [номера отмеченных строк] }, comment }. */
+  boardDecide: (chatId, payload) => post(`/api/web/ai/chats/${chatId}/board/decide`, payload),
   /** Картинки из объявлений кампаний проекта: { items: [{ hash, account_id, preview_url, campaigns, ads }], more }. */
   wsImages: (workspaceId, accountId = null) => request(`${WS(workspaceId)}/ad-images${query({ account_id: accountId })}`),
   /** Картинки по описанию → библиотека кабинета: { images: [{ hash, preview_url, account_id }], errors }. */
@@ -669,6 +671,7 @@ export const JOB_LABELS = {
   ads_ai: 'Тексты объявлений ИИ',
   ads_ab: 'Новые варианты объявлений',
   fix_links: 'Ссылки по шаблону сайта',
+  set_campaign_ref: 'Свой ref в ссылках кампании',
 }
 
 export function jobProgressText(job) {

@@ -16,7 +16,7 @@
           class="board__step"
           :class="`is-${s.status}`"
           :data-section="s.section"
-          v-tip="STATUS[s.status] || s.status"
+          v-tip="s.held ? HELD_TIP : STATUS[s.status] || s.status"
           @click="show(s.section)"
         >
           <span class="board__dot">{{ s.status === 'done' ? '✓' : i + 1 }}</span>
@@ -24,7 +24,15 @@
         </button>
       </nav>
     </header>
-    <p v-if="!locked" class="hint board__legend">
+    <p v-if="!locked && heldTables.length" class="hint board__legend">
+      <span class="board__swatch" aria-hidden="true" />
+      <span>
+        предложено ИИ. Снимите галочки с лишнего, заголовок, текст или фразу поправьте щелчком — и согласуйте
+        кампанию целиком, одной кнопкой внизу доски.
+        <button class="ai-check__link" type="button" @click="show('ready')">К согласованию</button>
+      </span>
+    </p>
+    <p v-else-if="!locked" class="hint board__legend">
       <span class="board__swatch" aria-hidden="true" /> предложено ИИ и ждёт решения. Заголовок, текст или фразу
       можно поправить щелчком — ИИ увидит правки.
     </p>
@@ -163,6 +171,44 @@
         </li>
       </ul>
 
+      <!-- Кампания собрана одной доской: одно решение на все таблицы, которые на ней лежат. -->
+      <div v-if="heldTables.length" class="board-draft board-approve is-pending">
+        <strong>{{ missing.length ? 'Кампания собрана не полностью' : 'Кампания собрана — проверьте и согласуйте' }}</strong>
+        <p class="hint">
+          Отмечено {{ heldChosen }} из {{ heldRows }} {{ plural(heldRows, 'строки', 'строк', 'строк') }} в
+          {{ heldTables.length }} {{ plural(heldTables.length, 'таблице', 'таблицах', 'таблицах') }}. Снятое галочкой ИИ
+          в кампанию не возьмёт.
+        </p>
+        <p v-if="missing.length" class="hint">
+          Ещё не готово: {{ missing.join(', ') }}. Согласуйте готовое — ИИ доделает остальное и покажет здесь же.
+        </p>
+        <p v-else-if="!build.ready" class="hint tone-bad">
+          В проверке есть красные пункты — Директ может не принять кампанию. Поправьте на доске или напишите в
+          комментарии, что изменить.
+        </p>
+        <textarea
+          v-model="boardComment"
+          class="ai-input ai-input--area"
+          rows="1"
+          maxlength="2000"
+          :disabled="disabled"
+          placeholder="Что поправить — необязательно"
+          aria-label="Комментарий к кампании"
+        />
+        <div class="board-decision__buttons">
+          <button class="btn btn--accent" type="button" :disabled="disabled || !heldChosen" @click="decideBoard(true)">
+            {{ approveLabel }}
+          </button>
+          <button class="btn btn--ghost" type="button" :disabled="disabled" @click="decideBoard(false)">
+            Отменить сборку
+          </button>
+        </div>
+        <p v-if="boardComment.trim()" class="hint">
+          С правкой ИИ сначала покажет изменённый раздел здесь же — черновик будет после того, как вы согласуете и его.
+        </p>
+        <p v-else class="hint">Черновик сам не запустится: на модерацию его отправляете вы.</p>
+      </div>
+
       <div v-if="build.draft" class="board-draft" :class="`is-${build.draft.status}`" :data-action="build.draft.action_id">
         <template v-if="build.draft.status === 'pending'">
           <strong>Черновик готов к созданию</strong>
@@ -190,7 +236,13 @@
         </template>
         <strong v-else><span class="spinner" /> Черновик создаётся…</strong>
       </div>
-      <p v-else class="hint">
+      <p v-else-if="build.board_approved && !heldTables.length && missing.length" class="hint">
+        Готовое согласовано. Осталось: {{ missing.join(', ') }} — ИИ соберёт это и покажет здесь же.
+      </p>
+      <p v-else-if="build.board_approved && !heldTables.length" class="hint">
+        Кампания согласована: ИИ создаст черновик в Директе без второго подтверждения — он появится здесь.
+      </p>
+      <p v-else-if="!heldTables.length" class="hint">
         Когда этапы будут согласованы, ИИ подготовит черновик — создать его в Директе можно будет здесь.
       </p>
     </BoardSection>
@@ -202,11 +254,13 @@
  * Доска сборки новой кампании рядом с чатом: разделы по этапам сверху вниз, галочки и решения по
  * ждущим таблицам, правки маркетолога (фразы, группы, заголовки, тексты и картинки), предпросмотр и проверка
  * готовности. Данные — build из get_chat; правки уходят через edit(ops) и возвращают чат целиком.
+ * Кампания, собранная одной доской (build.held), согласуется одним решением в разделе «Готовность».
  */
 import { computed, nextTick, onMounted, provide, reactive, ref, watch } from 'vue'
 import UiCheckbox from '../../components/ui/UiCheckbox.vue'
 import { RouterLink } from 'vue-router'
 import { aiApi } from '../../api/web'
+import { askConfirm } from '../../composables/useConfirm'
 import { plural } from '../../utils/format'
 import BoardFacts from './BoardFacts.vue'
 import BoardGroup from './BoardGroup.vue'
@@ -224,7 +278,9 @@ const props = defineProps({
   // Генерация картинок подключена в настройках.
   imageGen: { type: Boolean, default: false },
 })
-const emit = defineEmits(['decide', 'draft'])
+// decide — решение по одной таблице (id, payload); board — одно решение на всю доску ({ approve, rows, comment });
+// draft — карточка создания черновика (approve).
+const emit = defineEmits(['decide', 'board', 'draft'])
 
 const SECTION_OF = {
   goals: 'goals',
@@ -245,6 +301,8 @@ const STATUS = {
   skipped: 'пропущено',
   rejected: 'на доработке',
 }
+const HELD_TEXT = 'на доске'
+const HELD_TIP = 'на доске — ждёт общего согласования'
 const DRAFT_TEXT = { todo: 'впереди', pending: 'ждёт решения', approved: 'создаётся', done: 'создан', error: 'ошибка' }
 const CHECK_ICONS = { ok: '✓', warn: '!', bad: '×' }
 const PREVIEW_MODES = [
@@ -274,17 +332,40 @@ const pendingTables = computed(() => {
 
 const stageLabels = computed(() => Object.fromEntries(props.build.stages.map((s) => [s.key, s.label])))
 
+// Таблицы, собранные одной доской: своих кнопок у них нет, решение одно — в разделе «Готовность».
+const heldIds = computed(() => new Set(props.build.held || []))
+const heldTables = computed(() => pendingTables.value.filter((a) => heldIds.value.has(a.id)))
+const heldRows = computed(() => heldTables.value.reduce((n, t) => n + (t.args?.rows || []).length, 0))
+const heldChosen = computed(() => heldTables.value.reduce((n, t) => n + chosenOf(t).length, 0))
+// Обязательные этапы, которых на доске ещё нет: согласование закроет готовое, черновик — после остальных.
+const missing = computed(() => props.build.missing || [])
+const boardComment = ref('')
+const approveLabel = computed(() => {
+  if (missing.value.length) return 'Согласовать готовое'
+  return boardComment.value.trim() ? 'Согласовать с правкой' : 'Согласовать и создать черновик'
+})
+
 const tables = computed(() => {
   const out = { goals: [], demand: [], groups: [], negatives: [], extras: [], settings: [] }
   for (const a of pendingTables.value) {
     const stage = a.args?.stage
-    out[SECTION_OF[stage] || 'goals'].push({ ...a, stageLabel: stageLabels.value[stage] || stage })
+    out[SECTION_OF[stage] || 'goals'].push({
+      ...a,
+      stageLabel: stageLabels.value[stage] || stage,
+      held: heldIds.value.has(a.id),
+    })
   }
   return out
 })
 
 const steps = computed(() => {
-  const out = props.build.stages.map((s) => ({ key: s.key, label: s.label, status: s.status, section: SECTION_OF[s.key] }))
+  const out = props.build.stages.map((s) => ({
+    key: s.key,
+    label: s.label,
+    status: s.status,
+    held: !!s.held,
+    section: SECTION_OF[s.key],
+  }))
   const draft = props.build.draft
   const status = !draft ? 'todo' : draft.status === 'done' ? 'done' : draft.status === 'error' ? 'rejected' : 'pending'
   out.push({ key: 'draft', label: 'Черновик', status, section: 'ready' })
@@ -294,6 +375,8 @@ const doneCount = computed(() => steps.value.filter((s) => s.status === 'done').
 
 const draftStage = computed(() => {
   const draft = props.build.draft
+  // Кампания на доске ждёт одного согласования: раздел уже не «впереди», решение за маркетологом.
+  if (!draft && heldTables.value.length) return [{ key: 'draft', short: '', status: 'pending', text: 'ждёт согласования' }]
   const status = draft ? draft.status : 'todo'
   return [{ key: 'draft', short: '', status, text: DRAFT_TEXT[status] }]
 })
@@ -332,7 +415,7 @@ onMounted(() => {
 function stagesOf(section) {
   return props.build.stages
     .filter((s) => SECTION_OF[s.key] === section)
-    .map((s) => ({ key: s.key, short: SHORT[s.key] || s.label, status: s.status }))
+    .map((s) => ({ key: s.key, short: SHORT[s.key] || s.label, status: s.status, text: s.held ? HELD_TEXT : '' }))
 }
 
 function isOn(item) {
@@ -388,6 +471,35 @@ async function addNegative() {
 function decide(id, payload) {
   emit('decide', id, payload)
 }
+
+/** Номера строк таблицы, оставленных с галочкой. */
+function chosenOf(table) {
+  const list = off[table.id] || []
+  return (table.args?.rows || []).map((r) => r.n).filter((n) => !list.includes(n))
+}
+
+/** Одно решение на всю доску: согласовать отмеченное во всех её таблицах или отменить сборку. */
+async function decideBoard(approve) {
+  const comment = boardComment.value.trim()
+  if (!approve) {
+    const sure = await askConfirm(
+      'Отменить сборку? Таблицы на доске будут отклонены, в Директе ничего не создано. Чтобы поправить часть ' +
+        'кампании, напишите комментарий и нажмите «Согласовать».',
+      { danger: true },
+    )
+    if (!sure) return
+  }
+  const rows = approve ? Object.fromEntries(heldTables.value.map((t) => [t.id, chosenOf(t)])) : {}
+  emit('board', { approve, rows, comment })
+}
+
+// Комментарий живёт, пока доска ждёт решения: не принятое сервером решение его не теряет.
+watch(
+  () => heldTables.value.length,
+  (n) => {
+    if (!n) boardComment.value = ''
+  },
+)
 
 // Картинки: кабинет кампании (или выбранный, пока ИИ его не назвал), библиотека кампаний — один раз на доску.
 const chosenAccount = ref(null)

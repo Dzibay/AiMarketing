@@ -88,6 +88,25 @@ def test_body_has_cache_points_and_claude_shapes():
     assert "cache_control" not in results["content"][0]
 
 
+def test_cache_point_stays_before_the_service_note(monkeypatch):
+    # Сводка сервиса меняется от шага к шагу: точка кэша — на последнем блоке до неё, иначе кэш не попадал бы.
+    note = {"role": "user", "content": "[Сводка сервиса] Цели согласованы."}
+    body = ai.anthropic_body([*HISTORY, note], TOOLS, "claude-opus-5-5", volatile_tail=1)
+    results = body["messages"][-1]
+    assert [b["type"] for b in results["content"]] == ["tool_result", "tool_result", "text"]
+    assert results["content"][1]["cache_control"] == {"type": "ephemeral"}
+    assert "cache_control" not in results["content"][2] and results["content"][2]["text"].startswith("[Сводка")
+    # Без пометки точка кэша — как раньше, на самом последнем блоке.
+    plain = ai.anthropic_body([*HISTORY, note], TOOLS, "claude-opus-5-5")["messages"][-1]["content"]
+    assert "cache_control" in plain[2] and "cache_control" not in plain[1]
+
+    # Пометка доезжает от хода агента до запроса в настройках вызова.
+    calls = _stream(monkeypatch, ANSWER)
+    ai.complete({**CFG, "volatile_tail": 1}, [*HISTORY, note], TOOLS)
+    sent = calls[0][1]["messages"][-1]["content"]
+    assert "cache_control" in sent[1] and "cache_control" not in sent[2]
+
+
 def test_stream_is_read_into_the_usual_reply_with_cached_tokens(monkeypatch):
     calls = _stream(monkeypatch, ANSWER)
     reply = ai.complete(CFG, HISTORY, TOOLS)

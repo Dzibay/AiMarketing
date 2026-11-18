@@ -195,7 +195,12 @@ export function provideChat({ general, ws, basePath, reloadWs, panel = false, pa
   // Что подключено у маркетолога: варианты ответа, которым это нужно, без него не выбрать.
   const caps = computed(() => ({ image_gen: !!data.value?.image_gen?.configured }))
   const onBoard = computed(() => new Set(build.value?.action_ids || []))
-  const boardWaiting = computed(() => pendingActions.value.filter((a) => onBoard.value.has(a.id)).length)
+  // Таблицы, собранные одной доской (args.held), ждут одного решения — в счётчике они одна запись.
+  const boardWaiting = computed(() => {
+    const waiting = pendingActions.value.filter((a) => onBoard.value.has(a.id))
+    const held = waiting.filter((a) => a.args?.held).length
+    return waiting.length - held + (held ? 1 : 0)
+  })
 
   // @-упоминания: кампании, группы, периоды и другие проекты (их ИИ получает на чтение). Выбранные
   // в окне «@» помним с типом и id; проекты, набранные руками, находим по названию в тексте при отправке.
@@ -386,11 +391,17 @@ export function provideChat({ general, ws, basePath, reloadWs, panel = false, pa
     }
     const stage = action.args?.stage
     const label = build.value.stages.find((s) => s.key === stage)?.label || stage
-    if (action.status === 'pending') return `Этап «${label}» на доске ждёт решения`
+    if (action.status === 'pending') {
+      // Собрано одной доской: своего решения у таблицы нет, кампания согласуется целиком.
+      return action.args?.held ? `Этап «${label}» на доске — согласуется вместе с кампанией` : `Этап «${label}» на доске ждёт решения`
+    }
     if (action.status === 'done') {
       const chosen = (action.result?.approved_rows || []).length
       return `Этап «${label}» согласован на доске: ${chosen} из ${(action.args?.rows || []).length}`
     }
+    // Сервис сам закрыл таблицу: ИИ показал этот раздел заново или маркетолог отменил сборку целиком.
+    if ((action.error || '').startsWith('Заменена')) return `Этап «${label}»: таблица заменена новой`
+    if ((action.error || '').includes('отменил сборку')) return `Этап «${label}»: сборка отменена`
     return `Этап «${label}» отклонён`
   }
 

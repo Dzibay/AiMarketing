@@ -354,7 +354,7 @@ export const CAMPAIGN_TYPES = {
   CPM_BANNER_CAMPAIGN: 'Медийная',
 }
 
-// Короткие подписи для строки под названием кампании; ТГО — по площадкам её стратегии (placement с бэкенда).
+// Короткие подписи для строки под названием кампании; у ТГО и ЕПК — площадки её стратегии (placement с бэкенда).
 const CAMPAIGN_TYPES_SHORT = {
   UNIFIED_CAMPAIGN: 'ЕПК',
   DYNAMIC_TEXT_CAMPAIGN: 'Динамические',
@@ -364,9 +364,11 @@ const CAMPAIGN_TYPES_SHORT = {
 }
 const PLACEMENTS = { search: 'Поиск', network: 'РСЯ', both: 'Поиск и РСЯ' }
 
-/** «Поиск», «РСЯ», «ЕПК»… — тип кампании одним-двумя словами. */
+/** «Поиск», «ЕПК · Поиск», «Смарт»… — тип кампании одним-двумя словами. */
 export function campaignTypeShort(c) {
   if (c?.type === 'TEXT_CAMPAIGN') return PLACEMENTS[c.placement] || 'ТГО'
+  // Директ ведёт текстовые кампании как ЕПК: площадки — то, чем они различаются в списке.
+  if (c?.type === 'UNIFIED_CAMPAIGN') return ['ЕПК', PLACEMENTS[c.placement]].filter(Boolean).join(' · ')
   return CAMPAIGN_TYPES_SHORT[c?.type] || CAMPAIGN_TYPES[c?.type] || c?.type || ''
 }
 

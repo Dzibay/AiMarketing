@@ -179,6 +179,7 @@
       :disabled="deciding || status === 'running'"
       :edit="editBoard"
       @decide="(id, payload) => respond(() => aiApi.items(id, payload))"
+      @board="(payload) => respond(() => aiApi.boardDecide(chatId, payload))"
       @draft="(approve) => decide({ id: build.draft.action_id }, approve)"
     />
   </div>

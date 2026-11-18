@@ -904,11 +904,17 @@ def _anthropic_parts(content) -> list[dict]:
     return blocks
 
 
-def anthropic_body(messages: list[dict], tools: list[dict] | None, model: str) -> dict:
-    """Запрос chat/completions (сообщения и инструменты OpenAI) → тело /v1/messages с точками кэша."""
+def anthropic_body(messages: list[dict], tools: list[dict] | None, model: str, *, volatile_tail: int = 0) -> dict:
+    """Запрос chat/completions (сообщения и инструменты OpenAI) → тело /v1/messages с точками кэша.
+
+    volatile_tail — сколько последних сообщений меняются от шага к шагу (служебная сводка): точка кэша
+    ставится перед ними, иначе следующий шаг не нашёл бы в кэше начало запроса.
+    """
     system = []
     out: list[dict] = []
-    for m in messages:
+    stable = len(messages) - max(0, volatile_tail)
+    mark: tuple[int, int] | None = None
+    for index, m in enumerate(messages):
         role = m.get("role")
         if role in ("system", "developer"):
             system.extend(b["text"] for b in _anthropic_parts(m.get("content")) if b["type"] == "text")
@@ -945,6 +951,8 @@ def anthropic_body(messages: list[dict], tools: list[dict] | None, model: str) -
             out[-1]["content"].extend(blocks)
         else:
             out.append({"role": role, "content": blocks})
+        if index < stable:
+            mark = (len(out) - 1, len(out[-1]["content"]) - 1)
     body: dict = {"model": model, "max_tokens": ANTHROPIC_MAX_TOKENS, "messages": out}
     if system:
         body["system"] = [{"type": "text", "text": "\n\n".join(system), "cache_control": _EPHEMERAL}]
@@ -960,8 +968,8 @@ def anthropic_body(messages: list[dict], tools: list[dict] | None, model: str) -
         converted[-1] = {**converted[-1], "cache_control": _EPHEMERAL}
         body["tools"] = converted
     if out:
-        last = out[-1]["content"]
-        last[-1] = {**last[-1], "cache_control": _EPHEMERAL}
+        at, block = mark if mark is not None else (len(out) - 1, len(out[-1]["content"]) - 1)
+        out[at]["content"][block] = {**out[at]["content"][block], "cache_control": _EPHEMERAL}
     return body
 
 
@@ -1339,7 +1347,10 @@ def _complete_once(cfg: dict, messages: list[dict], tools: list[dict] | None = N
     native = cfg.get("anthropic")
     if native:
         try:
-            data = _send_retrying(cfg, native["url"], anthropic_body(messages, tools, native["model"]), timeout, native=True)
+            native_body = anthropic_body(
+                messages, tools, native["model"], volatile_tail=int(cfg.get("volatile_tail") or 0)
+            )
+            data = _send_retrying(cfg, native["url"], native_body, timeout, native=True)
         except YandexError as exc:
             if not getattr(exc, "native_rejected", False):
                 raise

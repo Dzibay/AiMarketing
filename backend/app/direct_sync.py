@@ -67,6 +67,8 @@ def _money_to_kopecks(raw) -> int | None:
 _GOAL_FIELDS = ["PriorityGoals", "AttributionModel"]
 _GOAL_TYPES = ("TEXT_CAMPAIGN", "DYNAMIC_TEXT_CAMPAIGN", "UNIFIED_CAMPAIGN")
 # Попытки campaigns.get: (ЕПК, ключевые цели) — старые аккаунты API могут не знать ЕПК или поля целей.
+# С ЕПК читаем через v501: только она называет настоящий тип. v5 ту же кампанию отдаёт как
+# TEXT_CAMPAIGN с блоком TextCampaign — так Директ ведёт и бывшие текстово-графические кампании.
 _GET_ATTEMPTS = ((True, True), (True, False), (False, True), (False, False))
 # Метки ссылок (TrackingParams) — для проверки по шаблону сайта.
 _TRACKING_TYPES = ("TEXT_CAMPAIGN", "UNIFIED_CAMPAIGN")
@@ -83,7 +85,7 @@ def _campaigns_get(access_token: str, client_login: str, *, unified: bool, goals
     }
     if unified:
         params["UnifiedCampaignFieldNames"] = [*fields, "TrackingParams"]
-    return direct_api.call(access_token, client_login, "campaigns", "get", params)
+    return direct_api.call(access_token, client_login, "campaigns", "get", params, version="v501" if unified else "v5")
 
 
 def _counter_ids(item: dict) -> list[int]:
@@ -106,9 +108,10 @@ def _counter_ids(item: dict) -> list[int]:
 
 def fetch_campaigns(access_token: str, client_login: str) -> list[dict]:
     """Кампании логина. priority_goals и attribution_model — None, если Директ не отдал поля целей:
-    записанные раньше значения тогда не трогаем."""
+    записанные раньше значения тогда не трогаем. type_exact — тип назвала v501; из v5 он устаревший,
+    и ЕПК в базе на TEXT_CAMPAIGN не меняем."""
     result: dict = {}
-    goals = False
+    unified = goals = False
     for index, (unified, goals) in enumerate(_GET_ATTEMPTS):
         try:
             result = _campaigns_get(access_token, client_login, unified=unified, goals=goals)
@@ -140,6 +143,7 @@ def fetch_campaigns(access_token: str, client_login: str) -> list[dict]:
                 "campaign_id": int(cid),
                 "name": str(item.get("Name") or ""),
                 "campaign_type": str(item.get("Type") or ""),
+                "type_exact": unified,
                 "state": str(item.get("State") or ""),
                 "status": str(item.get("Status") or ""),
                 "strategy": strategy,
@@ -194,7 +198,10 @@ _UPSERT_SQL = """
     )
     ON CONFLICT (account_id, campaign_id) DO UPDATE SET
         name = EXCLUDED.name,
-        campaign_type = EXCLUDED.campaign_type,
+        campaign_type = CASE
+            WHEN %(type_exact)s::boolean OR EXCLUDED.campaign_type <> 'TEXT_CAMPAIGN'
+                 OR direct_campaigns.campaign_type <> 'UNIFIED_CAMPAIGN'
+            THEN EXCLUDED.campaign_type ELSE direct_campaigns.campaign_type END,
         state = EXCLUDED.state,
         status = EXCLUDED.status,
         strategy = EXCLUDED.strategy,
@@ -221,6 +228,7 @@ def _upsert_params(user_id: int, account_id: int, item: dict) -> dict:
         "campaign_id": item["campaign_id"],
         "name": item.get("name") or "",
         "type": item.get("campaign_type") or "",
+        "type_exact": bool(item.get("type_exact", True)),
         "state": item.get("state") or "",
         "status": item.get("status") or "",
         "strategy": item.get("strategy") or "",

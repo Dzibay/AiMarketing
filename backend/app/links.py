@@ -9,11 +9,14 @@ utm-метки и параметры с подстановками {…} — в 
 Проверка строгая: домен, ref и каждая метка; путь страницы (/tarify) может отличаться.
 Свои метки группы Директ ставит вместо меток кампании — их проверяем так же. Быстрые ссылки
 проверяем как ссылку объявления; набор в Директе не правится, поэтому создаём новый.
+У кампании могут быть свои значения параметров ссылки (свой ref) — direct_campaigns.link_params:
+маркетолог выбрал их вместо шаблонных, и для этой кампании правильными считаются они.
 """
 
 from __future__ import annotations
 
 import logging
+import re
 from urllib.parse import unquote, urlsplit
 
 from psycopg.types.json import Jsonb
@@ -140,6 +143,97 @@ def normalize_href(href: str | None, t: dict) -> str:
     if parts.fragment:
         out += f"#{parts.fragment}"
     return out[:MAX_LEN]
+
+
+# --- Свои параметры кампании -------------------------------------------------------------------
+
+
+def link_choice(raw) -> dict:
+    """direct_campaigns.link_params → {"own": {параметр: значение}, "asked": {параметр: [значения]}}.
+
+    own — значения, которые маркетолог выбрал для кампании вместо шаблонных; asked — о каких значениях
+    его уже спрашивали (повторно не спрашиваем).
+    """
+    data = raw if isinstance(raw, dict) else {}
+    own = data.get("own") if isinstance(data.get("own"), dict) else {}
+    asked = data.get("asked") if isinstance(data.get("asked"), dict) else {}
+    return {
+        "own": {str(k): str(v) for k, v in own.items() if str(v or "").strip()},
+        "asked": {str(k): list(dict.fromkeys(str(v) for v in vs)) for k, vs in asked.items() if isinstance(vs, list)},
+    }
+
+
+def merge_link_choice(choice: dict | None, *, own: dict | None = None, asked: dict | None = None) -> dict:
+    """Выбор с новыми ответами: own со значением None или "" — вернуть параметр к шаблону."""
+    base = link_choice(choice)
+    for key, value in (own or {}).items():
+        if value in (None, ""):
+            base["own"].pop(str(key), None)
+        else:
+            base["own"][str(key)] = str(value)
+    for key, values in (asked or {}).items():
+        merged = [*base["asked"].get(str(key), []), *(str(v) for v in values)]
+        base["asked"][str(key)] = list(dict.fromkeys(merged))[-20:]
+    return base
+
+
+def with_own(t: dict | None, own: dict | None) -> dict | None:
+    """Шаблон для кампании: параметры ссылки со значениями, которые выбраны для неё вместо шаблонных."""
+    if not t or not own:
+        return t
+    params = [(k, str(own[k]) if own.get(k) not in (None, "") else v) for k, v in t["ad_params"]]
+    keys = {k for k, _ in params}
+    # Параметра в шаблоне может и не быть (шаблон без ref) — у кампании он всё равно свой.
+    params += [(str(k), str(v)) for k, v in own.items() if k not in keys and v not in (None, "") and not _misplaced(str(k), t)]
+    return t if params == t["ad_params"] else {**t, "ad_params": params}
+
+
+def _split(href: str | None):
+    href = (href or "").strip()
+    if not href:
+        return None
+    return urlsplit(href if "://" in href else "https://" + href)
+
+
+def same_site(href: str | None, t: dict) -> bool:
+    """Ссылка ведёт на сайт шаблона (www не в счёт)."""
+    parts = _split(href)
+    return parts is not None and _host(parts.hostname or "") == _host(t["host"])
+
+
+def foreign_params(href: str | None, t: dict) -> list[tuple[str, str, str]]:
+    """Параметры ссылки, которыми распоряжается шаблон, но значение в ссылке своё:
+    [(параметр, значение в ссылке, значение по шаблону)]. Чужой домен и пустые значения — не сюда."""
+    if not same_site(href, t):
+        return []
+    wanted = dict(t["ad_params"])
+    out: list[tuple[str, str, str]] = []
+    for key, value in _pairs(_split(href).query):
+        if key in wanted and value and not _same(value, wanted[key]) and (key, value, wanted[key]) not in out:
+            out.append((key, value, wanted[key]))
+    return out
+
+
+def campaign_link_choice(user_id: int, campaign_row_id: int) -> dict:
+    with pool.connection() as conn:
+        row = conn.execute(
+            "SELECT link_params FROM direct_campaigns WHERE id = %s AND user_id = %s", (campaign_row_id, user_id)
+        ).fetchone()
+    return link_choice(row["link_params"] if row else None)
+
+
+def save_link_choice(user_id: int, campaign_row_id: int, *, own: dict | None = None, asked: dict | None = None) -> dict:
+    """Дописывает выбор маркетолога в кампанию; → что теперь хранится."""
+    with pool.connection() as conn:
+        row = conn.execute(
+            "SELECT link_params FROM direct_campaigns WHERE id = %s AND user_id = %s FOR UPDATE",
+            (campaign_row_id, user_id),
+        ).fetchone()
+        if row is None:
+            raise YandexError("not-found")
+        choice = merge_link_choice(row["link_params"], own=own, asked=asked)
+        conn.execute("UPDATE direct_campaigns SET link_params = %s WHERE id = %s", (Jsonb(choice), campaign_row_id))
+    return choice
 
 
 # --- Проверка ----------------------------------------------------------------------------------
@@ -310,12 +404,13 @@ def _ws_template(user_id: int, workspace_id: int) -> dict | None:
 
 
 def campaign_template(user_id: int, campaign_row_id: int) -> dict | None:
-    """Шаблон сайта, к которому привязана кампания; None — шаблона нет."""
+    """Шаблон сайта, к которому привязана кампания, с её своими параметрами ссылки; None — шаблона нет."""
     with pool.connection() as conn:
         row = conn.execute(
             """
-            SELECT w.url_template FROM workspace_campaigns wc
+            SELECT w.url_template, c.link_params FROM workspace_campaigns wc
             JOIN workspaces w ON w.id = wc.workspace_id
+            JOIN direct_campaigns c ON c.id = wc.campaign_row_id
             WHERE wc.campaign_row_id = %s AND wc.user_id = %s
             """,
             (campaign_row_id, user_id),
@@ -323,7 +418,7 @@ def campaign_template(user_id: int, campaign_row_id: int) -> dict | None:
     if row is None:
         return None
     try:
-        return parse_template(row["url_template"])
+        return with_own(parse_template(row["url_template"]), link_choice(row["link_params"])["own"])
     except YandexError:
         return None
 
@@ -345,7 +440,7 @@ def _campaign_rows(user_id: int, workspace_id: int, campaign_row_ids: list[int] 
     with pool.connection() as conn:
         return conn.execute(
             f"""
-            SELECT c.id, c.campaign_id, c.name, c.state, c.status, c.tracking_params
+            SELECT c.id, c.campaign_id, c.name, c.state, c.status, c.tracking_params, c.link_params
             FROM workspace_campaigns wc
             JOIN direct_campaigns c ON c.id = wc.campaign_row_id
             WHERE {' AND '.join(clauses)}
@@ -406,7 +501,9 @@ def workspace_link_issues(user_id: int, workspace_id: int, campaign_row_ids: lis
     groups = _campaign_groups(user_id, row_ids)
     items, checked, unknown = [], [], 0
     for c in campaigns:
-        res = check_campaign(t, c.get("tracking_params"), ads.get(int(c["id"]), []), groups.get(int(c["id"]), []))
+        # У кампании может быть свой ref — тогда правильным для неё считается он, а не шаблонный.
+        own = with_own(t, link_choice(c.get("link_params"))["own"])
+        res = check_campaign(own, c.get("tracking_params"), ads.get(int(c["id"]), []), groups.get(int(c["id"]), []))
         unknown += int(res["tracking_unknown"])
         if res["ok"]:
             continue
@@ -418,6 +515,7 @@ def workspace_link_issues(user_id: int, workspace_id: int, campaign_row_ids: lis
                 "name": c["name"],
                 "state": c.get("state") or "",
                 "status": c.get("status") or "",
+                "own_href": template_href(own) if own is not t else "",
                 **res,
                 "ads_total": len(res["ads"]),
                 "ads_fixable": sum(1 for a in res["ads"] if a["fixable"]),
@@ -573,6 +671,124 @@ def fix_campaign_links(user_id: int, campaign_row_id: int, *, journal: bool = Tr
             undo={"label": "Вернуть прежние ссылки", "steps": undo_steps},
         )
     out["undo_steps"] = undo_steps
+    return out
+
+
+_PARAM_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_.\-]{0,49}")
+_VALUE_RE = re.compile(r"[^\s&#?=]{1,100}")
+
+
+def clean_params(params) -> dict[str, str]:
+    """{параметр: значение} для ссылки кампании: без пробелов и служебных знаков адреса."""
+    if not isinstance(params, dict) or not params:
+        raise YandexError("args", "Укажите параметр ссылки и его значение, например ref и Telegram")
+    out: dict[str, str] = {}
+    for key, value in params.items():
+        key, value = str(key or "").strip(), str(value if value is not None else "").strip()
+        if not _PARAM_RE.fullmatch(key):
+            raise YandexError("args", f"Имя параметра «{key}» — латиница, цифры и подчёркивание")
+        if not _VALUE_RE.fullmatch(value):
+            raise YandexError("args", f"Значение {key} — без пробелов и знаков & # ? =, до 100 символов")
+        out[key] = value
+    return out
+
+
+def campaign_params_plan(user_id: int, campaign_row_id: int, params) -> dict:
+    """Что станет с параметрами ссылки кампании: {own — что записать (None — как в шаблоне), template — шаблон
+    кампании после замены, before — значения сейчас}. Меток (utm) здесь быть не может — они в параметрах кампании."""
+    params = clean_params(params)
+    with pool.connection() as conn:
+        row = conn.execute(
+            """
+            SELECT w.url_template, c.link_params FROM workspace_campaigns wc
+            JOIN workspaces w ON w.id = wc.workspace_id
+            JOIN direct_campaigns c ON c.id = wc.campaign_row_id
+            WHERE wc.campaign_row_id = %s AND wc.user_id = %s
+            """,
+            (campaign_row_id, user_id),
+        ).fetchone()
+    t = None
+    if row is not None:
+        try:
+            t = parse_template(row["url_template"])
+        except YandexError:
+            t = None
+    if t is None:
+        raise YandexError("url-template", "У сайта не задан шаблон ссылки — укажите его в настройках сайта")
+    choice = link_choice(row["link_params"])
+    wanted = dict(t["ad_params"])
+    now = dict(with_own(t, choice["own"])["ad_params"])
+    own: dict[str, str | None] = {}
+    for key, value in params.items():
+        if _misplaced(key, t) or _is_tracking(key, value):
+            raise YandexError("args", f"{key} — метка: она задаётся в параметрах кампании, а не в ссылке объявления")
+        own[key] = None if key in wanted and _same(value, wanted[key]) else value
+    after = merge_link_choice(choice, own=own)["own"]
+    return {
+        "own": own,
+        "params": params,
+        "before": {key: now.get(key, "") for key in params},
+        "previous_own": {key: choice["own"].get(key) for key in params},
+        "template": with_own(t, after),
+    }
+
+
+def campaign_params_effect(user_id: int, campaign_row_id: int, plan: dict) -> dict:
+    """Сколько ссылок перепишет замена параметра (plan — из campaign_params_plan): по данным последней синхронизации."""
+    ads = [a for a in _campaign_ads(user_id, [campaign_row_id]).get(campaign_row_id, []) if (a.get("state") or "") != "ARCHIVED"]
+    res = check_campaign(plan["template"], None, ads)
+    return {
+        "ads_total": len(ads),
+        "ads": sum(1 for a in res["ads"] if a["fixable"] and a["fixed_href"] != a["href"]),
+        "sitelinks": sum(1 for a in res["ads"] if a["fixable"] and a["sitelink_problems"]),
+        # Объявления, которые Директ отправит на модерацию: у них меняется адрес или набор быстрых ссылок.
+        "touched": sum(1 for a in res["ads"] if a["fixable"]),
+        "manual": sum(1 for a in res["ads"] if not a["fixable"]),
+    }
+
+
+def set_campaign_params(user_id: int, campaign_row_id: int, params) -> dict:
+    """
+    Свой параметр ссылки у кампании (ref=Telegram): значение закрепляется за ней, адреса объявлений и
+    быстрых ссылок переписываются под него; тексты не меняются. Значение как в шаблоне — вернуть шаблонное.
+    Откат — прежнее значение и прежние адреса.
+    """
+    from app.actions import get_campaign_rows
+
+    plan = campaign_params_plan(user_id, campaign_row_id, params)
+    rows = get_campaign_rows(user_id, [campaign_row_id])
+    if not rows:
+        raise YandexError("not-found")
+    name = rows[0]["name"]
+    save_link_choice(
+        user_id,
+        campaign_row_id,
+        own=plan["own"],
+        asked={key: [v for v in (value, plan["before"][key]) if v] for key, value in plan["params"].items()},
+    )
+    try:
+        out = fix_campaign_links(user_id, campaign_row_id, journal=False)
+    except YandexError:
+        # Ссылки не тронуты — и выбор возвращаем: иначе кампания числилась бы с ref, которого в ней нет.
+        save_link_choice(user_id, campaign_row_id, own=plan["previous_own"])
+        raise
+    steps = out.pop("undo_steps", [])
+    if out["status"] == "error":
+        save_link_choice(user_id, campaign_row_id, own=plan["previous_own"])
+        raise YandexError("links", "; ".join(out["errors"]) or "Ссылки не изменены")
+    back = {"op": "campaign_link_params", "args": {"campaign_row_id": campaign_row_id, "own": plan["previous_own"]}}
+    label = ", ".join(f"{k}={v}" for k, v in plan["params"].items())
+    log_action(
+        user_id,
+        "links",
+        {"campaign_row_id": campaign_row_id, "params": plan["params"]},
+        out,
+        "ok" if not out["errors"] else "partial",
+        title=f"Ссылки «{name}»: {label}",
+        undo={"label": "Вернуть прежние ссылки", "steps": [back, *steps]},
+    )
+    out["params"] = plan["params"]
+    out["note"] = "Изменённые объявления и быстрые ссылки Директ заново отправит на модерацию; тексты не менялись."
     return out
 
 

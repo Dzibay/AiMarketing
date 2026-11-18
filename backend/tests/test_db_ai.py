@@ -53,8 +53,16 @@ class FakeModel:
     def __init__(self, *replies):
         self.replies = list(replies)
         self.calls: list[list[dict]] = []
+        self.notes: list[str] = []
+        self.cfgs: list[dict] = []
 
     def __call__(self, cfg, messages, tools=None):
+        # Сводку сервиса о сборке (последнее сообщение запроса) держим отдельно: calls — это сама переписка.
+        note = ""
+        if messages and messages[-1]["role"] == "user" and str(messages[-1].get("content") or "").startswith(ai_agent.BUILD_MEMORY_NOTE):
+            note, messages = messages[-1]["content"], messages[:-1]
+        self.notes.append(note)
+        self.cfgs.append(cfg)
         self.calls.append(messages)
         return self.replies.pop(0)
 
@@ -616,7 +624,7 @@ def test_new_campaign_goes_by_stages(db, monkeypatch):
     fake, out = _start(
         user, chat, "Сделай новую кампанию на окна", monkeypatch,
         _call("create_campaign", spec(["купить окна пвх"], ["Окна от завода"])),
-        _call("propose_items", {"stage": "goals", "rows": [
+        _call("propose_items", {"stage": "goals", "by_stages": True, "requirements": {}, "rows": [
             {"cells": ["Что рекламируем", "Окна ПВХ"]}, {"cells": ["Гео", "Москва"]},
         ]}, "c2"),
     )
@@ -629,7 +637,10 @@ def test_new_campaign_goes_by_stages(db, monkeypatch):
     with pytest.raises(YandexError):  # таблица решается только своей кнопкой
         ai_agent.decide_action(user, table["id"], approve=True)
     build = ai_agent.get_chat(user, chat)["build"]
-    assert build["stages"][0] == {"key": "goals", "label": "Цели", "status": "pending", "count": 2, "action_id": table["id"]}
+    assert build["stages"][0] == {
+        "key": "goals", "label": "Цели", "status": "pending", "count": 2, "action_id": table["id"], "held": False,
+    }
+    assert build["board"] is False and build["held"] == []  # по шагам: общего согласования нет
     assert [g["pending"] for g in build["goals"]] == [True, True] and build["groups"] == []
 
     # Цели согласованы, анализ: «Двери» сняты галочкой.
@@ -743,9 +754,8 @@ def test_board_edits(db, monkeypatch):
     )
     with pytest.raises(YandexError):  # сборки ещё нет
         ai_agent.edit_board(user, chat, [{"op": "add", "kind": "negative", "text": "даром"}])
-    _start(user, chat, "Новая кампания на окна", monkeypatch, _call("propose_items", {"stage": "goals", "rows": [
-        {"cells": ["Что рекламируем", "Окна ПВХ"]},
-    ]}))
+    goals = {"stage": "goals", "by_stages": True, "requirements": {}, "rows": [{"cells": ["Что рекламируем", "Окна ПВХ"]}]}
+    _start(user, chat, "Новая кампания на окна", monkeypatch, _call("propose_items", goals))
     ai_agent.decide_items(user, _pending(user, chat, "propose_items")["id"], rows=[1])
     _turn(user, chat, monkeypatch, _call("propose_items", {"stage": "analysis", "rows": [{"cells": ["Окна ПВХ"]}]}, "c2"))
     ai_agent.decide_items(user, _pending(user, chat, "propose_items")["id"], rows=[1])
@@ -910,7 +920,7 @@ def test_first_campaign_in_empty_workspace(db, monkeypatch):
         _call("list_campaigns", {}),
         _call("get_signals", {}, "c2"),
         _call("get_wordstat", {"phrases": ["купить диван"], "region_ids": [213]}, "c3"),
-        _call("propose_items", {"stage": "goals", "rows": [
+        _call("propose_items", {"stage": "goals", "by_stages": True, "requirements": {}, "rows": [
             {"cells": ["Что рекламируем", "Прямые и угловые диваны"]}, {"cells": ["Бюджет", "3500 ₽/неделя"]},
         ]}, "c4"),
     )

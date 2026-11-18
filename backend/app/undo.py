@@ -173,12 +173,30 @@ def _ad_update(user_id: int, args: dict) -> dict:
     return update_text_ad(user_id, int(args["ad_row_id"]), **fields)
 
 
+def _ads_extras(user_id: int, args: dict) -> dict:
+    from app.ads import set_ads_extras
+
+    asked = args.get("ad_row_ids") or []
+    ids = _existing(user_id, "direct_ads", asked)
+    if not ids:
+        raise YandexError("not-found", "Этих объявлений уже нет")
+    out = set_ads_extras(user_id, ids, args.get("extras") or {})
+    return {"updated": out["updated"], "missing": len(asked) - len(ids)}
+
+
 def _adgroup_update(user_id: int, args: dict) -> dict:
     from app.adgroups import update_adgroup
 
     return update_adgroup(
         user_id, int(args["adgroup_row_id"]), name=args.get("name"), tracking_params=args.get("tracking_params")
     )
+
+
+def _campaign_link_params(user_id: int, args: dict) -> dict:
+    from app.links import save_link_choice
+
+    own = {str(k): v for k, v in (args.get("own") or {}).items()}
+    return {"own": save_link_choice(user_id, int(args["campaign_row_id"]), own=own)["own"]}
 
 
 def _adgroups_delete(user_id: int, args: dict) -> dict:
@@ -220,7 +238,9 @@ OPS: dict[str, Callable[[int, dict], dict]] = {
     "keywords_recreate": _keywords_recreate,
     "ads_action": _ads_action,
     "ad_update": _ad_update,
+    "ads_extras": _ads_extras,
     "adgroup_update": _adgroup_update,
+    "campaign_link_params": _campaign_link_params,
     "adgroups_delete": _adgroups_delete,
     "query_labels_restore": _query_labels_restore,
     "bid_modifiers": _bid_modifiers,
@@ -318,8 +338,15 @@ def describe_step(user_id: int, step: dict) -> str:
         extras = {"sitelink_set_id": "быстрые ссылки", "callout_ids": "уточнения", "image_hashes": "картинки"}
         parts = [v for k, v in names.items() if k in a] + [v for k, v in extras.items() if k in (a.get("extras") or {})]
         return "Вернуть объявлению " + ", ".join(parts)
+    if op == "ads_extras":
+        extras = {"sitelink_set_id": "быстрые ссылки", "callout_ids": "уточнения", "image_hashes": "картинки"}
+        parts = [v for k, v in extras.items() if k in (a.get("extras") or {})]
+        return f"Вернуть прежние {', '.join(parts) or 'расширения'}: {_names(user_id, 'direct_ads', 'title', a.get('ad_row_ids'))}"
     if op == "adgroup_update":
         return f"Вернуть название группы: «{a.get('name')}»"
+    if op == "campaign_link_params":
+        own = ", ".join(f"{k}={v}" if v else f"{k} по шаблону сайта" for k, v in (a.get("own") or {}).items())
+        return f"Вернуть ссылкам {_names(user_id, 'direct_campaigns', 'name', [a.get('campaign_row_id')])}: {own}"
     if op == "adgroups_delete":
         return f"Удалить группы: {_names(user_id, 'direct_adgroups', 'name', a.get('adgroup_row_ids'))}"
     if op == "query_labels_restore":

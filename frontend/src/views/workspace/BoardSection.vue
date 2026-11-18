@@ -15,7 +15,7 @@
       v-for="t in tables"
       :key="t.id"
       class="board-decision"
-      :class="{ 'is-table': shown[t.id] }"
+      :class="{ 'is-table': shown[t.id], 'is-held': t.held }"
       :data-action="t.id"
     >
       <div class="board-decision__head">
@@ -33,28 +33,31 @@
         :disabled="board.disabled.value"
         @update:off="board.setOff(t.id, $event)"
       />
-      <textarea
-        v-model="comments[t.id]"
-        class="ai-input ai-input--area"
-        rows="1"
-        maxlength="2000"
-        :disabled="board.disabled.value"
-        placeholder="Что поправить или добавить — необязательно"
-        aria-label="Комментарий к этапу"
-      />
-      <div class="board-decision__buttons">
-        <button
-          class="btn btn--accent"
-          type="button"
-          :disabled="board.disabled.value || !chosen(t).length"
-          @click="decide(t, true)"
-        >
-          Согласовать выбранные ({{ chosen(t).length }})
-        </button>
-        <button class="btn btn--ghost" type="button" :disabled="board.disabled.value" @click="decide(t, false)">
-          Отклонить этап
-        </button>
-      </div>
+      <!-- Таблица одной доски решается вместе с остальными — кнопкой в разделе «Готовность». -->
+      <template v-if="!t.held">
+        <textarea
+          v-model="comments[t.id]"
+          class="ai-input ai-input--area"
+          rows="1"
+          maxlength="2000"
+          :disabled="board.disabled.value"
+          placeholder="Что поправить или добавить — необязательно"
+          aria-label="Комментарий к этапу"
+        />
+        <div class="board-decision__buttons">
+          <button
+            class="btn btn--accent"
+            type="button"
+            :disabled="board.disabled.value || !chosen(t).length"
+            @click="decide(t, true)"
+          >
+            Согласовать выбранные ({{ chosen(t).length }})
+          </button>
+          <button class="btn btn--ghost" type="button" :disabled="board.disabled.value" @click="decide(t, false)">
+            Отклонить этап
+          </button>
+        </div>
+      </template>
     </div>
   </section>
 </template>
@@ -63,6 +66,7 @@
 /**
  * Раздел доски: заголовок со статусом этапов, пояснение ИИ, содержимое и решение по ждущей таблице —
  * отмеченное галочками на доске, комментарий, «Согласовать» и «Отклонить». Таблица целиком — по кнопке.
+ * У таблицы одной доски (held) своих кнопок нет: кампания согласуется целиком в разделе «Готовность».
  */
 import { computed, inject, reactive } from 'vue'
 import AiCheckTable from './AiCheckTable.vue'
@@ -72,7 +76,7 @@ const props = defineProps({
   title: { type: String, required: true },
   // [{ key, short, status, text? }] — этапы раздела.
   stages: { type: Array, default: () => [] },
-  // Ждущие таблицы этапов раздела (действия propose_items) с stageLabel.
+  // Ждущие таблицы этапов раздела (действия propose_items) с stageLabel и held.
   tables: { type: Array, default: () => [] },
 })
 const board = inject('board')

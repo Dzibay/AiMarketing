@@ -126,6 +126,13 @@ class BoardBody(BaseModel):
     ops: list[dict] = []
 
 
+class BoardDecideBody(BaseModel):
+    approve: bool = True
+    # {id таблицы на доске: номера отмеченных строк}; таблицы без записи согласуются как показаны.
+    rows: dict[str, list[int]] = {}
+    comment: str = ""
+
+
 class ReviewBody(BaseModel):
     # Пусто — общий разбор проекта; текст карточки сигнала — разбор по ней.
     prompt: str = ""
@@ -382,6 +389,12 @@ def chat_retry(chat_id: int, user_id: int = Depends(require_web_user)) -> dict:
 def chat_board(chat_id: int, body: BoardBody, user_id: int = Depends(require_web_user)) -> dict:
     """Правки маркетолога на доске сборки новой кампании; ответ — чат целиком."""
     return _call(ai_agent.edit_board, user_id, chat_id, body.ops)
+
+
+@router.post("/ai/chats/{chat_id}/board/decide")
+def chat_board_decide(chat_id: int, body: BoardDecideBody, user_id: int = Depends(require_web_user)) -> dict:
+    """Одно решение по всей кампании на доске: согласовать (ИИ создаст черновик) или отменить сборку."""
+    return _call(ai_agent.decide_build, user_id, chat_id, approve=body.approve, rows=body.rows, comment=body.comment)
 
 
 @router.post("/ai/chats/{chat_id}/decide-all")

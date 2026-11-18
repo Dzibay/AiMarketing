@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 
 from psycopg.types.json import Jsonb
@@ -326,6 +327,12 @@ def create_text_ad(
     if not titles_n or not texts_n or not href_n:
         raise YandexError("empty")
     extras_n = ad_extras.clean_extras(extras, ad_type)
+    if template and extras_n.get("sitelinks"):
+        # Быстрые ссылки на тот же сайт — с тем же ref, что и ссылка объявления; чужие адреса не трогаем.
+        extras_n["sitelinks"] = [
+            {**link, "href": links.normalize_href(link["href"], template)} if links.same_site(link["href"], template) else link
+            for link in extras_n["sitelinks"]
+        ]
     token = get_connection_access_token(group["connection_id"], user_id)
     resolved = ad_extras.resolve(token, group["client_login"], extras_n) if extras_n else {}
     if responsive:
@@ -675,6 +682,271 @@ def extras_like(user_id: int, ad_row_id: int) -> dict:
     token = get_connection_access_token(row["connection_id"], user_id)
     refs = ad_extras._ad_refs(token, row["client_login"], int(row["ad_id"]))
     return {key: refs[key] for key in ("sitelink_set_id", "callout_ids", "image_hashes")}
+
+
+# Расширения ставятся текстовым и комбинаторным объявлениям; у графических их нет.
+EXTRAS_AD_TYPES = ("TEXT_AD", "RESPONSIVE_AD")
+# ads.update принимает до 1000 объявлений за вызов; пачки меньше — чтобы сбой одной не терял всё.
+EXTRAS_UPDATE_BATCH = 200
+
+
+def _extras_ad_rows(
+    user_id: int, *, ad_row_ids: list[int] | None = None, campaign_row_id: int | None = None, adgroup_row_ids=None
+) -> list[dict]:
+    """Объявления с кабинетом и группой: по списку id либо все неархивные в кампании (или в её группах)."""
+    where, params = ["ad.user_id = %s"], [user_id]
+    if ad_row_ids is not None:
+        where.append("ad.id = ANY(%s)")
+        params.append(list(ad_row_ids))
+    else:
+        where.append("g.campaign_row_id = %s AND ad.state <> 'ARCHIVED'")
+        params.append(campaign_row_id)
+        if adgroup_row_ids:
+            where.append("g.id = ANY(%s)")
+            params.append(list(adgroup_row_ids))
+    with pool.connection() as conn:
+        return conn.execute(
+            f"""
+            SELECT ad.id, ad.ad_id, ad.type, ad.state, ad.title, ad.account_id, ad.adgroup_row_id,
+                   g.name AS adgroup_name, g.campaign_row_id, a.connection_id, a.client_login, a.enabled
+            FROM direct_ads ad
+            JOIN direct_adgroups g ON g.id = ad.adgroup_row_id
+            JOIN direct_accounts a ON a.id = ad.account_id
+            WHERE {" AND ".join(where)}
+            ORDER BY g.id, ad.id
+            """,
+            params,
+        ).fetchall()
+
+
+def _one_account(rows: list[dict]) -> dict:
+    """Кабинет объявлений: расширения — объекты кабинета, общий набор ставится только внутри одного."""
+    if len({int(r["account_id"]) for r in rows}) > 1:
+        raise YandexError("extras", "Объявления из разных кабинетов — общие расширения ставятся в одном кабинете")
+    if not rows[0].get("enabled"):
+        raise YandexError("disabled")
+    return rows[0]
+
+
+def campaign_extras(user_id: int, campaign_row_id: int, adgroup_row_ids: list[int] | None = None) -> dict:
+    """Расширения всех объявлений кампании одним заходом в Директ: какие наборы быстрых ссылок и уточнений
+    стоят и в скольких объявлениях, где их нет. Одинаковые по содержанию наборы считаются одним."""
+    rows = _extras_ad_rows(user_id, campaign_row_id=campaign_row_id, adgroup_row_ids=adgroup_row_ids)
+    if not rows:
+        return {"ads_total": 0, "sitelinks": [], "callouts": [], "images": []}
+    account = _one_account(rows)
+    token = get_connection_access_token(account["connection_id"], user_id)
+    login = account["client_login"]
+    refs = ad_extras.ads_refs(token, login, [r["ad_id"] for r in rows])
+    sets = ad_extras.sitelink_sets(token, login, [f["sitelink_set_id"] for f in refs.values()])
+    texts = ad_extras.callout_texts(token, login, [i for f in refs.values() for i in f["callout_ids"]])
+
+    def bucket(store: dict, key, value: dict, row: dict) -> None:
+        item = store.setdefault(key, {**value, "ads": 0, "ad_row_ids": [], "adgroups": []})
+        item["ads"] += 1
+        item["ad_row_ids"].append(int(row["id"]))
+        if row["adgroup_name"] not in item["adgroups"]:
+            item["adgroups"].append(row["adgroup_name"])
+
+    sitelinks: dict = {}
+    callouts: dict = {}
+    images: dict = {}
+    other, gone = [], []
+    for row in rows:
+        found = refs.get(int(row["ad_id"]))
+        if found is None:
+            gone.append(int(row["id"]))
+            continue
+        if found["type"] not in EXTRAS_AD_TYPES:
+            other.append({"ad_row_id": int(row["id"]), "type": found["type"]})
+            continue
+        links_now = sets.get(found["sitelink_set_id"]) or []
+        bucket(sitelinks, tuple((l["title"], l["href"], l["description"]) for l in links_now), {"links": links_now}, row)
+        own = [texts[i] for i in found["callout_ids"] if texts.get(i)]
+        bucket(callouts, tuple(sorted(own)), {"texts": own}, row)
+        bucket(images, len(found["image_hashes"]), {"count": len(found["image_hashes"])}, row)
+
+    def ordered(store: dict) -> list[dict]:
+        out = sorted(store.values(), key=lambda item: -item["ads"])
+        for item in out:
+            names = item["adgroups"]
+            item["adgroups"] = names[:10] + ([f"и ещё {len(names) - 10}"] if len(names) > 10 else [])
+        return out
+
+    out = {
+        "ads_total": len(rows),
+        "sitelinks": ordered(sitelinks),
+        "callouts": ordered(callouts),
+        "images": ordered(images),
+    }
+    if other:
+        out["other_types"] = other
+    if gone:
+        out["missing_in_direct"] = gone
+    return out
+
+
+def set_ads_extras(user_id: int, ad_row_ids: list[int], extras: dict | None) -> dict:
+    """Одни и те же быстрые ссылки, уточнения и картинки — многим объявлениям одного кабинета за один заход.
+
+    extras: ключ есть — заменить, пустой список — снять; для отката — готовые sitelink_set_id и callout_ids.
+    Набор ссылок и уточнения создаются в кабинете один раз, ads.update идёт пачками. Объявление, у которого
+    всё уже так, не трогаем: лишняя правка — лишняя модерация.
+    """
+    ids = list(dict.fromkeys(int(i) for i in ad_row_ids or []))
+    if not ids:
+        raise YandexError("empty")
+    rows = _extras_ad_rows(user_id, ad_row_ids=ids)
+    if len(rows) < len(ids):
+        raise YandexError("not-found")
+    account = _one_account(rows)
+    extras_n = ad_extras.clean_extras(extras, "RESPONSIVE_AD")
+    if not extras_n:
+        raise YandexError("empty")
+    token = get_connection_access_token(account["connection_id"], user_id)
+    login = account["client_login"]
+    refs = ad_extras.ads_refs(token, login, [r["ad_id"] for r in rows])
+
+    skipped: list[dict] = []
+    todo: list[dict] = []
+    for row in rows:
+        found = refs.get(int(row["ad_id"]))
+        if found is None:
+            skipped.append({"ad_row_id": int(row["id"]), "title": row["title"], "reason": "объявления уже нет в Директе"})
+        elif found["type"] not in EXTRAS_AD_TYPES:
+            skipped.append({"ad_row_id": int(row["id"]), "title": row["title"], "reason": "у объявлений этого типа нет расширений"})
+        else:
+            todo.append(row)
+    if not todo:
+        raise YandexError("extras", "Расширения ставятся текстовым и комбинаторным объявлениям — среди выбранных таких нет")
+
+    # Такой же набор ссылок уже стоит у одного из объявлений — берём его, а не плодим копии в кабинете.
+    hrefs: list[str] | None = None
+    if extras_n.get("sitelinks"):
+        hrefs = [link["href"] for link in extras_n["sitelinks"]]
+        known = ad_extras.sitelink_sets(token, login, [refs[int(r["ad_id"])]["sitelink_set_id"] for r in todo])
+        same = next((set_id for set_id, links_now in known.items() if links_now == extras_n["sitelinks"]), None)
+        if same is not None:
+            extras_n = {**{k: v for k, v in extras_n.items() if k != "sitelinks"}, "sitelink_set_id": same}
+    resolved = ad_extras.resolve(token, login, extras_n)
+    warnings: list[str] = []
+    images = resolved.get("image_hashes")
+    if images and len(images) > 1 and any(refs[int(r["ad_id"])]["type"] == "TEXT_AD" for r in todo):
+        warnings.append("В текстовое объявление встаёт одна картинка — им поставлена первая из списка")
+    if "sitelink_set_id" in resolved and hrefs is None:
+        set_id = resolved["sitelink_set_id"]
+        if not set_id:
+            hrefs = []
+        else:
+            # Откат приходит готовым id набора — адреса для проверки ссылок берём из самого набора.
+            try:
+                found_set = ad_extras.sitelink_sets(token, login, [set_id]).get(set_id)
+                hrefs = [link["href"] for link in found_set if link["href"]] if found_set is not None else None
+            except YandexError:
+                hrefs = None
+
+    batches: dict[str, list[tuple[dict, dict]]] = {"TEXT_AD": [], "RESPONSIVE_AD": []}
+    unchanged = 0
+    for row in todo:
+        current = refs[int(row["ad_id"])]
+        ad_type = current["type"]
+        own = dict(resolved)
+        if images is not None and ad_type == "TEXT_AD":
+            own["image_hashes"] = images[:1]
+        fields = ad_extras.update_fields(own, current, ad_type)
+        if fields:
+            batches[ad_type].append((row, fields))
+        else:
+            unchanged += 1
+
+    done: list[dict] = []
+    failed: list[dict] = []
+    failure: YandexError | None = None
+    for ad_type, key in (("TEXT_AD", "TextAd"), ("RESPONSIVE_AD", "ResponsiveAd")):
+        for part in direct_api.chunks(batches[ad_type], EXTRAS_UPDATE_BATCH):
+            try:
+                result = _call(token, login, "update", {"Ads": [{"Id": int(r["ad_id"]), key: f} for r, f in part]})
+            except YandexError as exc:
+                failure = failure or exc
+                failed += [{"ad_row_id": int(r["id"]), "title": r["title"], "error": exc.message or exc.code} for r, _f in part]
+                continue
+            errors = dict(direct_api.item_errors(result, "UpdateResults"))
+            if errors:
+                log.warning("ads.update extras: %s", errors)
+            for index, (row, _fields) in enumerate(part):
+                if index in errors:
+                    failure = failure or YandexError("direct", errors[index])
+                    failed.append({"ad_row_id": int(row["id"]), "title": row["title"], "error": errors[index]})
+                else:
+                    done.append(row)
+
+    ok_ids = [int(r["id"]) for r in done]
+    if ok_ids:
+        sets_sql, params = ["synced_at = NOW()"], []
+        if "sitelink_set_id" in resolved:
+            sets_sql += ["sitelink_set_id = %s", "sitelink_hrefs = %s"]
+            params += [resolved["sitelink_set_id"], Jsonb(hrefs) if hrefs is not None else None]
+        with pool.connection() as conn:
+            conn.execute(
+                f"UPDATE direct_ads SET {', '.join(sets_sql)} WHERE user_id = %s AND id = ANY(%s)", (*params, user_id, ok_ids)
+            )
+            if images is not None:
+                for ad_type in EXTRAS_AD_TYPES:
+                    typed = [int(r["id"]) for r in done if refs[int(r["ad_id"])]["type"] == ad_type]
+                    if typed:
+                        conn.execute(
+                            "UPDATE direct_ads SET image_hashes = %s WHERE user_id = %s AND id = ANY(%s)",
+                            (Jsonb(images[:1] if ad_type == "TEXT_AD" else images), user_id, typed),
+                        )
+
+    status = "ok" if failure is None else ("partial" if done else "error")
+    if done or failure is not None:
+        # Откат — прежними id: объявления с одинаковым прошлым уходят одним шагом.
+        back: dict[str, dict] = {}
+        for row in done:
+            current = refs[int(row["ad_id"])]
+            before = {key: current[key] for key in ("sitelink_set_id", "callout_ids", "image_hashes") if key in resolved}
+            step = back.setdefault(_json_key(before), {"ad_row_ids": [], "extras": before})
+            step["ad_row_ids"].append(int(row["id"]))
+        names = ", ".join(f"«{r.get('title') or r['ad_id']}»" for r in (done or todo)[:3])
+        rest = len(done or todo) - 3
+        log_action(
+            user_id,
+            "ads",
+            {
+                "ad_row_ids": ok_ids or [int(r["id"]) for r in todo],
+                "campaign_row_ids": sorted({int(r["campaign_row_id"]) for r in todo}),
+                "changes": {"extras": extras_n},
+            },
+            {
+                "applied": len(done),
+                "error": failure.code if failure else None,
+                "message": failure.message if failure else None,
+            },
+            status,
+            title=f"Расширения объявлений: {names}" + (f" и ещё {rest}" if rest > 0 else ""),
+            undo={
+                "label": "Вернуть прежние расширения",
+                "steps": [{"op": "ads_extras", "args": step} for step in back.values()],
+            }
+            if back
+            else None,
+            targets=[f"ad:{i}" for i in (ok_ids or [int(r["id"]) for r in todo])],
+        )
+    if failure is not None and not done:
+        raise failure
+    return {
+        "updated": len(done),
+        "unchanged": unchanged,
+        "status": status,
+        **({"failed": failed} if failed else {}),
+        **({"skipped": skipped} if skipped else {}),
+        **({"warnings": warnings} if warnings else {}),
+    }
+
+
+def _json_key(value) -> str:
+    return json.dumps(value, sort_keys=True, ensure_ascii=False)
 
 
 def campaign_images(user_id: int, campaign_row_id: int, *, limit: int = 30) -> dict:

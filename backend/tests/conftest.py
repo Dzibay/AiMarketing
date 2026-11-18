@@ -32,6 +32,8 @@ def _no_plan_without_db(request, monkeypatch):
     if {"db", "db_pool"} & set(request.fixturenames):
         return
     monkeypatch.setattr("app.plans._row", lambda user_id: None)
+    # Требований ТЗ у сборки без БД нет (их читают из таблиц чата).
+    monkeypatch.setattr("app.ai_agent._chat_requirements", lambda ctx: None)
 
 
 def reset_schema(pool) -> None:

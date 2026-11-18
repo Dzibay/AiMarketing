@@ -196,25 +196,60 @@ def update_fields(resolved: dict, current: dict, ad_type: str) -> dict:
 # --- Чтение ------------------------------------------------------------------------------------
 
 
+_REFS_FIELDS = {
+    "FieldNames": ["Id", "Type"],
+    "TextAdFieldNames": ["SitelinkSetId", "AdExtensions", "AdImageHash"],
+    "ResponsiveAdFieldNames": ["SitelinkSetId", "AdExtensions", "AdImages"],
+}
+# В Ids у ads.get не больше 10000 объявлений; берём пачками поменьше, чтобы ответ не резался страницей.
+REFS_BATCH = 1000
+
+
 def _ad_refs(token, client_login: str, ad_id: int) -> dict:
     """Какие расширения сейчас у объявления в Директе."""
     result = direct_api.call(
-        token,
-        client_login,
-        "ads",
-        "get",
-        {
-            "SelectionCriteria": {"Ids": [int(ad_id)]},
-            "FieldNames": ["Id", "Type"],
-            "TextAdFieldNames": ["SitelinkSetId", "AdExtensions", "AdImageHash"],
-            "ResponsiveAdFieldNames": ["SitelinkSetId", "AdExtensions", "AdImages"],
-        },
-        version="v501",
+        token, client_login, "ads", "get", {"SelectionCriteria": {"Ids": [int(ad_id)]}, **_REFS_FIELDS}, version="v501"
     )
     ads = result.get("Ads") or []
     if not ads:
         raise YandexError("not-found")
-    ad = ads[0]
+    return _refs_of(ads[0])
+
+
+def ads_refs(token, client_login: str, ad_ids) -> dict[int, dict]:
+    """Расширения многих объявлений одним запросом: {id объявления в Директе: refs}; удалённых в ответе нет."""
+    out: dict[int, dict] = {}
+    ids = list(dict.fromkeys(int(i) for i in ad_ids if i))
+    for part in direct_api.chunks(ids, REFS_BATCH):
+        result = direct_api.call(
+            token, client_login, "ads", "get", {"SelectionCriteria": {"Ids": part}, **_REFS_FIELDS}, version="v501"
+        )
+        for ad in result.get("Ads") or []:
+            if ad.get("Id"):
+                out[int(ad["Id"])] = _refs_of(ad)
+    return out
+
+
+def callout_texts(token, client_login: str, callout_ids) -> dict[int, str]:
+    """Тексты уточнений по id."""
+    out: dict[int, str] = {}
+    ids = sorted({int(i) for i in callout_ids if i})
+    for part in direct_api.chunks(ids, 1000):
+        exts = direct_api.call(
+            token,
+            client_login,
+            "adextensions",
+            "get",
+            {"SelectionCriteria": {"Ids": part}, "FieldNames": ["Id"], "CalloutFieldNames": ["CalloutText"]},
+        ).get("AdExtensions") or []
+        for e in exts:
+            text = (e.get("Callout") or {}).get("CalloutText")
+            if e.get("Id") and text:
+                out[int(e["Id"])] = str(text)
+    return out
+
+
+def _refs_of(ad: dict) -> dict:
     body = ad.get("ResponsiveAd") or ad.get("TextAd") or {}
     if ad.get("ResponsiveAd"):
         ad_type = "RESPONSIVE_AD"
@@ -311,14 +346,7 @@ def read_extras(token, client_login: str, ad_id: int) -> dict:
         sitelinks = sitelink_sets(token, client_login, [refs["sitelink_set_id"]]).get(refs["sitelink_set_id"], [])
     callouts: list[str] = []
     if refs["callout_ids"]:
-        exts = direct_api.call(
-            token,
-            client_login,
-            "adextensions",
-            "get",
-            {"SelectionCriteria": {"Ids": refs["callout_ids"]}, "FieldNames": ["Id"], "CalloutFieldNames": ["CalloutText"]},
-        ).get("AdExtensions") or []
-        texts = {int(e["Id"]): (e.get("Callout") or {}).get("CalloutText") for e in exts}
+        texts = callout_texts(token, client_login, refs["callout_ids"])
         callouts = [texts[i] for i in refs["callout_ids"] if texts.get(i)]
     previews = image_previews(token, client_login, refs["image_hashes"])
     return {

@@ -170,10 +170,63 @@ def test_attach_sitelink_hrefs(monkeypatch):
     monkeypatch.setattr(ad_extras, "sitelink_sets", fail)
     assert "sitelink_hrefs" not in ad_extras.attach_sitelink_hrefs("t", "l", [{"sitelink_set_id": 77}])[0]
 
+def test_campaign_own_params(t):
+    """Свой ref кампании: шаблон с ним, чужие значения в ссылке и память о том, что уже спрашивали."""
+    assert links.link_choice(None) == {"own": {}, "asked": {}}
+    assert links.link_choice({"own": {"ref": "Telegram", "x": ""}, "asked": {"ref": ["A", "A", "B"], "bad": "нет"}}) == {
+        "own": {"ref": "Telegram"},
+        "asked": {"ref": ["A", "B"]},
+    }
+    choice = links.merge_link_choice(None, own={"ref": "Telegram"}, asked={"ref": ["Telegram", "Yandex"]})
+    assert choice == {"own": {"ref": "Telegram"}, "asked": {"ref": ["Telegram", "Yandex"]}}
+    # Пустое значение возвращает параметр к шаблону; о чём спрашивали — помним дальше.
+    back = links.merge_link_choice(choice, own={"ref": None}, asked={"ref": ["Vk", "Telegram"]})
+    assert back == {"own": {}, "asked": {"ref": ["Telegram", "Yandex", "Vk"]}}
+
+    own = links.with_own(t, {"ref": "Telegram"})
+    assert links.template_href(own) == "https://happ-connection.ru/?ref=Telegram" and own["tracking"] == t["tracking"]
+    assert links.with_own(t, {}) is t and links.with_own(t, {"ref": "Yandex"}) is t and links.with_own(None, {"ref": "x"}) is None
+    # Параметра нет в шаблоне — у кампании он всё равно свой; метку своей сделать нельзя.
+    assert links.with_own(t, {"partner": "tg", "utm_source": "vk"})["ad_params"] == [("ref", "Yandex"), ("partner", "tg")]
+    assert links.normalize_href("https://happ-connection.ru/tarify?ref=Yandex&utm_source=x", own) == (
+        "https://happ-connection.ru/tarify?ref=Telegram"
+    )
+    assert links.href_problems("https://happ-connection.ru/?ref=Yandex", own) == ["ref=Yandex вместо Telegram"]
+
+    assert links.foreign_params("https://www.happ-connection.ru/a?ref=Telegram&x=1", t) == [("ref", "Telegram", "Yandex")]
+    assert links.foreign_params("happ-connection.ru/?ref=Telegram", own) == []
+    assert links.foreign_params("https://happ-connection.ru/?ref=Yandex", own) == [("ref", "Yandex", "Telegram")]
+    # Нет ref, пустой ref и чужой сайт — не выбор маркетолога: тут спрашивать не о чем.
+    for href in ("https://happ-connection.ru/tarify", "https://happ-connection.ru/?ref=", "https://other.ru/?ref=Telegram", ""):
+        assert links.foreign_params(href, t) == []
+    assert links.same_site("www.happ-connection.ru/x", t) and not links.same_site("https://other.ru/", t)
+
+
+@pytest.mark.parametrize(
+    "params, text",
+    [
+        ({}, "Укажите параметр ссылки и его значение, например ref и Telegram"),
+        ({"ре ф": "x"}, "Имя параметра «ре ф» — латиница, цифры и подчёркивание"),
+        ({"ref": "a b"}, "Значение ref — без пробелов и знаков & # ? =, до 100 символов"),
+        ({"ref": "a&utm=1"}, "Значение ref — без пробелов и знаков & # ? =, до 100 символов"),
+        ({"ref": ""}, "Значение ref — без пробелов и знаков & # ? =, до 100 символов"),
+    ],
+)
+def test_clean_params_errors(params, text):
+    with pytest.raises(YandexError) as exc:
+        links.clean_params(params)
+    assert exc.value.message == text
+
+
+def test_clean_params():
+    assert links.clean_params({" ref ": " Telegram_1 "}) == {"ref": "Telegram_1"}
+
+
 def test_ai_tools_are_registered():
     from app import ai_agent
 
     names = {t["function"]["name"] for t in ai_agent.TOOLS}
-    for name in ("get_headline_stats", "get_slices", "check_links"):
+    for name in ("get_headline_stats", "get_slices", "check_links", "get_campaign_extras"):
         assert name in ai_agent.READ_TOOLS and name in names and name in ai_agent.TOOL_LABELS
-    assert "fix_links" in ai_agent.WRITE_TOOLS and "fix_links" in ai_agent._DIFFS and "fix_links" in names
+    for name in ("fix_links", "set_campaign_ref", "set_ads_extras"):
+        assert name in ai_agent.WRITE_TOOLS and name in ai_agent._DIFFS and name in names and name in ai_agent.TOOL_LABELS

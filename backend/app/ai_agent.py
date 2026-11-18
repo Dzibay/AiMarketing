@@ -45,7 +45,13 @@ from app.yandex import YandexError
 
 log = logging.getLogger(__name__)
 
-MAX_STEPS = 8
+# Потолок шагов одного захода модели (до ответа, вопроса или карточки). Согласованную работу ИИ доводит
+# до конца сам, без «продолжай»; от хождения по кругу защищают MAX_SAME_ERROR и MAX_ERROR_STEPS.
+MAX_STEPS = 40
+# Один и тот же вызов с той же ошибкой столько раз за заход — стоп.
+MAX_SAME_ERROR = 3
+# Столько шагов подряд, где не удалось ничего, — стоп.
+MAX_ERROR_STEPS = 5
 HISTORY_MESSAGES = 60
 # Ответы чтения из прошлых ходов в запрос идут укороченными: полный вызов с ~100 тыс. токенов не укладывался во
 # время ответа. Нужны данные — модель читает заново; согласования, ответы на вопросы и записи не сокращаются.
@@ -388,7 +394,11 @@ class Context:
         allowed = set(workspace_campaign_row_ids(self.user_id, self.ws_id))
         foreign = [i for i in ids if i not in allowed]
         if foreign:
-            raise YandexError("scope", f"Кампании {foreign} не входят в этот проект")
+            raise YandexError(
+                "scope",
+                f"Кампании {foreign} не входят в этот проект. Кампанию можно назвать номером строки "
+                "(campaign_row_id) или номером в Директе (campaign_id) — оба есть в list_campaigns",
+            )
         with pool.connection() as conn:
             rows = conn.execute(
                 """
@@ -448,16 +458,19 @@ class Context:
             "Объявления",
         )
 
-    def adgroup(self, adgroup_row_id: int) -> dict:
+    def adgroups(self, ids: list[int]) -> list[dict]:
         return self._scoped(
             """
             SELECT g.id, g.name, g.type, g.account_id, g.campaign_row_id, c.campaign_type
             FROM direct_adgroups g JOIN direct_campaigns c ON c.id = g.campaign_row_id
             WHERE g.user_id = %s AND g.id = ANY(%s)
             """,
-            [adgroup_row_id],
+            ids,
             "Группы",
-        )[0]
+        )
+
+    def adgroup(self, adgroup_row_id: int) -> dict:
+        return self.adgroups([adgroup_row_id])[0]
 
     def queries(self, ids: list[int]) -> list[dict]:
         return self._scoped(
@@ -949,6 +962,33 @@ def _t_ad_extras(ctx: Context, args: dict) -> dict:
     }
 
 
+def _campaign_groups(ctx: Context, campaign_row_id: int, args: dict) -> list[int] | None:
+    """adgroup_row_ids из аргументов — группы этой кампании; None — вся кампания."""
+    if args.get("adgroup_row_ids") in (None, "", []):
+        return None
+    ids = _ids(args, "adgroup_row_ids")
+    foreign = [int(g["id"]) for g in ctx.adgroups(ids) if int(g["campaign_row_id"]) != campaign_row_id]
+    if foreign:
+        raise YandexError("args", f"Группы {foreign} — из другой кампании")
+    return ids
+
+
+def _t_campaign_extras(ctx: Context, args: dict) -> dict:
+    from app.ads import campaign_extras
+
+    cid = _int(args, "campaign_row_id")
+    campaign = ctx.campaign(cid)
+    out = campaign_extras(ctx.user_id, cid, _campaign_groups(ctx, cid, args))
+    return {
+        "campaign_row_id": cid,
+        "campaign": campaign["name"],
+        **out,
+        "note": "Одинаковые наборы собраны в одну запись: ads — в скольких объявлениях набор стоит, ad_row_ids — в "
+        "каких. Пустые links или texts — у этих объявлений расширения нет. Поставить один набор многим "
+        "объявлениям — одно действие set_ads_extras.",
+    }
+
+
 def _t_ad_images(ctx: Context, args: dict) -> dict:
     from app.ads import campaign_images
 
@@ -1301,13 +1341,70 @@ def _t_help(ctx: Context, args: dict) -> dict:
     return out
 
 
+_CAMPAIGN_ARGS = ("campaign_row_id", "source_campaign_row_id")
+_CAMPAIGN_LIST_ARGS = ("campaign_row_ids",)
+
+
+def _resolve_campaign_numbers(ctx: Context, args: dict) -> dict:
+    """Маркетолог называет кампанию номером из Директа, а инструменты ждут номер строки сервиса.
+
+    Число, которое не строка кампании проекта, но совпадает с номером в Директе ровно одной его кампании,
+    заменяется её строкой. Остальное остаётся как есть — об ошибке скажет сам инструмент.
+    """
+    if ctx.ws_id is None:
+        return args
+
+    def number(value) -> int | None:
+        if isinstance(value, bool):
+            return None
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None
+
+    asked = [number(args.get(key)) for key in _CAMPAIGN_ARGS]
+    for key in _CAMPAIGN_LIST_ARGS:
+        if isinstance(args.get(key), list):
+            asked += [number(v) for v in args[key]]
+    asked = [n for n in asked if n is not None]
+    if not asked:
+        return args
+    allowed = set(workspace_campaign_row_ids(ctx.user_id, ctx.ws_id))
+    unknown = sorted({n for n in asked if n not in allowed})
+    if not unknown or not allowed:
+        return args
+    with pool.connection() as conn:
+        rows = conn.execute(
+            "SELECT id, campaign_id FROM direct_campaigns WHERE user_id = %s AND id = ANY(%s) AND campaign_id = ANY(%s)",
+            (ctx.user_id, sorted(allowed), unknown),
+        ).fetchall()
+    found: dict[int, list[int]] = {}
+    for row in rows:
+        found.setdefault(int(row["campaign_id"]), []).append(int(row["id"]))
+    mapping = {direct: ids[0] for direct, ids in found.items() if len(ids) == 1}
+    if not mapping:
+        return args
+    out = dict(args)
+    for key in _CAMPAIGN_ARGS:
+        if number(out.get(key)) in mapping:
+            out[key] = mapping[number(out[key])]
+    for key in _CAMPAIGN_LIST_ARGS:
+        if isinstance(out.get(key), list):
+            out[key] = [mapping.get(number(v), v) for v in out[key]]
+    return out
+
+
+def _t_build(ctx: Context, args: dict) -> dict:
+    return build_snapshot(ctx, args)
+
+
 def _read(ctx: Context, name: str, args: dict) -> dict:
     """Инструмент чтения; с project_id — на данных другого проекта, ответ подписан его названием."""
     raw = args.get("project_id") if name in CROSS_PROJECT_TOOLS else None
     if raw in (None, ""):
-        return READ_TOOLS[name](ctx, args)
+        return READ_TOOLS[name](ctx, _resolve_campaign_numbers(ctx, args))
     other = ctx.project(_int(args, "project_id"))
-    args = {k: v for k, v in args.items() if k != "project_id"}
+    args = _resolve_campaign_numbers(other, {k: v for k, v in args.items() if k != "project_id"})
     out = READ_TOOLS[name](other, args)
     if other is ctx:
         return out
@@ -1339,9 +1436,11 @@ READ_TOOLS = {
     "get_slices": _t_slices,
     "check_links": _t_links,
     "get_ad_extras": _t_ad_extras,
+    "get_campaign_extras": _t_campaign_extras,
     "list_ad_images": _t_ad_images,
     "generate_images": _t_generate_images,
     "help_search": _t_help,
+    "get_build": _t_build,
 }
 
 
@@ -1610,8 +1709,9 @@ def _require_approved(ctx: Context, content: dict[str, list[str]], *, stages: li
     if missing:
         raise YandexError(
             "args",
-            "Новая кампания собирается по этапам, и каждый маркетолог согласует таблицей propose_items. Ещё не "
-            f"согласовано: {', '.join(missing)}. Пройди эти этапы по порядку, и только потом создавай кампанию",
+            "Новая кампания собирается по этапам — таблицами propose_items, и создать её можно только из того, что "
+            f"маркетолог согласовал. Ещё не согласовано: {', '.join(missing)}. Подготовь эти этапы таблицами и "
+            "дождись согласования, потом создавай кампанию",
         )
     bad: list[str] = []
     for kind, values in content.items():
@@ -1860,6 +1960,51 @@ def _check_spec_money(ctx: Context, spec: dict) -> None:
     actions.check_multi_goals(strategy, actions._priority_goals(spec.get("priority_goals")))
 
 
+def _spec_view(name: str, phrases: list[str], targeted: bool, ad, variants) -> dict:
+    """Группа spec для подсчёта требований ТЗ (см. _requirement_checks)."""
+    ad = ad if isinstance(ad, dict) else {}
+    extras = ad.get("extras") if isinstance(ad.get("extras"), dict) else {}
+    from_ad = ad.get("extras_from_ad_row_id") not in (None, "")
+    sitelinks = [
+        _link_text(s) for s in extras.get("sitelinks") or [] if isinstance(s, dict) and str(s.get("title") or "").strip()
+    ]
+    callouts = [str(c).strip() for c in extras.get("callouts") or [] if str(c or "").strip()]
+    return {
+        "name": name,
+        "keywords": None if not phrases and targeted else phrases,
+        "titles": list(variants[0]) if variants else [],
+        "texts": list(variants[1]) if variants else [],
+        "sitelinks": None if from_ad else sitelinks,
+        "callouts": None if from_ad else callouts,
+    }
+
+
+def _chat_requirements(ctx: Context) -> dict | None:
+    """Требования ТЗ сборки, которая идёт в этом чате; None — сборки нет или требований в ней нет."""
+    if ctx.chat_id is None or ctx.ws_id is None:
+        return None
+    build, _created = _chat_build(ctx)
+    return build.get("requirements") if _build_open(build) else None
+
+
+def _require_brief(ctx: Context, views: list[dict]) -> None:
+    """Жёсткая проверка требований ТЗ: пока список не выполнен, черновик не создаётся."""
+    requirements = _chat_requirements(ctx)
+    if not requirements:
+        return
+    problems = _spec_requirement_problems(requirements, views)
+    if problems:
+        raise YandexError(
+            "args",
+            f"Черновик не создан: не выполнены требования ТЗ — {problems}. Исправь новой таблицей того же этапа с "
+            "revise=true: недостающие строки добавь, а согласованную строку, которую надо убрать (например, с "
+            "запрещённым словом), дай в ней с checked=false. Таблица ляжет на доску, маркетолог согласует — и только "
+            "потом вызывай create_campaign. "
+            "Требования меняются, только если маркетолог сам так решил: тогда передай новый requirements в таблице "
+            "этапа.",
+        )
+
+
 def _p_create_campaign(ctx: Context, args: dict) -> Plan:
     from app import actions
 
@@ -1881,6 +2026,8 @@ def _p_create_campaign(ctx: Context, args: dict) -> Plan:
     group_audiences: list[tuple[str, dict]] = []
     group_images: list[tuple[str, str]] = []
     bare: list[str] = []
+    # Группы глазами требований ТЗ: что в каждой посчитать.
+    views: list[dict] = []
     href_default = bool(actions._ws_link_template(ctx.ws))
     for index, group in enumerate(groups):
         name = str(group.get("name") or f"Группа {index + 1}").strip()
@@ -1898,6 +2045,7 @@ def _p_create_campaign(ctx: Context, args: dict) -> Plan:
         if mine and not phrases:
             bare.append(name)
         variants = _group_ad(ctx, group.get("ad"), name, int(account["id"]))
+        views.append(_spec_view(name, phrases, bool(mine), group.get("ad"), variants))
         if variants is None:
             continue
         extras = group["ad"].get("extras")
@@ -1933,6 +2081,7 @@ def _p_create_campaign(ctx: Context, args: dict) -> Plan:
         _require_approved(ctx, {k: v for k, v in content.items() if v}, stages=stages)
         _require_audiences(ctx, group_audiences)
         _require_images(ctx, group_images)
+        _require_brief(ctx, views)
 
     details = []
     strategy = spec.get("strategy") or {}
@@ -2779,6 +2928,124 @@ def _x_update_ads(ctx: Context, args: dict) -> dict:
     return {"updated": len(done), "ads": done, **({"warnings": warnings} if warnings else {})}
 
 
+# Одни расширения многим объявлениям — одним действием; столько же строк с галочками вмещает карточка.
+MAX_EXTRAS_ADS = 300
+_EXTRAS_SCOPES = ("campaign_row_id", "adgroup_row_ids", "ad_row_ids")
+_EXTRAS_TYPES = ("TEXT_AD", "RESPONSIVE_AD")
+
+
+def _extras_scope(ctx: Context, args: dict) -> list[dict]:
+    """Объявления для set_ads_extras: вся кампания, её группы или список — всегда из одной кампании.
+
+    Из кампании и групп берутся неархивные текстовые и комбинаторные объявления; в списке другой тип — ошибка.
+    """
+    given = [k for k in _EXTRAS_SCOPES if args.get(k) not in (None, "", [])]
+    if len(given) != 1:
+        raise YandexError(
+            "args",
+            "Назови объявления одним способом: campaign_row_id — все объявления кампании, adgroup_row_ids — "
+            "все объявления этих групп, ad_row_ids — только перечисленные",
+        )
+    key = given[0]
+    where = "TRUE"
+    if key == "campaign_row_id":
+        value: int | list[int] = _int(args, key)
+        ctx.campaign(value)
+        where, column = "ad.state <> 'ARCHIVED'", "g.campaign_row_id = %s"
+    elif key == "adgroup_row_ids":
+        value = _ids(args, key)
+        if len({int(g["campaign_row_id"]) for g in ctx.adgroups(value)}) > 1:
+            raise YandexError("args", "Группы из разных кампаний — расширения ставь по одной кампании за раз")
+        where, column = "ad.state <> 'ARCHIVED'", "g.id = ANY(%s)"
+    else:
+        raw = args.get(key)
+        try:
+            value = list(dict.fromkeys(int(v) for v in raw)) if isinstance(raw, list) else []
+        except (TypeError, ValueError) as exc:
+            raise YandexError("args", "ad_row_ids: id должны быть числами") from exc
+        if not value:
+            raise YandexError("args", "Укажите ad_row_ids — непустой список id")
+        if len(value) > MAX_EXTRAS_ADS:
+            raise YandexError("args", f"За раз — до {MAX_EXTRAS_ADS} объявлений")
+        if len({int(r["campaign_row_id"]) for r in ctx.ads(value)}) > 1:
+            raise YandexError("args", "Объявления из разных кампаний — расширения ставь по одной кампании за раз")
+        column = "ad.id = ANY(%s)"
+    with pool.connection() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT ad.id, ad.title, ad.type, ad.account_id, ad.adgroup_row_id, ad.sitelink_set_id, ad.image_hashes,
+                   g.name AS adgroup_name, g.campaign_row_id
+            FROM direct_ads ad JOIN direct_adgroups g ON g.id = ad.adgroup_row_id
+            WHERE ad.user_id = %s AND {column} AND {where}
+            ORDER BY g.id, ad.id
+            """,
+            (ctx.user_id, value),
+        ).fetchall()
+    if key == "ad_row_ids":
+        other = [r for r in rows if r["type"] and r["type"] not in _EXTRAS_TYPES]
+        if other:
+            raise YandexError(
+                "args",
+                f"У объявлений {_names(other)} нет расширений — они есть только у текстовых и комбинаторных: убери их из списка",
+            )
+        order = {i: n for n, i in enumerate(value)}
+        return sorted(rows, key=lambda r: order[int(r["id"])])
+    rows = [r for r in rows if not r["type"] or r["type"] in _EXTRAS_TYPES]
+    if not rows:
+        raise YandexError("args", "Здесь нет текстовых и комбинаторных объявлений — расширения ставить некому")
+    if len(rows) > MAX_EXTRAS_ADS:
+        raise YandexError(
+            "args", f"Объявлений {len(rows)} — за раз до {MAX_EXTRAS_ADS}: вызови по группам (adgroup_row_ids)"
+        )
+    return rows
+
+
+def _extras_scope_args(ctx: Context, args: dict) -> dict:
+    """«Вся кампания» и «эти группы» → явный список объявлений: маркетолог видит каждое и может снять галочку,
+    а выполняется ровно то, что было в карточке, даже если в кампании с тех пор появились новые объявления."""
+    rows = _extras_scope(ctx, args)
+    return {**{k: v for k, v in args.items() if k not in _EXTRAS_SCOPES}, "ad_row_ids": [int(r["id"]) for r in rows]}
+
+
+def _extras_what(args: dict) -> str:
+    extras = args.get("extras") if isinstance(args.get("extras"), dict) else {}
+    labels = {"sitelinks": "быстрые ссылки", "callouts": "уточнения", "image_hashes": "картинки"}
+    return ", ".join(v for k, v in labels.items() if extras.get(k) is not None) or "как у объявления-образца"
+
+
+def _p_set_ads_extras(ctx: Context, args: dict) -> Plan:
+    rows = _extras_scope(ctx, args)
+    if not _has_extras(args):
+        raise YandexError(
+            "args", "Укажи, что поставить: extras {sitelinks, callouts, image_hashes} или extras_from_ad_row_id"
+        )
+    _ad_extras_args(ctx, args, "RESPONSIVE_AD", int(rows[0]["account_id"]))
+    campaign = ctx.campaign(int(rows[0]["campaign_row_id"]))
+    return Plan(
+        f"Расширения ({_extras_what(args)}) — {_count(len(rows), 'объявлению', 'объявлениям', 'объявлениям')} "
+        f"кампании {_cname(campaign)}",
+        ["ads"],
+    )
+
+
+def _x_set_ads_extras(ctx: Context, args: dict) -> dict:
+    from app.ads import set_ads_extras
+
+    rows = _extras_scope(ctx, args)
+    account_id = int(rows[0]["account_id"])
+    extras = _ad_extras_args(ctx, args, "RESPONSIVE_AD", account_id, fetch=True)
+    warnings = _bring_extras_images(ctx, [extras] if extras else [], account_id, "картинки объявлений не менялись")
+    if not extras:
+        raise YandexError("extras", "; ".join(warnings) or "Ставить нечего: у объявления-образца нет расширений")
+    out = set_ads_extras(ctx.user_id, [int(r["id"]) for r in rows], extras)
+    warnings += out.pop("warnings", [])
+    return {**out, "warnings": warnings} if warnings else out
+
+
+# Действия, чьи аргументы сервис раскрывает ещё до карточки.
+_ARG_EXPANDERS = {"set_ads_extras": _extras_scope_args}
+
+
 _AD_ACTIONS = {
     "suspend": "Остановить",
     "resume": "Запустить",
@@ -2836,6 +3103,63 @@ def _x_fix_links(ctx: Context, args: dict) -> dict:
     return links.fix_links(ctx.user_id, [r["id"] for r in rows])
 
 
+def _ref_args(ctx: Context, args: dict) -> tuple[list[tuple[dict, dict, dict]], str, str]:
+    """set_campaign_ref → ([(кампания, план замены, сколько ссылок перепишется)], параметр, значение)."""
+    from app import links
+
+    rows = ctx.campaigns(_ids(args, "campaign_row_ids"))
+    param = str(args.get("param") or "ref").strip() or "ref"
+    value = str(args.get("value") if args.get("value") is not None else "").strip()
+    out = []
+    for r in rows:
+        plan = links.campaign_params_plan(ctx.user_id, int(r["id"]), {param: value})
+        out.append((r, plan, links.campaign_params_effect(ctx.user_id, int(r["id"]), plan)))
+    return out, param, value
+
+
+def _ref_same(plan: dict, effect: dict, param: str, value: str) -> bool:
+    """Значение уже закреплено за кампанией и стоит во всех её ссылках."""
+    return plan["before"][param].lower() == value.lower() and not effect["touched"] and not effect["manual"]
+
+
+def _p_set_ref(ctx: Context, args: dict) -> Plan:
+    found, param, value = _ref_args(ctx, args)
+    todo = [(r, effect) for r, plan, effect in found if not _ref_same(plan, effect, param, value)]
+    if not todo:
+        raise YandexError("args", f"{param}={value} уже стоит во всех ссылках этих кампаний — менять нечего")
+    ads = sum(effect["touched"] for _r, effect in todo)
+    summary = f"{param}={value} в ссылках: {_cnames([r for r, _e in todo])}"
+    if ads:
+        summary += f"; {_count(ads, 'объявление', 'объявления', 'объявлений')} уйдут на модерацию"
+    return Plan(summary, ["campaigns", "ads"] if ads else ["campaigns"])
+
+
+def _x_set_ref(ctx: Context, args: dict) -> dict:
+    from app import links
+
+    found, param, value = _ref_args(ctx, args)
+    items, failed = [], []
+    for r, plan, effect in found:
+        if _ref_same(plan, effect, param, value):
+            continue
+        try:
+            items.append(links.set_campaign_params(ctx.user_id, int(r["id"]), {param: value}))
+        except YandexError as exc:
+            failed.append(f"{_cname(r)} — {exc.message or exc.code}")
+    if failed and not items:
+        raise YandexError("links", "Ссылки не изменены: " + "; ".join(failed))
+    return {
+        "param": param,
+        "value": value,
+        "items": items,
+        "ads_fixed": sum(int(i.get("ads_fixed") or 0) for i in items),
+        "sitelinks_fixed": sum(int(i.get("sitelinks_fixed") or 0) for i in items),
+        **({"failed": failed} if failed else {}),
+        "note": f"{param}={value} закреплён за кампанией: новые объявления и проверка ссылок считают его правильным. "
+        "Изменённые объявления и быстрые ссылки Директ заново отправит на модерацию; тексты не менялись.",
+    }
+
+
 WRITE_TOOLS = {
     "campaigns_action": (_p_campaigns_action, _x_campaigns_action),
     "update_campaign_settings": (_p_update_settings, _x_update_settings),
@@ -2855,8 +3179,10 @@ WRITE_TOOLS = {
     "create_text_ad": (_p_create_ad, _x_create_ad),
     "update_text_ad": (_p_update_ad, _x_update_ad),
     "update_text_ads": (_p_update_ads, _x_update_ads),
+    "set_ads_extras": (_p_set_ads_extras, _x_set_ads_extras),
     "ads_action": (_p_ads_action, _x_ads_action),
     "fix_links": (_p_fix_links, _x_fix_links),
+    "set_campaign_ref": (_p_set_ref, _x_set_ref),
 }
 
 
@@ -3250,13 +3576,17 @@ def _d_add_negatives(ctx: Context, args: dict) -> list[dict]:
 
 
 def _d_create_campaign(ctx: Context, args: dict) -> list[dict]:
-    from app import actions, geo
+    from app import actions, geo, links
 
     account = ctx.require_account(_int(args, "account_id"))
     spec = dict(args.get("spec") or {})
     names = _goal_names(ctx)
     ctype = str(spec.get("type") or "TEXT_CAMPAIGN").upper()
-    out = [_ch("Кампания", "нет", f"«{str(spec.get('name') or '').strip()}» — черновик в кабинете {account['client_login']}")]
+    out = [
+        _ch("Кампания", "нет", f"«{str(spec.get('name') or '').strip()}» — черновик в кабинете {account['client_login']}"),
+        # Тип после создания не меняется: маркетолог видит его до согласования, а не узнаёт из Директа.
+        _ch("Тип кампании", "—", actions.CAMPAIGN_TYPES.get(ctype) or f"{ctype} — такого типа сервис не создаёт"),
+    ]
     strategy = dict(spec.get("strategy") or {}) if isinstance(spec.get("strategy"), dict) else {}
     if ctx.ws.get("goal_id") and not strategy.get("goal_id"):
         strategy["goal_id"] = ctx.ws["goal_id"]
@@ -3274,7 +3604,8 @@ def _d_create_campaign(ctx: Context, args: dict) -> list[dict]:
     if isinstance(negatives, list) and negatives:
         out.append(_ch("Минус-фразы кампании", "—", _preview([str(p) for p in negatives])))
     regions_all = geo.load_regions(ctx.user_id)
-    template = actions._ws_link_template(ctx.ws)
+    # Адрес в карточке — тот, что уйдёт в Директ: по шаблону проекта и со своим ref кампании, если он выбран.
+    template = links.with_own(actions._ws_link_template(ctx.ws), links.link_choice(spec.get("link_params"))["own"])
     try:
         groups = actions.spec_groups(spec)
     except YandexError:
@@ -3293,7 +3624,7 @@ def _d_create_campaign(ctx: Context, args: dict) -> list[dict]:
         titles = _variants(ad, "titles") or ([ad["title"]] if ad.get("title") else [])
         texts = _variants(ad, "texts") or ([ad["text"]] if ad.get("text") else [])
         if titles and texts:
-            href = str(ad.get("href") or "").strip() or ("ссылка по шаблону" if template else "без ссылки")
+            href = str(ad.get("href") or "").strip() or (links.template_href(template) if template else "без ссылки")
             parts.append(
                 f"объявление: {_count(len(titles), 'заголовок', 'заголовка', 'заголовков')}, "
                 f"{_count(len(texts), 'текст', 'текста', 'текстов')}, {href}"
@@ -3693,6 +4024,25 @@ def _d_update_ads(ctx: Context, args: dict) -> list[dict]:
     return out
 
 
+def _d_set_ads_extras(ctx: Context, args: dict) -> list[dict]:
+    """Одна карточка на все объявления: кому ставим и что именно; «было» — у скольких из них это уже есть."""
+    rows = _extras_scope(ctx, args)
+    campaign = ctx.campaign(int(rows[0]["campaign_row_id"]))
+    groups = len({int(r["adgroup_row_id"]) for r in rows})
+    total = len(rows)
+
+    def share(n: int) -> str:
+        return "нет" if not n else ("у всех" if n == total else f"у {n} из {total}")
+
+    had = {
+        "Быстрые ссылки": share(len([r for r in rows if r["sitelink_set_id"]])),
+        "Картинки": share(len([r for r in rows if _json_list(r["image_hashes"])])),
+    }
+    where = f"{_count(total, 'объявление', 'объявления', 'объявлений')} в {_count(groups, 'группе', 'группах', 'группах')}"
+    out = [_ch("Объявления", "—", f"{where} кампании {_cname(campaign)}")]
+    return out + [{**ch, "before": had.get(ch["what"], ch["before"])} for ch in _extras_rows(ctx, args, {})]
+
+
 _AD_AFTER = {"suspend": "на паузе", "resume": "работает", "archive": "в архиве", "unarchive": "не показывается", "delete": "удалено"}
 
 
@@ -3719,6 +4069,25 @@ def _d_fix_links(ctx: Context, args: dict) -> list[dict]:
     return out
 
 
+def _d_set_ref(ctx: Context, args: dict) -> list[dict]:
+    found, param, value = _ref_args(ctx, args)
+    out = []
+    for r, plan, effect in found:
+        if _ref_same(plan, effect, param, value):
+            continue
+        out.append(_ch(f"{_cname(r)}: {param} в ссылках", plan["before"][param] or "нет", value))
+        parts = []
+        if effect["ads"]:
+            parts.append(f"адрес у {_count(effect['ads'], 'объявления', 'объявлений', 'объявлений')}")
+        if effect["sitelinks"]:
+            parts.append(f"быстрые ссылки у {_count(effect['sitelinks'], 'объявления', 'объявлений', 'объявлений')}")
+        after = ", ".join(parts) + " — уйдут на модерацию; тексты не меняются" if parts else "ссылки уже такие — значение закрепится за кампанией"
+        if effect["manual"]:
+            after += f"; {_count(effect['manual'], 'объявление', 'объявления', 'объявлений')} другого типа правьте в Директе"
+        out.append(_ch(f"{_cname(r)}: что изменится", "—", after))
+    return out
+
+
 _DIFFS = {
     "campaigns_action": _d_campaigns_action,
     "update_campaign_settings": _d_update_settings,
@@ -3738,8 +4107,10 @@ _DIFFS = {
     "create_text_ad": _d_create_ad,
     "update_text_ad": _d_update_ad,
     "update_text_ads": _d_update_ads,
+    "set_ads_extras": _d_set_ads_extras,
     "ads_action": _d_ads_action,
     "fix_links": _d_fix_links,
+    "set_campaign_ref": _d_set_ref,
 }
 
 
@@ -3814,6 +4185,16 @@ def _k_update_ads(ctx: Context, args: dict) -> list[dict]:
     return out
 
 
+def _k_set_ads_extras(ctx: Context, args: dict) -> list[dict]:
+    rows = {int(r["id"]): r for r in _extras_scope(ctx, args)}
+    out = []
+    for i, value in enumerate(args.get("ad_row_ids") or []):
+        row = rows.get(int(value))
+        if row is not None:
+            out.append(_pick(f"ad_row_ids.{i}", row["title"] or row["id"], row["adgroup_name"] or ""))
+    return out
+
+
 def _k_ids(key: str, lookup: str, field: str):
     def build(ctx: Context, args: dict) -> list[dict]:
         return _row_picks(args, key, getattr(ctx, lookup)(_ids(args, key)), field)
@@ -3852,11 +4233,13 @@ _PICKS = {
     "create_text_ad": _k_ad,
     "update_text_ad": _k_ad,
     "update_text_ads": _k_update_ads,
+    "set_ads_extras": _k_set_ads_extras,
     "keywords_action": _k_ids("keyword_row_ids", "keywords", "keyword"),
     "ads_action": _k_ids("ad_row_ids", "ads", "title"),
     "search_queries_action": _k_ids("query_row_ids", "queries", "query"),
     "campaigns_action": _k_ids("campaign_row_ids", "campaigns", "name"),
     "fix_links": _k_ids("campaign_row_ids", "campaigns", "name"),
+    "set_campaign_ref": _k_ids("campaign_row_ids", "campaigns", "name"),
     "create_campaign": _k_create_campaign,
 }
 
@@ -4334,6 +4717,8 @@ def _q_items(ctx: Context, args: dict) -> dict:
         "columns": columns,
         "rows": rows,
         **({"account_id": image_account} if image_account else {}),
+        # Требования ТЗ (пункт 6 плана): {} — в ТЗ нет ни цифр, ни запретов.
+        **({"requirements": brief_requirements(args["requirements"])} if args.get("requirements") is not None else {}),
     }
 
 
@@ -4410,9 +4795,11 @@ TOOL_LABELS = {
     "get_slices": "Срезы статистики",
     "check_links": "Проверка ссылок",
     "get_ad_extras": "Расширения объявления",
+    "get_campaign_extras": "Расширения кампании",
     "list_ad_images": "Картинки объявлений",
     "generate_images": "Генерация картинок",
     "help_search": "Справка сервиса",
+    "get_build": "Что уже согласовано",
     "ask_questions": "Вопросы перед работой",
     "propose_plan": "План работ",
     "propose_items": "Таблица на согласование",
@@ -4434,8 +4821,10 @@ TOOL_LABELS = {
     "create_text_ad": "Новое объявление",
     "update_text_ad": "Правка объявления",
     "update_text_ads": "Правка объявлений",
+    "set_ads_extras": "Расширения объявлений",
     "ads_action": "Объявления",
     "fix_links": "Ссылки по шаблону",
+    "set_campaign_ref": "Свой ref в ссылках кампании",
     "suggest_next": "Подсказки «что дальше»",
     "show": "Блок в ответе",
 }
@@ -4669,7 +5058,8 @@ TOOLS = [
     _fn(
         "check_links",
         "Проверка ссылок кампаний по шаблону сайта из настроек: домен, ref и каждая utm-метка (метки — в "
-        "параметрах кампании). Косяки с исправленными значениями; исправить — fix_links.",
+        "параметрах кампании). Косяки с исправленными значениями; исправить — fix_links. У кампании может быть "
+        "свой ref (маркетолог выбрал его вместо шаблонного): тогда правильным считается он, own_href — её ссылка.",
         {"campaign_row_ids": {**_IDS, "description": "кампании; по умолчанию все"}},
     ),
     _fn(
@@ -4677,6 +5067,17 @@ TOOLS = [
         "Быстрые ссылки, уточнения и картинки объявления — из Директа.",
         {"ad_row_id": _ID},
         ["ad_row_id"],
+    ),
+    _fn(
+        "get_campaign_extras",
+        "Расширения всех объявлений кампании одним запросом — из Директа: какие наборы быстрых ссылок и "
+        "уточнений стоят и в скольких объявлениях, у каких их нет, сколько картинок. Одинаковые наборы собраны "
+        "в одну запись. Вызывай вместо get_ad_extras по каждому объявлению.",
+        {
+            "campaign_row_id": _ID,
+            "adgroup_row_ids": {**_IDS, "description": "только эти группы кампании; по умолчанию вся кампания"},
+        },
+        ["campaign_row_id"],
     ),
     _fn(
         "list_ad_images",
@@ -4709,6 +5110,16 @@ TOOLS = [
             "account_id": {**_ID, "description": "кабинет кампании, если их несколько"},
         },
         ["prompt"],
+    ),
+    _fn(
+        "get_build",
+        "Сборка новой кампании в этом чате, как её помнит сервис: какие этапы согласованы и что именно — цели, "
+        "направления, группы с фразами, заголовками, текстами, аудиториями и картинками, минус-фразы, быстрые "
+        "ссылки, уточнения, настройки — и какие кампании в этом чате уже созданы. Только согласованное "
+        "маркетологом; пока доска ждёт общего согласования — то, что на ней лежит (об этом скажет note). Бери "
+        "отсюда строки для create_campaign и сверяйся перед новой таблицей — старые таблицы "
+        "из переписки могли уйти.",
+        {"groups_offset": {"type": "integer", "description": "с какой группы продолжить, если показаны не все"}},
     ),
     _fn(
         "ask_questions",
@@ -4763,8 +5174,10 @@ TOOLS = [
         "Таблица на согласование: строки с галочками, маркетолог снимет лишние и согласует остальное. Для всего, "
         "что выбирают списком: направления и группы, фразы, минус-фразы, заголовки, тексты, картинки, "
         "расширения, настройки. "
-        "Ответ придёт результатом вызова: approved — согласованные строки, removed — снятые; используй только "
-        "согласованные. До ответа следующий этап не начинай.",
+        "Таблица этапа новой кампании ложится на доску и хода не останавливает: ответ on_board — сразу готовь "
+        "следующий этап, маркетолог согласует всю кампанию разом, его решение придёт служебной заметкой. Остальные "
+        "таблицы и таблицы с by_stages=true ждут решения: ответ придёт результатом вызова — approved — "
+        "согласованные строки, removed — снятые; используй только согласованные и до ответа дальше не иди.",
         {
             "stage": {
                 "type": "string",
@@ -4809,6 +5222,40 @@ TOOLS = [
                 },
             },
             "account_id": {**_ID, "description": "stage=audiences и images: кабинет кампании, если их несколько"},
+            "revise": {
+                "type": "boolean",
+                "description": "true — маркетолог попросил изменить или дополнить уже согласованный этап; в таблице "
+                "только меняемые и новые строки",
+            },
+            "new_campaign": {
+                "type": "boolean",
+                "description": "true в stage=goals — маркетолог прямо попросил ещё одну кампанию, хотя в этом чате "
+                "кампания уже создана",
+            },
+            "requirements": {
+                "type": "object",
+                "description": "требования ТЗ — обязательно в первой таблице сборки (stage=goals или analysis), "
+                "дальше только если маркетолог их изменил: {keywords, titles, texts — сколько в каждой группе; "
+                "sitelinks, callouts — сколько у объявления; banned_words — запрещённые слова или их начала "
+                "(«бесплатн»); other — прочие условия словами}. Только то, что в ТЗ сказано прямо; нет цифр и "
+                "запретов — {}. Сервис сам считает строки и ищет запрещённые слова: пока требования не выполнены, "
+                "черновик не создастся",
+                "properties": {
+                    "keywords": {"type": "integer"},
+                    "titles": {"type": "integer"},
+                    "texts": {"type": "integer"},
+                    "sitelinks": {"type": "integer"},
+                    "callouts": {"type": "integer"},
+                    "banned_words": {"type": "array", "items": {"type": "string"}},
+                    "other": {"type": "array", "items": {"type": "string"}},
+                },
+            },
+            "by_stages": {
+                "type": "boolean",
+                "description": "этап новой кампании: true — согласовать этот этап отдельно и ждать решения "
+                "(маркетолог сам попросил идти по шагам или ТЗ почти пустое). Не указывай — таблица ляжет на доску, "
+                "и кампания согласуется целиком",
+            },
         },
         ["stage", "rows"],
     ),
@@ -5198,6 +5645,22 @@ TOOLS = [
         ["items"],
     ),
     _fn(
+        "set_ads_extras",
+        f"Поставить одни и те же быстрые ссылки, уточнения или картинки многим объявлениям одной кампании — одной "
+        f"карточкой (до {MAX_EXTRAS_ADS} объявлений). Кому — одним из способов: campaign_row_id (все объявления "
+        "кампании), adgroup_row_ids (все объявления этих групп) или ad_row_ids. Тексты объявлений не трогает. "
+        "Набор ссылок создаётся в кабинете один раз; объявление, где всё уже так, не меняется и на модерацию не "
+        "уходит. В карточке маркетолог видит каждое объявление и может снять галочку. Откат — в журнале.",
+        {
+            "campaign_row_id": {**_ID, "description": "все текстовые и комбинаторные объявления кампании, кроме архивных"},
+            "adgroup_row_ids": {**_IDS, "description": "все такие объявления этих групп одной кампании"},
+            "ad_row_ids": {**_IDS, "description": "только эти объявления одной кампании"},
+            **_EXTRAS,
+            **_REASON,
+        },
+        [],
+    ),
+    _fn(
         "ads_action",
         "Остановить, запустить, архивировать или удалить объявления.",
         {"ad_row_ids": _IDS, "action": {"type": "string", "enum": list(_AD_ACTIONS)}, **_REASON},
@@ -5210,6 +5673,21 @@ TOOLS = [
         "Откат — в журнале.",
         {"campaign_row_ids": _IDS, **_REASON},
         ["campaign_row_ids"],
+    ),
+    _fn(
+        "set_campaign_ref",
+        "Поставить кампании свой ref (или другой параметр ссылки из шаблона сайта) вместо шаблонного — одной "
+        "карточкой: значение закрепляется за кампанией, адреса всех её объявлений и быстрых ссылок переписываются "
+        "под него, тексты не трогаются. Дальше сервис сам ставит этот ref в новые объявления кампании, а "
+        "check_links считает его правильным. Значение как в шаблоне — вернуть кампании шаблонный ref. Не правь "
+        "ради ref объявления по одному и не пересоздавай быстрые ссылки. Откат — в журнале.",
+        {
+            "campaign_row_ids": _IDS,
+            "value": {"type": "string", "description": "новое значение, например Telegram"},
+            "param": {"type": "string", "description": "имя параметра ссылки; по умолчанию ref"},
+            **_REASON,
+        },
+        ["campaign_row_ids", "value"],
     ),
     _fn(
         "suggest_next",
@@ -5506,7 +5984,9 @@ def _project_prompt(ctx: Context) -> str:
         "прямо скажи, что смотрел часть, — не делай вывода «всё в порядке» о том, чего не видел.",
         "- Суммы в инструментах — в рублях. Кампании, группы и объявления называй по имени или по тексту (у "
         "одинаковых названий добавляй номер кампании в Директе — campaign_id); внутренние id (campaign_row_id, "
-        "adgroup_row_id, ad_row_id и т. п.) в ответах не пиши — они только для вызова инструментов.",
+        "adgroup_row_id, ad_row_id и т. п.) в ответах не пиши — они только для вызова инструментов. Маркетолог "
+        "может назвать кампанию номером из Директа: передай его как campaign_row_id — сервис сам найдёт кампанию "
+        "проекта с таким номером.",
         "- Разбор начинай с get_signals, если выжимки ещё нет в чате: там уже посчитаны конверсии за 0 ₽, "
         "затухание, перезапуски копиями и успешные кампании. Кампанию по дням — get_campaign_history. "
         "Сырые таблицы запрашивай, только когда без них не обойтись.",
@@ -5527,13 +6007,26 @@ def _project_prompt(ctx: Context) -> str:
         "согласования выполняй только согласованные шаги, по одному инструменту на шаг, с plan_step. Новый шаг "
         "или изменённый план — новый propose_plan. Мелкую прямую просьбу выполняй без плана. Новую кампанию — "
         "по этапам ниже.",
-        "- Новую кампанию собирай строго по этапам. Каждый этап заканчивается таблицей propose_items, и к "
-        "следующему переходишь только после её согласования; без согласованных этапов create_campaign вернёт "
-        "ошибку. Маркетолог видит рядом с чатом доску сборки — цели, группы с фразами, объявлениями и "
-        "картинками, расширения — и согласует этапы на ней, поэтому называй группы (section) одинаково на всех "
-        "этапах. На доске он может сам поправить фразы, заголовки, тексты и группы, убрать аудитории, добавить и "
-        "убрать картинки: такие правки приходят сообщением "
-        "«[Правки на доске]» и полем edited_by_user в ответе таблицы — дальше бери их в таком виде. 1) Цели кампании — сначала "
+        "- Новую кампанию собирай по этапам, каждый этап — таблицей propose_items. Маркетолог видит рядом с чатом "
+        "доску сборки — цели, группы с фразами, объявлениями и картинками, расширения, — поэтому называй группы "
+        "(section) одинаково на всех этапах. Обычно кампания собирается одной доской: таблица этапа сразу ложится "
+        "на доску (ответ on_board) и хода не останавливает — в том же ходе готовь следующий этап, пока на доске "
+        "не окажется вся кампания. Тогда закончи ход коротким сообщением: что собрано, что стоит проверить — и "
+        "попроси согласовать кампанию на доске. Маркетолог согласует её целиком одной кнопкой: придёт служебная "
+        "заметка о решении, и после неё create_campaign создаст черновик сразу, без второй карточки; до "
+        "согласования create_campaign вернёт ошибку. Всё, чего не хватает в ТЗ, спроси одним ask_questions до "
+        "первой таблицы — посреди сборки вопросов не задавай, если без ответа можно обойтись разумным выбором "
+        "(назови его в итоговом сообщении). По шагам, с согласованием каждого этапа отдельно, собирай, только если "
+        "маркетолог сам попросил идти по шагам или ТЗ почти пустое и без его решений не обойтись: тогда в каждой "
+        "таблице by_stages=true, и к следующему этапу переходишь только после согласования предыдущего. Пока доска "
+        "не согласована, правку по просьбе маркетолога вноси новой таблицей того же этапа: она заменит на доске "
+        "строки тех же разделов (section) и вида, поэтому раздел показывай целиком, а остальные разделы и этапы не "
+        "трогай и заново не показывай. На доске он может сам поправить фразы, заголовки, тексты и группы, убрать "
+        "аудитории, добавить и убрать картинки: такие правки приходят сообщением «[Правки на доске]» и полем "
+        "edited_by_user — дальше бери их в таком виде. Цифры и запреты ТЗ (7 заголовков, 3 текста, 8 быстрых "
+        "ссылок, 20 уточнений, «не писать слово…») зафиксируй полем requirements первой таблицы сборки: сервис сам "
+        "считает строки и ищет запрещённые слова, показывает это маркетологу на доске и не создаст черновик, пока "
+        "список не выполнен, — поэтому сразу давай нужное число строк и не используй запрещённые слова. 1) Цели кампании — сначала "
         "ask_questions, если чего-то не хватает в брифе, затем propose_items stage=goals строками «что — "
         "значение»: что рекламируем и оффер, гео, бюджет, цель (действие на сайте или цель Метрики), посадочная "
         "ссылка, ограничения. 2) Анализ: похожие кампании проекта (list_campaigns, get_campaign — какие группы, фразы и тексты "
@@ -5555,13 +6048,15 @@ def _project_prompt(ctx: Context) -> str:
         "audience из согласованных строк. "
         "5) Заголовки и тексты — propose_items stage=ads: каждой группе до 7 заголовков (kind=title, до 56 "
         "знаков) и до 3 текстов (kind=text, до 81) под её фразы, section — группа. Одна строка — один заголовок или текст: не склеивай несколько через «;» "
-        "или «|». Несколько объявлений в группе — section «Группа / Объявление 2». 6) Картинки — сначала "
-        f"ask_questions с key {IMAGE_SOURCE_KEY}: откуда брать картинки (варианты подставит сервис, можно выбрать "
-        "несколько). «Взять из других кампаний» — list_ad_images без campaign_row_id, затем propose_items "
+        "или «|». Несколько объявлений в группе — section «Группа / Объявление 2». 6) Картинки — если маркетолог "
+        f"ещё не сказал, откуда их брать, — ask_questions с key {IMAGE_SOURCE_KEY} (варианты подставит сервис, можно "
+        "выбрать несколько; в сборке одной доской — вместе с остальными вопросами, до первой таблицы). «Взять из "
+        "других кампаний» — list_ad_images без campaign_row_id, затем propose_items "
         "stage=images: строка — картинка, image {hash, account_id}, section — группа, cells [название, откуда, "
         "почему]; самих картинок ты не видишь — выбирай по кампаниям, где они стоят, маркетолог увидит превью; "
         "название — что на картинке (сцена генерации или объявление, откуда взята), у каждой своё, не «Вариант A». "
-        "«Загружу свои» — попроси загрузить их кнопкой «Загрузить» в группах на доске и написать, когда готово: "
+        "«Загружу свои» — попроси загрузить их кнопкой «Загрузить» в группах на доске и написать, когда готово "
+        "(в сборке одной доской не жди: напомни об этом в итоговом сообщении): "
         "загруженное приходит правками на доске и уже согласовано, таблица не нужна. «Сгенерировать по "
         "описанию» — generate_images по каждой группе (сцена под её оффер, без надписей и логотипов), затем "
         "таблица stage=images. «Без картинок» — этап пропусти. В группе до 5 картинок; в create_campaign "
@@ -5576,6 +6071,17 @@ def _project_prompt(ctx: Context) -> str:
         "10) На модерацию — только после отдельного согласия (moderate_campaign). Если Вордстат не подключён или "
         "упёрся в квоту, скажи об этом, строй направления и фразы из брифа, сайта и запросов других кампаний, а "
         "частоты не выдумывай — в таблице так и пиши «нет данных».",
+        "- Сборку помнит сервис. Последним в запросе может стоять «[Сводка сервиса…]»: какие этапы согласованы, "
+        "какие лежат на доске и ждут согласования, что дальше и какие кампании в этом чате уже созданы. Верь ей "
+        "больше, чем переписке: старые таблицы "
+        "из переписки уходят, а сводка точная. Согласованный этап и этап, который уже лежит на доске, заново не "
+        "показывай и их строки не "
+        "повторяй; точные фразы, заголовки, тексты и настройки бери из get_build, а не по памяти. Новая таблица "
+        "согласованного этапа — только если маркетолог попросил его изменить или дополнить: revise=true и только "
+        "меняемые и новые строки. После create_campaign кампания уже в Директе: любые правки — действиями по "
+        "готовой кампании и только в той кампании, которую назвал маркетолог; заново её не собирай и вторую такую "
+        "же не создавай. Ещё одна кампания — только по его прямой просьбе: propose_items stage=goals с "
+        "new_campaign=true; согласованное раньше бери без новых таблиц.",
         "- Затухшую кампанию, если причина не в балансе, модерации или настройке, которую проще поправить, "
         "предлагай перезапустить копией — restart_campaign_copy.",
         "- Копию кампании на другой регион делай через copy_campaign_geo; id регионов бери из find_regions, "
@@ -5617,6 +6123,10 @@ def _project_prompt(ctx: Context) -> str:
         "бюджет. 4) create_campaign_variants с moderate=false — черновики. 5) Отдельно спроси, отправлять ли на "
         "модерацию, и только после согласия — moderate_campaign по каждой копии. Быстрые ссылки, уточнения и "
         "картинки копия и объявления теста берут у оригинала сами.",
+        "- Тип кампании: Директ ведёт текстово-графические кампании как ЕПК, поэтому у кампаний проекта тип "
+        "UNIFIED_CAMPAIGN (ЕПК) — это обычная кампания с группами, фразами и объявлениями. Новую создавай с "
+        "type=UNIFIED_CAMPAIGN, если маркетолог не назвал другой тип. Тип готовой кампании не меняется, и "
+        "пересоздавать кампанию ради типа не нужно: ЕПК она уже и есть.",
         "- Объявления: в текстовых группах и ЕПК новое объявление комбинаторное — до 7 заголовков и до 3 текстов, "
         "второго заголовка нет; пределы знаков соблюдай сам, сервис не обрезает, а возвращает ошибку. Одинаковых "
         "объявлений (те же заголовки и тексты) не делай ни в одной группе, ни в разных: каждой группе — тексты под "
@@ -5624,10 +6134,27 @@ def _project_prompt(ctx: Context) -> str:
         "(get_ad_extras покажет, что у него есть) или extras; картинки кабинета — list_ad_images. Без них "
         "объявление выйдет без быстрых ссылок, уточнений и картинок. Правку нескольких объявлений делай одним "
         "update_text_ads — маркетолог согласует её одной карточкой.",
+        "- Одни и те же быстрые ссылки, уточнения или картинки многим объявлениям — одно действие set_ads_extras "
+        "(вся кампания, её группы или список объявлений): не правь объявления по одному и не повторяй extras в "
+        "каждой записи update_text_ads. Что стоит сейчас — get_campaign_extras одним вызовом, а не get_ad_extras "
+        "по каждому объявлению. Кампаний несколько — по одному set_ads_extras на кампанию.",
+        "- Правку вноси ровно туда, куда просил маркетолог. Назвал объявление, группу или кампанию — меняй только "
+        "их: то же самое в соседних группах и других кампаниях не трогай, даже если там похожая недоработка — "
+        "скажи о ней одной строкой и спроси. «Везде», «во всех», «по всему проекту» — только когда он так сказал. "
+        "Не понятно, где менять (в одной группе или во всех, в этой кампании или в её копиях), — сначала "
+        "ask_questions, потом действие.",
         "- Ссылки: в настройках проекта задаётся шаблон ссылки сайта (адрес и ref — в объявлении, utm — в "
         "метках кампании). При разборе кампаний вызывай check_links; косяки (другой домен, нет ref, неверные или "
         "задвоенные utm) показывай как проблему с предложением исправить — fix_links после согласия. Новые "
         "кампании, копии и объявления сервис строит по шаблону сам.",
+        "- Ссылку маркетолога передавай как он её дал, слово в слово: ref и другие параметры сам не меняй, не "
+        "убирай и не подставляй шаблонные. Если ref в ней не тот, что в шаблоне проекта, сервис сам покажет "
+        "маркетологу карточку выбора и запомнит ответ за кампанией — ты получишь ответ «действие ещё не "
+        "выполнено»: повтори тот же вызов, адрес сервис поставит сам. У кампании может быть свой ref: check_links "
+        "считает правильным его, own_href в ответе — ссылка кампании с ним. Заменить ref во всей кампании — одно "
+        "действие set_campaign_ref (ссылки объявлений и быстрые ссылки, тексты не трогает): не правь объявления "
+        "по одному и не пересоздавай наборы быстрых ссылок. Ссылку на другой сайт в объявление проекта не ставь — "
+        "сервис её не примет: скажи об этом маркетологу.",
         "- Провальную кампанию сначала разбери: get_signals, get_campaign_history, get_campaign_settings, "
         "get_search_queries. Затем предложи, что лучше: исправить на месте (минус-фразы, ставки, настройки, тексты "
         "— если ошибка одна и понятная, а история кампании ценна) или исправленные копии через "
@@ -5797,7 +6324,7 @@ def _action_out(row: dict) -> dict:
         "tool_call_id": row["tool_call_id"],
         "tool": row["tool"],
         "kind": _kind(row["tool"]),
-        "label": TOOL_LABELS.get(row["tool"], row["tool"]),
+        "label": _LINK_CHOICE_LABEL if _link_choice_of(row) else TOOL_LABELS.get(row["tool"], row["tool"]),
         "args": args,
         "changes": changes,
         "items": items,
@@ -5960,6 +6487,8 @@ class _Board:
                     "type": row["audience"].get("type") or "",
                     "lal": bool(row.get("lal")),
                     "lookalike": row.get("lookalike"),
+                    # Условия аудитории целиком — get_build отдаёт их модели для create_campaign.
+                    "audience": row["audience"],
                 }
             elif (section or NO_GROUP) in self.groups:
                 self.groups[section or NO_GROUP]["audiences"].pop(key, None)
@@ -6145,6 +6674,181 @@ def _spec_board(
     return groups, items(spec.get("negative_keywords"), "negative")
 
 
+# --- Требования ТЗ ------------------------------------------------------------------------------
+#
+# Цифры и запреты из ТЗ модель фиксирует списком requirements в первой таблице сборки. Дальше их
+# считает сервис: на доске — строками «Проверки готовности», а create_campaign с невыполненным списком
+# черновик не создаёт. Меняются требования только новой таблицей этапа с requirements — по просьбе
+# маркетолога.
+
+# ключ → (чего, предел Директа, где)
+REQ_COUNTS = {
+    "keywords": ("фраз", 200, "в каждой группе"),
+    "titles": ("заголовков", 7, "в каждой группе"),
+    "texts": ("текстов", 3, "в каждой группе"),
+    "sitelinks": ("быстрых ссылок", 8, "у каждого объявления"),
+    "callouts": ("уточнений", 50, "у каждого объявления"),
+}
+MAX_BANNED_WORDS = 30
+MAX_REQ_NOTES = 10
+
+
+def brief_requirements(raw) -> dict:
+    """requirements из вызова модели → {titles: 7, …, banned_words: [...], other: [...]}; {} — в ТЗ их нет."""
+    if raw in (None, "", []):
+        return {}
+    if not isinstance(raw, dict):
+        raise YandexError(
+            "args", "requirements — объект {titles, texts, keywords, sitelinks, callouts, banned_words, other}"
+        )
+    out: dict = {}
+    for key, (word, limit, _where) in REQ_COUNTS.items():
+        value = raw.get(key)
+        if value in (None, "", 0, False):
+            continue
+        try:
+            number = int(value)
+        except (TypeError, ValueError):
+            raise YandexError("args", f"requirements.{key} — число {word} из ТЗ") from None
+        if not 1 <= number <= limit:
+            raise YandexError("args", f"requirements.{key}: от 1 до {limit} — больше Директ не примет")
+        out[key] = number
+    banned = raw.get("banned_words")
+    if isinstance(banned, str):
+        banned = re.split(r"[,;\n]", banned)
+    words: list[str] = []
+    for value in banned if isinstance(banned, list) else []:
+        word = _line(value, 60).strip(" «»\"'.").lower()
+        if word and word not in words:
+            words.append(word)
+    if len(words) > MAX_BANNED_WORDS:
+        raise YandexError("args", f"requirements.banned_words: не больше {MAX_BANNED_WORDS} слов")
+    if words:
+        out["banned_words"] = words
+    other = raw.get("other")
+    if isinstance(other, str):
+        other = [other]
+    notes = [_line(v, 200) for v in other if _line(v, 200)] if isinstance(other, list) else []
+    if notes:
+        out["other"] = notes[:MAX_REQ_NOTES]
+    return out
+
+
+def _req_norm(text: str) -> str:
+    return str(text or "").lower().replace("ё", "е")
+
+
+def _banned_hits(words: list[str], texts: list[str]) -> list[str]:
+    """Запрещённое слово (или его начало: «бесплатн») в начале слова текста → «слово» в «тексте»."""
+    hits: list[str] = []
+    for word in words:
+        pattern = re.compile(r"(?<!\w)" + re.escape(_req_norm(word)))
+        for text in texts:
+            if text and pattern.search(_req_norm(text)):
+                hits.append(f"«{word}» в «{text}»")
+    return hits
+
+
+def requirements_text(req: dict | None) -> str:
+    """Требования словами — для модели."""
+    if not req:
+        return ""
+    parts = [f"{where} не меньше {req[key]} {word}" for key, (word, _l, where) in REQ_COUNTS.items() if req.get(key)]
+    if req.get("banned_words"):
+        parts.append("без слов " + ", ".join(f"«{w}»" for w in req["banned_words"]))
+    parts += req.get("other") or []
+    return "; ".join(parts)
+
+
+def _requirement_checks(req: dict | None, groups: list[dict], shared: dict | None = None) -> list[dict]:
+    """Требования ТЗ против групп: [{key, label, state ok|bad, note}].
+
+    groups — [{name, keywords, titles, texts, sitelinks, callouts}] списками строк (быстрая ссылка —
+    «текст описание»); None — посчитать нельзя (группа по аудитории без фраз, расширения взяты у
+    объявления). shared — расширения кампании на доске, пока они общие для всех групп.
+    """
+    if not req:
+        return []
+    checks: list[dict] = []
+    for key, (word, _limit, where) in REQ_COUNTS.items():
+        need = req.get(key)
+        if not need:
+            continue
+        label = f"ТЗ: {where} не меньше {need} {word}"
+        if shared is not None and key in shared and all(g.get(key) is None for g in groups):
+            have = len(shared[key])
+            state, note = ("ok", f"на доске {have}") if have >= need else ("bad", f"на доске {have} из {need}")
+            checks.append({"key": f"req_{key}", "label": label, "state": state, "note": note})
+            continue
+        if not groups:
+            checks.append({"key": f"req_{key}", "label": label, "state": "bad", "note": "групп пока нет"})
+            continue
+        short = [f"«{g['name']}» — {len(g[key])}" for g in groups if g.get(key) is not None and len(g[key]) < need]
+        checks.append(
+            {
+                "key": f"req_{key}",
+                "label": label,
+                "state": "bad" if short else "ok",
+                "note": "не хватает: " + _preview(short, 4) if short else "выполнено",
+            }
+        )
+    words = req.get("banned_words") or []
+    if words:
+        texts = [
+            t
+            for g in groups
+            for key in ("titles", "texts", "sitelinks", "callouts")
+            for t in g.get(key) or []
+        ] + [t for key in ("sitelinks", "callouts") for t in (shared or {}).get(key) or []]
+        hits = _banned_hits(words, list(dict.fromkeys(texts)))
+        checks.append(
+            {
+                "key": "req_banned",
+                "label": "ТЗ: без слов " + _preview([f"«{w}»" for w in words], 5),
+                "state": "bad" if hits else "ok",
+                "note": "найдено: " + _preview(hits, 3) if hits else "не встречаются",
+            }
+        )
+    return checks
+
+
+def _link_text(item: dict) -> str:
+    return " ".join(p for p in (item.get("text") or item.get("title") or "", item.get("description") or "") if p)
+
+
+def _board_requirement_checks(build: dict) -> list[dict]:
+    """Требования ТЗ против доски: всё, что на ней с галочкой, — и согласованное, и ждущее."""
+    req = build.get("requirements")
+    if not req:
+        return []
+    groups = []
+    for g in build["groups"]:
+        keywords = [k["text"] for k in _checked(g["keywords"])]
+        from_ad = bool(g.get("extras_from_ad"))
+        groups.append(
+            {
+                "name": g["name"],
+                # Группа по аудитории без фраз — фраз в ней и не должно быть.
+                "keywords": None if not keywords and _checked(g.get("audiences") or []) else keywords,
+                "titles": [t["text"] for t in _checked(g["titles"])],
+                "texts": [t["text"] for t in _checked(g["texts"])],
+                "sitelinks": None if from_ad or g.get("sitelinks") is None else [_link_text(s) for s in g["sitelinks"]],
+                "callouts": None if from_ad or g.get("callouts") is None else [c["text"] for c in g["callouts"]],
+            }
+        )
+    shared = {
+        "sitelinks": [_link_text(s) for s in _checked(build["sitelinks"])],
+        "callouts": [c["text"] for c in _checked(build["callouts"])],
+    }
+    return _requirement_checks(req, groups, shared)
+
+
+def _spec_requirement_problems(req: dict | None, views: list[dict]) -> str:
+    """Невыполненные требования ТЗ в spec черновика — строкой для ошибки; "" — всё выполнено."""
+    bad = [c for c in _requirement_checks(req, views) if c["state"] == "bad"]
+    return "; ".join(f"{c['label'][4:]} — {c['note']}" for c in bad)
+
+
 def _checked(items: list[dict]) -> list[dict]:
     return [i for i in items if i.get("checked", True)]
 
@@ -6166,6 +6870,8 @@ def _build_checks(build: dict, *, link_template: bool) -> list[dict]:
         add("stages", "Этапы согласованы", "warn", "ждут решения: " + ", ".join(waiting))
     else:
         add("stages", "Этапы согласованы", "ok")
+    # Требования ТЗ — сразу под этапами: пока они не выполнены, черновик не создаётся.
+    checks += _board_requirement_checks(build)
 
     groups = build["groups"]
     keywords = {g["name"]: _checked(g["keywords"]) for g in groups}
@@ -6269,11 +6975,19 @@ def campaign_build(actions: list[dict], *, link_template: bool = False) -> dict 
     """Как собирается новая кампания в чате; None — новую кампанию здесь не собирают.
 
     Сборка начинается таблицей целей или анализа и заканчивается созданным черновиком: после него
-    новая таблица целей или анализа начинает следующую сборку. link_template — у проекта есть
-    шаблон ссылки (для проверки готовности).
+    новая таблица целей или анализа начинает следующую сборку. Таблица с new_campaign (маркетолог
+    попросил другую кампанию) начинает новую сборку и посреди незаконченной. link_template — у
+    проекта есть шаблон ссылки (для проверки готовности).
     """
     episodes: list[list[dict]] = [[]]
     for action in actions:
+        restart = (
+            action["tool"] == "propose_items"
+            and (action.get("args") or {}).get("new_campaign")
+            and action["status"] != "rejected"
+        )
+        if restart and episodes[-1]:
+            episodes.append([])
         episodes[-1].append(action)
         if action["tool"] == "create_campaign" and action["status"] == "done":
             episodes.append([])
@@ -6291,8 +7005,23 @@ def campaign_build(actions: list[dict], *, link_template: bool = False) -> dict 
     status: dict[str, str] = {}
     last_table: dict[str, int] = {}
     board = _Board()
+    # Сборка одной доской: таблицы лежат на доске (held) и ждут одного решения на всю кампанию.
+    held: list[dict] = []
+    staged: set[str] = set()
+    on_board = False
+    board_approved = False
+    # Требования ТЗ — из последней таблицы сборки, где они есть (заменённая на доске новой тоже считается).
+    # Пустые {} в следующих таблицах их не стирают: «в ТЗ ничего нет» говорит только первая.
+    requirements: dict | None = None
     for action in episode:
         args = action.get("args") or {}
+        if (
+            action["tool"] == "propose_items"
+            and isinstance(args.get("requirements"), dict)
+            and (action["status"] != "rejected" or action.get("error") == _TABLE_REPLACED)
+            and (requirements is None or args["requirements"])
+        ):
+            requirements = args["requirements"]
         if action["tool"] == "board_edit":
             for op in args.get("ops") or []:
                 board.op(op)
@@ -6302,6 +7031,11 @@ def campaign_build(actions: list[dict], *, link_template: bool = False) -> dict 
             continue
         last_table[stage] = action["id"]
         state = action["status"]
+        on_board = bool(args.get("held"))
+        if state == "pending":
+            (held.append(action) if args.get("held") else staged.add(stage))
+        elif state == "done" and (action.get("result") or {}).get("board"):
+            board_approved = True
         if state == "pending":
             status[stage] = "pending"
         elif state == "done" and status.get(stage) != "pending":
@@ -6361,7 +7095,8 @@ def campaign_build(actions: list[dict], *, link_template: bool = False) -> dict 
         }
 
     # Минус-фразы часто приходят строками таблицы ключей — тогда этап закрыт вместе с ней.
-    if "negatives" not in status and negatives and "keywords" in status:
+    shared_negatives = "negatives" not in status and bool(negatives) and "keywords" in status
+    if shared_negatives:
         status["negatives"] = "pending" if any(n["pending"] for n in negatives) else "done"
         last_table["negatives"] = last_table["keywords"]
     # Картинки, которые маркетолог сам добавил на доске, — этап пройден и без таблицы.
@@ -6375,6 +7110,9 @@ def campaign_build(actions: list[dict], *, link_template: bool = False) -> dict 
     counts["audiences"] = sum(len(_checked(g["audiences"])) for g in groups)
     counts["images"] = sum(len(_checked(g.get("images") or [])) for g in groups)
 
+    held_stages = {(a.get("args") or {}).get("stage") for a in held} - staged
+    if shared_negatives and "keywords" in held_stages:
+        held_stages.add("negatives")
     stages = []
     later_started = False
     for key in reversed(BUILD_STAGES):
@@ -6384,7 +7122,15 @@ def campaign_build(actions: list[dict], *, link_template: bool = False) -> dict 
         else:
             later_started = True
         stages.append(
-            {"key": key, "label": BUILD_STAGES[key], "status": state, "count": counts[key], "action_id": last_table.get(key)}
+            {
+                "key": key,
+                "label": BUILD_STAGES[key],
+                "status": state,
+                "count": counts[key],
+                "action_id": last_table.get(key),
+                # Ждёт не своего решения, а общего согласования доски.
+                "held": state == "pending" and key in held_stages,
+            }
         )
     stages.reverse()
     # Таблицы этапов и карточка создания этой сборки решаются на доске: в чате вместо них — плашка.
@@ -6402,6 +7148,17 @@ def campaign_build(actions: list[dict], *, link_template: bool = False) -> dict 
         "callouts": list(board.links["callout"].values()),
         "draft": draft,
         "account_id": _build_account(episode, groups),
+        "requirements": requirements,
+        # Таблицы, которые ждут одного согласования доски; board — последняя таблица сборки легла на доску
+        # (следующая без by_stages ляжет так же); board_approved — доску уже согласовали одной кнопкой.
+        "held": [a["id"] for a in held],
+        "held_edits": [note for a in held for note in _edited_rows((a.get("args") or {}).get("rows") or [])],
+        "board": on_board,
+        "board_approved": board_approved,
+        # Обязательные этапы, которых на доске ещё нет: с ними одно согласование черновик не создаст.
+        "missing": [
+            s["label"] for s in stages if s["key"] not in _BUILD_OPTIONAL and s["status"] in ("todo", "rejected")
+        ],
     }
     build["checks"] = _build_checks(build, link_template=link_template)
     build["ready"] = all(c["state"] != "bad" for c in build["checks"])
@@ -6423,6 +7180,638 @@ def _build_account(episode: list[dict], groups: list[dict]) -> int | None:
     if found is None:
         found = next((int(i["account_id"]) for g in groups for i in g.get("images") or [] if i.get("account_id")), None)
     return found
+
+
+# --- Память сборки ------------------------------------------------------------------------------
+#
+# Модель видит последние HISTORY_MESSAGES сообщений, а сборка кампании занимает сотни: согласованные
+# таблицы выпадали из окна, и этапы начинались заново. Поэтому состояние сборки считает сервис — по тем
+# же таблицам и правкам, что и доска, — и на каждом шаге отдаёт модели короткой сводкой (в чат она не
+# пишется), а согласованное содержимое целиком — инструментом get_build.
+
+_BUILD_TOOLS = ("propose_items", "board_edit", "create_campaign")
+_STAGE_STATE = {
+    "done": "согласовано",
+    "pending": "ждёт решения маркетолога",
+    "held": "на доске, ждёт общего согласования",
+    "rejected": "отклонено маркетологом",
+    "todo": "не начато",
+    "skipped": "пропущено",
+}
+# Сколько знаков JSON get_build отдаёт на группы и на минус-фразы: вместе с целями и настройками ответ
+# влезает в TOOL_RESULT_LIMIT, остальные группы — следующим вызовом.
+BUILD_GROUPS_BUDGET = 6500
+BUILD_NEGATIVES_BUDGET = 1200
+BUILD_MEMORY_GROUPS = 30
+BUILD_MEMORY_EDITS = 20
+BUILD_MEMORY_NOTE = (
+    "[Сводка сервиса о состоянии работы в этом чате. Это не сообщение маркетолога: не отвечай на неё и не "
+    "пересказывай её, просто учитывай.]"
+)
+
+
+def _chat_build(ctx: Context) -> tuple[dict | None, list[dict]]:
+    """(сборка кампании в этом чате — как на доске; кампании, созданные в нём и не удалённые из Директа)."""
+    if ctx.chat_id is None or ctx.ws_id is None:
+        return None, []
+    from app.actions import _ws_link_template
+
+    with pool.connection() as conn:
+        actions = conn.execute(
+            "SELECT * FROM ai_actions WHERE chat_id = %s AND tool = ANY(%s) ORDER BY id",
+            (ctx.chat_id, list(_BUILD_TOOLS)),
+        ).fetchall()
+        made: list[int] = []
+        for action in actions:
+            campaign = (action.get("result") or {}).get("campaign") if action["tool"] == "create_campaign" else None
+            if action["status"] == "done" and isinstance(campaign, dict) and campaign.get("id"):
+                made.append(int(campaign["id"]))
+        rows = []
+        if made:
+            rows = conn.execute(
+                """
+                SELECT id, campaign_id, name, state, status, campaign_type FROM direct_campaigns
+                WHERE user_id = %s AND id = ANY(%s)
+                """,
+                (ctx.user_id, made),
+            ).fetchall()
+    by_id = {int(r["id"]): r for r in rows}
+    created = [
+        {
+            "campaign_row_id": i,
+            "campaign_id": by_id[i]["campaign_id"],
+            "name": by_id[i]["name"],
+            "type": by_id[i]["campaign_type"],
+            "state": by_id[i]["state"],
+            "status": by_id[i]["status"],
+        }
+        for i in dict.fromkeys(made)
+        if i in by_id
+    ]
+    return campaign_build(actions, link_template=bool(_ws_link_template(ctx.ws))), created
+
+
+def _build_open(build: dict | None) -> bool:
+    """Сборка идёт: на доске есть согласованное или ждущее, а черновик по ней ещё не создан."""
+    if build is None:
+        return False
+    if build["draft"]:
+        return build["draft"]["status"] != "done"
+    # Одна отклонённая таблица целей — маркетолог сборку не начал.
+    return any(s["status"] in ("done", "pending") for s in build["stages"])
+
+
+def _approved_items(items: list[dict] | None) -> list[dict]:
+    return [i for i in items or [] if not i.get("pending") and i.get("checked", True)]
+
+
+def _on_board_items(items: list[dict] | None) -> list[dict]:
+    """Всё, что лежит на доске с галочкой: согласованное и ждущее общего согласования."""
+    return [i for i in items or [] if i.get("checked", True)]
+
+
+def _stage_state(stage: dict) -> str:
+    """Состояние этапа словами для модели."""
+    key = "held" if stage.get("held") else stage["status"]
+    return _STAGE_STATE.get(key, key)
+
+
+_BOARD_READY = (
+    "вся кампания на доске и ждёт одного согласования маркетолога — новые таблицы не нужны: закончи ход коротким "
+    "сообщением (что собрано, что стоит проверить) и попроси согласовать кампанию на доске. create_campaign — "
+    "только после его согласования"
+)
+
+
+def _build_next(build: dict) -> str:
+    """Что делать дальше в сборке — одной фразой для модели."""
+    status = {s["key"]: s["status"] for s in build["stages"]}
+    held = {s["key"] for s in build["stages"] if s.get("held")}
+    draft = build["draft"]
+    if draft and draft["status"] == "error":
+        return (
+            f"черновик не создался: {draft['error'] or 'ошибка'}. Исправь причину и вызови create_campaign снова — "
+            "согласованные этапы заново не показывай"
+        )
+    if draft and draft["status"] in ("pending", "approved"):
+        return "карточка создания черновика ждёт решения маркетолога"
+    waiting = [BUILD_STAGES[k] for k in BUILD_STAGES if status.get(k) == "pending" and k not in held]
+    if waiting:
+        return "ждут решения маркетолога: " + ", ".join(waiting)
+    optional: list[str] = []
+    for key in BUILD_STAGES:
+        if status.get(key) not in ("todo", "rejected"):
+            continue
+        if key in _BUILD_OPTIONAL:
+            optional.append(f"«{BUILD_STAGES[key]}»")
+            continue
+        before = f" (перед ним, если кампании это нужно, — необязательные: {', '.join(optional)})" if optional else ""
+        # На доске: решения по готовым этапам не ждём — готовим следующий в том же ходе.
+        ahead = " — готовь его сейчас, решения по этапам на доске не жди" if held else ""
+        return f"следующий этап — «{BUILD_STAGES[key]}»{before}{ahead}"
+    if held:
+        return _BOARD_READY
+    if build.get("board_approved"):
+        return (
+            "доска согласована — создавай черновик create_campaign из согласованного (содержимое — get_build): он "
+            "создастся сразу, без второй карточки; новые таблицы не нужны"
+        )
+    return (
+        "все этапы согласованы — создавай черновик create_campaign из согласованного (содержимое — get_build), "
+        "новые таблицы не нужны"
+    )
+
+
+def _unmet_requirements(build: dict) -> list[str]:
+    return [
+        f"{c['label'][4:]} — {c['note']}"
+        for c in build.get("checks") or []
+        if c["key"].startswith("req_") and c["state"] == "bad"
+    ]
+
+
+def _requirements_memory(build: dict) -> list[str]:
+    """Требования ТЗ в сводке: какие есть и какие на доске пока не выполнены."""
+    req = build.get("requirements")
+    if not req:
+        return []
+    lines = [f"Требования ТЗ (сервис считает их сам, с невыполненными черновик не создастся): {requirements_text(req)}."]
+    unmet = _unmet_requirements(build)
+    if unmet:
+        lines.append("На доске пока не выполнено: " + "; ".join(unmet) + ".")
+    return lines
+
+
+def _build_memory(ctx: Context) -> str:
+    """Сводка для модели: что уже создано в Директе и что согласовано в сборке. "" — сказать нечего."""
+    build, created = _chat_build(ctx)
+    lines: list[str] = []
+    if created:
+        lines.append("Кампании, созданные в этом чате, — они уже есть в Директе:")
+        lines += [
+            f"- «{c['name']}» — campaign_row_id {c['campaign_row_id']}, номер в Директе {c['campaign_id']}, "
+            f"статус {c['status'] or '—'}, состояние {c['state'] or '—'}"
+            for c in created
+        ]
+        lines.append(
+            "Просьбы что-то изменить относятся к готовой кампании: правь её действиями (update_text_ads, "
+            "add_keywords, keywords_action, create_adgroup, update_campaign_settings и другими) и только ту "
+            "кампанию, которую назвал маркетолог. Заново её не собирай и вторую такую же не создавай. Ещё одну "
+            "кампанию начинай, только если маркетолог прямо попросил новую: propose_items stage=goals с "
+            "new_campaign=true."
+        )
+    if _build_open(build):
+        if lines:
+            lines.append("")
+        held = bool(build["held"])
+        lines.append("Сборка новой кампании — что уже есть на доске:")
+        for stage in build["stages"]:
+            count = f", строк: {stage['count']}" if stage["count"] and stage["status"] in ("done", "pending") else ""
+            lines.append(f"- {stage['label']}: {_stage_state(stage)}{count}")
+        lines += _requirements_memory(build)
+        # Пока доска ждёт общего согласования, на ней — всё предложенное; после него — только согласованное.
+        pick = _on_board_items if held else _approved_items
+        groups = []
+        for g in build["groups"]:
+            sizes = [
+                (len(pick(g["keywords"])), "фраз"),
+                (len(pick(g["titles"])), "заголовков"),
+                (len(pick(g["texts"])), "текстов"),
+                (len(pick(g.get("audiences"))), "аудиторий"),
+                (len(pick(g.get("images"))), "картинок"),
+            ]
+            if any(n for n, _ in sizes):
+                groups.append(f"«{g['name']}» ({', '.join(f'{word} {n}' for n, word in sizes if n)})")
+        if groups:
+            more = f" и ещё {len(groups) - BUILD_MEMORY_GROUPS}" if len(groups) > BUILD_MEMORY_GROUPS else ""
+            lead = "На доске в группах" if held else "Согласовано в группах"
+            lines.append(f"{lead}: " + "; ".join(groups[:BUILD_MEMORY_GROUPS]) + more + ".")
+        if build["held_edits"]:
+            edits = build["held_edits"]
+            more = f"; и ещё {len(edits) - BUILD_MEMORY_EDITS}" if len(edits) > BUILD_MEMORY_EDITS else ""
+            lines.append(
+                "Маркетолог сам поправил на доске (бери в таком виде): " + "; ".join(edits[:BUILD_MEMORY_EDITS]) + more + "."
+            )
+        lines.append(f"Дальше: {_build_next(build)}.")
+        if held:
+            lines.append(
+                "Этап, который уже лежит на доске, заново не показывай. Правку по просьбе маркетолога вноси новой "
+                "таблицей того же этапа: она заменяет на доске строки того же раздела (section) и вида целиком — "
+                "показывай раздел полностью, с тем, что остаётся, а другие разделы и этапы не трогай. Что сейчас "
+                "лежит на доске — get_build."
+            )
+        else:
+            lines.append(
+                "Согласованный этап заново таблицей не показывай и уже согласованные строки не повторяй — новая "
+                "таблица этапа нужна, только если маркетолог попросил его изменить или дополнить (тогда revise=true и "
+                "только меняемые строки). Точные согласованные фразы, заголовки, тексты и настройки бери из get_build, "
+                "а не по памяти."
+            )
+    return f"{BUILD_MEMORY_NOTE}\n" + "\n".join(lines) if lines else ""
+
+
+def build_snapshot(ctx: Context, args: dict) -> dict:
+    """get_build: согласованное в сборке кампании этого чата — в виде, близком к spec для create_campaign."""
+    build, created = _chat_build(ctx)
+    out: dict = {"created_campaigns": created}
+    if build is None:
+        out["build"] = None
+        out["note"] = (
+            "Новую кампанию в этом чате не собирали."
+            if not created
+            else "Сборки в работе нет: кампания создана — правь её действиями по готовой кампании."
+        )
+        return out
+    offset = _offset(args, "groups_offset")
+    # Доска ждёт общего согласования — показываем, что на ней лежит (с правками маркетолога); иначе —
+    # только согласованное.
+    held = bool(build["held"]) and _build_open(build)
+    pick = _on_board_items if held else _approved_items
+
+    def texts(items) -> list[str]:
+        return [i["text"] for i in pick(items)]
+
+    def facts(items) -> list[dict]:
+        return [{k: i[k] for k in ("text", "value", "note") if i.get(k)} for i in pick(items)]
+
+    groups = []
+    for g in build["groups"]:
+        item: dict = {"name": g["name"]}
+        for key in ("keywords", "titles", "texts"):
+            if texts(g[key]):
+                item[key] = texts(g[key])
+        chosen = pick(g.get("audiences"))
+        if chosen:
+            item["audiences"] = [a.get("audience") or a["text"] for a in chosen]
+        images = pick(g.get("images"))
+        if images:
+            item["image_hashes"] = [i["hash"] for i in images]
+        if g.get("href"):
+            item["href"] = g["href"]
+        if g.get("sitelinks"):
+            item["sitelinks"] = [
+                {"title": s["text"], **{k: s[k] for k in ("href", "description") if s.get(k)}} for s in g["sitelinks"]
+            ]
+        if g.get("callouts"):
+            item["callouts"] = [c["text"] for c in g["callouts"]]
+        if len(item) > 1:
+            groups.append(item)
+    shown = _fit(groups, offset, BUILD_GROUPS_BUDGET)
+    body: dict = {
+        "status": "черновик создан" if not _build_open(build) else "собирается",
+        "stages": [{"stage": s["key"], "name": s["label"], "status": _stage_state(s)} for s in build["stages"]],
+    }
+    if _build_open(build):
+        body["next"] = _build_next(build)
+    if build.get("requirements"):
+        body["requirements"] = build["requirements"]
+        unmet = _unmet_requirements(build)
+        if unmet:
+            body["requirements_unmet"] = unmet
+    if not offset:
+        for stage, key in _BUILD_FACTS.items():
+            if facts(build[key]):
+                body[stage] = facts(build[key])
+        negatives = texts(build["negatives"])
+        if negatives:
+            fitted = _fit(negatives, 0, BUILD_NEGATIVES_BUDGET)
+            body["negative_keywords"] = fitted
+            if len(fitted) < len(negatives):
+                body["negative_keywords_note"] = f"показано {len(fitted)} из {len(negatives)} минус-фраз"
+        sitelinks = [
+            {"title": s["text"], **{k: s[k] for k in ("href", "description") if s.get(k)}}
+            for s in pick(build["sitelinks"])
+        ]
+        if sitelinks:
+            body["sitelinks"] = sitelinks
+        if texts(build["callouts"]):
+            body["callouts"] = texts(build["callouts"])
+        if build["account_id"]:
+            body["account_id"] = build["account_id"]
+    body["groups"] = shown
+    body["groups_total"] = len(groups)
+    if offset + len(shown) < len(groups):
+        body["not_all_shown"] = (
+            f"показаны группы {offset + 1}–{offset + len(shown)} из {len(groups)}; остальные — get_build с "
+            f"groups_offset={offset + len(shown)}"
+        )
+    out["build"] = body
+    out["note"] = (
+        "Доска ещё ждёт согласования маркетолога: здесь то, что на ней лежит сейчас, вместе с его правками. "
+        "create_campaign — только после согласования."
+        if held
+        else "Здесь только согласованное маркетологом: в create_campaign бери строки отсюда слово в слово. Чего "
+        "здесь нет — не согласовано."
+    )
+    return out
+
+
+def _approved_keys(items: list[dict] | None, kind: str = "") -> set[str]:
+    return {_item_key(i["text"], kind) for i in _approved_items(items)}
+
+
+def _created_names(created: list[dict]) -> str:
+    return _preview([f"«{c['name']}» (campaign_row_id {c['campaign_row_id']})" for c in created], 3)
+
+
+_EDIT_CREATED = (
+    "Чтобы что-то в ней изменить, правь её действиями по готовой кампании (update_text_ads, add_keywords, "
+    "keywords_action, create_adgroup, update_campaign_settings и другими) — заново не собирай и второй раз не "
+    "создавай."
+)
+_REVISE_HINT = (
+    "Если маркетолог попросил изменить или дополнить согласованное — повтори вызов с revise=true и только с "
+    "меняемыми и новыми строками."
+)
+
+
+_REQUIREMENTS_HINT = (
+    "Первая таблица сборки фиксирует требования ТЗ: передай requirements — сколько в каждой группе фраз "
+    "(keywords), заголовков (titles), текстов (texts), сколько у объявления быстрых ссылок (sitelinks) и "
+    "уточнений (callouts), запрещённые слова (banned_words) и прочие условия словами (other). Бери только то, что "
+    "в ТЗ сказано прямо; если цифр и запретов в ТЗ нет — requirements={}."
+)
+
+
+def _new_requirements(build: dict | None, payload: dict) -> bool:
+    """Таблица меняет требования ТЗ сборки."""
+    return bool(payload.get("requirements")) and payload["requirements"] != ((build or {}).get("requirements") or {})
+
+
+def _need_requirements(payload: dict) -> None:
+    """Таблица, с которой начинается сборка, обязана нести требования ТЗ (хотя бы пустые)."""
+    if "requirements" not in payload:
+        raise YandexError("args", _REQUIREMENTS_HINT)
+
+
+def _table_guard(ctx: Context, args: dict, payload: dict) -> dict | None:
+    """Таблица этапа сборки против того, что сервис уже помнит.
+
+    None — показать маркетологу; dict — ответ модели без карточки (всё из таблицы уже согласовано);
+    YandexError — таблица повторяет согласованный этап или начинает кампанию заново без просьбы.
+    """
+    stage = payload["stage"]
+    if stage not in BUILD_STAGES or ctx.chat_id is None or ctx.ws_id is None:
+        return None
+    if stage in _BUILD_STARTS and _bool(args, "new_campaign", False):
+        # С этой таблицы доска начинает новую сборку (campaign_build).
+        _need_requirements(payload)
+        payload["new_campaign"] = True
+        return None
+    build, created = _chat_build(ctx)
+    if not _build_open(build):
+        if stage in _BUILD_STARTS and not created:
+            _need_requirements(payload)
+        if stage in _BUILD_STARTS and created:
+            raise YandexError(
+                "args",
+                f"В этом чате уже создана кампания {_created_names(created)} — она есть в Директе. {_EDIT_CREATED} "
+                "Если маркетолог прямо попросил ещё одну кампанию — повтори вызов с new_campaign=true.",
+            )
+        return None
+
+    groups = {
+        g["name"]: {
+            "keyword": _approved_keys(g["keywords"], "keyword"),
+            "title": _approved_keys(g["titles"]),
+            "text": _approved_keys(g["texts"]),
+        }
+        for g in build["groups"]
+    }
+    negatives = _approved_keys(build["negatives"], "negative")
+    facts = {(_item_key(i["text"]), i["value"], i["note"]) for i in _approved_items(build.get(_BUILD_FACTS.get(stage, "")))}
+    links = {
+        kind: {(_item_key(i["text"]), i.get("href") or "", i.get("description") or "") for i in _approved_items(build[f"{kind}s"])}
+        for kind in ("sitelink", "callout")
+    }
+
+    def row_kind(row: dict) -> str:
+        if stage == "negatives" or (stage == "keywords" and row["kind"] == "negative"):
+            return "negative"
+        return "keyword" if stage == "keywords" else row["kind"]
+
+    def on_board(row: dict) -> bool:
+        """Строка уже согласована на доске в том же виде."""
+        text, name, kind = row["cells"][0], row["section"] or NO_GROUP, row_kind(row)
+        if kind == "negative":
+            return _item_key(text, "negative") in negatives
+        if stage in ("keywords", "ads"):
+            return _item_key(text, kind) in groups.get(name, {}).get(kind, set())
+        link_kind, found = _extra_links(row["section"], row) if stage == "extras" else ("", [])
+        if link_kind:
+            return all((_item_key(f["text"]), f["href"], f["description"]) in links[link_kind] for f in found)
+        item = _row_item(row, {"id": None}, False)
+        return (_item_key(item["text"]), item["value"], item["note"]) in facts
+
+    rows = payload["rows"]
+    following = f"Дальше: {_build_next(build)}."
+    # Новые требования ТЗ в той же таблице — её надо показать, даже если строки уже согласованы.
+    if stage not in ("audiences", "images") and not _new_requirements(build, payload) and all(
+        r["checked"] and on_board(r) for r in rows
+    ):
+        return {
+            "ok": True,
+            "already_approved": True,
+            "note": f"Всё из этой таблицы маркетолог уже согласовал — она не показана. {following}",
+        }
+    if _bool(args, "revise", False):
+        return None
+    status = {s["key"]: s["status"] for s in build["stages"]}
+    if stage in ("goals", "analysis", "settings") and status.get(stage) == "done":
+        restart = (
+            " Бросить эту сборку и начать другую кампанию — new_campaign=true, только по его прямой просьбе."
+            if stage in _BUILD_STARTS
+            else ""
+        )
+        raise YandexError(
+            "args",
+            f"Этап «{BUILD_STAGES[stage]}» маркетолог уже согласовал — заново его не показывай (что согласовано — "
+            f"get_build). {following} {_REVISE_HINT}{restart}",
+        )
+    if stage in ("keywords", "ads"):
+        again: list[str] = []
+        for row in rows:
+            name, kind = row["section"] or NO_GROUP, row_kind(row)
+            if kind != "negative" and groups.get(name, {}).get(kind) and name not in again:
+                again.append(name)
+        if again:
+            what = "фразы" if stage == "keywords" else "заголовки или тексты"
+            raise YandexError(
+                "args",
+                f"У групп {_preview([f'«{n}»' for n in again], 5)} {what} уже согласованы (они в get_build) — убери "
+                f"эти группы из таблицы, покажи только новые. {_REVISE_HINT}",
+            )
+    return None
+
+
+# --- Сборка одной доской ---------------------------------------------------------------------------
+#
+# При подробном ТЗ маркетолог согласует кампанию один раз. Таблица этапа сборки не останавливает ход:
+# она ложится на доску (held — ждёт решения, но модель сразу получает ответ и готовит следующий этап),
+# а решение по всей доске принимается одной кнопкой (decide_build) — после него черновик создаётся без
+# второй карточки. По шагам, как раньше, — by_stages=true: по просьбе маркетолога или при пустом ТЗ.
+
+_TABLE_REPLACED = "Заменена новой таблицей этапа"
+_BUILD_DROPPED = "Маркетолог попросил другую кампанию — эта сборка брошена"
+
+
+def _table_held(ctx: Context, args: dict, payload: dict) -> bool:
+    """Таблица ляжет на доску без остановки хода: этап сборки новой кампании и не «по шагам»."""
+    stage = payload["stage"]
+    if stage not in BUILD_STAGES or ctx.chat_id is None or ctx.ws_id is None or ctx.general:
+        return False
+    build, _created = _chat_build(ctx)
+    fresh = stage in _BUILD_STARTS and (bool(payload.get("new_campaign")) or not _build_open(build))
+    if not fresh and not _build_open(build):
+        # Таблица заголовков, картинок или аудиторий для готовой кампании — обычная карточка.
+        return False
+    if args.get("by_stages") not in (None, ""):
+        return not _bool(args, "by_stages", False)
+    # Режим сборки не меняется сам: как легла прошлая таблица, так и эта.
+    return True if fresh else bool(build["board"])
+
+
+def _held_tables(conn, chat_id: int) -> list[dict]:
+    """Таблицы сборки, которые лежат на доске и ждут общего согласования, — по порядку."""
+    rows = conn.execute(
+        """
+        SELECT * FROM ai_actions
+        WHERE chat_id = %s AND tool = 'propose_items' AND status = 'pending' AND detached_at IS NOT NULL
+        ORDER BY id
+        """,
+        (chat_id,),
+    ).fetchall()
+    return [r for r in rows if (r["args"] or {}).get("held")]
+
+
+def _row_same(a: dict, b: dict) -> bool:
+    return (
+        (a.get("section") or "") == (b.get("section") or "")
+        and a.get("kind") == b.get("kind")
+        and [str(c or "") for c in a.get("cells") or []] == [str(c or "") for c in b.get("cells") or []]
+        and a.get("checked", True) == b.get("checked", True)
+    )
+
+
+def _hold_table(ctx: Context, chat_id: int, message_id: int, call_id: str, payload: dict, summary: str) -> dict:
+    """Кладёт таблицу этапа на доску — ждать общего согласования. → ответ модели, ход идёт дальше.
+
+    Новая таблица заменяет на доске ждущие строки того же этапа, раздела и вида: правка одного раздела
+    не трогает остальные. Таблица с new_campaign бросает прежнюю несогласованную сборку.
+    """
+    stage = payload["stage"]
+    payload["held"] = True
+    rows = payload["rows"]
+    slots = {(r["section"] or "", r["kind"]) for r in rows}
+    replaced = 0
+    with pool.connection() as conn:
+        conn.execute("SELECT id FROM ai_chats WHERE id = %s FOR UPDATE", (chat_id,))
+        older = _held_tables(conn, chat_id)
+        if not payload.get("new_campaign"):
+            on_board = [r for o in older if o["args"].get("stage") == stage for r in o["args"].get("rows") or []]
+            build, _created = _chat_build(ctx)
+            if not _new_requirements(build, payload) and all(any(_row_same(r, old) for old in on_board) for r in rows):
+                return {
+                    "ok": True,
+                    "on_board": True,
+                    "already_on_board": True,
+                    "note": "Эта таблица уже лежит на доске в том же виде — второй раз она не показана. "
+                    f"Дальше: {_build_next(build) if build else 'готовь следующий этап'}.",
+                }
+        for old in older:
+            old_args = old["args"]
+            if payload.get("new_campaign"):
+                conn.execute(
+                    "UPDATE ai_actions SET status = 'rejected', error = %s, decided_at = NOW() WHERE id = %s",
+                    (_BUILD_DROPPED, old["id"]),
+                )
+                continue
+            if old_args.get("stage") != stage:
+                continue
+            keep = [r for r in old_args.get("rows") or [] if (r.get("section") or "", r.get("kind")) not in slots]
+            gone = len(old_args.get("rows") or []) - len(keep)
+            if not gone:
+                continue
+            replaced += gone
+            if keep:
+                conn.execute(
+                    "UPDATE ai_actions SET args = %s WHERE id = %s", (Jsonb({**old_args, "rows": keep}), old["id"])
+                )
+            else:
+                conn.execute(
+                    "UPDATE ai_actions SET status = 'rejected', error = %s, decided_at = NOW() WHERE id = %s",
+                    (_TABLE_REPLACED, old["id"]),
+                )
+        conn.execute(
+            """
+            INSERT INTO ai_actions
+                (chat_id, message_id, user_id, tool_call_id, tool, args, summary, category, status, auto, detached_at)
+            VALUES (%s, %s, %s, %s, 'propose_items', %s, %s, '', 'pending', FALSE, NOW())
+            """,
+            (chat_id, message_id, ctx.user_id, call_id, Jsonb(payload), _line(summary, 1000)),
+        )
+    build, _created = _chat_build(ctx)
+    out = {
+        "ok": True,
+        "on_board": True,
+        "stage": BUILD_STAGES[stage],
+        "rows": len(rows),
+        "note": "Таблица на доске. Маркетолог согласует кампанию целиком, одним решением — отдельного ответа на "
+        f"эту таблицу не будет. Дальше: {_build_next(build) if build else 'готовь следующий этап'}.",
+    }
+    if replaced:
+        out["replaced_rows"] = replaced
+        out["note"] += (
+            f" Прежние строки этих разделов ({replaced}) заменены новыми: если что-то из них нужно было оставить — "
+            "покажи раздел ещё раз целиком."
+        )
+    return out
+
+
+def _board_go(ctx: Context) -> bool:
+    """Доску согласовали одной кнопкой, и на ней ничего не ждёт: черновик создаётся без второй карточки."""
+    build, _created = _chat_build(ctx)
+    return (
+        _build_open(build)
+        and bool(build["board_approved"])
+        and not build["held"]
+        and all(s["status"] != "pending" for s in build["stages"])
+    )
+
+
+def _create_guard(ctx: Context, args: dict) -> None:
+    """create_campaign от модели: кампания из этой сборки уже создана — второй такой же не будет."""
+    from app.actions import spec_groups
+
+    spec = args.get("spec")
+    if ctx.chat_id is None or not isinstance(spec, dict):
+        return
+    build, created = _chat_build(ctx)
+    if build and build["held"] and _build_open(build):
+        waiting = [s["label"] for s in build["stages"] if s.get("held")]
+        raise YandexError(
+            "args",
+            f"Кампания на доске ещё ждёт согласования маркетолога ({', '.join(waiting)}) — create_campaign вызывай "
+            "после его решения. Сейчас закончи ход коротким сообщением: что собрано и что стоит проверить на доске.",
+        )
+    if not created:
+        return
+    if spec_groups(spec) and not _build_open(build):
+        raise YandexError(
+            "args",
+            f"В этом чате уже создана кампания {_created_names(created)} — она есть в Директе. {_EDIT_CREATED} Ещё "
+            "одну кампанию — только если маркетолог прямо попросил: сначала propose_items stage=goals с "
+            "new_campaign=true, потом create_campaign; согласованные раньше фразы, заголовки и тексты можно взять "
+            "без новых таблиц.",
+        )
+    name = _item_key(spec.get("name"))
+    twin = next((c for c in created if name and _item_key(c["name"]) == name), None)
+    if twin:
+        raise YandexError(
+            "args",
+            f"Кампания «{twin['name']}» в этом чате уже создана (campaign_row_id {twin['campaign_row_id']}). Нужно "
+            "её изменить — правь её; нужна ещё одна — дай новой другое название.",
+        )
 
 
 # --- Правки маркетолога на доске ----------------------------------------------------------------
@@ -6914,9 +8303,16 @@ def _replan_create(user_id: int, chat: dict, action: dict, recorded: list[dict])
     return stored, plan.summary[:1000]
 
 
-_CHAT_SELECT = """
+# Сколько решений ждёт чат. Таблицы сборки на доске (held) решаются одной кнопкой — это одно решение.
+_PENDING_COUNT = """
+           (SELECT COUNT(*) FILTER (WHERE a.args->>'held' IS DISTINCT FROM 'true')
+                   + COALESCE(MAX(CASE WHEN a.args->>'held' = 'true' THEN 1 END), 0)
+            FROM ai_actions a WHERE a.chat_id = ch.id AND a.status = 'pending') AS pending_actions
+"""
+
+_CHAT_SELECT = f"""
     SELECT ch.*,
-           (SELECT COUNT(*) FROM ai_actions a WHERE a.chat_id = ch.id AND a.status = 'pending') AS pending_actions
+{_PENDING_COUNT}
     FROM ai_chats ch
 """
 
@@ -7004,7 +8400,7 @@ def search_chats(user_id: int, workspace_id: int | None, q: str, *, archived: bo
     like = _like(q)
     with pool.connection() as conn:
         rows = conn.execute(
-            """
+            f"""
             WITH hits AS (
                 SELECT DISTINCT ON (m.chat_id) m.chat_id, m.id AS hit_id, m.role AS hit_role, m.content AS hit_content
                 FROM ai_messages m JOIN ai_chats c ON c.id = m.chat_id
@@ -7013,7 +8409,7 @@ def search_chats(user_id: int, workspace_id: int | None, q: str, *, archived: bo
                 ORDER BY m.chat_id, m.id DESC
             )
             SELECT ch.*, h.hit_id, h.hit_role, h.hit_content,
-                   (SELECT COUNT(*) FROM ai_actions a WHERE a.chat_id = ch.id AND a.status = 'pending') AS pending_actions
+{_PENDING_COUNT}
             FROM ai_chats ch LEFT JOIN hits h ON h.chat_id = ch.id
             WHERE ch.user_id = %(user)s AND ch.workspace_id IS NOT DISTINCT FROM %(ws)s
               AND (ch.archived_at IS NOT NULL) = %(archived)s
@@ -7305,7 +8701,9 @@ def _skip_open_actions(conn, chat_id: int, reason: str, *, by_message: bool = Fa
         (list(ASK_TOOLS), ask_reason, reason, chat_id),
     ).fetchall()
     for r in rows:
-        if by_message and r["tool"] in ASK_TOOLS:
+        if _link_choice_of(r):
+            payload = _LINK_SKIPPED_BY_MESSAGE if by_message else {"ok": False, "error": reason}
+        elif by_message and r["tool"] in ASK_TOOLS:
             payload = _ASK_SKIPPED[r["tool"]]
         elif by_message:
             payload = _write_skipped(reason, r["tool"], r.get("args") or {})
@@ -7317,7 +8715,7 @@ def _skip_open_actions(conn, chat_id: int, reason: str, *, by_message: bool = Fa
             "tool",
             json.dumps(payload, ensure_ascii=False),
             tool_call_id=r["tool_call_id"],
-            tool_name=r["tool"],
+            tool_name=_reply_tool(r),
         )
 
 
@@ -7846,7 +9244,13 @@ def _pending_rows(user_id: int, workspace_id: int | None = None) -> list[tuple[d
         return []
     projects = {w["id"]: w for w in list_workspaces(user_id) if not w["locked"]}
     out = []
+    boards: set[int] = set()
     for row in rows:
+        if row["tool"] == "propose_items" and (row["args"] or {}).get("held"):
+            # Таблицы на доске решаются одной кнопкой: в очереди — одна запись на чат, последняя таблица.
+            if row["chat_id"] in boards:
+                continue
+            boards.add(row["chat_id"])
         project_id = _action_project_id(row, row["chat_workspace_id"])
         if project_id is not None and project_id not in projects:
             continue
@@ -7861,8 +9265,16 @@ def pending_count(user_id: int) -> dict:
     return {"count": sum(1 for row, _ in _pending_rows(user_id) if not row["snoozed_at"])}
 
 
+_BOARD_PENDING_LABEL = "Кампания на доске"
+_BOARD_PENDING_SUMMARY = "ИИ собрал кампанию — проверьте её на доске в чате и согласуйте одной кнопкой."
+
+
 def _pending_item(row: dict, ws: dict | None) -> dict:
     item = _action_out(row)
+    if row["tool"] == "propose_items" and (row["args"] or {}).get("held"):
+        # Доска решается целиком: в очереди — кампания, а не её последняя таблица.
+        item["label"] = _BOARD_PENDING_LABEL
+        item["summary"] = _BOARD_PENDING_SUMMARY
     item["project"] = {"id": ws["id"], "name": ws["name"]} if ws else None
     item["chat"] = {
         "id": row["chat_id"],
@@ -8053,6 +9465,18 @@ def _pending_interactive(user_id: int, action_id: int, tool: str) -> dict:
     return row
 
 
+def _link_choice_of(row: dict) -> dict | None:
+    """Карточка выбора ref (вопрос вместо действия со ссылкой) → её служебные данные."""
+    args = row.get("args") if isinstance(row.get("args"), dict) else {}
+    link = args.get("link_choice") if row.get("tool") == "ask_questions" else None
+    return link if isinstance(link, dict) else None
+
+
+def _reply_tool(row: dict) -> str:
+    """Чьим результатом уйдёт ответ на карточку: вопрос о ref задан вместо действия — отвечает за него."""
+    return str((_link_choice_of(row) or {}).get("tool") or row["tool"])
+
+
 def _close_interactive(
     user_id: int, row: dict, *, status: str, result: dict | None, error: str, reply: dict
 ) -> tuple[dict, int]:
@@ -8075,7 +9499,7 @@ def _close_interactive(
         if updated is None:
             raise YandexError("decided", "Решение уже принято")
         _insert_message(
-            conn, row["chat_id"], "tool", _dump(reply), tool_call_id=row["tool_call_id"], tool_name=row["tool"]
+            conn, row["chat_id"], "tool", _dump(reply), tool_call_id=row["tool_call_id"], tool_name=_reply_tool(row)
         )
         left = conn.execute(
             "SELECT COUNT(*) AS n FROM ai_actions WHERE chat_id = %s AND status = 'pending' AND detached_at IS NULL",
@@ -8139,7 +9563,17 @@ def answer_questions(user_id: int, action_id: int, *, answers=None, comment: str
     row = _pending_interactive(user_id, action_id, "ask_questions")
     payload = row.get("args") or {}
     comment = _para(comment, 2000)
-    if skip:
+    link = _link_choice_of(row)
+    saved: dict[int, dict] = {}
+    if skip and link:
+        # Выбор ref пропущен: ref остаётся прежним, и об этом значении больше не спрашиваем — иначе круг.
+        decided, build, saved = _link_decision(link, None)
+        reply = {"ok": True, "executed": False, "skipped": True, "decided": decided, "note": _LINK_RETRY}
+        if comment:
+            reply["comment"] = comment
+        result = {"link_choice": build, **({"comment": comment} if comment else {})}
+        updated, left = _close_interactive(user_id, row, status="rejected", result=result, error="Пропущено", reply=reply)
+    elif skip:
         reply = {"ok": False, "error": "Пользователь не стал отвечать — работай с тем, что есть, или спроси иначе"}
         if comment:
             reply["comment"] = comment
@@ -8151,6 +9585,14 @@ def answer_questions(user_id: int, action_id: int, *, answers=None, comment: str
             error="Пропущено",
             reply=reply,
         )
+    elif link:
+        out, _facts = _compose_answers(payload.get("questions") or [], answers)
+        if not comment and not any("answer" in a for a in out):
+            raise YandexError("args", "Выберите вариант или напишите комментарий")
+        decided, build, saved = _link_decision(link, _link_picks(link, out))
+        result = {"answers": out, "remembered": [], "comment": comment, "link_choice": build}
+        reply = {"ok": True, "executed": False, "decided": decided, "answers": out, "comment": comment, "note": _LINK_RETRY}
+        updated, left = _close_interactive(user_id, row, status="done", result=result, error="", reply=reply)
     else:
         questions = payload.get("questions") or []
         needs = {n for q in questions for n in (q.get("needs") or {}).values()}
@@ -8170,6 +9612,7 @@ def answer_questions(user_id: int, action_id: int, *, answers=None, comment: str
         if payload.get("answered"):
             reply["already_answered"] = payload["answered"]
         updated, left = _close_interactive(user_id, row, status="done", result=result, error="", reply=reply)
+    _save_link_choices(user_id, saved)  # до хода ИИ: повтор действия должен увидеть выбор
     job = _submit(user_id, row["chat_id"], f"q{action_id}") if not left else None
     return {"action": _action_out(updated), "pending": left, "job": public_job(job) if job else None}
 
@@ -8279,6 +9722,12 @@ def decide_items(user_id: int, action_id: int, *, rows=None, comment: str = "", 
 
     row = _pending_interactive(user_id, action_id, "propose_items")
     payload = row.get("args") or {}
+    if payload.get("held"):
+        # Таблица лежит на доске: её вызов модель уже получил ответом, решение уйдёт служебной заметкой.
+        out = decide_build(
+            user_id, row["chat_id"], approve=approve, rows={str(action_id): rows or []}, comment=comment, only=[action_id]
+        )
+        return {"action": out["actions"][0], "pending": out["pending"], "job": out["job"]}
     table = payload.get("rows") or []
     stage = ITEM_STAGES.get(payload.get("stage") or "other", "")
     comment = _para(comment, 2000)
@@ -8333,6 +9782,163 @@ def decide_items(user_id: int, action_id: int, *, rows=None, comment: str = "", 
         updated, left = _close_interactive(user_id, row, status="done", result=result, error="", reply=reply)
     job = _submit(user_id, row["chat_id"], f"i{action_id}") if not left else None
     return {"action": _action_out(updated), "pending": left, "job": public_job(job) if job else None}
+
+
+# Сколько снятых строк и правок маркетолога перечисляет заметка о решении по доске: остальное — в get_build.
+BOARD_NOTE_ROWS = 60
+_BOARD_DECISION = "[Служебная заметка: маркетолог принял решение по кампании на доске. {result}]"
+_BOARD_CANCELLED = "Маркетолог отменил сборку на доске"
+
+
+def decide_build(
+    user_id: int, chat_id: int, *, approve: bool = True, rows=None, comment: str = "", only: list[int] | None = None
+) -> dict:
+    """Одно решение на всю доску: таблицы, которые на ней лежат, согласованы разом — или сборка отменена.
+
+    rows — {id таблицы: номера отмеченных строк}; таблица без записи согласуется как показана. only —
+    решить только эти таблицы (кнопки одной таблицы вне доски). Согласование продолжает ход: модель
+    создаёт черновик из согласованного, без второй карточки. Отмена без комментария хода не начинает.
+    """
+    from app.actions import _ws_link_template
+    from app.jobs import public_job
+
+    comment = _para(comment, 2000)
+    picked = rows if isinstance(rows, dict) else {}
+    with pool.connection() as conn:
+        chat = _require_chat(conn, user_id, chat_id)
+    if chat["workspace_id"] is None:
+        raise YandexError("decided", "На доске нет таблиц, ждущих согласования")
+    link_template = bool(_ws_link_template(require_workspace(user_id, chat["workspace_id"])))
+    with pool.connection() as conn:
+        chat = _require_chat(conn, user_id, chat_id, lock=True)
+        if _chat_out(chat)["status"] == "running":
+            raise YandexError("busy", "ИИ ещё отвечает — дождитесь ответа")
+        tables = [t for t in _held_tables(conn, chat_id) if only is None or t["id"] in only]
+        if not tables:
+            raise YandexError("decided", "На доске нет таблиц, ждущих согласования")
+        open_cards = conn.execute(
+            "SELECT COUNT(*) AS n FROM ai_actions WHERE chat_id = %s AND status = 'pending' AND detached_at IS NULL",
+            (chat_id,),
+        ).fetchone()["n"]
+        if open_cards:
+            raise YandexError("args", "ИИ ждёт вашего ответа в чате — сначала ответьте ему, потом согласуйте доску")
+
+        plans: list[tuple[dict, list[dict], list[int]]] = []
+        for t in tables:
+            table = (t["args"] or {}).get("rows") or []
+            mine = picked.get(str(t["id"]), picked.get(t["id"]))
+            numbers = [r["n"] for r in table]
+            chosen = _numbers(mine, numbers) if mine is not None else [r["n"] for r in table if r.get("checked", True)]
+            plans.append((t, table, chosen))
+        if approve and not any(chosen for _t, _table, chosen in plans):
+            raise YandexError("args", "Отметьте хотя бы одну строку или отмените сборку")
+
+        updated: list[dict] = []
+        counts: dict[str, list[int]] = {}
+        removed: list[dict] = []
+        edited: list[str] = []
+        for t, table, chosen in plans:
+            stage = (t["args"] or {}).get("stage") or "other"
+            # Этап, с которого сняли все строки: необязательный — пропущен, обязательный — на доработку.
+            agreed = approve and (bool(chosen) or stage in _BUILD_OPTIONAL)
+            if agreed:
+                result = {
+                    "approved_rows": chosen,
+                    "removed_rows": [r["n"] for r in table if r["n"] not in chosen],
+                    "comment": comment,
+                }
+                if only is None:
+                    result["board"] = True
+                removed += [r for r in table if r["n"] not in chosen]
+                edited += _edited_rows([r for r in table if r["n"] in chosen])
+                error = ""
+            else:
+                result = {"comment": comment} if comment else None
+                error = "Пользователь не согласовал таблицу" if approve or only is not None else _BOARD_CANCELLED
+            row = conn.execute(
+                """
+                UPDATE ai_actions SET status = %s, result = %s, error = %s, decided_at = NOW()
+                WHERE id = %s AND status = 'pending'
+                RETURNING *
+                """,
+                ("done" if agreed else "rejected", Jsonb(result) if result is not None else None, error, t["id"]),
+            ).fetchone()
+            if row is None:
+                raise YandexError("decided", "Решение уже принято")
+            updated.append(row)
+            count = counts.setdefault(ITEM_STAGES.get(stage, stage), [0, 0])
+            count[0] += len(chosen) if agreed else 0
+            count[1] += len(table)
+
+        actions = conn.execute(
+            "SELECT * FROM ai_actions WHERE chat_id = %s AND tool = ANY(%s) ORDER BY id", (chat_id, list(_BUILD_TOOLS))
+        ).fetchall()
+        build = campaign_build(actions, link_template=link_template)
+        following = f"Дальше: {_build_next(build)}." if build and _build_open(build) else ""
+        if approve:
+            whole = only is None
+            note = {
+                "ok": True,
+                "decision": "Маркетолог согласовал кампанию на доске" if whole else "Маркетолог согласовал таблицу на доске",
+                "stages": {label: f"согласовано {n} из {total}" for label, (n, total) in counts.items()},
+                "note": "Согласованное целиком — в get_build: в create_campaign бери строки оттуда слово в слово. "
+                "Снятое галочкой не используй и не предлагай снова без новой причины. " + following,
+            }
+            if removed:
+                note["removed"] = _items_brief(removed[:BOARD_NOTE_ROWS])
+                if len(removed) > BOARD_NOTE_ROWS:
+                    note["removed_more"] = len(removed) - BOARD_NOTE_ROWS
+            if edited:
+                note["edited_by_user"] = edited[:BOARD_NOTE_ROWS]
+                note["note"] += f" {_EDITED_NOTE}."
+            if comment:
+                note["comment"] = comment
+                note["note"] += (
+                    " Комментарий учти. Если он меняет строки на доске — покажи изменённый раздел новой таблицей того "
+                    "же этапа с revise=true (она ляжет на доску, маркетолог согласует её), и только потом создавай "
+                    "черновик; если не меняет — создавай черновик сразу."
+                )
+        elif only is not None:
+            note = {
+                "ok": False,
+                "decision": "Маркетолог отклонил таблицу на доске",
+                "stages": list(counts),
+                "note": "Этап не согласован: ничего из этой таблицы не делай. Учти комментарий и покажи таблицу этого "
+                "этапа заново. " + following,
+            }
+        else:
+            note = {
+                "ok": False,
+                "decision": "Маркетолог отменил сборку кампании на доске",
+                "stages": list(counts),
+                "note": "Из отменённого ничего не создавай и сам сборку заново не начинай."
+                + (
+                    " Учти комментарий: если маркетолог просит переделать — покажи исправленное новыми таблицами."
+                    if comment
+                    else " Новую кампанию собирай только по его просьбе."
+                ),
+            }
+        if comment and not approve:
+            note["comment"] = comment
+        _insert_message(
+            conn,
+            chat_id,
+            "tool",
+            _dump(note),
+            tool_call_id=tables[-1]["tool_call_id"],
+            tool_name="propose_items",
+            meta={"detached": True, "board": True},
+        )
+        # Отмена всей сборки без слов хода не начинает: заметку модель увидит со следующим сообщением маркетолога.
+        run = approve or bool(comment) or only is not None
+        if run:
+            conn.execute(
+                "UPDATE ai_chats SET status = 'running', error = '', updated_at = NOW() WHERE id = %s", (chat_id,)
+            )
+        else:
+            conn.execute("UPDATE ai_chats SET updated_at = NOW() WHERE id = %s", (chat_id,))
+    job = _submit(user_id, chat_id, f"b{tables[-1]['id']}") if run else None
+    return {"actions": [_action_out(r) for r in updated], "pending": 0, "job": public_job(job) if job else None}
 
 
 # --- Ход агента ---------------------------------------------------------------------------------
@@ -8509,7 +10115,11 @@ def _history(
             continue
         if _is_detached(r):
             label = TOOL_LABELS.get(r.get("tool_name") or "", r.get("tool_name") or "")
-            out.append({"role": "user", "content": _DETACHED_NOTE.format(label=label, result=r["content"])})
+            if (r.get("meta") or {}).get("board"):
+                # Решение по всей доске — не «отложенное предложение»: своими словами.
+                out.append({"role": "user", "content": _BOARD_DECISION.format(result=r["content"])})
+            else:
+                out.append({"role": "user", "content": _DETACHED_NOTE.format(label=label, result=r["content"])})
         elif r["role"] in ("user", "assistant"):
             content = r["content"]
             if r["role"] == "user" and (r.get("meta") or {}).get("context"):
@@ -8709,6 +10319,313 @@ def _show(ctx: Context, message_id: int, args: dict) -> dict:
     return ai_blocks.block_brief(block)
 
 
+# --- Ref из ссылки маркетолога -------------------------------------------------------------------
+#
+# Шаблон проекта задаёт ref (ref=Yandex), а маркетолог может дать ссылку со своим (ref=Telegram). Молча
+# ставить шаблонный нельзя — это подмена его ссылки. Поэтому действие со ссылкой, где значение не то, что
+# у кампании, не выполняется, пока маркетолог не выберет в карточке, какое ставить. Выбор хранится в
+# кампании (direct_campaigns.link_params), а пока она собирается — в ответах на карточки этого чата.
+
+_LINK_TOOLS = ("create_campaign", "create_text_ad", "update_text_ad", "update_text_ads", "set_ads_extras")
+# Копии и эксперименты: ссылки у копии — как у исходной кампании, свой ref ставят уже ей.
+_COPY_TOOLS = ("create_campaign_variants", "restart_campaign_copy", "start_experiment")
+_LINK_CHOICE_LABEL = "Выбор ref в ссылке"
+_LINK_RETRY = (
+    "Действие, из-за которого был вопрос, ещё не выполнено. Если оно нужно — повтори тот же вызов со ссылкой "
+    "маркетолога: ref сервис поставит по его выбору сам. Если ref у кампании сменился, остальные её объявления "
+    "пока со старым — привести их к новому можно одним fix_links."
+)
+_LINK_SKIPPED_BY_MESSAGE = {
+    "ok": False,
+    "error": "Маркетолог не выбрал ref в карточке, а написал сообщение ниже — действие не выполнено. Прочитай его "
+    "сообщение: если в нём есть ответ, какой ref ставить, повтори вызов — карточка появится снова, и он подтвердит "
+    "выбор одним нажатием; если он просит другое — делай, что он просит.",
+}
+
+
+def _href_slots(holder: dict) -> list[tuple[dict, bool]]:
+    """Места со ссылкой в объявлении: (словарь с href, это быстрая ссылка)."""
+    out: list[tuple[dict, bool]] = []
+    if isinstance(holder.get("href"), str) and holder["href"].strip():
+        out.append((holder, False))
+    extras = holder.get("extras")
+    sitelinks = extras.get("sitelinks") if isinstance(extras, dict) else None
+    for link in sitelinks if isinstance(sitelinks, list) else []:
+        if isinstance(link, dict) and isinstance(link.get("href"), str) and link["href"].strip():
+            out.append((link, True))
+    return out
+
+
+def _link_slots(ctx: Context, name: str, args: dict) -> list[tuple[dict | None, dict, bool]]:
+    """Ссылки действия: (кампания или None — она ещё собирается, словарь с href, это быстрая ссылка)."""
+    if name == "create_campaign":
+        spec = args.get("spec") if isinstance(args.get("spec"), dict) else {}
+        groups = spec.get("groups") if isinstance(spec.get("groups"), list) else []
+        ads = [g["ad"] for g in groups if isinstance(g, dict) and isinstance(g.get("ad"), dict)]
+        return [(None, slot, sitelink) for ad in ads for slot, sitelink in _href_slots(ad)]
+    if name == "create_text_ad":
+        slots = _href_slots(args)
+        if not slots:
+            return []
+        campaign = ctx.campaign(int(ctx.adgroup(_int(args, "adgroup_row_id"))["campaign_row_id"]))
+        return [(campaign, slot, sitelink) for slot, sitelink in slots]
+    if name == "set_ads_extras":
+        # Ссылки здесь только быстрые; объявления — из одной кампании, её ref и ставим.
+        slots = [slot for slot, sitelink in _href_slots(args) if sitelink]
+        if not slots:
+            return []
+        campaign = ctx.campaign(int(_extras_scope(ctx, args)[0]["campaign_row_id"]))
+        return [(campaign, slot, True) for slot in slots]
+    items = [args] if name == "update_text_ad" else args.get("items")
+    items = [i for i in items if isinstance(i, dict) and _href_slots(i)] if isinstance(items, list) else []
+    if not items:
+        return []
+    ads = {int(r["id"]): r for r in ctx.ads(list(dict.fromkeys(_int(i, "ad_row_id") for i in items)))}
+    campaigns = {int(c["id"]): c for c in ctx.campaigns(sorted({int(r["campaign_row_id"]) for r in ads.values()}))}
+    return [
+        (campaigns[int(ads[_int(item, "ad_row_id")]["campaign_row_id"])], slot, sitelink)
+        for item in items
+        for slot, sitelink in _href_slots(item)
+    ]
+
+
+def _build_link_choice(ctx: Context) -> dict:
+    """Выбор ref для кампании, которая ещё собирается: ответы на карточки выбора после последнего черновика."""
+    from app import links
+
+    choice = links.link_choice(None)
+    if ctx.chat_id is None:
+        return choice
+    with pool.connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT result FROM ai_actions
+            WHERE chat_id = %s AND tool = 'ask_questions' AND status IN ('done', 'rejected') AND result ? 'link_choice'
+              AND id > COALESCE((
+                  SELECT MAX(id) FROM ai_actions WHERE chat_id = %s AND tool = 'create_campaign' AND status = 'done'
+              ), 0)
+            ORDER BY id
+            """,
+            (ctx.chat_id, ctx.chat_id),
+        ).fetchall()
+    for r in rows:
+        saved = (r["result"] or {}).get("link_choice")
+        saved = saved if isinstance(saved, dict) else {}
+        choice = links.merge_link_choice(
+            choice,
+            own=saved.get("own") if isinstance(saved.get("own"), dict) else None,
+            asked=saved.get("asked") if isinstance(saved.get("asked"), dict) else None,
+        )
+    return choice
+
+
+def _hrefs_in(node) -> list[str]:
+    """Все ссылки (href) в аргументах, на любой глубине."""
+    if isinstance(node, list):
+        return [h for item in node for h in _hrefs_in(item)]
+    if not isinstance(node, dict):
+        return []
+    own = [node["href"].strip()] if isinstance(node.get("href"), str) and node["href"].strip() else []
+    return own + [h for key, value in node.items() if key != "href" for h in _hrefs_in(value)]
+
+
+def _copy_link_guard(ctx: Context, args: dict) -> None:
+    """Копия получает ссылки исходной кампании: ссылку с другим ref в неё не подставляем — ошибка для модели."""
+    from app import actions, links
+
+    base = actions._ws_link_template(ctx.ws) if ctx.ws_id is not None else None
+    hrefs = _hrefs_in(args) if base else []
+    if not hrefs:
+        return
+    own: dict = {}
+    try:
+        own = links.campaign_link_choice(ctx.user_id, int(args.get("campaign_row_id")))["own"]
+    except (TypeError, ValueError, YandexError):
+        pass
+    t = links.with_own(base, own)
+    for href in hrefs:
+        for param, value, current in links.foreign_params(href, t):
+            raise YandexError(
+                "args",
+                f"В ссылке {param}={value}, а у исходной кампании {param}={current}. Копия получает ссылки "
+                f"исходной кампании: передай href без {param} или не передавай совсем, а свой {param} поставь "
+                "копии после создания — set_campaign_ref.",
+            )
+
+
+def _link_card(name: str, found: list[dict]) -> dict:
+    """Карточка выбора: какой ref ставить — из ссылки маркетолога или тот, что сейчас у кампании."""
+    questions, items = [], []
+    for n, f in enumerate(found[:MAX_QUESTIONS], start=1):
+        param, value, current = f["param"], f["value"], f["current"]
+        use = f"{param}={value} — как в ссылке"
+        keep = f"{param}={current} — " + ("как сейчас у кампании" if f["own"] else "как в шаблоне проекта")
+        where = f"кампании {f['name']}" if f["name"] else "новой кампании"
+        source = "у кампании сейчас" if f["own"] else "в шаблоне проекта"
+        questions.append(
+            {
+                "n": n,
+                "key": "",
+                "question": f"В ссылке {param}={value}, а {source} — {param}={current}. Какой ставить в ссылках {where}?",
+                "options": [use, keep],
+                "multiple": False,
+                "remember": False,
+            }
+        )
+        items.append(
+            {
+                "n": n,
+                "campaign_row_id": f["campaign_row_id"],
+                "param": param,
+                "value": value,
+                "current": current,
+                "use": use,
+                "keep": keep,
+            }
+        )
+    return {
+        "understanding": "В ссылке другой ref, чем задан для кампании. Что выберете, то и закреплю за ней: буду ставить "
+        "в её объявления и быстрые ссылки, а проверка ссылок перестанет предлагать другой.",
+        "questions": questions,
+        "answered": [],
+        "link_choice": {"tool": name, "items": items},
+    }
+
+
+def _link_guard(ctx: Context, name: str, args: dict) -> tuple[dict, dict | None]:
+    """Ссылки действия → (аргументы с адресами, которые уйдут в Директ; карточка выбора ref или None).
+
+    Ссылку объявления на чужой сайт сервис заменил бы главной страницей — вместо молчаливой замены модель
+    получает ошибку. Быстрые ссылки на другой сайт не трогаем.
+    """
+    from app import actions, links
+
+    if name in _COPY_TOOLS:
+        _copy_link_guard(ctx, args)
+        return args, None
+    if name not in _LINK_TOOLS:
+        return args, None
+    args = copy.deepcopy(args)
+    spec = args.get("spec") if name == "create_campaign" and isinstance(args.get("spec"), dict) else None
+    if spec is not None:
+        spec.pop("link_params", None)  # выбор маркетолога ставит сервис, а не модель
+    base = actions._ws_link_template(ctx.ws) if ctx.ws_id is not None else None
+    if not base:
+        return args, None
+    try:
+        slots = _link_slots(ctx, name, args)
+    except (YandexError, KeyError, TypeError, ValueError):
+        return args, None  # нет такой группы или объявления — об этом скажет сам инструмент
+    choices: dict[int | None, dict] = {}
+
+    def choice_of(cid: int | None) -> dict:
+        if cid not in choices:
+            choices[cid] = links.campaign_link_choice(ctx.user_id, cid) if cid else _build_link_choice(ctx)
+        return choices[cid]
+
+    found: list[dict] = []
+    for campaign, slot, sitelink in slots:
+        cid = int(campaign["id"]) if campaign else None
+        choice = choice_of(cid)
+        t = links.with_own(base, choice["own"])
+        href = slot["href"].strip()
+        if not links.same_site(href, t):
+            if sitelink:
+                continue
+            raise YandexError(
+                "args",
+                f"Ссылка {href} ведёт не на сайт проекта ({base['host']}): в объявления проекта сервис ставит только "
+                "ссылки на его сайт. Скажи об этом маркетологу — такую ссылку он может поставить сам в Директе, "
+                "либо нужен шаблон ссылки с этим сайтом в настройках проекта.",
+            )
+        for param, value, current in links.foreign_params(href, t):
+            if value.lower() in (v.lower() for v in choice["asked"].get(param, [])):
+                continue
+            if not any((f["campaign_row_id"], f["param"], f["value"].lower()) == (cid, param, value.lower()) for f in found):
+                found.append(
+                    {
+                        "campaign_row_id": cid,
+                        "name": _cname(campaign) if campaign else "",
+                        "param": param,
+                        "value": value,
+                        "current": current,
+                        "own": param in choice["own"],
+                    }
+                )
+        slot["href"] = links.normalize_href(href, t)
+    if found:
+        return args, _link_card(name, found)
+    if spec is not None:
+        choice = choice_of(None)
+        if choice["own"] or choice["asked"]:
+            spec["link_params"] = choice
+    return args, None
+
+
+def _link_picks(link: dict, answers: list[dict]) -> dict[int, str]:
+    """Что выбрано в карточке выбора ref: {номер вопроса: "use" — как в ссылке, "keep" — как сейчас}.
+
+    Вариант могли не нажать, а написать значение своими словами («ставь Telegram») — понимаем и так,
+    если в ответе названо только одно из двух значений.
+    """
+    out: dict[int, str] = {}
+    for item in link.get("items") or []:
+        n = int(item["n"])
+        answer = str((answers[n - 1] if 0 < n <= len(answers) else {}).get("answer") or "")
+        if answer.startswith(item["use"]):
+            out[n] = "use"
+        elif answer.startswith(item["keep"]):
+            out[n] = "keep"
+        else:
+            text = answer.lower()
+            use, keep = str(item["value"]).lower() in text, bool(item["current"]) and str(item["current"]).lower() in text
+            if use != keep:
+                out[n] = "use" if use else "keep"
+    return out
+
+
+def _link_decision(link: dict, picks: dict[int, str] | None) -> tuple[list[str], dict, dict[int, dict]]:
+    """Решения по карточке выбора ref.
+
+    picks=None — маркетолог пропустил карточку: ref остаётся прежним, и больше о нём не спрашиваем.
+    → (что решено — для модели; выбор для собираемой кампании — в результат карточки; выбор для кампаний
+    из Директа {campaign_row_id: выбор} — его сохраняет _save_link_choices).
+    """
+    decided: list[str] = []
+    build: dict = {"own": {}, "asked": {}}
+    saved: dict[int, dict] = {}
+    for item in link.get("items") or []:
+        param, value, current = item["param"], item["value"], item["current"]
+        pick = "keep" if picks is None else picks.get(int(item["n"]))
+        if pick is None:
+            decided.append(
+                f"{param}: маркетолог не выбрал вариант — прочитай его ответ; пока остаётся {param}={current}, "
+                "повторный вызов снова покажет карточку выбора"
+            )
+            continue
+        cid = item.get("campaign_row_id")
+        slot = saved.setdefault(int(cid), {"own": {}, "asked": {}}) if cid else build
+        slot["asked"].setdefault(param, []).append(value)
+        if pick == "use":
+            slot["own"][param] = value
+            if current:
+                slot["asked"][param].append(current)
+            decided.append(f"{param}={value} — закреплён за кампанией, ставь его во все её ссылки")
+        else:
+            decided.append(f"{param}={current} остаётся; {param}={value} из ссылки в эту кампанию не ставим")
+    return decided, build, saved
+
+
+def _save_link_choices(user_id: int, saved: dict[int, dict]) -> None:
+    from app import links
+
+    for cid, slot in saved.items():
+        try:
+            links.save_link_choice(user_id, cid, own=slot["own"] or None, asked=slot["asked"])
+        except YandexError:
+            log.warning("Выбор ref не сохранён: кампании %s уже нет", cid)
+
+
 def _handle_call(ctx: Context, chat_id: int, message_id: int, call: dict) -> int:
     """Выполняет вызов инструмента; возвращает 1, если действие ждёт согласования."""
     name = call["name"]
@@ -8779,8 +10696,12 @@ def _handle_call(ctx: Context, chat_id: int, message_id: int, call: dict) -> int
     if name in ASK_TOOLS:
         try:
             payload = ASK_TOOLS[name](ctx, args)
+            # Таблица, которая повторяет согласованное, до маркетолога не доходит.
+            repeated = _table_guard(ctx, args, payload) if name == "propose_items" else None
         except YandexError as exc:
             return reply({"ok": False, "error": exc.message or exc.code})
+        if repeated is not None:
+            return reply(repeated)
         if name == "ask_questions" and not payload["questions"]:
             return reply(
                 {
@@ -8790,6 +10711,9 @@ def _handle_call(ctx: Context, chat_id: int, message_id: int, call: dict) -> int
                 }
             )
         summary = payload.get("understanding") or payload.get("goal") or payload.get("title") or TOOL_LABELS[name]
+        if name == "propose_items" and _table_held(ctx, args, payload):
+            # Сборка одной доской: таблица ждёт общего согласования, ход идёт дальше.
+            return reply(_hold_table(ctx, chat_id, message_id, call["id"], payload, summary))
         with pool.connection() as conn:
             conn.execute(
                 """
@@ -8804,16 +10728,39 @@ def _handle_call(ctx: Context, chat_id: int, message_id: int, call: dict) -> int
         return reply({"ok": False, "error": f"Нет инструмента {name}"})
     prepare, _execute = WRITE_TOOLS[name]
     try:
+        # В карточку и в выполнение уходит уже номер строки: кампанию могли назвать номером из Директа.
+        args = _resolve_campaign_numbers(target, args)
+        if name in _ARG_EXPANDERS:
+            args = _ARG_EXPANDERS[name](target, args)
+        if name == "create_campaign":
+            _create_guard(target, args)
+        # В карточку идут адреса, которые реально уйдут в Директ; чужой ref — сначала вопрос маркетологу.
+        args, link_card = _link_guard(target, name, args)
         plan = prepare(target, args)
     except YandexError as exc:
         return reply({"ok": False, "error": exc.message or exc.code})
+    if link_card is not None:
+        # Вопрос занимает место действия: ответ маркетолога уйдёт модели результатом этого же вызова.
+        with pool.connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO ai_actions (chat_id, message_id, user_id, tool_call_id, tool, args, summary, category, status, auto)
+                VALUES (%s, %s, %s, %s, 'ask_questions', %s, %s, '', 'pending', FALSE)
+                """,
+                (chat_id, message_id, ctx.user_id, call["id"], Jsonb(link_card), _line(link_card["understanding"], 1000)),
+            )
+        return 1
     changes = _changes(target, name, args)
     # Из общего чата — всегда на согласование: права ИИ задаются в каждом проекте, а здесь их нет.
     auto = not ctx.general and _allowed(ctx.access, plan.categories, plan.change_pct)
+    # Кампанию целиком маркетолог уже согласовал на доске кнопкой «Согласовать и создать черновик»:
+    # второй карточки нет, но это его решение, а не право ИИ действовать самому.
+    agreed = name == "create_campaign" and not auto and not ctx.general and _board_go(target)
+    go = auto or agreed
     stored = {**args, "_diff": changes} if changes else dict(args)
     if ctx.general:
         stored["project_id"] = target.ws_id
-    picks = [] if auto else _picks(target, name, args)
+    picks = [] if go else _picks(target, name, args)
     if picks:
         stored["_items"] = picks
     with pool.connection() as conn:
@@ -8832,12 +10779,12 @@ def _handle_call(ctx: Context, chat_id: int, message_id: int, call: dict) -> int
                 Jsonb(stored),
                 plan.summary[:1000],
                 ",".join(plan.categories),
-                "approved" if auto else "pending",
+                "approved" if go else "pending",
                 auto,
-                auto,
+                go,
             ),
         ).fetchone()
-    if not auto:
+    if not go:
         return 1
     _run_action(ctx, action)
     return 0
@@ -8897,6 +10844,59 @@ def _fallback_followups(chat_id: int) -> None:
         )
 
 
+def _step_errors(chat_id: int, message_id: int) -> dict[str, str]:
+    """Вызовы шага, которые не удались: tool_call_id → текст ошибки."""
+    with pool.connection() as conn:
+        rows = conn.execute(
+            "SELECT tool_call_id, content FROM ai_messages WHERE chat_id = %s AND role = 'tool' AND id > %s",
+            (chat_id, message_id),
+        ).fetchall()
+    out: dict[str, str] = {}
+    for r in rows:
+        try:
+            payload = json.loads(r["content"] or "{}")
+        except ValueError:
+            continue
+        if isinstance(payload, dict) and payload.get("ok") is False:
+            out[r["tool_call_id"] or ""] = str(payload.get("error") or "")
+    return out
+
+
+class _LoopGuard:
+    """Защита захода от хождения по кругу: потолок шагов высокий, а повторять неудачное незачем."""
+
+    def __init__(self) -> None:
+        self.same: dict[tuple[str, str, str], int] = {}
+        self.error_steps = 0
+
+    def stuck(self, calls: list[dict], errors: dict[str, str]) -> str:
+        """Шаг сделан: calls — его вызовы, errors — ошибки по id вызова. → текст остановки или ''."""
+        failed = [(c, errors[c["id"]]) for c in calls if c["id"] in errors]
+        if not failed:
+            self.error_steps = 0
+            return ""
+        for call, error in failed:
+            key = (call["name"], call.get("arguments") or "", error)
+            self.same[key] = self.same.get(key, 0) + 1
+            if self.same[key] >= MAX_SAME_ERROR:
+                return self._text(call, error)
+        if len(failed) < len(calls):
+            self.error_steps = 0
+            return ""
+        self.error_steps += 1
+        if self.error_steps >= MAX_ERROR_STEPS:
+            return self._text(*failed[-1])
+        return ""
+
+    @staticmethod
+    def _text(call: dict, error: str) -> str:
+        label = TOOL_LABELS.get(call["name"], call["name"])
+        return (
+            f"Остановился: «{label}» не проходит несколько раз подряд — {_line(error, 300).rstrip('. ')}. "
+            "Напишите, как поступить, или уточните задачу."
+        )
+
+
 def run_chat(user_id: int, chat_id: int, progress=None) -> dict:
     """Ход агента: выполнить одобренное, затем звать модель, пока она вызывает инструменты."""
     with pool.connection() as conn:
@@ -8952,15 +10952,20 @@ def run_chat(user_id: int, chat_id: int, progress=None) -> dict:
 
         system = {"role": "system", "content": _system_prompt(ctx)}
         tools = GENERAL_TOOLS if ctx.general else TOOLS
+        guard = _LoopGuard()
         for n in range(MAX_STEPS):
             history = _history(chat_id, general=ctx.general, workspace_id=ctx.ws_id, images=vision)
             if not history or (history[-1]["role"] == "assistant" and not history[-1].get("tool_calls")):
                 break
             step(n, "ИИ думает…")
             _touch(chat_id)
-            request = (ai.estimate_tokens([system, *history], tools), len(history))
+            # Сводка сборки — последним сообщением и только в запросе: в чат не пишется и от шага к шагу
+            # меняется, поэтому точка кэша Claude ставится перед ней (volatile_tail).
+            memory = _build_memory(ctx)
+            messages = [system, *history, *([{"role": "user", "content": memory}] if memory else [])]
+            request = (ai.estimate_tokens(messages, tools), len(history))
             try:
-                reply = ai.complete(cfg, [system, *history], tools)
+                reply = ai.complete({**cfg, "volatile_tail": 1 if memory else 0}, messages, tools)
             except YandexError as exc:
                 return _end_with_error(chat_id, exc.message or exc.code, request)
             except Exception:
@@ -8997,13 +11002,19 @@ def run_chat(user_id: int, chat_id: int, progress=None) -> dict:
             if waiting:
                 _set_status(chat_id, "waiting")
                 return {"status": "waiting", "pending": waiting}
+            stuck = guard.stuck(calls, _step_errors(chat_id, message["id"]))
+            if stuck:
+                with pool.connection() as conn:
+                    _insert_message(conn, chat_id, "assistant", stuck)
+                break
         else:
             with pool.connection() as conn:
                 _insert_message(
                     conn,
                     chat_id,
                     "assistant",
-                    "Остановился после нескольких шагов подряд. Напишите «продолжай», если нужно продолжить.",
+                    f"Сделал {MAX_STEPS} шагов подряд и остановился, чтобы не уйти по кругу. "
+                    "Напишите «продолжай», если нужно продолжить.",
                     meta={"followups": FOLLOWUPS_AFTER_STOP},
                 )
     _set_status(chat_id, "idle")
