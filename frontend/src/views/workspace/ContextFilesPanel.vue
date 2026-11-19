@@ -46,9 +46,8 @@
     <template v-if="items.length">
       <div class="ctx-usage">
         <p class="ctx-usage__text">
-          В ИИ уходит <b>{{ num(usage.sent_chars) }}</b> из {{ num(usage.chars) }}
-          {{ plural(usage.chars, 'символа', 'символов', 'символов') }} — около {{ num(usage.tokens) }}
-          {{ plural(usage.tokens, 'токена', 'токенов', 'токенов') }} при каждом вызове модели. Лимит проекта —
+          При каждом ответе ИИ читает <b>{{ num(usage.sent_chars) }}</b> из {{ num(usage.chars) }}
+          {{ plural(usage.chars, 'символа', 'символов', 'символов') }} ваших файлов. Лимит проекта —
           {{ num(usage.limit) }} {{ plural(usage.limit, 'символ', 'символа', 'символов') }}.
         </p>
         <div
@@ -78,9 +77,8 @@
           </div>
           <small class="field-hint">
             От {{ num(limits.prompt_min) }} до {{ num(limits.prompt_max) }}, по умолчанию
-            {{ num(limits.prompt_default) }}. {{ num(limitDraft || 0) }} символов — около
-            {{ num(Math.round((limitDraft || 0) / limits.chars_per_token)) }} токенов в каждом вызове: больше лимит —
-            дороже ответы, а модель с небольшим контекстом (например, YandexGPT) может не вместить разговор.
+            {{ num(limits.prompt_default) }}. Больше лимит — ИИ видит больше из ваших файлов, но остаётся меньше
+            места для самого разговора: длинный чат может не уместиться.
           </small>
         </div>
         <p v-if="usage.cut.length || usage.out.length" class="notice notice--warn ctx-usage__warn">
@@ -144,14 +142,13 @@ const STATES = {
 const EXTENSIONS = ['.txt', '.md', '.zip']
 
 const items = ref([])
-const usage = ref({ limit: 0, chars: 0, sent_chars: 0, tokens: 0, cut: [], out: [] })
+const usage = ref({ limit: 0, chars: 0, sent_chars: 0, cut: [], out: [] })
 const limits = reactive({
   upload_bytes: 5 * 1024 * 1024,
   zip_files: 50,
   prompt_min: 5000,
   prompt_max: 100000,
   prompt_default: 20000,
-  chars_per_token: 3,
 })
 const limitDraft = ref(0)
 const savingLimit = ref(false)
