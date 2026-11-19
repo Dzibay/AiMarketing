@@ -6,9 +6,13 @@ from fastapi import FastAPI
 from app.api.admin import admin_public
 from app.api.admin import router as admin_router
 from app.api.ai import router as ai_router
+from app.api.ai_schedule import router as ai_schedule_router
 from app.api.budget_protection import router as budget_protection_router
+from app.api.cleaning_memory import router as cleaning_memory_router
 from app.api.negative_lists import router as negative_lists_router
 from app.api.overview import router as overview_router
+from app.api.reports import router as reports_router
+from app.api.project_defaults import router as project_defaults_router
 from app.api.site import router as site_router
 from app.api.undo_header import UndoLogHeader
 from app.api.web import router as web_router
@@ -58,8 +62,12 @@ app.include_router(site_router, prefix="/api")
 app.include_router(web_router, prefix="/api")
 app.include_router(overview_router, prefix="/api")
 app.include_router(negative_lists_router, prefix="/api")
+app.include_router(cleaning_memory_router, prefix="/api")
 app.include_router(workspaces_router, prefix="/api")
 app.include_router(budget_protection_router, prefix="/api")
+app.include_router(reports_router, prefix="/api")
+app.include_router(project_defaults_router, prefix="/api")
 app.include_router(ai_router, prefix="/api")
+app.include_router(ai_schedule_router, prefix="/api")
 app.include_router(admin_public, prefix="/api/admin")
 app.include_router(admin_router, prefix="/api/admin")

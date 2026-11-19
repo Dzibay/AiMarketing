@@ -23,7 +23,15 @@ class DigestBody(BaseModel):
 
 @router.get("/overview")
 def web_overview(user_id: int = Depends(require_web_user)) -> dict:
-    return build_overview(user_id, review=True)
+    from app.effects import week_summary
+
+    out = build_overview(user_id, review=True)
+    # «За неделю правки помогли у 5 проектов, хуже — у 1»; нет итогов — строки нет.
+    try:
+        out["effects_week"] = week_summary(user_id)
+    except Exception:  # noqa: BLE001 — строка необязательная, обзор без неё живёт
+        out["effects_week"] = None
+    return out
 
 
 class SnoozeBody(BaseModel):

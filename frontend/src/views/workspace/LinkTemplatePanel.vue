@@ -28,6 +28,7 @@
       </button>
     </form>
     <p v-if="saveError" class="form-error">{{ saveError }}</p>
+    <DefaultsAsk kind="url_template" />
     <dl v-if="split" class="link-split">
       <dt>В объявлении</dt>
       <dd><code>{{ split.ad }}</code></dd>
@@ -153,6 +154,8 @@ import { pushToast } from '../../composables/useToasts'
 import { undoAction } from '../../composables/useUndo'
 import { plural } from '../../utils/format'
 import { useWs } from './context'
+import DefaultsAsk from '../../components/DefaultsAsk.vue'
+import { offerDefaults } from '../../composables/useDefaultsAsk'
 
 const { ws, patch } = useWs()
 
@@ -244,6 +247,7 @@ async function save() {
     const updated = await wsApi.update(ws.value.id, { url_template: template.value })
     patch(updated)
     pushToast('Шаблон сохранён', 'ok')
+    if (updated.url_template) offerDefaults(updated.id, 'url_template')
     await load()
   } catch (err) {
     saveError.value = errorText(err)

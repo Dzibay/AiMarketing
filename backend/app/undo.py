@@ -273,6 +273,13 @@ def _negative_list_links(user_id: int, args: dict) -> dict:
     return restore_links(user_id, int(args["list_id"]), args.get("campaigns") or {})
 
 
+def _negative_list_phrases(user_id: int, args: dict) -> dict:
+    """Убрать из общего списка фразы, добавленные из чистки; кампании списка догонит «Догнать N кампаний»."""
+    from app.shared_cleaning import remove_list_phrases
+
+    return remove_list_phrases(user_id, int(args["list_id"]), args.get("remove") or [])
+
+
 OPS: dict[str, Callable[[int, dict], dict]] = {
     "campaigns_action": _campaigns_action,
     "campaign_budgets": _campaign_budgets,
@@ -294,6 +301,7 @@ OPS: dict[str, Callable[[int, dict], dict]] = {
     "adgroup_regions": _adgroup_regions,
     "campaign_group_regions": _campaign_group_regions,
     "negative_list_links": _negative_list_links,
+    "negative_list_phrases": _negative_list_phrases,
 }
 
 
@@ -427,6 +435,10 @@ def describe_step(user_id: int, step: dict) -> str:
         if back:
             parts.append(f"вернуть как было в кампаниях {_names(user_id, 'direct_campaigns', 'name', back)}")
         return f"Список минус-фраз «{a.get('name') or ''}»: " + "; ".join(parts)
+    if op == "negative_list_phrases":
+        words = ", ".join(f"«{p}»" for p in (a.get("remove") or [])[:5])
+        more = len(a.get("remove") or []) - 5
+        return f"Убрать из списка «{a.get('name') or ''}» фразы {words}" + (f" и ещё {more}" if more > 0 else "")
     if op == "query_labels_restore":
         return f"Вернуть разметку запросов: {len(a.get('labels') or [])}"
     return str(op)

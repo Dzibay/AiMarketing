@@ -124,6 +124,13 @@ const router = createRouter({
           meta: neutral('settings', 'Настройки'),
         },
         {
+          path: 'cabinet/settings/projects',
+          name: 'settings-projects',
+          component: () => import('../views/SettingsView.vue'),
+          props: { tab: 'projects' },
+          meta: neutral('settings', 'Настройки'),
+        },
+        {
           path: 'cabinet/plan',
           name: 'plan',
           component: () => import('../views/PlanView.vue'),
@@ -182,6 +189,12 @@ const router = createRouter({
               path: 'analytics',
               name: 'ws-analytics',
               component: () => import('../views/workspace/WsAnalytics.vue'),
+              meta: proj('analytics'),
+            },
+            {
+              path: 'report',
+              name: 'ws-report',
+              component: () => import('../views/workspace/WsReport.vue'),
               meta: proj('analytics'),
             },
             {

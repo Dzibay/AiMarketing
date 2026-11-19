@@ -101,10 +101,23 @@ class SettingsPatchBody(BaseModel):
     changes: dict = Field(default_factory=dict)
 
 
+class CopyReplaceBody(BaseModel):
+    """Замены в копии: пустое поле — по регионам и проектам; skip — ключи снятых строк."""
+
+    from_city: str | None = Field(default=None, max_length=100)
+    to_city: str | None = Field(default=None, max_length=100)
+    from_site: str | None = Field(default=None, max_length=300)
+    to_site: str | None = Field(default=None, max_length=300)
+    skip: list[str] = Field(default_factory=list, max_length=20_000)
+
+
 class DuplicateBody(BaseModel):
     target_account_id: int | None = None
     name: str = ""
     target_workspace_id: int | None = None
+    region_ids: list[int] | None = Field(default=None, max_length=500)
+    replace: CopyReplaceBody | None = None
+    copy_shared_sets: bool = False
 
 
 class WsBulkBody(BaseModel):
@@ -813,14 +826,8 @@ def ws_set_campaign_budget(
         raise _http(exc) from exc
 
 
-@router.post("/{workspace_id}/campaigns/{campaign_row_id}/duplicate")
-def ws_duplicate_campaign(
-    workspace_id: int,
-    campaign_row_id: int,
-    body: DuplicateBody,
-    user_id: int = Depends(require_web_user),
-) -> dict:
-    """Копия — задачей: структура большой кампании копируется минутами."""
+def _duplicate_target(user_id: int, workspace_id: int, campaign_row_id: int, body: DuplicateBody) -> int:
+    """Проверки окна «Копия»: кампания в проекте, проект и кабинет копии свои, регионы известны."""
     _ws_campaign(user_id, workspace_id, campaign_row_id)
     target_ws = body.target_workspace_id or workspace_id
     _ws(user_id, target_ws)
@@ -832,12 +839,66 @@ def ws_duplicate_campaign(
             ).fetchone()
         if owned is None:
             raise HTTPException(status_code=404, detail="not-found")
+    if body.region_ids is not None:
+        from app import geo
+
+        if not any(r > 0 for r in body.region_ids):
+            raise _http(YandexError("args", "Нужен хотя бы один регион показа"))
+        unknown = geo.unknown_regions(user_id, body.region_ids)
+        if unknown:
+            raise _http(YandexError("args", f"Неизвестные регионы: {unknown[:5]}"))
+    return target_ws
+
+
+@router.post("/{workspace_id}/campaigns/{campaign_row_id}/duplicate/preview")
+def ws_duplicate_preview(
+    workspace_id: int,
+    campaign_row_id: int,
+    body: DuplicateBody,
+    user_id: int = Depends(require_web_user),
+) -> dict:
+    """Окно «Копия», шаг «Замены»: упоминания старого города и сайта, корректировки ставок, наборы минус-фраз."""
+    from app import campaign_copy
+
+    target_ws = _duplicate_target(user_id, workspace_id, campaign_row_id, body)
+    source = _ws(user_id, workspace_id)
+    target = source if target_ws == workspace_id else _ws(user_id, target_ws)
+    try:
+        return campaign_copy.preview(
+            user_id,
+            campaign_row_id,
+            target_account_id=body.target_account_id,
+            source_ws=source,
+            target_ws=target,
+            region_ids=body.region_ids,
+            replace=body.replace.model_dump() if body.replace else None,
+        )
+    except YandexError as exc:
+        raise _http(exc) from exc
+
+
+@router.post("/{workspace_id}/campaigns/{campaign_row_id}/duplicate")
+def ws_duplicate_campaign(
+    workspace_id: int,
+    campaign_row_id: int,
+    body: DuplicateBody,
+    user_id: int = Depends(require_web_user),
+) -> dict:
+    """Копия — задачей: структура большой кампании копируется минутами."""
+    target_ws = _duplicate_target(user_id, workspace_id, campaign_row_id, body)
     payload = {
         "campaign_row_id": campaign_row_id,
         "target_account_id": body.target_account_id,
         "name": body.name.strip(),
         "workspace_id": target_ws,
     }
+    # Новые поля — только когда заданы: прежние задачи и их проверки остаются как были.
+    if body.region_ids:
+        payload["region_ids"] = body.region_ids
+    if body.replace is not None:
+        payload["replace"] = body.replace.model_dump()
+    if body.copy_shared_sets:
+        payload["copy_shared_sets"] = True
     # Без повторов: упавшая на середине копия не должна создать вторую кампанию.
     job = submit("duplicate_campaign", user_id, payload, priority=PRIORITY_USER, max_attempts=1)
     return {"job": public_job(job)}

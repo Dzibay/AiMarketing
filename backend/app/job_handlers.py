@@ -172,7 +172,15 @@ def _apply_negative_list(user_id: int, payload: dict, progress: Progress) -> dic
     ids = payload.get("campaign_row_ids")
     if not isinstance(ids, list):
         raise YandexError("payload", "В задаче нет campaign_row_ids")
-    return apply_negative_list(user_id, _int(payload, "list_id"), ids, progress)
+    only_add = payload.get("only_add")
+    return apply_negative_list(
+        user_id,
+        _int(payload, "list_id"),
+        ids,
+        progress,
+        catch_up=bool(payload.get("catch_up")),
+        only_add=[str(p) for p in only_add] if isinstance(only_add, list) else None,
+    )
 
 
 def _plan_reminder(user_id: int, payload: dict, progress: Progress) -> dict:
@@ -196,6 +204,9 @@ def _duplicate_campaign(user_id: int, payload: dict, progress: Progress) -> dict
             name=payload.get("name") or None,
             workspace_id=int(workspace_id) if workspace_id else None,
             progress=progress,
+            region_ids=[int(r) for r in payload.get("region_ids") or []] or None,
+            replace=payload.get("replace"),
+            copy_shared_sets=bool(payload.get("copy_shared_sets")),
         )
 
 
@@ -204,7 +215,20 @@ def _ai_chat(user_id: int, payload: dict, progress: Progress) -> dict:
 
     chat_id = _int(payload, "chat_id")
     result = run_chat(user_id, chat_id, progress)
-    _notify_answer(user_id, chat_id, result)
+    from app.ai_review import pending_summary_chat
+
+    # Разбор недели по расписанию сообщит одной сводкой, без «ИИ ответил» о каждом проекте.
+    if not pending_summary_chat(chat_id):
+        _notify_answer(user_id, chat_id, result)
+    else:
+        # Но карточки «Решать из Telegram» нужны и его предложениям: кнопки только спрашивают,
+        # Директ меняется лишь после «Да, выполнить» пользователя.
+        try:
+            from app.telegram_decisions import offer_chat
+
+            offer_chat(user_id, chat_id)
+        except Exception:  # noqa: BLE001 — карточки в Telegram не должны ронять ход ИИ
+            log.exception("Telegram: карточки предложений чата %s", chat_id)
     return result
 
 
@@ -225,6 +249,14 @@ def _notify_answer(user_id: int, chat_id: int, result: dict) -> None:
     ws_id = chat["workspace_id"]
     waiting = (result or {}).get("status") == "waiting"
     text = " ".join(((last or {}).get("content") or "").split())
+    # «Решать из Telegram»: карточки предложений с кнопками вместо общего «ИИ ждёт решения».
+    try:
+        from app.telegram_decisions import offer_chat
+
+        cards = offer_chat(user_id, chat_id)
+    except Exception:  # noqa: BLE001 — карточки в Telegram не должны ронять ход ИИ
+        log.exception("Telegram: карточки предложений чата %s", chat_id)
+        cards = 0
     notify(
         user_id,
         "ai_answer",
@@ -233,6 +265,7 @@ def _notify_answer(user_id: int, chat_id: int, result: dict) -> None:
         link=f"/w/{ws_id}/chat/{chat_id}" if ws_id else f"/cabinet/chat/{chat_id}",
         workspace_id=ws_id,
         dedup_key=f"ai_answer:{chat_id}",
+        telegram_off=bool(cards),
     )
 
 
@@ -240,11 +273,25 @@ def _notify_signals(user_id: int, payload: dict, progress: Progress) -> dict:
     return {"sent": notify_signals(user_id)}
 
 
+def _ai_scheduled_review(user_id: int, payload: dict, progress: Progress) -> dict:
+    """Разбор недели по расписанию (app.ai_review): запуск по проектам, потом — одна сводка."""
+    from app.ai_review import run_scheduled
+
+    return run_scheduled(user_id, str(payload.get("week") or ""))
+
+
 def _urgent_check(user_id: int, payload: dict, progress: Progress) -> dict:
     """Ежечасная проверка срочного: новые события и отложенный на утро Telegram."""
     from app.urgent import run
 
     return run(user_id)
+
+
+def _compute_effects(user_id: int, payload: dict, progress: Progress) -> dict:
+    """Итог правок через 7 и 14 дней (app.effects); стало хуже — запись в колокольчике."""
+    from app.effects import compute_for_user
+
+    return compute_for_user(user_id)
 
 
 LOAD_KINDS = ("load_account", "load_counter", "sync_connection")
@@ -308,6 +355,12 @@ def _brief_draft(user_id: int, payload: dict, progress: Progress) -> dict:
     return draft_brief(user_id, {**payload, "workspace_id": _int(payload, "workspace_id")}, progress)
 
 
+def _report_comment(user_id: int, payload: dict, progress: Progress) -> dict:
+    from app.reports import ai_comment
+
+    return ai_comment(user_id, {**payload, "workspace_id": _int(payload, "workspace_id")}, progress)
+
+
 def _bulk_budget(user_id: int, payload: dict, progress: Progress) -> dict:
     from app.budgets import bulk_budget
 
@@ -334,7 +387,23 @@ def _undo_action(user_id: int, payload: dict, progress: Progress) -> dict:
 
     # log_ids — несколько записей разом: «Вернуть как было» у предложения ИИ или «Отменить» у задачи.
     if payload.get("log_ids"):
-        return run_undo_group(user_id, payload["log_ids"], progress)
+        if not payload.get("telegram"):
+            return run_undo_group(user_id, payload["log_ids"], progress)
+        # «Да, вернуть» из Telegram: итог — в том же сообщении бота.
+        from app.plain_errors import plain_error
+        from app.telegram_decisions import undo_finished
+
+        try:
+            result = run_undo_group(user_id, payload["log_ids"], progress)
+        except YandexError as exc:
+            undo_finished(payload["telegram"], error=plain_error(exc.code, exc.message))
+            raise
+        except Exception:
+            # Иначе в сообщении навсегда осталось бы «Возвращаю как было…».
+            undo_finished(payload["telegram"], error="сбой при откате — проверьте в «Истории»")
+            raise
+        undo_finished(payload["telegram"], result)
+        return result
     return run_undo(user_id, _int(payload, "log_id"), progress)
 
 
@@ -411,6 +480,7 @@ HANDLERS: dict[str, Handler] = {
     "classify_all_queries": _classify_all_queries,
     "apply_query_decisions": _apply_query_decisions,
     "brief_draft": _brief_draft,
+    "report_comment": _report_comment,
     "undo_action": _undo_action,
     "bulk_budget": _bulk_budget,
     "slice_report": _slice_report,
@@ -424,6 +494,8 @@ HANDLERS: dict[str, Handler] = {
     "plan_reminder": _plan_reminder,
     "notify_signals": _notify_signals,
     "urgent_check": _urgent_check,
+    "compute_effects": _compute_effects,
+    "ai_scheduled_review": _ai_scheduled_review,
 }
 
 

@@ -113,6 +113,8 @@
               <span v-if="moreCampaigns(a)">и ещё {{ moreCampaigns(a) }}</span>
               <span v-if="expert && summaryLine(a)">{{ summaryLine(a) }}</span>
             </small>
+            <!-- Итог через 7 и 14 дней: «Цена заявки −18 % за 7 дней» или «Мало данных». -->
+            <p v-if="a.effect && !a.undone_at" class="hrow__effect"><EffectLine :effect="a.effect" /></p>
 
             <div v-if="open.has(a.id)" :id="`hmore-${a.id}`" class="hrow__more">
               <p v-if="expert && a.cut" class="hrow__cut">
@@ -240,6 +242,7 @@ import {
   X,
 } from '@lucide/vue'
 import ActionWho from './ActionWho.vue'
+import EffectLine from './EffectLine.vue'
 import ExpertHint from './ExpertHint.vue'
 import EmptyState from './ui/EmptyState.vue'
 import PageHeader from './ui/PageHeader.vue'
@@ -602,6 +605,9 @@ onMounted(async () => {
 }
 .hrow__meta a {
   color: var(--muted);
+}
+.hrow__effect {
+  margin: 4px 0 0;
 }
 /* Кампания в строке — ссылкой; длинное название не раздвигает строку. */
 .hrow__camp {

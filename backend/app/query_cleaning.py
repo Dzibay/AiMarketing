@@ -914,6 +914,12 @@ def memory_examples(workspace_id: int, limit_each: int = EXAMPLES_EACH) -> dict[
                 """,
                 (workspace_id, verdict, KEYWORD_QUOTED_REASON, limit_each),
             ).fetchall()
+    # Память «для всех проектов» — после решений самого проекта и без того, что он отметил целевым.
+    from app.shared_cleaning import shared_examples
+
+    have = {(r["negative_phrase"] or "").lower() for r in out.get("negative") or []}
+    extra = [e for e in shared_examples(workspace_id, limit_each) if e["negative_phrase"].lower() not in have]
+    out["negative"] = list(out.get("negative") or []) + extra[: max(limit_each - len(out.get("negative") or []), 0)]
     return out
 
 
@@ -929,8 +935,9 @@ def examples_prompt(examples: dict[str, list[dict]]) -> str:
 # --- Разметка: правила и ИИ ---------------------------------------------------------------------
 
 
-def _memory_rules(workspace_id: int) -> list[tuple[str, list[str], str, str]]:
-    """Подтверждённые минус-фразы проекта → (фраза, основы, уровень, исходный запрос)."""
+def _memory_rules(workspace_id: int) -> list[tuple]:
+    """Подтверждённые минус-фразы проекта → (фраза, основы, уровень, исходный запрос); за ними — память
+    «для всех проектов» пятым полем "shared" (слабее: проверяется после проектной, целевые проекта не трогает)."""
     with pool.connection() as conn:
         rows = conn.execute(
             """
@@ -941,7 +948,10 @@ def _memory_rules(workspace_id: int) -> list[tuple[str, list[str], str, str]]:
             """,
             (workspace_id,),
         ).fetchall()
-    return [(r["negative_phrase"], stems(r["negative_phrase"]), r["level"], r["query"]) for r in rows]
+    own = [(r["negative_phrase"], stems(r["negative_phrase"]), r["level"], r["query"]) for r in rows]
+    from app.shared_cleaning import shared_rules
+
+    return own + shared_rules(workspace_id)
 
 
 def _brief_rules(brief: dict) -> list[tuple[str, list[str]]]:
@@ -966,8 +976,18 @@ def rule_label(row: dict, memory, brief_rules, negatives: dict) -> dict | None:
             "source": "direct",
             "reason": f"Уже отсекается минус-фразой «{already[0]}»",
         }
-    for phrase, neg, level, query in memory:
+    for rule in memory:
+        phrase, neg, level, query = rule[:4]
         if blocks_stems(neg, query_stems):
+            if len(rule) > 4 and rule[4] == "shared":
+                return {
+                    "verdict": "negative",
+                    "negative_phrase": phrase,
+                    "level": level,
+                    "source": "memory",
+                    "reason": f"Вы минусуете «{phrase}» во всех проектах",
+                    "_shared": True,
+                }
             return {
                 "verdict": "negative",
                 "negative_phrase": phrase,
@@ -1130,8 +1150,15 @@ def _rule_split(user_id: int, workspace_id: int, brief: dict, rows: list[dict]) 
     brief_rules = _brief_rules(brief)
     labels: list[dict] = []
     rest: list[dict] = []
+    index = None
     for r in rows:
         hit = rule_label(r, memory, brief_rules, negatives)
+        if hit and hit.pop("_shared", False):
+            # Общая память не знает ключей этого проекта: задевает ключи кампании запроса — решать ИИ или вам.
+            if index is None:
+                index = _keyword_index(user_id, campaign_ids)
+            if find_conflicts(hit["negative_phrase"], hit["level"], r, index):
+                hit = None
         if hit:
             labels.append({**hit, "query_norm": r["norm"], "query": r["query"]})
         else:

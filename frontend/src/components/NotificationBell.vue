@@ -19,7 +19,7 @@
         <small>{{ summary }}</small>
       </div>
       <div class="nbell__list">
-        <NotificationItems :items="shown" :loading="loading" :error="error" @pick="pick" @retry="retry" />
+        <NotificationItems :items="shown" :loading="loading" :error="error" @pick="pick" @retry="retry" @undo="undo" />
       </div>
       <div class="nbell__footer">
         <RouterLink to="/cabinet/settings/notifications" @click="open = false">Что присылать и куда</RouterLink>
@@ -27,7 +27,7 @@
     </div>
 
     <UiSheet :open="open && sheet" title="Уведомления" @close="open = false">
-      <NotificationItems :items="shown" :loading="loading" :error="error" @pick="pick" @retry="retry" />
+      <NotificationItems :items="shown" :loading="loading" :error="error" @pick="pick" @retry="retry" @undo="undo" />
       <template #footer>
         <RouterLink class="nbell__sheet-link" to="/cabinet/settings/notifications" @click="open = false">
           Что присылать и куда
@@ -42,6 +42,7 @@ import { computed, defineComponent, h, onBeforeUnmount, onMounted, ref } from 'v
 import { RouterLink, useRouter } from 'vue-router'
 import {
   Bell,
+  CalendarCheck,
   CloudOff,
   CreditCard,
   Gauge,
@@ -56,6 +57,7 @@ import {
 import { errorText, notifyApi } from '../api/web'
 import { useHelp } from '../composables/useHelp'
 import { setNotifCount, usePending } from '../composables/usePending'
+import { openUndo } from '../composables/useUndo'
 import { pushToast } from '../composables/useToasts'
 import { openSupport } from '../composables/useSupport'
 import { useViewport } from '../composables/useViewport'
@@ -161,6 +163,12 @@ async function retry(item) {
   }
 }
 
+// «После правки стало хуже»: «Вернуть как было» открывает общее окно отката по записи журнала.
+function undo(item) {
+  open.value = false
+  openUndo(item.undo.log_id)
+}
+
 function onDocClick(event) {
   if (open.value && root.value && !root.value.contains(event.target) && !event.target.closest?.('.ui-sheet')) {
     open.value = false
@@ -174,10 +182,12 @@ onBeforeUnmount(() => document.removeEventListener('click', onDocClick))
 const ICONS = {
   urgent: Siren,
   ai_answer: MessageSquare,
+  ai_review: CalendarCheck,
   signal: TrendingDown,
   rule: Zap,
   load_error: CloudOff,
   operation: TriangleAlert,
+  effect: TrendingDown,
   limit: Gauge,
   plan: CreditCard,
   support: LifeBuoy,
@@ -187,7 +197,7 @@ const ICONS = {
 /** Список записей — общий для выпадающего окна и шторки. */
 const NotificationItems = defineComponent({
   props: { items: Array, loading: Boolean, error: String },
-  emits: ['pick', 'retry'],
+  emits: ['pick', 'retry', 'undo'],
   setup(p, { emit }) {
     return () => {
       if (p.error) return h('p', { class: 'nbell__empty is-error' }, p.error)
@@ -231,6 +241,15 @@ const NotificationItems = defineComponent({
                       onClick: () => emit('retry', item),
                     },
                     item.retry.label,
+                  ),
+                ])
+              : null,
+            item.undo
+              ? h('div', { class: 'nbell__retry' }, [
+                  h(
+                    'button',
+                    { type: 'button', class: 'btn btn--ghost btn--sm', onClick: () => emit('undo', item) },
+                    item.undo.label,
                   ),
                 ])
               : null,

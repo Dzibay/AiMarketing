@@ -177,6 +177,8 @@ export const wsApi = {
   campaignBudget: (id, cid) => request(`${WS(id)}/campaigns/${cid}/budget`),
   setCampaignBudget: (id, cid, payload) => post(`${WS(id)}/campaigns/${cid}/budget`, payload),
   duplicate: (id, cid, payload, onProgress) => runJob(`${WS(id)}/campaigns/${cid}/duplicate`, payload, onProgress),
+  // Окно «Копия», шаг «Замены»: старый город и сайт в текстах, корректировки ставок, наборы минус-фраз.
+  duplicatePreview: (id, cid, payload) => post(`${WS(id)}/campaigns/${cid}/duplicate/preview`, payload),
   moderate: (id, cid) => post(`${WS(id)}/campaigns/${cid}/moderate`),
   actions: (id, params = {}) => request(`${WS(id)}/actions${query(params)}`),
   rules: (id) => request(`${WS(id)}/rules`),
@@ -216,9 +218,9 @@ export const notifyApi = {
   read: (payload) => request('/api/web/notifications/read', { method: 'POST', body: JSON.stringify(payload) }),
   /** «Повторить для оставшихся» / «Повторить» у записи о сбое операции → { job }. */
   retry: (id) => request(`/api/web/notifications/${id}/retry`, { method: 'POST' }),
-  /** { events: [{ kind, label, cabinet, telegram }], telegram_available, telegram_linked }. */
+  /** { events: [{ kind, label, cabinet, telegram }], telegram_available, telegram_linked, telegram_decide }. */
   settings: () => request('/api/web/notifications/settings'),
-  /** { kind: { cabinet?, telegram? } } → те же настройки. */
+  /** { kind: { cabinet?, telegram? } } и/или { telegram_decide: bool } → те же настройки. */
   saveSettings: (changes) =>
     request('/api/web/notifications/settings', { method: 'PATCH', body: JSON.stringify(changes) }),
 }
@@ -265,6 +267,44 @@ export const protectApi = {
   /** { items: [{ workspace_id, name, client_name, target_cpa_rub, checks }], protected, total, allowed } */
   plan: () => request('/api/web/budget-protection/all'),
   applyAll: (workspaceIds) => post('/api/web/budget-protection/all', { workspace_ids: workspaceIds }),
+}
+
+/** Разбор недели по расписанию (Настройки → ИИ). */
+export const aiScheduleApi = {
+  /** { enabled, weekday, hour, scope, workspace_ids, next_run_at, last_run_at, projects, ai_ready, unlimited, per_project_percent } */
+  get: () => request('/api/web/ai-schedule'),
+  /** payload: { enabled, weekday?, hour?, scope?, workspace_ids? } → то же, что get. */
+  set: (payload) => put('/api/web/ai-schedule', payload),
+}
+
+/** «Для новых проектов» (общие настройки) и «Взять из проекта…» (настройки проекта). */
+export const defaultsApi = {
+  /** { defaults: { url_template, model_class, ai_access, kpi, budget_protection }, ai_categories, default_ai_access, protection, protection_allowed } */
+  get: () => request('/api/web/me/project-defaults'),
+  /** Меняется только присланное; null — «не задавать». */
+  save: (patch) => put('/api/web/me/project-defaults', patch),
+  /** «Сделать так по умолчанию?»: kinds — url_template | model_class | ai_access | kpi | budget_protection. */
+  asDefaults: (wsId, kinds) => post(`${WS(wsId)}/as-defaults`, { kinds }),
+  /** { source: { id, name }, items: [{ kind, label, available, note, before, after, same }] } */
+  copyPreview: (wsId, sourceId) => request(`${WS(wsId)}/copy-from/${sourceId}`),
+  /** { workspace, applied: [{ kind, label }], skipped: [{ kind, label, reason }] } */
+  copyApply: (wsId, sourceId, kinds) => post(`${WS(wsId)}/copy-from`, { source_id: sourceId, kinds }),
+}
+
+/** «Отчёт клиенту» за месяц: данные, план и комментарий, «готово», оформление (логотип, контакты). */
+export const reportApi = {
+  /** { month, month_label, prev_label, totals, by_day, prev_by_day, campaigns, done, plan, comment, sections, section_list, done_at, brand } */
+  get: (wsId, month = '') => request(`${WS(wsId)}/report${query({ month })}`),
+  /** payload: { month, plan?, comment?, sections? } */
+  save: (wsId, payload) => put(`${WS(wsId)}/report`, payload),
+  done: (wsId, month, done = true) => post(`${WS(wsId)}/report/done`, { month, done }),
+  /** Черновик комментария ИИ задачей → { comment, usage }. Тратит лимит, ничего не сохраняет. */
+  aiComment: (wsId, month, onProgress) => runJob(`${WS(wsId)}/report/ai-comment`, { month }, onProgress),
+  /** «Отчёты за октябрь: готово 3 из 9» → { month, month_name, done, total, items: [{ workspace_id, name, done }] } */
+  status: (month = '') => request(`/api/web/reports/status${query({ month })}`),
+  saveBrand: (payload) => put('/api/web/report-brand', payload),
+  setLogo: (data) => put('/api/web/report-brand/logo', { data }),
+  dropLogo: () => del('/api/web/report-brand/logo'),
 }
 
 /** ИИ-ассистент: общие модели сервиса, шкала лимита, чаты проекта, согласование действий. */
@@ -621,6 +661,21 @@ export const webApi = {
     }),
   negativeApply: (id, campaignRowIds, onProgress) =>
     runJob(`/api/web/negative-lists/${id}/apply`, { campaign_row_ids: campaignRowIds }, onProgress),
+  /** «Догнать N кампаний»: только отставшие кампании списка, остальные привязки не трогаем. */
+  negativeCatchUpPreview: (id) => post(`/api/web/negative-lists/${id}/catch-up/preview`),
+  negativeCatchUp: (id, campaignRowIds, onProgress) =>
+    runJob(`/api/web/negative-lists/${id}/catch-up`, { campaign_row_ids: campaignRowIds }, onProgress),
+  /** Чистка «В общий список …»: что будет (ничего не меняет) и отправка — фразы в список, затем «догнать». */
+  negativeFromQueriesPreview: (id, payload) => post(`/api/web/negative-lists/${id}/from-queries/preview`, payload),
+  negativeFromQueries: async (id, payload, onProgress) => {
+    const res = await post(`/api/web/negative-lists/${id}/from-queries`, payload)
+    const applied = res.job ? await waitJob(res.job, onProgress) : null
+    return { ...res.result, applied }
+  },
+  /** Память чистки «для всех проектов». */
+  cleaningMemory: () => request('/api/web/cleaning-memory'),
+  addCleaningMemory: (payload) => post('/api/web/cleaning-memory', payload),
+  removeCleaningMemory: (ids) => post('/api/web/cleaning-memory/remove', { ids }),
 }
 
 export const ERRORS = {
@@ -740,6 +795,7 @@ export const JOB_LABELS = {
   classify_all_queries: 'Разметка запросов всех проектов',
   apply_query_decisions: 'Применение решений по запросам',
   brief_draft: 'Черновик брифа по сайту',
+  report_comment: 'Комментарий к отчёту',
   undo_action: 'Откат действия',
   bulk_budget: 'Бюджеты и цена цели',
   slice_report: 'Отчёт по срезу',

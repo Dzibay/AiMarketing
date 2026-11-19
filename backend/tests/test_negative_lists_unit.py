@@ -1,6 +1,6 @@
 """Общие списки минус-фраз без БД: разбор ввода, лимиты Директа, план изменений кампании."""
 
-from app.negative_lists import negatives_length, parse_phrases, phrase_key, phrase_problems, plan_campaign
+from app.negative_lists import negatives_length, parse_phrases, phrase_key, phrase_problems, plan_campaign, plan_only_add
 
 
 def _keys(phrases):
@@ -62,3 +62,12 @@ def test_nothing_to_do():
     plan = plan_campaign(["скачать"], ["Скачать"], ["скачать"], set())
     assert not plan["changed"]
     assert plan["final"] == ["скачать"]
+
+
+def test_plan_only_add_adds_confirmed_phrases_and_removes_nothing():
+    # В списке убрали «скачать» и добавили «торрент», но подтвердили только «вакансии» из чистки.
+    plan = plan_only_add(["скачать", "Вакансии", "отзывы"], ["вакансии", "мечты"], ["скачать"])
+    assert plan["add"] == ["мечты"] and plan["remove"] == []
+    assert plan["final"] == ["скачать", "Вакансии", "отзывы", "мечты"]
+    assert plan["owned"] == ["скачать", "мечты"] and plan["changed"]
+    assert not plan_only_add(["мечты"], ["Мечты"], [])["changed"]

@@ -101,6 +101,28 @@ def _enqueue_urgent() -> None:
             submit("urgent_check", user_id)
 
 
+def _enqueue_effects() -> None:
+    """Помогла ли правка: итоги через 7 и 14 дней (app.effects) — у кого есть правки без итога."""
+    from app.effects import users_to_check
+
+    active = active_user_ids()
+    for user_id in users_to_check():
+        if user_id in active:
+            submit("compute_effects", user_id)
+
+
+def _enqueue_ai_reviews() -> None:
+    """Разбор недели по расписанию (app.ai_review): кому пора начинать и чьи запуски ждут сводки.
+
+    Только у тех, кто сам включил разбор, и с действующей подпиской; повтор той же недели невозможен."""
+    from app.ai_review import due, open_runs
+
+    active = active_user_ids()
+    for user_id, week in [*due(), *open_runs()]:
+        if user_id in active:
+            submit("ai_scheduled_review", user_id, {"week": week}, max_attempts=1)
+
+
 def _sync_payments() -> None:
     """Сверка с ЮKassa: на случай, если уведомление не дошло, и чтобы подтянуть возвраты."""
     from app.payments import sync_open
@@ -163,6 +185,10 @@ SCHEDULES: dict[str, tuple[int, Callable[[], None]]] = {
     "plan_reminders": (3600, _enqueue_reminders),
     "signals": (6 * 3600, _enqueue_signals),
     "urgent": (3600, _enqueue_urgent),
+    # Итог правок: раз в сутки (окна считаются, когда статистика загружена до их конца).
+    "effects": (86400, _enqueue_effects),
+    # Разбор недели: пора ли начинать и ответили ли чаты — сводка уходит в течение 10 минут после ответов.
+    "ai_reviews": (600, _enqueue_ai_reviews),
     "payments": (600, _sync_payments),
     "support_emails": (300, _support_emails),
     "alerts": (300, _check_alerts),

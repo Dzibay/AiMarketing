@@ -54,6 +54,9 @@ OPERATIONS: dict[str, dict] = {
     "ads_ab": {"title": "Новые объявления для A/B", "page": "/w/{ws}/ad-stats", "retry": None},
     "fix_links": {"title": "Ссылки по шаблону сайта", "page": "/w/{ws}/campaigns", "retry": "again"},
     "brief_draft": {"title": "Черновик брифа", "page": "/w/{ws}/settings", "retry": "again"},
+    # Без «Повторить»: текст ИИ не сохраняется задачей, его забирает открытая страница — повтор из колокольчика
+    # потратил бы лимит впустую. Запись ведёт на отчёт, там кнопка ИИ.
+    "report_comment": {"title": "Комментарий к отчёту", "page": "/w/{ws}/report", "retry": None},
     "undo_action": {"title": "Возврат изменений", "page": "/cabinet/history", "retry": None},
     "sync_campaign_structure": {"title": "Обновление кампании", "page": "/cabinet/campaigns", "retry": "again"},
     "sync_search_queries": {"title": "Загрузка поисковых запросов", "page": "/cabinet/campaigns", "retry": "again"},

@@ -77,7 +77,11 @@ def test_format_rule_alert():
     )
     assert "CPA" in text
     assert "Camp A" in text
-    assert "pause" in text
+    # Без кодов действий и «dry-run/auto» — словами.
+    assert "сработало: остановило 1 из 1" in text
+    assert "pause" not in text and "dry-run" not in text and "auto" not in text
+    dry = format_rule_alert(rule_name="CPA", action="set_bid", dry_run=True, matched=[{"name": "A"}], applied=0)
+    assert "режиме проверки" in dry and "set_bid" not in dry
 
 
 def test_rule_reason_rubles():

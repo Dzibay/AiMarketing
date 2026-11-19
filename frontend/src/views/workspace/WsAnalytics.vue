@@ -1,4 +1,7 @@
 <template>
+  <p class="client-report-link">
+    <RouterLink :to="`/w/${ws.id}/report`">Отчёт клиенту за месяц</RouterLink>
+  </p>
   <SimpleReport
     v-if="!expert"
     :data="data"
@@ -351,5 +354,11 @@ usePageContext(() => ({ view: 'analytics', period: { from: range.date_from, to: 
 
 .report-sync {
   margin: 0 0 1rem;
+}
+
+.client-report-link {
+  margin: 0 0 0.75rem;
+  text-align: right;
+  font-size: 0.9rem;
 }
 </style>

@@ -1722,28 +1722,80 @@ def _add_batches(
     return ids, errors
 
 
-def _copy_sitelinks(src_token, src_login, dst_token, dst_login, set_ids: set[int], warnings: list[str]) -> dict[int, int]:
+def _sitelink_href(href: str, template: dict) -> str:
+    """Адрес быстрой ссылки по шаблону проекта — только на сайте шаблона. Чужие адреса (ВКонтакте, Ozon,
+    поддомены города) не трогаем: normalize_href заменил бы их корнем сайта."""
+    from app.campaign_copy import site_host
+
+    host = site_host(href)
+    if host and host == site_host(template["host"]):
+        return links.normalize_href(href, template)
+    return href
+
+
+def _copy_sitelinks(
+    src_token,
+    src_login,
+    dst_token,
+    dst_login,
+    set_ids: set[int],
+    warnings: list[str],
+    *,
+    transform=None,
+    only_changed=False,
+    failed: set[int] | None = None,
+) -> dict[int, int]:
+    """Наборы быстрых ссылок в кабинет копии. transform(set_id, index, link) — замены города и сайта и ссылка
+    по шаблону проекта; only_changed — в своём кабинете пересоздаём только изменённые наборы; в failed —
+    наборы, которые надо было создать, а Директ не принял (или их не удалось прочитать)."""
     if not set_ids:
         return {}
+    sets: list[dict] = []
     try:
         sets = _get_all(
             src_token, src_login, "sitelinks", {"SelectionCriteria": {"Ids": sorted(set_ids)}, "FieldNames": ["Id", "Sitelinks"]}, "SitelinksSets"
         )
-        payload = [
-            {"Sitelinks": [_clean({k: link.get(k) for k in ("Title", "Href", "Description")}) for link in s.get("Sitelinks") or []]}
-            for s in sets
-        ]
+        payload = []
+        for s in sets:
+            links_ = [_clean({k: link.get(k) for k in ("Title", "Href", "Description")}) for link in s.get("Sitelinks") or []]
+            payload.append({"Sitelinks": [transform(int(s["Id"]), i, dict(link)) for i, link in enumerate(links_)] if transform else links_})
+            payload[-1]["_old"] = links_
+        if only_changed:
+            pairs = [(s, p) for s, p in zip(sets, payload) if p["Sitelinks"] != p["_old"]]
+            sets, payload = [s for s, _p in pairs], [p for _s, p in pairs]
+        for p in payload:
+            p.pop("_old")
+        if not payload:
+            return {}
         new_ids, errors = _add_batches(dst_token, dst_login, "sitelinks", "SitelinksSets", payload)
         warnings.extend(f"Быстрые ссылки: {e}" for e in errors[:3])
+        if failed is not None:
+            failed.update(int(s["Id"]) for s, new in zip(sets, new_ids) if not new)
         return {int(s["Id"]): new for s, new in zip(sets, new_ids) if new}
     except YandexError as exc:
         warnings.append(f"Быстрые ссылки не скопированы: {exc.message or exc.code}")
+        if failed is not None:
+            failed.update({int(s["Id"]) for s in sets} or set_ids)
         return {}
 
 
-def _copy_callouts(src_token, src_login, dst_token, dst_login, ext_ids: set[int], warnings: list[str]) -> dict[int, int]:
+def _copy_callouts(
+    src_token,
+    src_login,
+    dst_token,
+    dst_login,
+    ext_ids: set[int],
+    warnings: list[str],
+    *,
+    transform=None,
+    only_changed=False,
+    failed: set[int] | None = None,
+) -> dict[int, int]:
+    """Уточнения в кабинет копии; transform(ext_id, text) — замены; only_changed — только изменённые;
+    в failed — те, что надо было создать, а Директ не принял (или их не удалось прочитать)."""
     if not ext_ids:
         return {}
+    exts: list[dict] = []
     try:
         exts = _get_all(
             src_token,
@@ -1753,13 +1805,209 @@ def _copy_callouts(src_token, src_login, dst_token, dst_login, ext_ids: set[int]
             "AdExtensions",
         )
         exts = [e for e in exts if (e.get("Callout") or {}).get("CalloutText")]
-        payload = [{"Callout": {"CalloutText": e["Callout"]["CalloutText"]}} for e in exts]
+        texts = [
+            transform(int(e["Id"]), e["Callout"]["CalloutText"]) if transform else e["Callout"]["CalloutText"] for e in exts
+        ]
+        if only_changed:
+            pairs = [(e, t) for e, t in zip(exts, texts) if t != e["Callout"]["CalloutText"]]
+            exts, texts = [e for e, _t in pairs], [t for _e, t in pairs]
+        if not exts:
+            return {}
+        payload = [{"Callout": {"CalloutText": t}} for t in texts]
         new_ids, errors = _add_batches(dst_token, dst_login, "adextensions", "AdExtensions", payload)
         warnings.extend(f"Уточнения: {e}" for e in errors[:3])
+        if failed is not None:
+            failed.update(int(e["Id"]) for e, new in zip(exts, new_ids) if not new)
         return {int(e["Id"]): new for e, new in zip(exts, new_ids) if new}
     except YandexError as exc:
         warnings.append(f"Уточнения не скопированы: {exc.message or exc.code}")
+        if failed is not None:
+            failed.update({int(e["Id"]) for e in exts} or ext_ids)
         return {}
+
+
+# Корректировки ставок: поля чтения и как элемент get превращается в элемент add.
+_BID_MODIFIER_GET = {
+    "FieldNames": ["Id", "CampaignId", "AdGroupId", "Level", "Type"],
+    "MobileAdjustmentFieldNames": ["BidModifier", "OperatingSystemType"],
+    "TabletAdjustmentFieldNames": ["BidModifier", "OperatingSystemType"],
+    "DesktopAdjustmentFieldNames": ["BidModifier"],
+    "DesktopOnlyAdjustmentFieldNames": ["BidModifier"],
+    "DemographicsAdjustmentFieldNames": ["Gender", "Age", "BidModifier", "Enabled"],
+    "RetargetingAdjustmentFieldNames": ["RetargetingConditionId", "BidModifier", "Accessible", "Enabled"],
+    "RegionalAdjustmentFieldNames": ["RegionId", "BidModifier", "Enabled"],
+    "VideoAdjustmentFieldNames": ["BidModifier"],
+    "SmartAdAdjustmentFieldNames": ["BidModifier"],
+    "SerpLayoutAdjustmentFieldNames": ["SerpLayout", "BidModifier", "Enabled"],
+    "IncomeGradeAdjustmentFieldNames": ["Grade", "BidModifier", "Enabled"],
+}
+# Старые кабинеты могут не знать новых видов — тогда читаем основные.
+_BID_MODIFIER_BASIC = {
+    k: v
+    for k, v in _BID_MODIFIER_GET.items()
+    if k
+    in (
+        "FieldNames",
+        "MobileAdjustmentFieldNames",
+        "DesktopAdjustmentFieldNames",
+        "DemographicsAdjustmentFieldNames",
+        "RetargetingAdjustmentFieldNames",
+        "RegionalAdjustmentFieldNames",
+        "VideoAdjustmentFieldNames",
+    )
+}
+_BID_SINGLE = {
+    "MobileAdjustment": ("BidModifier", "OperatingSystemType"),
+    "TabletAdjustment": ("BidModifier", "OperatingSystemType"),
+    "DesktopAdjustment": ("BidModifier",),
+    "DesktopOnlyAdjustment": ("BidModifier",),
+    "VideoAdjustment": ("BidModifier",),
+    "SmartAdAdjustment": ("BidModifier",),
+}
+_BID_MULTI = {
+    "DemographicsAdjustment": ("DemographicsAdjustments", ("Gender", "Age", "BidModifier")),
+    "RetargetingAdjustment": ("RetargetingAdjustments", ("RetargetingConditionId", "BidModifier")),
+    "RegionalAdjustment": ("RegionalAdjustments", ("RegionId", "BidModifier")),
+    "SerpLayoutAdjustment": ("SerpLayoutAdjustments", ("SerpLayout", "BidModifier")),
+    "IncomeGradeAdjustment": ("IncomeGradeAdjustments", ("Grade", "BidModifier")),
+}
+
+
+def read_bid_modifiers(token, client_login: str, campaign_id: int, *, unified: bool = False) -> list[dict]:
+    version = "v501" if unified else "v5"
+    where = {"SelectionCriteria": {"CampaignIds": [int(campaign_id)], "Levels": ["CAMPAIGN", "AD_GROUP"]}}
+    try:
+        return _get_all(token, client_login, "bidmodifiers", {**where, **_BID_MODIFIER_GET}, "BidModifiers", version=version)
+    except YandexError:
+        return _get_all(token, client_login, "bidmodifiers", {**where, **_BID_MODIFIER_BASIC}, "BidModifiers", version=version)
+
+
+def bid_modifiers_for_add(
+    items: list[dict], campaign_id: int, group_map: dict[int, int], *, same: bool
+) -> tuple[list[dict], int]:
+    """Элементы bidmodifiers.add для копии (по одному виду на объект) и сколько корректировок пропущено.
+
+    Выключенные корректировки не переносим; ретаргетинг — только в своём кабинете: условия живут в кабинете.
+    """
+    grouped: dict[tuple, dict] = {}
+    skipped = 0
+    for item in items:
+        if item.get("AdGroupId"):
+            new_group = group_map.get(int(item["AdGroupId"]))
+            if not new_group:
+                continue
+            owner = ("AdGroupId", new_group)
+        else:
+            owner = ("CampaignId", int(campaign_id))
+        for kind, keys in _BID_SINGLE.items():
+            value = item.get(kind)
+            if not value or value.get("BidModifier") is None:
+                continue
+            if value.get("Enabled") == "NO":
+                skipped += 1
+                continue
+            grouped[(owner, kind)] = {owner[0]: owner[1], kind: _clean({k: value.get(k) for k in keys})}
+        for kind, (plural, keys) in _BID_MULTI.items():
+            value = item.get(kind)
+            if not value or value.get("BidModifier") is None:
+                continue
+            foreign = kind == "RetargetingAdjustment" and (not same or value.get("Accessible") == "NO")
+            if value.get("Enabled") == "NO" or foreign:
+                skipped += 1
+                continue
+            entry = grouped.setdefault((owner, plural), {owner[0]: owner[1], plural: []})
+            entry[plural].append(_clean({k: value.get(k) for k in keys}))
+    return list(grouped.values()), skipped
+
+
+def _copy_bid_modifiers(
+    src_token, src_login, src_campaign_id, dst_token, dst_login, new_campaign_id, group_map, *, same, unified, warnings
+) -> int:
+    """Корректировки ставок оригинала (кампании и групп) — в копию. Сколько перенесено."""
+    try:
+        found = read_bid_modifiers(src_token, src_login, src_campaign_id, unified=unified)
+    except YandexError as exc:
+        warnings.append(f"Корректировки ставок не прочитаны ({exc.message or exc.code}) — проверьте их в копии")
+        return 0
+    payload, skipped = bid_modifiers_for_add(found, new_campaign_id, group_map, same=same)
+    if skipped:
+        warnings.append(f"Не перенесено корректировок ставок: {skipped} (выключенные или ретаргетинг другого кабинета)")
+    done = 0
+    errors: list[str] = []
+    for chunk in direct_api.chunks(payload, 1000):
+        try:
+            result = direct_api.call(
+                dst_token, dst_login, "bidmodifiers", "add", {"BidModifiers": chunk}, version="v501" if unified else "v5"
+            )
+        except YandexError as exc:
+            errors.append(exc.message or exc.code)
+            continue
+        failed = dict(direct_api.item_errors(result, "AddResults"))
+        errors.extend(failed.values())
+        for index, entry in enumerate(chunk):
+            if index not in failed:
+                done += sum(len(v) if isinstance(v, list) else 1 for k, v in entry.items() if k not in ("CampaignId", "AdGroupId"))
+    if errors:
+        warnings.append(f"Часть корректировок ставок не перенесена: {errors[0]}")
+    return done
+
+
+def _keyword_list(raw) -> list[str]:
+    items = raw.get("Items") if isinstance(raw, dict) else raw
+    return [str(x) for x in items or [] if str(x or "").strip()]
+
+
+def read_shared_sets(token, client_login: str, set_ids) -> list[dict]:
+    """Наборы минус-фраз кабинета: [{Id, Name, NegativeKeywords: [...]}]."""
+    if not set_ids:
+        return []
+    found = _get_all(
+        token,
+        client_login,
+        "negativekeywordsharedsets",
+        {"SelectionCriteria": {"Ids": sorted(int(i) for i in set_ids)}, "FieldNames": ["Id", "Name", "NegativeKeywords"]},
+        "NegativeKeywordSharedSets",
+    )
+    return [{**s, "NegativeKeywords": _keyword_list(s.get("NegativeKeywords"))} for s in found if s.get("Id")]
+
+
+def _copy_shared_sets(src_token, src_login, dst_token, dst_login, set_ids, warnings: list[str]) -> list[int]:
+    """Наборы минус-фраз в другой кабинет: такой же набор там уже есть — подключаем его, нет — создаём."""
+    try:
+        found = read_shared_sets(src_token, src_login, set_ids)
+    except YandexError as exc:
+        warnings.append(f"Наборы минус-фраз не прочитаны ({exc.message or exc.code}) — подключите их к копии вручную")
+        return []
+    existing: dict[tuple, int] = {}
+    try:
+        for s in _get_all(
+            dst_token,
+            dst_login,
+            "negativekeywordsharedsets",
+            {"SelectionCriteria": {}, "FieldNames": ["Id", "Name", "NegativeKeywords"]},
+            "NegativeKeywordSharedSets",
+        ):
+            if s.get("Id"):
+                existing[(str(s.get("Name") or ""), frozenset(_keyword_list(s.get("NegativeKeywords"))))] = int(s["Id"])
+    except YandexError:
+        pass  # не прочитали наборы кабинета копии — просто создаём новые
+    ids: list[int] = []
+    todo: list[dict] = []
+    for s in found:
+        same_set = existing.get((str(s.get("Name") or ""), frozenset(s["NegativeKeywords"])))
+        if same_set:
+            ids.append(same_set)
+        elif s["NegativeKeywords"]:
+            todo.append({"Name": str(s.get("Name") or "Минус-фразы")[:255], "NegativeKeywords": s["NegativeKeywords"]})
+    if todo:
+        try:
+            new_ids, errors = _add_batches(dst_token, dst_login, "negativekeywordsharedsets", "NegativeKeywordSharedSets", todo)
+        except YandexError as exc:
+            new_ids, errors = [], [exc.message or exc.code]
+        ids += [i for i in new_ids if i]
+        if errors:
+            warnings.append(f"Не все наборы минус-фраз перенесены: {errors[0]}")
+    return ids
 
 
 # Поля для копии: без ResponsiveAdFieldNames Директ отдаёт комбинаторное объявление
@@ -1836,11 +2084,11 @@ _IMAGE_MAX_BYTES = 10 * 1024 * 1024
 _IMAGE_BATCH = 3
 
 
-def _group_for_add(group: dict, campaign_id: int, *, unified: bool) -> dict:
+def _group_for_add(group: dict, campaign_id: int, *, unified: bool, region_ids: list[int] | None = None) -> dict:
     entry = {
         "Name": group.get("Name") or "Группа",
         "CampaignId": campaign_id,
-        "RegionIds": group.get("RegionIds") or [225],
+        "RegionIds": region_ids or group.get("RegionIds") or [225],
         "NegativeKeywords": {"Items": group["NegativeKeywords"]["Items"]}
         if (group.get("NegativeKeywords") or {}).get("Items")
         else None,
@@ -1986,7 +2234,11 @@ def _ad_for_add(
 
     def sitelink(body: dict) -> int | None:
         set_id = int(body.get("SitelinkSetId") or 0)
-        return (set_id or None) if same else sitelinks.get(set_id)
+        # В своём кабинете набор тот же, если его не пересоздавали; 0 в sitelinks — пересоздать не вышло:
+        # тогда без набора, а не со старым (в нём прежний город).
+        if set_id in sitelinks:
+            return sitelinks[set_id] or None
+        return (set_id or None) if same else None
 
     def extensions(body: dict) -> list[int] | None:
         ids = [
@@ -1994,7 +2246,8 @@ def _ad_for_add(
             for e in body.get("AdExtensions") or []
             if e.get("AdExtensionId") and e.get("Type") in (None, "CALLOUT")
         ]
-        return (ids if same else [callouts[i] for i in ids if i in callouts]) or None
+        kept = [callouts.get(i, i) for i in ids] if same else [callouts.get(i) for i in ids]
+        return [i for i in kept if i] or None
 
     if ad.get("ResponsiveAd"):
         r = ad["ResponsiveAd"]
@@ -2132,6 +2385,24 @@ def _copy_images(src_token, src_login, dst_token, dst_login, hashes: set[str], w
     return out
 
 
+def _replaced_keyword(entry: dict, keyword: dict, rules) -> dict:
+    """Фраза копии с заменой города и сайта; автотаргетинг не трогаем."""
+    if rules and keyword.get("Id") and not _is_autotargeting(keyword):
+        entry["Keyword"] = rules.change(f"kw:{int(keyword['Id'])}", entry["Keyword"], "Keyword")
+    return entry
+
+
+def _replace_title(summary: dict | None) -> str:
+    if not summary or not summary.get("applied"):
+        return ""
+    pairs = [
+        f"{summary[a]} → {summary[b]}"
+        for a, b in (("from_city", "to_city"), ("from_site", "to_site"))
+        if summary.get(a) and summary.get(b) and summary[a] != summary[b]
+    ]
+    return f"; замены: {', '.join(pairs)}" if pairs else ""
+
+
 def duplicate_campaign(
     user_id: int,
     campaign_row_id: int,
@@ -2141,9 +2412,17 @@ def duplicate_campaign(
     workspace_id: int | None = None,
     progress=None,
     exclude_adgroup_ids: set[int] | None = None,
+    region_ids: list[int] | None = None,
+    replace: dict | None = None,
+    copy_shared_sets: bool = False,
 ) -> dict:
     """
     Копия кампании со структурой: настройки, группы, фразы и автотаргетинг.
+    region_ids — регионы показа всех групп копии (None — как в оригинале).
+    replace — замены старого города и сайта (campaign_copy): {from_city, to_city, from_site, to_site, skip};
+    пустые поля — по регионам оригинала и копии и сайтам проектов. None — тексты как в оригинале.
+    copy_shared_sets — в другой кабинет перенести и наборы минус-фраз.
+    Корректировки ставок кампании и групп переносятся (bidmodifiers).
     exclude_adgroup_ids — id групп Директа, которые не копируем (вместе с их фразами и объявлениями).
     В ответе group_map: id группы оригинала → id её копии в Директе.
     Объявления — комбинаторные, текстовые, графические и товарные. Товарные читаются и создаются
@@ -2155,6 +2434,7 @@ def duplicate_campaign(
     from app.adgroups import sync_campaign_adgroups
     from app.ads import sync_campaign_ads
     from app.keywords import sync_campaign_keywords
+    from app import campaign_copy
     from app.workspaces import attach_campaign, campaign_workspace_id, require_workspace
 
     def step(n: int, text: str) -> None:
@@ -2179,7 +2459,13 @@ def duplicate_campaign(
     body, manual = _copy_body(
         item, ctype, name=new_name, counter_id=int(ws["counter_id"]) if ws else None, same_account=same
     )
-    if not same and ((item.get(block_name) or {}).get("NegativeKeywordSharedSetIds") or {}).get("Items"):
+    shared_sets = ((item.get(block_name) or {}).get("NegativeKeywordSharedSetIds") or {}).get("Items") or []
+    shared_copied: list[int] = []
+    if not same and shared_sets and copy_shared_sets:
+        shared_copied = _copy_shared_sets(src_token, src["client_login"], dst_token, dst["client_login"], shared_sets, warnings)
+        if shared_copied:
+            body[block_name]["NegativeKeywordSharedSetIds"] = {"Items": shared_copied}
+    elif not same and shared_sets:
         warnings.append("Наборы минус-фраз живут в исходном кабинете — подключите их к копии вручную")
     # Свой ref оригинала переходит к копии: её ссылки остаются такими же.
     choice = links.link_choice(src.get("link_params"))
@@ -2214,7 +2500,20 @@ def duplicate_campaign(
     _update_local(row["id"], {"tracking_params": body[block_name].get("TrackingParams") or ""})
     if choice["own"] or choice["asked"]:
         links.save_link_choice(user_id, row["id"], own=choice["own"], asked=choice["asked"])
-    out = {"campaign": row, "groups": 0, "group_map": {}, "keywords": 0, "ads": 0, "warnings": warnings, "status": "ok"}
+    out = {
+        "campaign": row,
+        "groups": 0,
+        "group_map": {},
+        "keywords": 0,
+        "ads": 0,
+        "warnings": warnings,
+        "status": "ok",
+        # Что Директ не принял: ИИ такую копию на модерацию не отправляет.
+        "failed": {"ads": 0, "sitelinks": 0, "callouts": 0},
+    }
+    if shared_copied:
+        out["shared_sets"] = len(shared_copied)
+    rules = None
 
     try:
         step(2, "Копирую группы")
@@ -2235,7 +2534,13 @@ def duplicate_campaign(
         groups = [g for g in groups if g.get("Type") in _GROUP_TYPES]
         if exclude_adgroup_ids:
             groups = [g for g in groups if int(g["Id"]) not in exclude_adgroup_ids]
-        payload = [_group_for_add(g, new_campaign_id, unified=unified) for g in groups]
+        if replace is not None:
+            src_ws_id = campaign_workspace_id(user_id, campaign_row_id)
+            src_ws = ws if src_ws_id == ws_id else (require_workspace(user_id, src_ws_id, allow_locked=True) if src_ws_id else None)
+            rules = campaign_copy.rules_from(
+                replace, **campaign_copy.defaults(user_id, groups, src_ws, ws, region_ids or [])
+            )
+        payload = [_group_for_add(g, new_campaign_id, unified=unified, region_ids=region_ids) for g in groups]
         new_group_ids, errors = _add_batches(
             dst_token, dst["client_login"], "adgroups", "AdGroups", payload, version="v501" if unified else "v5"
         )  # группы ЕПК v5 не создаёт
@@ -2262,7 +2567,7 @@ def duplicate_campaign(
             dst["client_login"],
             "keywords",
             "Keywords",
-            [_keyword_for_add(k, group_map[int(k["AdGroupId"])], manual=manual, unified=unified) for k in phrases],
+            [_replaced_keyword(_keyword_for_add(k, group_map[int(k["AdGroupId"])], manual=manual, unified=unified), k, rules) for k in phrases],
         )
         warnings.extend(f"Фраза: {e}" for e in errors[:5])
         # AdGroups.add уже создаёт ---autotargeting со ставкой 0,30 ₽. Повторный add не проходит,
@@ -2376,29 +2681,65 @@ def duplicate_campaign(
         sitelinks: dict[int, int] = {}
         callouts: dict[int, int] = {}
         images: dict[str, str] = {}
-        if not same:
-            bodies = [_ad_body(a) for a in ads]
+        bodies = [_ad_body(a) for a in ads]
+        set_ids = {int(b["SitelinkSetId"]) for b in bodies if b.get("SitelinkSetId")}
+        ext_ids = {
+            int(e["AdExtensionId"])
+            for b in bodies
+            for e in b.get("AdExtensions") or []
+            if e.get("AdExtensionId") and e.get("Type") in (None, "CALLOUT")
+        }
+        active = bool(rules and rules.active)
+
+        def sitelink_transform(set_id: int, index: int, link: dict) -> dict:
+            # Замены города и сайта, затем адрес — по шаблону ссылки проекта, как у объявлений.
+            for name, key in (("Title", "SlTitle"), ("Description", "SlDescription"), ("Href", "SlHref")):
+                if rules and link.get(name):
+                    link[name] = rules.change(f"sl:{set_id}:{index}:{name}", link[name], key)
+            if template and link.get("Href"):
+                link["Href"] = _sitelink_href(link["Href"], template)
+            return link
+
+        def callout_transform(ext_id: int, text: str) -> str:
+            return rules.change(f"co:{ext_id}", text, "Callout") if rules else text
+
+        failed_sitelinks: set[int] = set()
+        failed_callouts: set[int] = set()
+        if not same or active or template:
+            # В своём кабинете пересоздаём только наборы и уточнения, которые изменились.
             sitelinks = _copy_sitelinks(
                 src_token,
                 src["client_login"],
                 dst_token,
                 dst["client_login"],
-                {int(b["SitelinkSetId"]) for b in bodies if b.get("SitelinkSetId")},
+                set_ids,
                 warnings,
+                transform=sitelink_transform,
+                only_changed=same,
+                failed=failed_sitelinks,
             )
+        if not same or active:
             callouts = _copy_callouts(
                 src_token,
                 src["client_login"],
                 dst_token,
                 dst["client_login"],
-                {
-                    int(e["AdExtensionId"])
-                    for b in bodies
-                    for e in b.get("AdExtensions") or []
-                    if e.get("AdExtensionId") and e.get("Type") in (None, "CALLOUT")
-                },
+                ext_ids,
                 warnings,
+                transform=callout_transform,
+                only_changed=same,
+                failed=failed_callouts,
             )
+        # Не вышло пересоздать — объявления копии без набора, а не со старым (с прежним городом).
+        for set_id in failed_sitelinks:
+            sitelinks.setdefault(set_id, 0)
+        for ext_id in failed_callouts:
+            callouts.setdefault(ext_id, 0)
+        out["failed"]["sitelinks"] = len(failed_sitelinks)
+        out["failed"]["callouts"] = len(failed_callouts)
+        if same and (failed_sitelinks or failed_callouts):
+            warnings.append("Быстрые ссылки или уточнения с заменами не созданы — объявления копии без них")
+        if not same:
             step(4, "Копирую картинки объявлений")
             images = _copy_images(
                 src_token,
@@ -2416,6 +2757,8 @@ def duplicate_campaign(
         shopping_skipped = 0
         for a in ads:
             entry = _ad_for_add(a, unified=unified, same=same, sitelinks=sitelinks, callouts=callouts, images=images)
+            if entry and rules:
+                campaign_copy.apply_to_ad(entry, int(a.get("Id") or 0), rules)
             if entry and template:
                 for kind in ("TextAd", "ResponsiveAd", "TextImageAd"):
                     if (entry.get(kind) or {}).get("Href"):
@@ -2444,12 +2787,30 @@ def duplicate_campaign(
             dst_token, dst["client_login"], "ads", "Ads", v501_payload, version="v501"
         )
         warnings.extend(f"Объявление: {e}" for e in (errors + v501_errors)[:5])
+        out["failed"]["ads"] = sum(1 for x in new_ad_ids + v501_ids if not x)
         out["ads"] = sum(1 for x in new_ad_ids + v501_ids if x)
-        warnings.append("Корректировки ставок не копируются — проверьте их в копии")
+        step(4, "Копирую корректировки ставок")
+        out["bid_modifiers"] = _copy_bid_modifiers(
+            src_token,
+            src["client_login"],
+            int(src["campaign_id"]),
+            dst_token,
+            dst["client_login"],
+            new_campaign_id,
+            group_map,
+            same=same,
+            unified=unified,
+            warnings=warnings,
+        )
     except YandexError as exc:
         warnings.append(f"Структура скопирована не полностью: {exc.message or exc.code}")
         out["status"] = "partial"
 
+    if rules is not None:
+        out["replace"] = rules.summary()
+        warnings.extend(f"После замены: {t} — Директ может не принять" for t in out["replace"]["too_long"][:5])
+        if out["replace"]["left"]:
+            warnings.append("В копии остался старый город: " + ", ".join(f"«{t}»" for t in out["replace"]["left"][:5]))
     step(5, "Обновляю данные копии")
     for sync in (sync_campaign_adgroups, sync_campaign_keywords, sync_campaign_ads):
         try:
@@ -2464,7 +2825,7 @@ def duplicate_campaign(
         {k: v for k, v in out.items() if k != "campaign"},
         out["status"],
         workspace_id=int(ws["id"]) if ws else None,
-        title=f"Копия «{src['name']}» → «{new_name}» ({dst['client_login']})",
+        title=f"Копия «{src['name']}» → «{new_name}» ({dst['client_login']})" + _replace_title(out.get("replace")),
         undo=_delete_undo(row["id"], "Удалить копию"),
         targets=[f"campaign:{campaign_row_id}", f"campaign:{row['id']}"],
     )

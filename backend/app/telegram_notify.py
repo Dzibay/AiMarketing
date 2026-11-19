@@ -38,20 +38,17 @@ def bot_username() -> str:
     return (settings.telegram_bot_username or "").lstrip("@")
 
 
-def send_message(chat_id: str | int, text: str) -> bool:
+def send_message(chat_id: str | int, text: str, reply_markup: dict | None = None) -> bool:
+    """Текст без разметки; reply_markup — кнопки под сообщением ({"inline_keyboard": [[...]]})."""
     if not telegram_configured() or not chat_id:
         return False
     url = f"{API}/bot{settings.telegram_bot_token}/sendMessage"
+    body = {"chat_id": str(chat_id), "text": text[:4000], "disable_web_page_preview": True}
+    if reply_markup:
+        body["reply_markup"] = reply_markup
     try:
         with httpx.Client(timeout=20.0) as client:
-            response = client.post(
-                url,
-                json={
-                    "chat_id": str(chat_id),
-                    "text": text[:4000],
-                    "disable_web_page_preview": True,
-                },
-            )
+            response = client.post(url, json=body)
         if response.status_code >= 400:
             log.warning("telegram send %s %s", response.status_code, response.text[:300])
             return False
@@ -220,7 +217,30 @@ def _bind_code(code: str, chat_id: str) -> bool:
     return True
 
 
+def answer_callback(callback_id: str, text: str = "") -> None:
+    """Ответ на нажатие кнопки: без него у кнопки крутятся часики. text — короткая всплывашка."""
+    _api("answerCallbackQuery", payload={"callback_query_id": callback_id, "text": text[:200]})
+
+
+def edit_message(chat_id: str | int, message_id: int, text: str, reply_markup: dict | None = None) -> bool:
+    """Заменить текст и кнопки отправленного сообщения; без reply_markup кнопки убираются."""
+    payload = {
+        "chat_id": str(chat_id),
+        "message_id": int(message_id),
+        "text": text[:4000],
+        "disable_web_page_preview": True,
+        "reply_markup": reply_markup or {"inline_keyboard": []},
+    }
+    return _api("editMessageText", payload=payload) is not None
+
+
 def handle_update(update: dict) -> None:
+    if update.get("callback_query"):
+        # Нажатие кнопки «Выполнить / Отклонить / Да, выполнить…» (telegram_decisions).
+        from app.telegram_decisions import handle_callback
+
+        handle_callback(update["callback_query"])
+        return
     message = update.get("message") or update.get("edited_message") or {}
     text = (message.get("text") or "").strip()
     chat = message.get("chat") or {}
@@ -276,6 +296,29 @@ def poll_updates_once() -> int:
     return n
 
 
+# Что сделало правило — словами, без кодов действий.
+_RULE_DID = {
+    "pause": "остановило",
+    "resume": "запустило",
+    "set_budget": "поменяло дневной бюджет —",
+    "set_weekly_budget": "поменяло недельный бюджет —",
+    "change_budget_pct": "поменяло бюджет —",
+    "set_bid": "поменяло ставку —",
+    "negative_adgroup": "добавило минус-фразы в группы —",
+    "negative_campaign": "добавило минус-фразы в кампании —",
+}
+
+
+def rule_outcome(action: str, dry_run: bool, matched: int, applied: int) -> str:
+    """«остановило 2 из 3», «нашло 3, ничего не меняло — правило в режиме проверки», «нашло 3»."""
+    if action == "notify":
+        return f"нашло {matched}"
+    if dry_run:
+        return f"нашло {matched}, ничего не меняло — правило в режиме проверки"
+    did = _RULE_DID.get(action, "применило")
+    return f"{did} {applied} из {matched}"
+
+
 def format_rule_alert(
     *,
     rule_name: str,
@@ -285,11 +328,7 @@ def format_rule_alert(
     applied: int,
     error: str = "",
 ) -> str:
-    mode = "dry-run" if dry_run else "auto"
-    lines = [
-        f"Толк · правило «{rule_name}»",
-        f"Режим: {mode} · действие: {action} · совпало: {len(matched)} · применено: {applied}",
-    ]
+    lines = [f"Толк · правило «{rule_name}» сработало: {rule_outcome(action, dry_run, len(matched), applied)}"]
     if error:
         lines.append(f"⚠ Не всё применилось: {error}")
     for item in matched[:15]:

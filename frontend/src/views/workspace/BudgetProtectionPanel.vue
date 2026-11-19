@@ -79,6 +79,7 @@
         </div>
       </div>
       <p v-if="error" class="form-error">{{ error }}</p>
+      <DefaultsAsk kind="budget_protection" />
     </template>
   </section>
 </template>
@@ -93,6 +94,8 @@ import UiSkeleton from '../../components/ui/UiSkeleton.vue'
 import UiSwitch from '../../components/ui/UiSwitch.vue'
 import { rub } from '../../utils/format'
 import { useWs } from './context'
+import DefaultsAsk from '../../components/DefaultsAsk.vue'
+import { offerDefaults } from '../../composables/useDefaultsAsk'
 
 /**
  * «Защита бюджета» в настройках проекта (обычный режим): два-три переключателя из шаблонов правил.
@@ -156,6 +159,7 @@ async function send(item, payload, done) {
   try {
     fill(await protectApi.set(ws.value.id, item.key, payload), item.key)
     if (done) pushToast(done, 'ok')
+    if (state.value.items.some((i) => i.enabled)) offerDefaults(ws.value.id, 'budget_protection')
   } catch (err) {
     error.value = errorText(err)
   } finally {

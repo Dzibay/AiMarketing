@@ -112,6 +112,7 @@ export function sectionTabs(key, projectId) {
         { label: 'Уведомления', to: '/cabinet/settings/notifications' },
         { label: 'Интерфейс', to: '/cabinet/settings/interface' },
         { label: 'ИИ', to: '/cabinet/settings/ai' },
+        { label: 'Для новых проектов', to: '/cabinet/settings/projects' },
       ]
     default:
       return []

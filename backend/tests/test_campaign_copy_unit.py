@@ -296,6 +296,7 @@ def test_duplicate_campaign_reads_ads_of_the_source_campaign(monkeypatch):
             {"Id": 51, "AdGroupId": 1, "TextAd": text_ad},
             {"Id": 52, "AdGroupId": 1, "ResponsiveAd": {"Titles": [{"Title": "Слоны"}], "Texts": [{"Text": "Купите"}]}},
         ],
+        ("bidmodifiers", 111): [],
     }
     reads: list[tuple] = []
     journal: list[dict] = []
@@ -335,6 +336,7 @@ def test_duplicate_campaign_reads_ads_of_the_source_campaign(monkeypatch):
         ("client-src", "keywords", 111),
         ("client-dst", "keywords", 222),
         ("client-src", "ads", 111),
+        ("client-src", "bidmodifiers", 111),
     ]
     assert [a for a in added if a[0] == "ads"] == [("ads", "v5", ["TextAd"]), ("ads", "v501", ["ResponsiveAd"])]
     assert journal[0]["title"] == "Копия «Поиск» → «Поиск (копия)» (client-dst)"

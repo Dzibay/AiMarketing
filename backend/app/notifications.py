@@ -61,6 +61,20 @@ KINDS: dict[str, dict] = {
         "telegram": True,
         "window_days": 0,
     },
+    # Итог правки через 7 и 14 дней (effects.py): стало хуже — одна запись на правку, с «Вернуть как было».
+    "effect": {
+        "label": "После правки стало хуже: итог через 7 и 14 дней",
+        "cabinet": True,
+        "telegram": False,
+        "window_days": 3650,
+    },
+    # Разбор недели по расписанию (ai_review.py): одна сводка по всем проектам запуска.
+    "ai_review": {
+        "label": "Разбор недели по расписанию: что нашёл ИИ",
+        "cabinet": True,
+        "telegram": True,
+        "window_days": 0,
+    },
     "limit": {
         "label": "Лимит ИИ израсходован на 80 % и на 100 %",
         "cabinet": True,
@@ -111,12 +125,16 @@ def get_prefs(user_id: int) -> dict:
     from app.telegram_notify import telegram_configured
 
     with pool.connection() as conn:
-        row = conn.execute("SELECT notify_prefs, telegram_chat_id FROM users WHERE id = %s", (user_id,)).fetchone()
+        row = conn.execute(
+            "SELECT notify_prefs, telegram_chat_id, telegram_decide FROM users WHERE id = %s", (user_id,)
+        ).fetchone()
     prefs = prefs_from((row or {}).get("notify_prefs"))
     return {
         "events": [{"kind": k, "label": KINDS[k]["label"], **prefs[k]} for k in KINDS],
         "telegram_available": telegram_configured(),
         "telegram_linked": bool((row or {}).get("telegram_chat_id")),
+        # «Решать из Telegram»: кнопки «Выполнить / Отклонить» у предложений ИИ (telegram_decisions.py).
+        "telegram_decide": bool((row or {}).get("telegram_decide")),
     }
 
 
@@ -124,7 +142,13 @@ def set_prefs(user_id: int, changes: dict) -> dict:
     """changes: {kind: {cabinet?: bool, telegram?: bool}} — сливается с сохранённым."""
     if not isinstance(changes, dict) or not changes:
         raise NotificationsError("Нечего сохранять")
+    changes = dict(changes)
+    decide = changes.pop("telegram_decide", None)  # «Решать из Telegram» — отдельный флаг, не событие
+    if decide is not None and not isinstance(decide, bool):
+        raise NotificationsError("Неверная настройка")
     with pool.connection() as conn:
+        if decide is not None:
+            conn.execute("UPDATE users SET telegram_decide = %s WHERE id = %s", (decide, user_id))
         row = conn.execute("SELECT notify_prefs FROM users WHERE id = %s FOR UPDATE", (user_id,)).fetchone()
         saved = dict((row or {}).get("notify_prefs") or {})
         for kind, item in changes.items():
@@ -163,6 +187,8 @@ def notify(
     dedup_key: str = "",
     telegram_text: str | None = None,
     telegram_later: bool = False,
+    telegram_markup: dict | None = None,
+    telegram_off: bool = False,
 ) -> int | None:
     """Сообщить о событии: запись в ленте и/или Telegram — по настройкам пользователя.
 
@@ -170,10 +196,13 @@ def notify(
     вызывающий код: уведомление — побочный эффект.
     telegram_later — тихие часы: запись в ленте сразу, а текст для Telegram ждёт в telegram_pending
     (отправит flush_telegram утром, если событие ещё актуально).
+    telegram_markup — кнопки под сообщением Telegram (утром после тихих часов уходит только текст);
+    telegram_off — в Telegram не слать: о том же уже сообщили отдельным сообщением (карточки решений).
     """
     try:
         return _notify(
-            user_id, kind, title, body, link, workspace_id, severity, dedup_key, telegram_text, telegram_later
+            user_id, kind, title, body, link, workspace_id, severity, dedup_key, telegram_text, telegram_later,
+            telegram_markup, telegram_off,
         )
     except Exception:  # noqa: BLE001
         log.exception("Уведомление %s пользователю %s", kind, user_id)
@@ -181,7 +210,8 @@ def notify(
 
 
 def _notify(
-    user_id, kind, title, body, link, workspace_id, severity, dedup_key, telegram_text, telegram_later=False
+    user_id, kind, title, body, link, workspace_id, severity, dedup_key, telegram_text, telegram_later=False,
+    telegram_markup=None, telegram_off=False,
 ) -> int | None:
     spec = KINDS.get(kind)
     if spec is None:
@@ -193,7 +223,9 @@ def _notify(
         user = conn.execute("SELECT notify_prefs, telegram_chat_id FROM users WHERE id = %s", (user_id,)).fetchone()
         if user is None:
             return None
-        prefs = prefs_from(user["notify_prefs"])[kind]
+        prefs = dict(prefs_from(user["notify_prefs"])[kind])
+        if telegram_off:
+            prefs["telegram"] = False
         row_id, fresh = None, True
         if dedup_key:
             last = conn.execute(
@@ -250,7 +282,11 @@ def _notify(
     if fresh and prefs["telegram"] and chat_id:
         from app.telegram_notify import send_message
 
-        send_message(chat_id, telegram_text or _telegram_text(title, body, link))
+        text = telegram_text or _telegram_text(title, body, link)
+        if telegram_markup:
+            send_message(chat_id, text, telegram_markup)
+        else:
+            send_message(chat_id, text)
     return row_id if prefs["cabinet"] else None
 
 
@@ -267,6 +303,13 @@ def _out(row: dict) -> dict:
         "read": row["read_at"] is not None,
         # «Повторить для оставшихся» / «Повторить» у сбоя операции: {job_id, label}; None — кнопки нет.
         "retry": {"label": row["retry"]["label"]} if isinstance(row.get("retry"), dict) else None,
+        # «Вернуть как было» у записи «После правки стало хуже»: окно отката по записи журнала.
+        # Правку уже вернули — кнопки нет.
+        "undo": (
+            {"log_id": int(row["undo_log_id"]), "label": "Вернуть как было"}
+            if row.get("undo_log_id") and not row.get("undo_done")
+            else None
+        ),
     }
 
 
@@ -284,8 +327,11 @@ def list_notifications(user_id: int, limit: int = LIST_LIMIT) -> dict:
     with pool.connection() as conn:
         rows = conn.execute(
             """
-            SELECT * FROM notifications WHERE user_id = %s AND in_cabinet
-            ORDER BY created_at DESC, id DESC LIMIT %s
+            SELECT n.*,
+                   EXISTS (SELECT 1 FROM action_logs l WHERE l.id = n.undo_log_id AND l.undone_at IS NOT NULL)
+                       AS undo_done
+            FROM notifications n WHERE n.user_id = %s AND n.in_cabinet
+            ORDER BY n.created_at DESC, n.id DESC LIMIT %s
             """,
             (user_id, limit),
         ).fetchall()

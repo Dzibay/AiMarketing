@@ -2566,9 +2566,13 @@ def _p_copy_geo(ctx: Context, args: dict) -> Plan:
     row, region_ids, target = _geo_args(ctx, args)
     regions = geo.load_regions(ctx.user_id)
     where = f" в кабинет {target['client_login']}" if target else ""
-    steps = [f"копия «{_geo_name(row, region_ids, args, regions)}»{where}", geo.region_label(region_ids, regions)]
+    steps = [
+        f"копия «{_geo_name(row, region_ids, args, regions)}»{where}",
+        geo.region_label(region_ids, regions),
+        "замена старого города и сайта в текстах",
+    ]
     if _bool(args, "moderate", True):
-        steps.append("на модерацию")
+        steps.append("на модерацию, если старого города в текстах не осталось")
     return Plan(f"Копия {_cname(row)} на новое гео: " + " → ".join(steps) + "; оригинал работает", ["campaigns"])
 
 
@@ -2588,8 +2592,11 @@ def _x_copy_geo(ctx: Context, args: dict) -> dict:
         target_account_id=int(target["id"]) if target else None,
         name=_geo_name(row, region_ids, args, geo.load_regions(ctx.user_id)),
         workspace_id=ctx.ws_id,
+        region_ids=region_ids,
+        replace={},
     )
     new = copy["campaign"]
+    replaced = copy.get("replace")
     out = {
         "copy": {
             "campaign_row_id": new["id"],
@@ -2601,6 +2608,12 @@ def _x_copy_geo(ctx: Context, args: dict) -> dict:
         },
         "warnings": copy["warnings"],
     }
+    if replaced:
+        out["replace"] = {
+            k: replaced.get(k)
+            for k in ("from_city", "to_city", "from_site", "to_site", "applied", "left", "too_long", "doubtful")
+        }
+    failed = {k: v for k, v in (copy.get("failed") or {}).items() if v}
     try:
         out["regions"] = geo.set_campaign_regions(ctx.user_id, new["id"], region_ids, workspace_id=ctx.ws_id)
     except YandexError as exc:
@@ -2612,6 +2625,30 @@ def _x_copy_geo(ctx: Context, args: dict) -> dict:
         out["note"] = "Регионы заменены не во всех группах — копия осталась черновиком, на модерацию не отправлена"
     elif copy["status"] != "ok":
         out["note"] = "Копия собрана не полностью — проверьте её и отправьте на модерацию сами"
+    elif not replaced or replaced.get("left") or replaced.get("skipped"):
+        # Старый город в текстах копии — объявления позвали бы не туда: только черновик.
+        left = ", ".join(f"«{t}»" for t in ((replaced or {}).get("left") or [])[:3])
+        out["note"] = (
+            f"В текстах копии остался старый город{': ' + left if left else ''} — копия осталась черновиком, "
+            "проверьте тексты и отправьте на модерацию сами"
+            if replaced
+            else "Тексты копии не проверены на старый город — копия осталась черновиком"
+        )
+    elif failed or replaced.get("too_long"):
+        # Директ не принял часть объявлений, быстрых ссылок или уточнений (часто — длиннее лимита после
+        # замены): копия неполная, на модерацию — только после проверки человеком.
+        names = {"ads": "объявлений", "sitelinks": "наборов быстрых ссылок", "callouts": "уточнений"}
+        lost = ", ".join(f"{names[k]}: {v}" for k, v in failed.items() if k in names)
+        out["note"] = (
+            "Директ не принял часть копии" + (f" ({lost})" if lost else " — тексты после замены длиннее лимита")
+            + " — копия осталась черновиком, проверьте её и отправьте на модерацию сами"
+        )
+    elif replaced.get("doubtful"):
+        words = ", ".join(f"«{t}»" for t in replaced["doubtful"][:3])
+        out["note"] = (
+            f"Замены {words} могли задеть обычные слова, а не город — копия осталась черновиком, "
+            "проверьте фразы и отправьте на модерацию сами"
+        )
     elif not _bool(args, "moderate", True):
         out["note"] = "Копия — черновик: отправьте на модерацию, когда проверите"
     else:
@@ -3964,7 +4001,11 @@ def _d_copy_geo(ctx: Context, args: dict) -> list[dict]:
     row, region_ids, target = _geo_args(ctx, args)
     regions = geo.load_regions(ctx.user_id)
     where = f" в кабинете {target['client_login']}" if target else ""
-    state = "на модерации" if _bool(args, "moderate", True) else "черновик"
+    state = (
+        "на модерации, если старого города в текстах не осталось, иначе черновик"
+        if _bool(args, "moderate", True)
+        else "черновик"
+    )
     return [
         _ch("Копия", "нет", f"«{_geo_name(row, region_ids, args, regions)}» — {state}{where}"),
         _ch(
@@ -9664,7 +9705,7 @@ def get_chat(user_id: int, chat_id: int) -> dict:
     with pool.connection() as conn:
         _require_chat(conn, user_id, chat_id)
         # Карточка «выполняется» после падения процесса иначе висела бы вечно.
-        _recover_stale_actions(conn, chat_id)
+        stale = _recover_stale_actions(conn, chat_id)
         chat = conn.execute(_CHAT_SELECT + " WHERE ch.id = %s", (chat_id,)).fetchone()
         messages = conn.execute(
             """
@@ -9674,6 +9715,7 @@ def get_chat(user_id: int, chat_id: int) -> dict:
             (chat_id,),
         ).fetchall()
         actions = conn.execute("SELECT * FROM ai_actions WHERE chat_id = %s ORDER BY id", (chat_id,)).fetchall()
+    _stale_to_telegram(stale)
     if chat["workspace_id"] is None:
         return {
             "chat": _chat_out(chat),
@@ -9785,7 +9827,21 @@ def _reject_quietly(conn, chat_id: int, reason: str) -> int:
             tool_name=r["tool"],
             meta={"detached": True} if r["detached_at"] else None,
         )
-    return len(rows)
+    return [int(r["id"]) for r in rows]
+
+
+def _stale_to_telegram(action_ids) -> None:
+    """Закрытые _recover_stale_actions — итог в сообщение бота, если одобряли из Telegram
+    (иначе там навсегда «Принято — выполняю»). Вызывать после коммита."""
+    if not action_ids:
+        return
+    try:
+        from app.telegram_decisions import action_finished
+
+        for action_id in action_ids:
+            action_finished(int(action_id))
+    except Exception:  # noqa: BLE001 — сообщение в Telegram не должно ронять чат
+        log.exception("Telegram: итог прерванных действий %s", action_ids)
 
 
 def delete_chat(user_id: int, chat_id: int) -> None:
@@ -11664,11 +11720,11 @@ STALE_ACTION_ERROR = (
 )
 
 
-def _recover_stale_actions(conn, chat_id: int) -> int:
+def _recover_stale_actions(conn, chat_id: int) -> list[int]:
     """Одобренное, которое давно начато или давно одобрено и не начато, — ошибкой, с заметкой модели.
 
     Процесс мог упасть посреди выполнения: без этого действие оставалось «approved», и следующий ход
-    выполнял его ещё раз (вторая копия кампании). → сколько закрыто.
+    выполнял его ещё раз (вторая копия кампании). → id закрытых (после коммита — _stale_to_telegram).
     """
     rows = conn.execute(
         """
@@ -11689,7 +11745,21 @@ def _recover_stale_actions(conn, chat_id: int) -> int:
             tool_name=r["tool"],
             meta={"detached": True} if r["detached_at"] else None,
         )
-    return len(rows)
+    return [int(r["id"]) for r in rows]
+
+
+def _stale_to_telegram(action_ids) -> None:
+    """Закрытые _recover_stale_actions — итог в сообщение бота, если одобряли из Telegram
+    (иначе там навсегда «Принято — выполняю»). Вызывать после коммита."""
+    if not action_ids:
+        return
+    try:
+        from app.telegram_decisions import action_finished
+
+        for action_id in action_ids:
+            action_finished(int(action_id))
+    except Exception:  # noqa: BLE001 — сообщение в Telegram не должно ронять чат
+        log.exception("Telegram: итог прерванных действий %s", action_ids)
 
 
 def _run_action(ctx: Context, action: dict) -> None:
@@ -11749,6 +11819,13 @@ def _run_action(ctx: Context, action: dict) -> None:
             tool_name=action["tool"],
             meta={"detached": True} if action.get("detached_at") or late else None,
         )
+    # Одобрено из Telegram — итог и «Вернуть как было» в том же сообщении бота.
+    try:
+        from app.telegram_decisions import action_finished
+
+        action_finished(int(action["id"]))
+    except Exception:  # noqa: BLE001 — сообщение в Telegram не должно ронять ход ИИ
+        log.exception("Telegram: итог действия %s", action["id"])
 
 
 @functools.cache
@@ -12260,14 +12337,19 @@ def _handle_call(ctx: Context, chat_id: int, message_id: int, call: dict) -> int
     changes = _changes(target, name, args)
     # Из общего чата — всегда на согласование: права ИИ задаются в каждом проекте, а здесь их нет.
     # После чтения страницы сайта — тоже: действие могла подсказать чужая страница, а не маркетолог.
+    # В чате разбора по расписанию — тоже: разбор идёт без человека и в Директе ничего не меняет.
+    from app.ai_review import is_review_chat
+
+    scheduled = not ctx.general and is_review_chat(chat_id)
     auto = (
         not ctx.general
+        and not scheduled
         and _allowed(ctx.access, plan.categories, plan.change_pct)
         and not _page_was_read(ctx, chat_id)
     )
     # Кампанию целиком маркетолог уже согласовал на доске кнопкой «Согласовать и создать черновик»:
     # второй карточки нет, но это его решение, а не право ИИ действовать самому.
-    agreed = name == "create_campaign" and not auto and not ctx.general and _board_go(target)
+    agreed = name == "create_campaign" and not auto and not ctx.general and not scheduled and _board_go(target)
     go = auto or agreed
     stored = {**args, "_diff": changes} if changes else dict(args)
     if ctx.general:
@@ -12443,11 +12525,12 @@ def run_chat(user_id: int, chat_id: int, progress=None) -> dict:
 
     with acting_as("ai"):
         with pool.connection() as conn:
-            _recover_stale_actions(conn, chat_id)
+            stale = _recover_stale_actions(conn, chat_id)
             approved = conn.execute(
                 "SELECT * FROM ai_actions WHERE chat_id = %s AND status = 'approved' AND started_at IS NULL ORDER BY id",
                 (chat_id,),
             ).fetchall()
+        _stale_to_telegram(stale)
         for action in approved:
             step(0, "Выполняю одобренные действия…")
             _run_action(ctx, action)

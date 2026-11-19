@@ -56,7 +56,7 @@ HEAVY_KINDS = ("load_account", "load_counter")
 
 # Служебные задачи расписания, которые только шлют уведомления (срочное, сигналы, дайджест, напоминание
 # о тарифе): это не синхронизация, в списке задач пользователя их не показываем.
-SYSTEM_KINDS = ("urgent_check", "notify_signals", "plan_reminder", "send_digest")
+SYSTEM_KINDS = ("urgent_check", "notify_signals", "plan_reminder", "send_digest", "compute_effects", "ai_scheduled_review")
 
 
 def backoff_seconds(attempt: int) -> int:

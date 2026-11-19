@@ -120,6 +120,26 @@
           <button class="btn btn--ghost" type="button" :disabled="tgBusy" @click="testTelegram">Тестовое сообщение</button>
           <button class="btn btn--ghost" type="button" :disabled="tgBusy" @click="unlinkTelegram">Отвязать</button>
         </div>
+        <template v-if="notifyPrefs">
+          <h3 class="subhead">Решать из Telegram</h3>
+          <p class="hint">
+            У простых предложений ИИ появятся кнопки «Выполнить» и «Отклонить». Перед выполнением бот переспросит,
+            а после — предложит «Вернуть как было». Где нужно выбрать строки, будет только «Открыть в кабинете».
+          </p>
+          <p class="hint">
+            Внимание: кто откроет ваш Telegram, сможет менять рекламу. Включайте, только если телефон под паролем.
+          </p>
+          <div class="filters">
+            <UiSwitch
+              class="check-row"
+              :checked="!!notifyPrefs.telegram_decide"
+              :disabled="notifyBusy"
+              @change="saveDecide($event.target.checked)"
+            >
+              Кнопки в Telegram
+            </UiSwitch>
+          </div>
+        </template>
         <template v-if="digest">
           <h3 class="subhead">Утренний дайджест</h3>
           <FeatureLockNotice feature="digest">Дайджест в Telegram не входит в ваш тариф.</FeatureLockNotice>
@@ -259,6 +279,10 @@
       </template>
     </form>
 
+    <AiReviewSchedule v-if="tab === 'ai'" />
+
+    <ProjectDefaultsPanel v-if="tab === 'projects'" />
+
     <section v-if="tab === 'profile'" class="panel">
       <h2>Смена пароля</h2>
       <form class="pwd-form" @submit.prevent="changePassword">
@@ -284,7 +308,9 @@
 import UiSkeleton from '../components/ui/UiSkeleton.vue'
 import { computed, onMounted, reactive, ref, watch, watchEffect } from 'vue'
 import { RouterLink } from 'vue-router'
+import AiReviewSchedule from '../components/AiReviewSchedule.vue'
 import FeatureLockNotice from '../components/FeatureLockNotice.vue'
+import ProjectDefaultsPanel from '../components/ProjectDefaultsPanel.vue'
 import RoleChoice from '../components/RoleChoice.vue'
 import UiSelect from '../components/ui/UiSelect.vue'
 import UiStatus from '../components/ui/UiStatus.vue'
@@ -305,7 +331,7 @@ const HOURS = Array.from({ length: 24 }, (_, h) => ({ value: h, label: `${String
  */
 const props = defineProps({ tab: { type: String, default: 'profile' } })
 
-const TAB_TITLES = { profile: 'Профиль', notifications: 'Уведомления', interface: 'Интерфейс', ai: 'ИИ' }
+const TAB_TITLES = { profile: 'Профиль', notifications: 'Уведомления', interface: 'Интерфейс', ai: 'ИИ', projects: 'Для новых проектов' }
 // Вкладки — одна страница: при переходе между ними меняется только заголовок.
 watchEffect(() => useHead(`${TAB_TITLES[props.tab] || 'Настройки'} — Толк`, true))
 
@@ -363,6 +389,18 @@ async function saveNotify(kind, where, value) {
   notifyBusy.value = true
   try {
     notifyPrefs.value = await notifyApi.saveSettings({ [kind]: { [where]: value } })
+  } catch (err) {
+    pushToast(errorText(err), 'error')
+  } finally {
+    notifyBusy.value = false
+  }
+}
+/** «Решать из Telegram»: кнопки «Выполнить / Отклонить» у предложений ИИ, по умолчанию выключено. */
+async function saveDecide(value) {
+  notifyBusy.value = true
+  try {
+    notifyPrefs.value = await notifyApi.saveSettings({ telegram_decide: value })
+    pushToast(value ? 'Кнопки в Telegram включены' : 'Кнопки в Telegram выключены')
   } catch (err) {
     pushToast(errorText(err), 'error')
   } finally {

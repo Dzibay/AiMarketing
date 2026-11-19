@@ -494,7 +494,10 @@ def list_action_logs(
             """,
             params,
         ).fetchall()
-    return describe_logs(user_id, rows)
+    from app import effects
+
+    # Итог правки через 7 и 14 дней — «Цена заявки −18 % за 7 дней» в истории, на главной проекта, у кампании.
+    return effects.attach(user_id, describe_logs(user_id, rows))
 
 
 def describe_logs(user_id: int, rows: list[dict]) -> list[dict]:

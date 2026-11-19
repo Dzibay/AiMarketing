@@ -98,12 +98,22 @@ def direct(monkeypatch, regions):
         copy_status="ok",
         regions={"groups": 2, "updated": 2, "errors": []},
         moderation={"drafts": 3, "sent": 3, "errors": [], "status": "ok"},
+        replace={"from_city": "Москва", "to_city": "Казань", "from_site": "", "to_site": "",
+                 "applied": 4, "skipped": 0, "left": [], "too_long": []},
+        copy_kw={},
+        failed=None,
     )
 
     def duplicate(user_id, row_id, *, target_account_id=None, name=None, workspace_id=None, **kw):
         fake.calls.append(("copy", row_id, target_account_id, name, workspace_id))
-        return {"campaign": {"id": 70, "name": name}, "groups": 2, "keywords": 5, "autotargeting": 0, "ads": 3,
-                "warnings": [], "status": fake.copy_status}
+        fake.copy_kw = kw
+        out = {"campaign": {"id": 70, "name": name}, "groups": 2, "keywords": 5, "autotargeting": 0, "ads": 3,
+               "warnings": [], "status": fake.copy_status}
+        if fake.replace is not None:
+            out["replace"] = fake.replace
+        if fake.failed is not None:
+            out["failed"] = fake.failed
+        return out
 
     def set_regions(user_id, row_id, region_ids, *, workspace_id=None):
         fake.calls.append(("regions", row_id, region_ids, workspace_id))
@@ -533,7 +543,9 @@ def test_unknown_regions(monkeypatch, regions):
 def test_copy_geo_plan(regions):
     plan = ai_agent._p_copy_geo(FakeContext(), {"campaign_row_id": 7, "region_ids": [43]})
     assert plan.summary == (
-        "Копия «Поиск Москва» на новое гео: копия «Поиск Москва — Казань» → Казань → на модерацию; оригинал работает"
+        "Копия «Поиск Москва» на новое гео: копия «Поиск Москва — Казань» → Казань"
+        " → замена старого города и сайта в текстах → на модерацию, если старого города в текстах не осталось;"
+        " оригинал работает"
     )
     assert plan.categories == ["campaigns"]
 
@@ -544,7 +556,7 @@ def test_copy_geo_plan(regions):
     )
     assert other.summary == (
         "Копия «Поиск Москва» на новое гео: копия «Поиск Татарстан» в кабинет okna-spb"
-        " → Республика Татарстан, кроме: Казань; оригинал работает"
+        " → Республика Татарстан, кроме: Казань → замена старого города и сайта в текстах; оригинал работает"
     )
 
 
@@ -583,6 +595,28 @@ def test_copy_geo_sets_regions_then_moderates(direct):
     assert out["regions"] == {"groups": 2, "updated": 2, "errors": []}
     assert out["moderation"]["sent"] == 3
     assert "note" not in out
+    # Тексты копии — с заменой города по регионам оригинала и копии.
+    assert direct.copy_kw == {"region_ids": [43], "replace": {}}
+    assert out["replace"]["applied"] == 4
+
+
+@pytest.mark.parametrize(
+    "replace, note",
+    [
+        ({"from_city": "Москва", "to_city": "Казань", "applied": 1, "skipped": 0, "left": ["Москва-Сити"]},
+         "В текстах копии остался старый город: «Москва-Сити»"),
+        ({"from_city": "Москва", "to_city": "Казань", "applied": 1, "skipped": 2, "left": []},
+         "В текстах копии остался старый город — копия осталась черновиком"),
+        (None, "Тексты копии не проверены на старый город"),
+    ],
+)
+def test_copy_geo_with_old_city_left_stays_draft(direct, replace, note):
+    """Объявления со старым городом в тексте звали бы не туда — такую копию на модерацию не отправляем."""
+    direct.replace = replace
+    out = ai_agent._x_copy_geo(FakeContext(), {"campaign_row_id": 7, "region_ids": [43]})
+    assert [call[0] for call in direct.calls] == ["copy", "regions"]
+    assert out["note"].startswith(note)
+    assert "moderation" not in out
 
 
 def test_copy_geo_to_other_account(direct):
@@ -619,6 +653,29 @@ def test_copy_geo_partial_copy_is_not_moderated(direct):
     assert out["note"] == "Копия собрана не полностью — проверьте её и отправьте на модерацию сами"
 
 
+@pytest.mark.parametrize(
+    "failed, replace_extra, note",
+    [
+        ({"ads": 1, "sitelinks": 0, "callouts": 0}, {}, "Директ не принял часть копии (объявлений: 1)"),
+        ({"ads": 0, "sitelinks": 1, "callouts": 2}, {},
+         "Директ не принял часть копии (наборов быстрых ссылок: 1, уточнений: 2)"),
+        (None, {"too_long": ["Уточнение «Доставка по Санкт-Петербургу» — длиннее 25 знаков"]},
+         "Директ не принял часть копии — тексты после замены длиннее лимита"),
+        (None, {"doubtful": ["ковров"]}, "Замены «ковров» могли задеть обычные слова"),
+    ],
+)
+def test_copy_geo_incomplete_or_doubtful_copy_stays_draft(direct, failed, replace_extra, note):
+    """Объявление, набор ссылок или уточнение не создались (часто — длиннее лимита после замены) или замена
+    могла задеть обычное слово — копию проверяет человек, на модерацию её не отправляем."""
+    direct.failed = failed
+    direct.replace = {**direct.replace, **replace_extra}
+    out = ai_agent._x_copy_geo(FakeContext(), {"campaign_row_id": 7, "region_ids": [43]})
+    assert [call[0] for call in direct.calls] == ["copy", "regions"]
+    assert out["note"].startswith(note)
+    assert out["note"].endswith("отправьте на модерацию сами")
+    assert "moderation" not in out
+
+
 def test_copy_geo_draft_on_request(direct):
     out = ai_agent._x_copy_geo(FakeContext(), {"campaign_row_id": 7, "region_ids": [43], "moderate": "false"})
     assert [call[0] for call in direct.calls] == ["copy", "regions"]
@@ -634,7 +691,7 @@ def test_copy_geo_reports_moderation_error(direct):
 def test_copy_geo_changes(monkeypatch, regions):
     monkeypatch.setattr(geo, "campaign_regions", lambda user_id, campaign_row_id: [213, 20728])
     assert ai_agent._changes(FakeContext(), "copy_campaign_geo", {"campaign_row_id": 7, "region_ids": [43]}) == [
-        {"what": "Копия", "before": "нет", "after": "«Поиск Москва — Казань» — на модерации"},
+        {"what": "Копия", "before": "нет", "after": "«Поиск Москва — Казань» — на модерации, если старого города в текстах не осталось, иначе черновик"},
         {"what": "Регионы копии", "before": "Москва, Королёв", "after": "Казань"},
         {"what": "Оригинал «Поиск Москва»", "before": "работает", "after": "без изменений"},
     ]

@@ -12,6 +12,10 @@
         <component :is="t.icon" :size="16" aria-hidden="true" />
         <span>{{ t.label }}</span>
       </button>
+      <button v-if="hasOtherProjects" type="button" class="snav__copy" @click="copyOpen = true">
+        <Copy :size="16" aria-hidden="true" />
+        <span>Взять из проекта…</span>
+      </button>
     </nav>
 
     <div class="set__body">
@@ -83,10 +87,11 @@
                 {{ generalBusy ? 'Сохраняем…' : 'Сохранить' }}
               </button>
             </div>
+            <DefaultsAsk kind="kpi" class="field--wide" />
           </form>
         </section>
 
-        <BudgetProtectionPanel @set-target="focusTarget" />
+        <BudgetProtectionPanel :key="protKey" @set-target="focusTarget" />
 
         <section class="panel">
           <div class="panel__head">
@@ -216,6 +221,7 @@
               {{ notesBusy ? 'Сохраняем…' : 'Сохранить' }}
             </button>
           </div>
+          <DefaultsAsk kind="model_class" />
         </form>
 
         <section class="ccard ai-simple">
@@ -282,6 +288,7 @@
               {{ aiBusy ? 'Сохраняем…' : 'Сохранить' }}
             </button>
           </div>
+          <DefaultsAsk kind="ai_access" />
         </form>
       </section>
 
@@ -616,6 +623,7 @@
 
       <ExpertHint>Доступ ИИ, память помощника, кабинеты и кампании, шаблон ссылки, клиент и архив</ExpertHint>
     </div>
+    <CopyFromProjectDialog :open="copyOpen" :ws-id="ws.id" @close="copyOpen = false" @applied="copyApplied" />
   </div>
 </template>
 
@@ -627,6 +635,7 @@ import { RouterLink, useRoute, useRouter } from 'vue-router'
 import {
   Archive,
   ArchiveRestore,
+  Copy,
   FileText,
   Folder,
   Link2,
@@ -646,6 +655,9 @@ import { CAMPAIGN_STATES, CAMPAIGN_TYPES, formatDateTime, niceQuotes, plural, ru
 import BriefPanel from './BriefPanel.vue'
 import BudgetProtectionPanel from './BudgetProtectionPanel.vue'
 import ContextFilesPanel from './ContextFilesPanel.vue'
+import CopyFromProjectDialog from './CopyFromProjectDialog.vue'
+import DefaultsAsk from '../../components/DefaultsAsk.vue'
+import { offerDefaults } from '../../composables/useDefaultsAsk'
 import LinkTemplatePanel from './LinkTemplatePanel.vue'
 import { useWs } from './context'
 import TermHint from '../../components/TermHint.vue'
@@ -664,6 +676,20 @@ const { ws, reload, patch } = useWs()
 const { expert } = useExpert()
 const { clients, workspaces } = useWorkspaces()
 const route = useRoute()
+
+// «Взять из проекта…»: после переноса формы вкладок берут новые значения, «Защита бюджета» перечитывается.
+const copyOpen = ref(false)
+const protKey = ref(0)
+const hasOtherProjects = computed(() => workspaces.value.some((w) => w.id !== ws.value.id && !w.archived))
+
+function copyApplied(updated) {
+  patch(updated)
+  Object.assign(general, generalFromWs(updated))
+  Object.assign(ai, aiFromWs(updated))
+  Object.assign(style, styleFromWs(updated))
+  notes.value = updated.ai_notes || ''
+  protKey.value += 1
+}
 const router = useRouter()
 
 // --- Вкладки (макет «Диалог»): три в простом режиме, остальные — в экспертном. Вкладка — в #адресе. ----
@@ -798,9 +824,11 @@ async function saveGeneral() {
   }
   generalBusy.value = true
   try {
-    const updated = await wsApi.update(ws.value.id, generalPayload.value)
+    const sent = generalPayload.value
+    const updated = await wsApi.update(ws.value.id, sent)
     patch(updated)
     Object.assign(general, generalFromWs(updated))
+    if (updated.kpi_type && ('kpi_type' in sent || 'kpi_target' in sent)) offerDefaults(updated.id, 'kpi')
     pushToast('Сохранено', 'ok')
   } catch (err) {
     generalError.value = errorText(err)
@@ -1181,6 +1209,7 @@ async function saveAi() {
     })
     patch(updated)
     Object.assign(ai, aiFromWs(updated))
+    offerDefaults(updated.id, 'ai_access')
     pushToast('Доступ ИИ сохранён', 'ok')
   } catch (err) {
     aiError.value = errorText(err)
@@ -1242,9 +1271,12 @@ async function saveHelper() {
   notesBusy.value = true
   notesError.value = ''
   try {
+    const oldModel = ws.value.ai_style?.model_class || ''
     const updated = await wsApi.update(ws.value.id, { ai_style: { ...style }, ai_notes: notes.value })
     patch(updated)
+    const modelChanged = (updated.ai_style?.model_class || '') !== oldModel
     Object.assign(style, styleFromWs(updated))
+    if (modelChanged) offerDefaults(updated.id, 'model_class')
     pushToast('Настройки помощника сохранены', 'ok')
   } catch (err) {
     notesError.value = errorText(err)
@@ -1402,6 +1434,11 @@ onMounted(() => {
 .snav button:hover {
   background: color-mix(in srgb, var(--ink) 6%, transparent);
   color: var(--ink);
+}
+.snav__copy {
+  margin-top: 8px;
+  color: var(--muted) !important;
+  font-weight: 500 !important;
 }
 .snav button.active {
   background: var(--surface);

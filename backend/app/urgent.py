@@ -557,11 +557,18 @@ def _already_sent(event: dict, recent: list[dict], now: datetime) -> bool:
     return False
 
 
-def _telegram_text(event: dict) -> str:
+def _telegram_text(event: dict, with_url: bool = True) -> str:
     from app.settings_store import public_base_url
 
     url = event["tg_link"] or (f"{(public_base_url() or '').rstrip('/')}{event['link']}" if event["link"] else "")
-    return "\n".join(x for x in (f"Срочно · {event['where']}", event["sentence"], url) if x)
+    return "\n".join(x for x in (f"Срочно · {event['where']}", event["sentence"], url if with_url else "") if x)
+
+
+def _telegram_markup(event: dict) -> dict | None:
+    """«Решать из Telegram»: кнопка «Открыть в кабинете». Готового действия у сигнала нет — решать в кабинете."""
+    from app.telegram_decisions import cabinet_url, open_markup
+
+    return open_markup(cabinet_url(event["link"])) if event["link"] else None
 
 
 def run(user_id: int, now: datetime | None = None) -> dict:
@@ -574,8 +581,9 @@ def run(user_id: int, now: datetime | None = None) -> dict:
     is_quiet = quiet(now)
     flushed = 0 if is_quiet else flush_telegram(user_id, lambda key: object_of(key) in objects, now)
     with pool.connection() as conn:
-        row = conn.execute("SELECT notify_prefs FROM users WHERE id = %s", (user_id,)).fetchone()
+        row = conn.execute("SELECT notify_prefs, telegram_decide FROM users WHERE id = %s", (user_id,)).fetchone()
     prefs = prefs_from((row or {}).get("notify_prefs"))["urgent"]
+    buttons = bool((row or {}).get("telegram_decide")) and not is_quiet
     if not (prefs["cabinet"] or prefs["telegram"]):
         return {"events": len(events), "sent": 0, "flushed": flushed}
     recent = _recent_keys(user_id, now - timedelta(days=MODERATION_LOOKBACK_DAYS + 1))
@@ -584,6 +592,7 @@ def run(user_id: int, now: datetime | None = None) -> dict:
     for e in events:
         if _already_sent(e, recent, now):
             continue
+        markup = _telegram_markup(e) if buttons else None
         notify(
             user_id,
             "urgent",
@@ -593,8 +602,10 @@ def run(user_id: int, now: datetime | None = None) -> dict:
             workspace_id=e["workspace_id"],
             severity="error",
             dedup_key=f"urgent:{e['object']}:{day}",
-            telegram_text=_telegram_text(e),
+            # С кнопкой ссылка на кабинет — в кнопке; ссылка на Директ (деньги) остаётся в тексте.
+            telegram_text=_telegram_text(e, with_url=not (markup and not e["tg_link"])),
             telegram_later=is_quiet,
+            telegram_markup=markup,
         )
         recent.append({"dedup_key": f"urgent:{e['object']}:{day}", "created_at": now})
         sent += 1

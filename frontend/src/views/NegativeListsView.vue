@@ -93,11 +93,21 @@
               {{ draftChars.toLocaleString('ru-RU') }} из 20 000 символов
             </span>
           </div>
-          <p v-if="selectedId && detail?.stale" class="neg-stale">
-            Список менялся после применения: {{ detail.stale }}
-            {{ plural(detail.stale, 'кампания ждёт', 'кампании ждут', 'кампаний ждут') }} обновления. Откройте
-            предпросмотр и примените заново.
-          </p>
+          <div v-if="selectedId && detail?.stale" class="neg-stale">
+            <span>
+              Список менялся после применения: {{ detail.stale }}
+              {{ plural(detail.stale, 'кампания ждёт', 'кампании ждут', 'кампаний ждут') }} обновления.
+            </span>
+            <button
+              class="btn btn--ghost btn--sm"
+              type="button"
+              :disabled="previewing || applying || dirty"
+              :title="dirty ? 'Сначала сохраните правки списка' : ''"
+              @click="loadCatchUp"
+            >
+              {{ previewing ? 'Считаем…' : `Догнать ${detail.stale} ${plural(detail.stale, 'кампанию', 'кампании', 'кампаний')}` }}
+            </button>
+          </div>
           <div class="neg-foot">
             <button v-if="dirty" class="btn btn--ghost" type="button" :disabled="busy" @click="resetForm">
               {{ selectedId ? 'Отменить правки' : 'Отмена' }}
@@ -184,6 +194,9 @@
 
       <section v-if="preview" class="neg-block">
         <h2 class="section-h">Что изменится в Директе</h2>
+        <p v-if="preview.catchUp" class="neg-lead">
+          Только кампании, которые отстали от списка; остальные привязки не меняем.
+        </p>
         <p class="neg-lead">
           Список «{{ preview.list.name }}». Посчитано по последней загрузке{{
             preview.synced_at ? ` (${formatTime(preview.synced_at)})` : ''
@@ -568,6 +581,21 @@ async function remove() {
   }
 }
 
+/** «Догнать N кампаний»: предпросмотр только по отставшим кампаниям — применяется одним подтверждением. */
+async function loadCatchUp() {
+  previewing.value = true
+  result.value = null
+  try {
+    const out = await webApi.negativeCatchUpPreview(selectedId.value)
+    preview.value = { ...out, catchUp: true }
+  } catch (err) {
+    pushToast(errorText(err), 'error')
+    await loadDetail().catch(() => {})
+  } finally {
+    previewing.value = false
+  }
+}
+
 async function loadPreview() {
   previewing.value = true
   result.value = null
@@ -582,17 +610,23 @@ async function loadPreview() {
 
 async function apply() {
   const t = preview.value.totals
+  const catchUp = preview.value.catchUp
   const question = t.changed
     ? `Записать в Директ: ${t.changed} ${plural(t.changed, 'кампания', 'кампании', 'кампаний')}, ` +
       `+${t.add} / −${t.remove} фраз?`
-    : 'В Директе ничего не изменится — только обновим привязки списка. Продолжить?'
+    : catchUp
+      ? 'В Директе ничего не изменится — только отметим кампании обновлёнными. Продолжить?'
+      : 'В Директе ничего не изменится — только обновим привязки списка. Продолжить?'
   if (!await askConfirm(question)) return
   applying.value = true
   applyText.value = 'Ставим задачу…'
+  const onProgress = (job) => {
+    applyText.value = `Применяем: ${jobProgressText(job)}`
+  }
   try {
-    const out = await webApi.negativeApply(selectedId.value, [...checked.value], (job) => {
-      applyText.value = `Применяем: ${jobProgressText(job)}`
-    })
+    const out = catchUp
+      ? await webApi.negativeCatchUp(selectedId.value, preview.value.campaign_row_ids, onProgress)
+      : await webApi.negativeApply(selectedId.value, [...checked.value], onProgress)
     result.value = out
     preview.value = null
     pushToast(
@@ -725,6 +759,10 @@ onMounted(async () => {
   font-size: 13px;
 }
 .neg-stale {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
   margin: 0;
   color: var(--warn);
   font-size: 13px;

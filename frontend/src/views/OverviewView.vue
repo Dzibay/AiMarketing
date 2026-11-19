@@ -39,6 +39,10 @@
       />
       <MoneyBlock :balances="data.balances" :refreshing="refreshing" @refresh="refresh" />
       <BudgetProtectAll />
+      <ReportsDoneLine />
+      <p v-if="data.effects_week" class="sync-status overview-effects">
+        {{ data.effects_week.text }} · <RouterLink to="/cabinet/history">История</RouterLink>
+      </p>
 
       <h2 class="section-h"><span class="hico" aria-hidden="true"><Layers /></span>Проекты <span class="cgroup__n">{{ projectCards.length }}</span></h2>
       <div class="pstrip">
@@ -112,6 +116,7 @@
 
       <MoneyBlock :balances="data.balances" :refreshing="refreshing" @refresh="refresh" />
       <BudgetProtectAll />
+      <ReportsDoneLine />
 
       <section class="panel overview-spaces">
         <div class="panel__head">
@@ -290,6 +295,9 @@
           </div>
         </div>
         <p v-if="reviewLine" class="sync-status overview-review">{{ reviewLine }}</p>
+        <p v-if="data.effects_week" class="sync-status overview-effects">
+          {{ data.effects_week.text }} · <RouterLink to="/cabinet/history">История</RouterLink>
+        </p>
         <p v-if="!filteredProblems.length" class="empty">
           {{
             data.problems.length
@@ -318,6 +326,7 @@ import HomeHeadline from '../components/HomeHeadline.vue'
 import KpiTile from '../components/KpiTile.vue'
 import MoneyBlock from '../components/MoneyBlock.vue'
 import BudgetProtectAll from '../components/BudgetProtectAll.vue'
+import ReportsDoneLine from '../components/ReportsDoneLine.vue'
 import OnboardingChecklist from '../components/OnboardingChecklist.vue'
 import PendingDecisions from '../components/PendingDecisions.vue'
 import ProblemList from '../components/ProblemList.vue'

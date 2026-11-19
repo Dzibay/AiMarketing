@@ -182,6 +182,7 @@
             <div class="prow__main">
               <b>{{ keepNumbers(a.title || a.action) }}</b>
               <span class="meta-note camp-act-meta">{{ formatDateTime(a.created_at) }}<ActionWho :source="a.source" /></span>
+              <EffectLine v-if="a.effect && !a.undone_at" :effect="a.effect" />
             </div>
             <!-- Окно отката покажет, что вернётся, и спросит подтверждение. -->
             <button v-if="a.undo" class="btn btn--ghost btn--sm" type="button" @click="openUndo(a.id, loadRecent)">
@@ -344,6 +345,7 @@ import {
   Wallet,
 } from '@lucide/vue'
 import ActionWho from '../../components/ActionWho.vue'
+import EffectLine from '../../components/EffectLine.vue'
 import BudgetDialog from '../../components/BudgetDialog.vue'
 import CampaignStructure from '../../components/CampaignStructure.vue'
 import ExpertHint from '../../components/ExpertHint.vue'

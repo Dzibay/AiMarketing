@@ -405,23 +405,83 @@ def _linked_ids(list_id: int) -> set[int]:
     return {r["campaign_row_id"] for r in rows}
 
 
-def _selection(user_id: int, list_id: int, campaign_row_ids: list[int]) -> tuple[dict, set[int], list[dict]]:
+def stale_campaign_ids(user_id: int, list_id: int) -> list[int]:
+    """Кампании списка, отставшие от его фраз: список правили после последнего применения к ним."""
+    with pool.connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT lc.campaign_row_id
+            FROM negative_list_campaigns lc
+            JOIN negative_lists l ON l.id = lc.list_id
+            WHERE lc.list_id = %s AND l.user_id = %s AND lc.applied_at < l.phrases_updated_at
+            ORDER BY lc.campaign_row_id
+            """,
+            (list_id, user_id),
+        ).fetchall()
+    return [int(r["campaign_row_id"]) for r in rows]
+
+
+def _selection(
+    user_id: int, list_id: int, campaign_row_ids: list[int], *, catch_up: bool = False
+) -> tuple[dict, set[int], list[dict]]:
+    """catch_up — «Догнать»: только эти кампании и только из уже привязанных; остальные привязки не трогаем
+    (обычное применение снимает список со всех привязанных кампаний, которых нет в выборе)."""
     nlist = _list_row(user_id, list_id)
     selected = {int(x) for x in campaign_row_ids}
     if len(selected) > MAX_TARGETS:
         raise YandexError("limit", f"Слишком много кампаний за раз (макс. {MAX_TARGETS}).")
+    if catch_up:
+        # Отвязанные за это время кампании молча пропускаем: догоняем только то, где список стоит.
+        selected &= _linked_ids(list_id)
+        if not selected:
+            raise YandexError("empty", "Все кампании списка уже обновлены")
+        return nlist, selected, _campaigns(user_id, sorted(selected))
     rows = _campaigns(user_id, sorted(selected | _linked_ids(list_id)))
     if not selected <= {r["id"] for r in rows}:
         raise YandexError("not-found")
     return nlist, selected, rows
 
 
-def _entry(nlist: dict, row: dict, selected: set[int], links: list[dict], current: list[str]) -> dict:
+def plan_only_add(current: list[str], only_add: list[str], owned: list[str]) -> dict:
+    """Дописать в кампанию только эти фразы списка (из чистки «В общий список …»): ничего не убираем и не трогаем
+    другие неприменённые правки списка — их маркетолог не видел в подтверждении, они ждут «Догнать»."""
+    seen = {phrase_key(p) for p in current}
+    add: list[str] = []
+    for phrase in only_add:
+        key = phrase_key(phrase)
+        if key not in seen:
+            seen.add(key)
+            add.append(phrase)
+    owned_keys = {phrase_key(p) for p in owned}
+    return {
+        "add": add,
+        "remove": [],
+        "final": list(current) + add,
+        "owned": list(owned) + [p for p in add if phrase_key(p) not in owned_keys],
+        "handover": [],
+        "changed": bool(add),
+    }
+
+
+def _entry(
+    nlist: dict,
+    row: dict,
+    selected: set[int],
+    links: list[dict],
+    current: list[str],
+    only_add: list[str] | None = None,
+) -> dict:
     mine = next((link for link in links if link["list_id"] == nlist["id"]), None)
     protected = {phrase_key(p) for link in links if link["list_id"] != nlist["id"] for p in link["phrases"] or []}
     is_selected = row["id"] in selected
     desired = list(nlist["phrases"] or []) if is_selected else None
-    plan = plan_campaign(current, desired, list(mine["added_phrases"] or []) if mine else [], protected)
+    owned = list(mine["added_phrases"] or []) if mine else []
+    if only_add is not None and is_selected and mine:
+        plan = plan_only_add(current, only_add, owned)
+        # Кампания догнала список целиком (других правок не было) — тогда её можно считать обновлённой.
+        plan["up_to_date"] = not plan_campaign(plan["final"], desired, plan["owned"], protected)["changed"]
+    else:
+        plan = plan_campaign(current, desired, owned, protected)
     action = "detach" if not is_selected else ("update" if mine else "attach")
 
     reason = _blocked(row)
@@ -467,9 +527,9 @@ def _totals(entries: list[dict]) -> dict:
     }
 
 
-def preview_apply(user_id: int, list_id: int, campaign_row_ids: list[int]) -> dict:
+def preview_apply(user_id: int, list_id: int, campaign_row_ids: list[int], *, catch_up: bool = False) -> dict:
     """План по данным последней синхронизации; при применении минус-фразы перечитываются из Директа."""
-    nlist, selected, rows = _selection(user_id, list_id, campaign_row_ids)
+    nlist, selected, rows = _selection(user_id, list_id, campaign_row_ids, catch_up=catch_up)
     links = _links(user_id, [r["id"] for r in rows])
     entries = [
         _entry(nlist, row, selected, links.get(row["id"], []), _parse_phrases(row.get("negative_keywords") or "[]"))
@@ -524,9 +584,10 @@ def _commit(user_id: int, list_id: int, entry: dict) -> None:
                 VALUES (%s, %s, %s, %s, NOW())
                 ON CONFLICT (list_id, campaign_row_id) DO UPDATE SET
                     added_phrases = EXCLUDED.added_phrases,
-                    applied_at = NOW()
+                    applied_at = CASE WHEN %s THEN NOW() ELSE negative_list_campaigns.applied_at END
                 """,
-                (list_id, campaign_row_id, user_id, Jsonb(plan["owned"])),
+                # Дописали только фразы из чистки, а другие правки списка ещё ждут — кампания остаётся «отстающей».
+                (list_id, campaign_row_id, user_id, Jsonb(plan["owned"]), plan.get("up_to_date", True)),
             )
         if not plan["handover"]:
             return
@@ -584,7 +645,13 @@ def _undo_entry(list_id: int, entry: dict, links: list[dict]) -> dict:
 
 
 def _apply_account(
-    user_id: int, nlist: dict, selected: set[int], group: list[dict], out: dict, undo: dict | None = None
+    user_id: int,
+    nlist: dict,
+    selected: set[int],
+    group: list[dict],
+    out: dict,
+    undo: dict | None = None,
+    only_add: list[str] | None = None,
 ) -> None:
     """undo — сюда кладём, как вернуть каждую изменённую кампанию: {id кампании: _undo_entry}."""
     undo = {} if undo is None else undo
@@ -602,7 +669,7 @@ def _apply_account(
         if current is None:
             out["skipped"].append({"campaign_row_id": row["id"], "reason": "not-found"})
             continue
-        entry = _entry(nlist, row, selected, links.get(row["id"], []), current)
+        entry = _entry(nlist, row, selected, links.get(row["id"], []), current, only_add)
         if entry["blocked"]:
             out["skipped"].append({"campaign_row_id": row["id"], "reason": entry["blocked"]})
         elif not entry["changed"]:
@@ -656,13 +723,28 @@ def apply_negative_list(
     list_id: int,
     campaign_row_ids: list[int],
     progress: Progress | None = None,
+    *,
+    catch_up: bool = False,
+    only_add: list[str] | None = None,
 ) -> dict:
-    """Записывает список в выбранные кампании и снимает с тех, где его больше нет. Задачей очереди."""
+    """Записывает список в выбранные кампании и снимает с тех, где его больше нет. Задачей очереди.
+
+    catch_up — «Догнать N кампаний»: обновить только выбранные привязанные кампании, ничего не снимая.
+    only_add (вместе с catch_up) — из чистки «В общий список …»: дописать только эти фразы списка, ничего не убирая;
+    прочие неприменённые правки списка в Директ не уходят (их не было в подтверждении)."""
+    if only_add is not None:
+        if not catch_up:
+            raise YandexError("payload", "only_add — только для догоняющего применения")
+        only_add = [str(p).strip() for p in only_add if str(p or "").strip()]
     with try_worker_lock(f"negative-lists:{user_id}") as locked:
         if not locked:
             # Два применения разом перетёрли бы минус-фразы общей кампании — повтор задачи позже.
             raise YandexError("busy")
-        nlist, selected, rows = _selection(user_id, list_id, campaign_row_ids)
+        nlist, selected, rows = _selection(user_id, list_id, campaign_row_ids, catch_up=catch_up)
+        if only_add is not None:
+            # Фразу успели убрать из списка до запуска задачи — в кампании её не пишем.
+            in_list = {phrase_key(p) for p in nlist["phrases"] or []}
+            only_add = [p for p in only_add if phrase_key(p) in in_list]
         by_account: dict[int, list[dict]] = defaultdict(list)
         for row in rows:
             by_account[row["account_id"]].append(row)
@@ -674,7 +756,7 @@ def apply_negative_list(
                 progress(n, len(by_account), group[0]["client_name"] or group[0]["client_login"])
             before = _handled(out)
             try:
-                _apply_account(user_id, nlist, selected, group, out, undo)
+                _apply_account(user_id, nlist, selected, group, out, undo, only_add)
             except YandexError as exc:
                 out["errors"].append(
                     {
@@ -700,10 +782,12 @@ def apply_negative_list(
     out["status"] = "ok" if not out["errors"] else ("partial" if done else "error")
     parts = [f"привязан к кампаниям: {out['linked']}" if out["linked"] else "",
              f"снят с кампаний: {out['detached']}" if out["detached"] else ""]
+    if catch_up:
+        parts = [f"обновлён в кампаниях: {out['linked']}"]
     _log_action(
         user_id,
         "negative_list_apply",
-        {"list_id": list_id, "name": nlist["name"], "campaign_row_ids": sorted(selected)},
+        {"list_id": list_id, "name": nlist["name"], "campaign_row_ids": sorted(selected), "catch_up": catch_up},
         out,
         out["status"],
         title=f"Список минус-фраз «{nlist['name']}»" + (" — " + ", ".join(p for p in parts if p) if done else ""),

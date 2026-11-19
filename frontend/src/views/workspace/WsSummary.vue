@@ -37,7 +37,7 @@
 
     <h2 class="section-h">
       <span class="hico" aria-hidden="true"><Megaphone /></span>Кампании проекта
-      <small class="home-link"><RouterLink :to="`/w/${ws.id}/campaigns`">Все кампании</RouterLink></small>
+      <small class="home-link"><RouterLink :to="`/w/${ws.id}/campaigns`">Все кампании</RouterLink> · <RouterLink :to="`/w/${ws.id}/report`">Отчёт клиенту</RouterLink></small>
     </h2>
     <div v-if="topCampaigns.length" class="ccard">
       <div v-for="c in topCampaigns" :key="c.campaign_row_id" class="crow">
@@ -246,6 +246,7 @@
                 <span>{{ formatDateTime(a.created_at) }}</span>
                 <ActionWho :source="a.source" />
               </small>
+              <EffectLine v-if="a.effect && !a.undone_at" :effect="a.effect" />
             </div>
             <UiStatus v-if="a.undone_at" tone="off" :icon="Undo2" label="Возвращено" />
             <UiStatus v-else-if="ACTION_RESULT[a.status]" v-bind="ACTION_RESULT[a.status]" />
@@ -280,6 +281,7 @@ import {
   Wallet,
 } from '@lucide/vue'
 import ActionWho from '../../components/ActionWho.vue'
+import EffectLine from '../../components/EffectLine.vue'
 import BudgetForecast from '../../components/BudgetForecast.vue'
 import DataFreshness from '../../components/DataFreshness.vue'
 import ExpertHint from '../../components/ExpertHint.vue'

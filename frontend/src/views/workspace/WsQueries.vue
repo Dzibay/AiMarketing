@@ -573,7 +573,7 @@
         <button class="btn btn--ghost" type="button" :disabled="!!busy" @click="markSelected('target')">Целевые</button>
         <UiSelect
           :model-value="null"
-          :options="BULK_LEVELS"
+          :options="bulkLevels"
           placeholder="Уровень минус-фраз…"
           aria-label="Уровень минус-фраз"
           :disabled="!!busy"
@@ -609,6 +609,15 @@
     <div v-if="mem.selected.size && !phone" class="bulk-bar">
       <span>Выбрано: {{ mem.selected.size }}</span>
       <button class="btn btn--ghost" type="button" :disabled="mem.busy" @click="forget">Забыть</button>
+      <button
+        class="btn btn--ghost"
+        type="button"
+        :disabled="mem.busy || !memNegPicked"
+        title="Решения «в минус» будут работать во всех ваших проектах"
+        @click="shareSelected"
+      >
+        Для всех проектов
+      </button>
       <button class="btn btn--ghost" type="button" @click="mem.selected = new Set()">Снять выбор</button>
     </div>
     <UiSkeleton v-if="mem.loading && !mem.items.length" variant="text" :count="3" label="Загружаем" />
@@ -654,6 +663,7 @@
             </td>
             <td data-label="Минус-фраза">
               {{ m.verdict === 'negative' && m.negative_phrase ? `${m.negative_phrase} · ${LEVELS[m.level] || m.level}` : '—' }}
+              <span v-if="isShared(m)" class="chip chip--src-rule">во всех проектах</span>
             </td>
             <td data-label="Когда">
               {{ formatDateTime(m.updated_at) }}
@@ -670,10 +680,34 @@
       <span class="sync-status">Показано {{ mem.items.length }} из {{ mem.total }}</span>
       <button class="btn btn--ghost" type="button" :disabled="mem.loading" @click="loadMemory(true)">Показать ещё</button>
     </div>
+    <div v-if="shared.items.length" class="shared-mem">
+      <h3 class="section-h">Для всех проектов</h3>
+      <p class="hint">
+        Эти слова и фразы минусуем по памяти во всех ваших проектах и показываем ИИ как пример. Решение проекта
+        сильнее: если запрос с таким словом отмечен в проекте целевым, там оно не работает.
+      </p>
+      <ul class="shared-mem__list">
+        <li v-for="e in shared.items" :key="e.id" class="chip">
+          {{ e.phrase }}
+          <button
+            class="link-btn"
+            type="button"
+            :disabled="shared.busy"
+            :aria-label="`Убрать «${e.phrase}» из памяти для всех проектов`"
+            @click="unshare(e)"
+          >
+            <X aria-hidden="true" />
+          </button>
+        </li>
+      </ul>
+    </div>
     <!-- Телефон: выбор начинается долгим нажатием на карточку, поэтому действия — внизу, над нижней панелью. -->
     <div v-if="mem.selected.size && phone" class="bulk-bar queries-applybar">
       <span>Выбрано: {{ mem.selected.size }}</span>
       <button class="btn btn--ghost btn--sm" type="button" :disabled="mem.busy" @click="forget">Забыть</button>
+      <button class="btn btn--ghost btn--sm" type="button" :disabled="mem.busy || !memNegPicked" @click="shareSelected">
+        Для всех проектов
+      </button>
       <button class="btn btn--ghost btn--sm" type="button" @click="mem.selected = new Set()">Снять выбор</button>
     </div>
   </section>
@@ -814,7 +848,7 @@ import { useExpert } from '../../composables/useExpert'
 import { useViewport } from '../../composables/useViewport'
 import TermHint from '../../components/TermHint.vue'
 import UndoDialog from '../../components/UndoDialog.vue'
-import { errorText, jobProgressText, wsApi } from '../../api/web'
+import { errorText, jobProgressText, webApi, wsApi } from '../../api/web'
 import { askConfirm } from '../../composables/useConfirm'
 import { pushToast } from '../../composables/useToasts'
 import { undoAction } from '../../composables/useUndo'
@@ -884,6 +918,18 @@ const BULK_LEVELS = [
   { value: 'adgroup', label: 'Все на группу' },
   { value: 'campaign', label: 'Все на кампанию' },
 ]
+// Третий уровень «В общий список …» — только в расширенном режиме (страница списков тоже там) и только
+// если списки есть: фраза уходит в список и во все его кампании.
+const sharedLists = ref([])
+const LIST_LEVEL = 'list:'
+const isListLevel = (level) => String(level || '').startsWith(LIST_LEVEL)
+const listOptions = computed(() =>
+  expert.value ? sharedLists.value.map((l) => ({ id: l.id, value: `${LIST_LEVEL}${l.id}`, name: l.name })) : [],
+)
+const bulkLevels = computed(() => [
+  ...BULK_LEVELS,
+  ...listOptions.value.map((o) => ({ value: o.value, label: `Все в общий список «${o.name}»` })),
+])
 const VERDICTS = [
   { value: '', label: 'Все решения' },
   { value: 'negative', label: 'В минус' },
@@ -894,7 +940,17 @@ function levelOptions(q) {
   return [
     { value: 'adgroup', label: 'на группу', disabled: !q.adgroups.length },
     { value: 'campaign', label: 'на кампанию' },
+    ...listOptions.value.map((o) => ({ value: o.value, label: `в общий список «${o.name}»` })),
   ]
+}
+
+async function loadSharedLists() {
+  if (!expert.value) return
+  try {
+    sharedLists.value = (await webApi.negativeLists()).items || []
+  } catch {
+    sharedLists.value = []
+  }
 }
 
 // Группы с одинаковым названием (обычно из копии кампании) различаем кампанией.
@@ -1309,6 +1365,7 @@ function initDecision(q) {
 
 /** Запрос без группы (например, из автотаргетинга) можно минусовать только в кампании. */
 function levelFor(q, level) {
+  if (isListLevel(level)) return listOptions.value.some((o) => o.value === level) ? level : 'campaign'
   return q?.adgroups?.length ? level : 'campaign'
 }
 
@@ -1356,7 +1413,10 @@ function scheduleCheck(norms) {
 }
 
 async function runChecks() {
-  const list = [...checkQueue].filter((n) => decisions[n]?.verdict === 'negative').slice(0, 500)
+  // Общий список проверяется по ключам всех его кампаний — в подтверждении перед отправкой.
+  const list = [...checkQueue]
+    .filter((n) => decisions[n]?.verdict === 'negative' && !isListLevel(decisions[n].level))
+    .slice(0, 500)
   checkQueue.clear()
   if (!list.length) return
   const keys = Object.fromEntries(list.map((n) => [n, checkKey(decisions[n])]))
@@ -1624,16 +1684,121 @@ function toItem(q) {
   }
 }
 
-function openApply() {
+async function openApply() {
   const chosen = items.value.filter((q) => selected.value.has(q.query_norm))
   const ready = chosen.filter((q) => decisions[q.query_norm]?.verdict)
   if (!ready.length) {
     pushToast('Отметьте выбранные запросы: «Минус» или «Целевой»', 'error')
     return
   }
-  applyModal.items = ready.map(toItem)
+  const toList = ready.filter(
+    (q) => decisions[q.query_norm].verdict === 'negative' && isListLevel(decisions[q.query_norm].level),
+  )
+  if (toList.length && (await sendToLists(toList)) === null) return
+  const rest = ready.filter((q) => !toList.includes(q))
+  if (!rest.length) return
+  applyModal.items = rest.map(toItem)
   applyModal.skipped = chosen.length - ready.length
   applyModal.open = true
+}
+
+/** Текст подтверждения «В общий список …»: что добавим, в какие кампании, что пропустим. */
+function toListQuestion(plan) {
+  const ok = plan.phrases.filter((p) => !p.problems.length)
+  // Списка нет ни в одной кампании запроса — фраза до его показов не дойдёт, запрос пропустим.
+  const away = ok.filter((p) => !p.reaches)
+  const clash = ok.filter((p) => p.reaches && p.conflicts_total)
+  const fresh = ok.filter((p) => p.reaches && !p.in_list && !p.conflicts_total)
+  const names = plan.campaigns.map((c) => `«${c.campaign_name}»`).join(', ')
+  const more = plan.campaigns_total - plan.campaigns.length
+  const lines = [
+    fresh.length
+      ? `Добавить в список «${plan.list.name}»: ${fresh.slice(0, 5).map((p) => `«${p.phrase}»`).join(', ')}` +
+        (fresh.length > 5 ? ` и ещё ${fresh.length - 5}.` : '.')
+      : `Фразы уже есть в списке «${plan.list.name}».`,
+    plan.campaigns_total
+      ? `Запишем во все кампании списка (${plan.campaigns_total}): ${names}${more > 0 ? ` и ещё ${more}` : ''}.`
+      : 'Список пока не стоит ни в одной кампании.',
+  ]
+  if (clash.length) {
+    const sample = clash
+      .slice(0, 3)
+      .map((p) => `«${p.phrase}» → «${p.conflicts[0]?.keyword}»`)
+      .join(', ')
+    lines.push(`Заденут ключи этих кампаний и будут пропущены: ${sample}${clash.length > 3 ? ` и ещё ${clash.length - 3}` : ''}.`)
+  }
+  if (away.length) {
+    lines.push(
+      `Пропустим ${away.length} ${plural(away.length, 'запрос', 'запроса', 'запросов')}: списка нет в ${away.length > 1 ? 'их кампаниях' : 'его кампаниях'} — минусуйте на группу или кампанию.`,
+    )
+  }
+  const bad = plan.phrases.find((p) => p.problems.length)
+  if (bad) lines.push(`Не подходят: ${plan.phrases.length - ok.length} — ${bad.problems[0]}.`)
+  if (plan.outside_total) {
+    const tail = plan.outside_total > plan.outside.length ? ` и ещё ${plan.outside_total - plan.outside.length}` : ''
+    lines.push(`В кампаниях запросов без этого списка (${plan.outside.map((n) => `«${n}»`).join(', ')}${tail}) фраз не будет.`)
+  }
+  return { text: lines.join(' '), usable: ok.length - clash.length - away.length }
+}
+
+/** «В общий список …»: по каждому списку — что будет, одно подтверждение, фразы в список и во все его кампании.
+ *  null — отменили. */
+async function sendToLists(rows) {
+  const byList = new Map()
+  for (const q of rows) {
+    const id = Number(decisions[q.query_norm].level.slice(LIST_LEVEL.length))
+    if (!byList.has(id)) byList.set(id, [])
+    byList.get(id).push({ query_norm: q.query_norm, negative_phrase: decisions[q.query_norm].negative_phrase.trim() })
+  }
+  let sent = 0
+  for (const [listId, listItems] of byList) {
+    let plan
+    try {
+      plan = await webApi.negativeFromQueriesPreview(listId, { workspace_id: ws.value.id, items: listItems })
+    } catch (err) {
+      pushToast(errorText(err), 'error')
+      return null
+    }
+    const question = toListQuestion(plan)
+    if (!question.usable) {
+      pushToast(question.text, 'error')
+      continue
+    }
+    if (!(await askConfirm(question.text, { title: 'В общий список минус-фраз', confirmText: 'Добавить' }))) return null
+    busy.value = 'apply'
+    busyText.value = `Добавляем в список «${plan.list.name}»…`
+    try {
+      const res = await webApi.negativeFromQueries(listId, { workspace_id: ws.value.id, items: listItems }, (job) => {
+        busyText.value = `Пишем в кампании списка: ${jobProgressText(job)}`
+      })
+      for (const it of res.items || []) {
+        rowResults[it.query_norm] = it
+        if (it.status === 'ok' && decisions[it.query_norm]) decisions[it.query_norm].touched = false
+      }
+      const done = new Set((res.items || []).filter((i) => i.status === 'ok').map((i) => i.query_norm))
+      selected.value = new Set([...selected.value].filter((n) => !done.has(n)))
+      sent += done.size
+      const applied = res.applied
+      const ids = [res.log_id, applied?.undo_log_id, ...(applied?.undo_log_ids || [])].filter(Boolean)
+      // Пропущенные кампании (кабинет выключен, лимит символов, кампании нет) — тоже «не во всех».
+      const failed = applied && (applied.status !== 'ok' || (applied.skipped || []).length > 0)
+      pushToast(
+        `В список «${res.list.name}»: ${res.negative}` +
+          (applied ? `, обновлено кампаний: ${applied.linked}` : '') +
+          (res.skipped ? `, пропущено: ${res.skipped}` : '') +
+          (failed ? '. Не во всех кампаниях — откройте список и нажмите «Догнать»' : ''),
+        res.status === 'ok' && !failed ? 'ok' : 'warn',
+        undoAction(ids.length > 1 ? { undo_log_ids: ids } : { undo_log_id: ids[0] }, onUndone),
+      )
+    } catch (err) {
+      pushToast(errorText(err), 'error')
+    } finally {
+      busy.value = ''
+      busyText.value = ''
+    }
+  }
+  if (sent) await Promise.all([load(), loadSharedLists()])
+  return sent
 }
 
 function confirmApply() {
@@ -1748,6 +1913,7 @@ function onUndone() {
 let memSeq = 0
 
 async function loadMemory(more = false) {
+  if (!more) loadShared()
   const seq = ++memSeq
   mem.loading = true
   mem.error = ''
@@ -1781,6 +1947,65 @@ function memToggle(norm, on) {
 
 function memToggleAll(on) {
   mem.selected = on ? new Set(mem.items.map((m) => m.query_norm)) : new Set()
+}
+
+// --- Память «для всех проектов» ---
+
+const shared = reactive({ items: [], busy: false })
+const sharedKeys = computed(() => new Set(shared.items.map((e) => phraseKeyOf(e.phrase))))
+// «Для всех проектов» — только решения с минус-фразой: у «ключ взят в кавычки» её нет.
+const isSharable = (m) => m.verdict === 'negative' && !!m.negative_phrase
+const memNegPicked = computed(() => mem.items.some((m) => mem.selected.has(m.query_norm) && isSharable(m)))
+
+function phraseKeyOf(text) {
+  return String(text || '').toLowerCase().replaceAll('ё', 'е').split(/\s+/).filter(Boolean).join(' ')
+}
+
+function isShared(m) {
+  return isSharable(m) && sharedKeys.value.has(phraseKeyOf(m.negative_phrase))
+}
+
+async function loadShared() {
+  try {
+    shared.items = (await webApi.cleaningMemory()).items || []
+  } catch {
+    // Список общей памяти — дополнение к памяти проекта; без него вкладка работает.
+  }
+}
+
+async function shareSelected() {
+  const norms = mem.items.filter((m) => mem.selected.has(m.query_norm) && isSharable(m)).map((m) => m.query_norm)
+  if (!norms.length) return
+  const ok = await askConfirm(
+    `Минусовать ${plural(norms.length, 'это решение', 'эти решения', 'эти решения')} (${norms.length}) во всех ваших проектах? ` +
+      'Запросы с такими словами будут размечаться «в минус» без ИИ — кроме проектов, где такой запрос отмечен целевым.',
+    { title: 'Для всех проектов', confirmText: 'Для всех проектов' },
+  )
+  if (!ok) return
+  shared.busy = true
+  try {
+    const res = await webApi.addCleaningMemory({ workspace_id: ws.value.id, query_norms: norms })
+    shared.items = res.items || []
+    pushToast(res.added ? `Для всех проектов: ${res.added}` : 'Эти решения уже работают во всех проектах', 'ok')
+    mem.selected = new Set()
+  } catch (err) {
+    pushToast(errorText(err), 'error')
+  } finally {
+    shared.busy = false
+  }
+}
+
+async function unshare(e) {
+  shared.busy = true
+  try {
+    const res = await webApi.removeCleaningMemory([e.id])
+    shared.items = res.items || []
+    pushToast(`«${e.phrase}» — больше не для всех проектов`, 'ok')
+  } catch (err) {
+    pushToast(errorText(err), 'error')
+  } finally {
+    shared.busy = false
+  }
 }
 
 async function forget() {
@@ -1826,6 +2051,7 @@ watch(
 
 // Смена режима — другой набор данных: простой грузит мусор и полезные целиком, экспертный — вкладку.
 watch(expert, (on) => {
+  if (on) loadSharedLists()
   if (on && tab.value === 'memory') {
     loadMemory()
     refreshCounts()
@@ -1833,6 +2059,7 @@ watch(expert, (on) => {
 })
 
 onMounted(() => {
+  loadSharedLists()
   if (expert.value && tab.value === 'memory') {
     loadMemory()
     refreshCounts()
@@ -1873,6 +2100,28 @@ usePageContext(() => {
 </script>
 
 <style scoped>
+.shared-mem {
+  display: grid;
+  gap: 8px;
+  margin-top: 16px;
+}
+.shared-mem__list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.shared-mem__list .chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.shared-mem__list svg {
+  width: 14px;
+  height: 14px;
+}
 .tri-sum {
   display: flex;
   flex-wrap: wrap;

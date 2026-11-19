@@ -227,7 +227,18 @@ def ensure_workspaces(user_id: int) -> list[int]:
             events.record(user_id, "project_created", workspace_id=int(r["id"]), counter_id=int(r["counter_id"]), auto=True)
         _attach_loose(user_id)
         _carry_site_checks(user_id)
+        _apply_defaults(user_id, ids)
     return ids
+
+
+def _apply_defaults(user_id: int, workspace_ids: list[int]) -> None:
+    """Настройки «Для новых проектов» — только что созданным проектам. Сбой не мешает созданию."""
+    from app import project_defaults
+
+    try:
+        project_defaults.apply_to_new(user_id, workspace_ids)
+    except Exception:  # noqa: BLE001
+        log.exception("Настройки по умолчанию для новых проектов пользователя %s", user_id)
 
 
 def _carry_site_checks(user_id: int) -> None:
@@ -664,6 +675,7 @@ def create_project_for_counter(user_id: int, counter_id: int) -> dict:
     events.record(user_id, "project_created", workspace_id=int(created["id"]), counter_id=int(counter_id), auto=False)
     _attach_loose(user_id)
     _carry_site_checks(user_id)
+    _apply_defaults(user_id, [int(created["id"])])
     return get_workspace(user_id, int(created["id"]))
 
 
