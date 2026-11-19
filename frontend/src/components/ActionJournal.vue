@@ -2,6 +2,17 @@
   <PageHeader :description="description" />
 
   <UiListTools label="Фильтры истории" :active="sheetFilters" @reset="resetFilters">
+    <!-- «Вся история» со страницы кампании: только её изменения, фильтр снимается крестиком. -->
+    <button
+      v-if="campaign"
+      class="chip hist-camp"
+      type="button"
+      v-tip="'Показать изменения всех кампаний'"
+      @click="campaign = 0"
+    >
+      <span class="hist-camp__name">Кампания: {{ campaignLabel }}</span>
+      <X :size="14" aria-label="Убрать фильтр по кампании" />
+    </button>
     <UiSelect v-if="showProjectFilter" v-model="project" size="sm" :options="projectOptions" aria-label="Проект" />
     <UiSelect v-model="kind" size="sm" :options="KINDS" aria-label="Тип действия" />
     <p v-if="phone" class="ltools__cap">Кто менял</p>
@@ -199,7 +210,7 @@
 
 <script setup>
 import { computed, onMounted, ref, watch } from 'vue'
-import { RouterLink, useRoute } from 'vue-router'
+import { RouterLink, useRoute, useRouter } from 'vue-router'
 import {
   Archive,
   ArchiveRestore,
@@ -314,14 +325,28 @@ const route = useRoute()
 const source = ref(SOURCES.some((s) => s.id && s.id === route.query.source) ? route.query.source : '')
 const kind = ref(KINDS.some((k) => k.value && k.value === route.query.kind) ? route.query.kind : '')
 const project = ref(0)
+// ?campaign=<id строки кампании> — «Вся история» со страницы кампании.
+const campaignOf = (q) => Number(q) || 0
+const campaign = ref(campaignOf(route.query.campaign))
+const router = useRouter()
 const hasMore = ref(false)
 const undoId = ref(null)
 const open = ref(new Set())
 
-const filtered = computed(() => !!(source.value || kind.value || project.value))
+const filtered = computed(() => !!(source.value || kind.value || project.value || campaign.value))
 // Телефон: фильтры — в шторке за кнопкой «Фильтры», на ней — сколько включено.
 const { phone } = useViewport()
-const sheetFilters = computed(() => (source.value ? 1 : 0) + (kind.value ? 1 : 0) + (project.value ? 1 : 0))
+const sheetFilters = computed(
+  () => (source.value ? 1 : 0) + (kind.value ? 1 : 0) + (project.value ? 1 : 0) + (campaign.value ? 1 : 0),
+)
+// Название кампании фильтра — из записей (их кампании приходят с сервера).
+const campaignLabel = computed(() => {
+  for (const a of items.value) {
+    const c = (a.campaigns || []).find((x) => x.id === campaign.value)
+    if (c) return campaignName(c)
+  }
+  return `№ ${campaign.value}`
+})
 
 function dayKey(d) {
   return `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`
@@ -355,6 +380,7 @@ const days = computed(() => {
 
 const emptyText = computed(() => {
   if (source.value || kind.value) return 'Таких изменений пока нет.'
+  if (campaign.value) return 'В этой кампании пока ничего не меняли.'
   const where = props.workspaceId || project.value ? 'В этом проекте ещё ничего не меняли' : 'Ещё ничего не меняли'
   return `${where}. Здесь появятся все правки — ваши, ИИ и правил, — и любую можно будет вернуть.`
 })
@@ -430,6 +456,7 @@ async function fetchPage(beforeId) {
     const params = { limit: PAGE }
     if (source.value) params.source = source.value
     if (kind.value) params.kind = kind.value
+    if (campaign.value) params.campaign_row_id = campaign.value
     if (beforeId) params.before_id = beforeId
     let data
     if (props.workspaceId) {
@@ -458,6 +485,7 @@ function resetFilters() {
   source.value = ''
   kind.value = ''
   project.value = 0
+  campaign.value = 0
 }
 
 function loadMore() {
@@ -465,11 +493,36 @@ function loadMore() {
   if (last) fetchPage(last.id)
 }
 
-watch([source, kind, project], reload)
+watch([source, kind, project, campaign], reload)
+// Фильтр кампании живёт в адресе: снятый крестиком — убираем из адреса, новая ссылка «Вся история» — подхватываем.
+watch(campaign, (id) => {
+  if (campaignOf(route.query.campaign) === id) return
+  const query = { ...route.query }
+  if (id) query.campaign = String(id)
+  else delete query.campaign
+  router.replace({ query })
+})
+watch(
+  () => route.query.campaign,
+  (q) => {
+    campaign.value = campaignOf(q)
+  },
+)
 onMounted(() => fetchPage())
 </script>
 
 <style scoped>
+.hist-camp {
+  min-height: 32px;
+  max-width: 100%;
+  border: 0;
+  cursor: pointer;
+}
+.hist-camp__name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .hist > .section-h:first-child {
   margin-top: 0;
 }

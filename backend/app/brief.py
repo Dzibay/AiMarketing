@@ -12,6 +12,7 @@ import socket
 from html.parser import HTMLParser
 from urllib.parse import urljoin, urlsplit
 
+import httpcore
 import httpx
 
 from app import ai
@@ -119,13 +120,65 @@ def _check_public(url: str) -> None:
     host = parts.hostname
     if host == "localhost" or host.endswith(".localhost") or host.endswith(".local"):
         raise YandexError("site", "Адрес сайта должен быть публичным")
+    _public_ips(host, port or (443 if parts.scheme == "https" else 80))
+
+
+# NAT64: в адресе IPv6 лежит IPv4 — проверяем его.
+_NAT64 = ipaddress.ip_network("64:ff9b::/96")
+
+
+def _is_public_ip(raw: str) -> bool:
+    """Адрес в интернете, а не во внутренней сети; IPv4 внутри IPv6 (::ffff:, 6to4, Teredo, NAT64) — тоже."""
     try:
-        infos = socket.getaddrinfo(host, port or (443 if parts.scheme == "https" else 80), proto=socket.IPPROTO_TCP)
+        addr = ipaddress.ip_address(str(raw).split("%", 1)[0])
+    except ValueError:
+        return False
+    if addr.version == 6:
+        inner = addr.ipv4_mapped or addr.sixtofour or (addr.teredo[1] if addr.teredo else None)
+        if inner is None and addr in _NAT64:
+            inner = ipaddress.IPv4Address(int(addr) & 0xFFFFFFFF)
+        if inner is not None and not inner.is_global:
+            return False
+    return addr.is_global
+
+
+def _public_ips(host: str, port: int) -> list[str]:
+    """Адреса сайта; хоть один внутренний — отказ."""
+    try:
+        infos = socket.getaddrinfo(host, port, proto=socket.IPPROTO_TCP)
     except socket.gaierror as exc:
         raise YandexError("site", f"Не удалось найти сайт {host}") from exc
-    for info in infos:
-        if not ipaddress.ip_address(info[4][0]).is_global:
-            raise YandexError("site", "Адрес сайта указывает во внутреннюю сеть")
+    ips = list(dict.fromkeys(str(info[4][0]) for info in infos))
+    if not ips or not all(_is_public_ip(ip) for ip in ips):
+        raise YandexError("site", "Адрес сайта указывает во внутреннюю сеть")
+    return ips
+
+
+class _PinnedBackend(httpcore.SyncBackend):
+    """Сеть fetch_site: адрес сайта узнаём и проверяем сами и подключаемся ровно к проверенному IP.
+
+    Иначе между проверкой и подключением DNS мог бы ответить уже внутренним адресом (DNS rebinding). Host и SNI
+    остаются именем сайта — их httpcore берёт из адреса запроса. Каждый редирект — новое подключение и новая проверка.
+    """
+
+    def connect_tcp(self, host, port, timeout=None, local_address=None, socket_options=None):
+        last: Exception | None = None
+        for ip in _public_ips(host, port):
+            try:
+                return super().connect_tcp(
+                    ip, port, timeout=timeout, local_address=local_address, socket_options=socket_options
+                )
+            except (httpcore.ConnectError, httpcore.ConnectTimeout) as exc:
+                last = exc
+        raise last  # type: ignore[misc]
+
+
+class _PinnedTransport(httpx.HTTPTransport):
+    def __init__(self) -> None:
+        super().__init__(trust_env=False)
+        self._pool = httpcore.ConnectionPool(
+            ssl_context=httpx.create_ssl_context(trust_env=False), network_backend=_PinnedBackend()
+        )
 
 
 def _charset(content_type: str, head: bytes) -> str:
@@ -139,10 +192,15 @@ def _charset(content_type: str, head: bytes) -> str:
 
 
 def fetch_site(raw_url: str) -> tuple[str, str]:
-    """→ (итоговый адрес, html). Редиректы проверяем по одному: каждый — на публичный адрес."""
+    """→ (итоговый адрес, html). Редиректы проверяем по одному: каждый — на публичный адрес.
+
+    Подключаемся только к проверенному IP (_PinnedBackend); прокси из окружения не берём — имя резолвим сами.
+    """
     url = _site_url(raw_url)
     headers = {"User-Agent": "TolkBot/1.0 (+https://tolk-ads.ru/bot/)", "Accept": "text/html,application/xhtml+xml"}
-    with httpx.Client(timeout=SITE_TIMEOUT, follow_redirects=False, headers=headers) as client:
+    with httpx.Client(
+        timeout=SITE_TIMEOUT, follow_redirects=False, headers=headers, transport=_PinnedTransport(), trust_env=False
+    ) as client:
         for _hop in range(SITE_MAX_REDIRECTS + 1):
             _check_public(url)
             try:
@@ -179,12 +237,14 @@ def fetch_site(raw_url: str) -> tuple[str, str]:
 class _Extractor(HTMLParser):
     SKIP = {"script", "style", "noscript", "svg", "template", "iframe"}
 
-    def __init__(self) -> None:
+    def __init__(self, text_cap: int = SITE_TEXT_CHARS * 2) -> None:
         super().__init__(convert_charrefs=True)
         self.title = ""
         self.meta: dict[str, str] = {}
         self.headings: list[str] = []
         self.text: list[str] = []
+        self._cap = text_cap
+        self._size = 0
         self._skip = 0
         self._tag = ""
         self._heading: list[str] | None = None
@@ -220,8 +280,9 @@ class _Extractor(HTMLParser):
             self.title = text[:300]
         if self._heading is not None:
             self._heading.append(text)
-        if sum(len(t) for t in self.text) < SITE_TEXT_CHARS * 2:
+        if self._size < self._cap:
             self.text.append(text)
+            self._size += len(text)
 
 
 def extract_page(html: str) -> dict:
@@ -238,6 +299,99 @@ def extract_page(html: str) -> dict:
         "headings": parser.headings,
         "text": " ".join(parser.text)[:SITE_TEXT_CHARS],
     }
+
+
+# --- Страница для ИИ-чата -----------------------------------------------------------------------
+#
+# ИИ читает сайт проекта и посадочные страницы сам: заголовок, описание, подзаголовки, цены и видимый текст —
+# всего около PAGE_CHARS знаков. Цены ищем по всей странице: на длинном лендинге они бывают ниже обрезки текста.
+
+PAGE_CHARS = 6000
+PAGE_SCAN_CHARS = 60_000
+PAGE_HEADINGS, PAGE_PRICES, PAGE_ITEM_CHARS = 20, 15, 120
+PAGE_THIN_CHARS = 100  # меньше — страница почти пустая: содержимое, скорее всего, рисует скрипт
+_PRICE_RE = re.compile(r"\d[\d   ]*(?:[.,]\d{1,2})?\s*(?:₽|руб(?:\.|л[а-я]*)?|р\.)", re.I)
+
+
+def _prices(pieces: list[str]) -> list[str]:
+    """Куски текста с ценой; короткая цена — вместе с соседним текстом: название товара часто стоит рядом."""
+    out: list[str] = []
+    for index, piece in enumerate(pieces):
+        if not _PRICE_RE.search(piece):
+            continue
+        snippet = piece
+        if len(piece) < 40 and index > 0:
+            snippet = f"{pieces[index - 1][-60:]} {piece}"
+        snippet = snippet[:PAGE_ITEM_CHARS]
+        if snippet not in out:
+            out.append(snippet)
+        if len(out) >= PAGE_PRICES:
+            break
+    return out
+
+
+def _plain_reason(message: str) -> str:
+    """Причина из fetch_site — простыми словами, без технических подробностей."""
+    text = message or ""
+    status = re.search(r"ошибкой (\d{3})", text)
+    if status:
+        code = int(status.group(1))
+        if code in (404, 410):
+            return "такой страницы нет"
+        if code in (401, 403):
+            return "сайт не пускает к этой странице"
+        if code >= 500:
+            return "сайт сейчас не работает — попробуйте позже"
+        return "сайт ответил ошибкой"
+    for marker, reason in (
+        ("не ответил", "сайт не ответил за 10 секунд"),
+        ("не HTML", "по адресу файл, а не страница"),
+        ("Не удалось найти", "такого адреса нет"),
+        ("Слишком много перенаправлений", "сайт перенаправляет по кругу"),
+        ("в никуда", "сайт перенаправляет в никуда"),
+        ("http:// или https://", "адрес должен начинаться с http:// или https://"),
+        ("Укажите адрес", "адрес сайта не указан"),
+    ):
+        if marker in text:
+            return reason
+    if any(marker in text for marker in ("публичным", "внутреннюю сеть", "порт", "логина")):
+        return "этот адрес закрыт для чтения"
+    return "не удалось подключиться"
+
+
+def read_page(raw_url: str, limit: int = PAGE_CHARS) -> dict:
+    """Страница для ИИ: {url, title, description, headings, prices, text, note?} — всего около limit знаков.
+
+    Не открылась — YandexError("site", «Сайт не открылся: …»): причина простыми словами.
+    """
+    try:
+        url, html = fetch_site(raw_url)
+    except YandexError as exc:
+        raise YandexError("site", f"Сайт не открылся: {_plain_reason(exc.message or '')}") from exc
+    parser = _Extractor(text_cap=PAGE_SCAN_CHARS)
+    try:
+        parser.feed(html)
+        parser.close()
+    except Exception:  # битая разметка — берём, что успели разобрать
+        pass
+    title = parser.title
+    description = parser.meta.get("description") or parser.meta.get("og:description") or ""
+    headings = [h[:PAGE_ITEM_CHARS] for h in dict.fromkeys(parser.headings)][:PAGE_HEADINGS]
+    prices = _prices(parser.text)
+    text = " ".join(parser.text)
+    used = len(title) + len(description) + sum(len(h) for h in headings) + sum(len(p) for p in prices)
+    room = max(1000, limit - used)
+    out = {"url": url, "title": title, "description": description, "headings": headings, "prices": prices}
+    out["text"] = text[:room]
+    # Заголовок есть почти у любого сайта на скриптах — считаем только текст страницы без него.
+    if len(text) - len(title) < PAGE_THIN_CHARS:
+        out["note"] = (
+            "На странице почти нет текста — похоже, сайт собирается скриптами, и его содержимое не видно. Не делай "
+            "вывода, что цен или оффера нет, — опирайся на бриф"
+        )
+    elif len(text) > room:
+        out["note"] = f"Страница длинная — текст обрезан до {room} знаков; цены собраны со всей страницы"
+    return out
 
 
 _DRAFT_SYSTEM = """Ты помогаешь маркетологу заполнить бриф клиента для рекламы в Яндекс Директе. По тексту главной страницы сайта составь черновик:

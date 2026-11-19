@@ -151,8 +151,8 @@
               <UiSelect v-model="form.group.region" :options="REGION_OPTIONS" />
             </div>
             <div v-if="form.group.region === 'custom'" v-field class="field field--wide">
-              <label>ID регионов Директа через запятую (минус — исключить)</label>
-              <input v-model.trim="form.group.region_ids" type="text" placeholder="213, 2, -10174" />
+              <label>Регионы показа</label>
+              <RegionPicker v-model="form.group.region_ids" />
             </div>
             <div v-field class="field field--wide">
               <label>Ключевые фразы — по одной на строку</label>
@@ -257,6 +257,7 @@ import TermHint from '../../components/TermHint.vue'
 import ScheduleGrid from '../../components/ScheduleGrid.vue'
 import StrategyFields from '../../components/StrategyFields.vue'
 import AdExtrasFields from '../../components/AdExtrasFields.vue'
+import RegionPicker from '../../components/RegionPicker.vue'
 import { errorText, wsApi } from '../../api/web'
 import { formatDate, isoDay, priorityGoalsForApi } from '../../utils/format'
 import { emptyExtras, extrasEmpty, extrasPayload, extrasProblem } from '../../utils/adExtras'
@@ -278,7 +279,7 @@ const REGIONS = [
 ]
 const REGION_OPTIONS = [
   ...REGIONS.map((r) => ({ value: r.id, label: r.label })),
-  { value: 'custom', label: 'Свой список ID регионов' },
+  { value: 'custom', label: 'Другие регионы — выбрать по названию' },
 ]
 const COUNTER_TONES = { ok: 'tone-ok', unknown: 'tone-warn' }
 
@@ -320,7 +321,7 @@ function blankForm() {
     group: {
       name: 'Группа 1',
       region: '225',
-      region_ids: '',
+      region_ids: [],
       keywords: '',
       bid_rub: '',
       ad: {
@@ -454,17 +455,17 @@ function validate() {
     }
     const extrasError = extrasProblem(ad.extras, responsiveAd.value ? 5 : 1)
     if (extrasError) return extrasError
-    if (form.group.region === 'custom' && !regionIds().length) return 'Укажите ID регионов'
+    if (form.group.region === 'custom' && !regionIds().some((id) => id > 0)) {
+      return 'Выберите хотя бы один регион показа — город, область или страну'
+    }
   }
   return ''
 }
 
 function regionIds() {
   if (form.group.region !== 'custom') return REGIONS.find((r) => r.id === form.group.region)?.ids || [225]
-  return form.group.region_ids
-    .split(/[\s,;]+/)
-    .map((v) => Number(v))
-    .filter((v) => Number.isInteger(v) && v !== 0)
+  // Свои регионы — id из поиска по названию; минус — «кроме».
+  return form.group.region_ids.filter((v) => Number.isInteger(v) && v !== 0)
 }
 
 function buildSpec() {

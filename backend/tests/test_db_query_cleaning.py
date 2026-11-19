@@ -196,6 +196,58 @@ def test_check_phrases(env):
     assert phrase_key(got[1]["negative_phrase"]) == "кухни бесплатно" and got[1]["problems"] == []
     assert got[2]["problems"]
     assert got[3]["conflicts"] == [] and got[3]["problems"] == []
+    assert all(g["targets_hit"] == [] and g["targets_total"] == 0 for g in got)
+
+
+def test_check_phrases_names_kept_queries(env):
+    """Общее слово не должно резать запросы, которые вы отметили целевыми или по которым были заявки."""
+    db, u, ws, acc = env["db"], env["user"], env["ws"], env["acc"]
+    _query(db, u, acc, env["camp"], env["g2"], "кухни отзывы цена", clicks=2, cost_rub=40)
+    _query(db, u, acc, env["camp"], env["g2"], "кухни отзывы купить", clicks=2, cost_rub=40)
+    _query(db, u, acc, env["camp"], env["g1"], "кухни москва дешево", clicks=1, cost_rub=20, conversions=1)
+    _query(db, u, acc, env["camp2"], env["g3"], "шкаф отзывы", clicks=1, cost_rub=10)
+    qc.remember_decisions(
+        u,
+        ws,
+        [
+            {"query_norm": "кухни отзывы купить", "verdict": "target"},
+            {"query_norm": "шкаф отзывы", "verdict": "target"},
+            # С заявками, но вы сами решили минусовать — не мешает.
+            {"query_norm": "кухни москва дешево", "verdict": "negative", "negative_phrase": "дешево"},
+        ],
+    )
+    got = qc.check_phrases(
+        u,
+        ws,
+        [
+            {"query_norm": "кухни отзывы цена", "negative_phrase": "отзывов", "level": "campaign"},
+            {"query_norm": "кухни своими руками", "negative_phrase": "москва", "level": "campaign"},
+            {"query_norm": "кухни своими руками", "negative_phrase": "москва", "level": "adgroup"},
+        ],
+    )
+    # Целевой запрос той же кампании — в любой форме слова; «шкаф отзывы» в другой кампании фраза не заденет.
+    assert got[0]["targets_total"] == 1
+    assert got[0]["targets_hit"] == [
+        {"query_norm": "кухни отзывы купить", "query": "кухни отзывы купить", "conversions": 0, "target": True}
+    ]
+    assert got[0]["conflicts_total"] == 0 and got[0]["problems"] == []
+    # Запрос с конверсиями; отминусованный вами «кухни москва дешево» — нет.
+    assert [(h["query_norm"], h["conversions"], h["target"]) for h in got[1]["targets_hit"]] == [
+        ("кухни на заказ москва", 2, False)
+    ]
+    # На группу «Кухни недорого»: запрос с заявками был в другой группе — не задет.
+    assert got[2]["targets_total"] == 0
+
+    # Запросы из одной проверки минусуют вместе — друг другу они не мешают.
+    together = qc.check_phrases(
+        u,
+        ws,
+        [
+            {"query_norm": "кухни отзывы цена", "negative_phrase": "отзывы", "level": "campaign"},
+            {"query_norm": "кухни отзывы купить", "negative_phrase": "отзывы", "level": "campaign"},
+        ],
+    )
+    assert [g["targets_total"] for g in together] == [0, 0]
 
 
 # --- Разметка -----------------------------------------------------------------------------------

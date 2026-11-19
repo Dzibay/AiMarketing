@@ -1,5 +1,5 @@
 <template>
-  <Modal :open="!!current" :title="current?.title || ''" top @close="answer(false)">
+  <Modal :open="!!current" :title="current?.title || ''" top @close="dismiss">
     <p v-if="current?.message" class="confirm-text">{{ current.message }}</p>
     <UiCheckbox v-if="current?.check" v-model="current.check.value" class="check-row confirm-check">
       {{ current.check.label }}
@@ -50,6 +50,11 @@ const blocked = computed(() => !!current.value?.input?.required && !String(curre
 
 function answer(value) {
   current.value?.resolve(value)
+}
+
+// ×, Esc и клик мимо окна — «передумал»: по умолчанию это та же отмена (см. dismissValue в askConfirm).
+function dismiss() {
+  current.value?.dismiss()
 }
 
 function submit() {

@@ -97,6 +97,7 @@
       @duplicate="openDuplicate"
       @archive="archiveOne"
       @unarchive="(c) => runBulk('unarchive', [c.campaign_row_id])"
+      @budget="load"
     >
       <template #notices>
         <UiNotice v-if="bulkErrors.length" tone="warn" closable @close="bulkErrors = []">

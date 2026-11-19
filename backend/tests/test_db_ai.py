@@ -483,11 +483,11 @@ def test_reject_all_lets_model_continue(db, monkeypatch):
     )
     assert ai_agent.get_chat(s["user"], s["chat"])["actions"][0]["categories"][0]["id"] == "destructive"
     out = ai_agent.decide_all(s["user"], s["chat"], approve=False)
-    assert out["decided"] == 1 and out["job"]
-    fake = FakeModel(_text("Ок, не удаляю."))
-    monkeypatch.setattr(ai, "complete", fake)
-    ai_agent.run_chat(s["user"], s["chat"])
-    assert "отклонил" in fake.calls[0][-1]["content"]
+    # Отказ без причины хода не запускает (ИИ гадал бы и тратил лимит) — отказ модель увидит со следующим сообщением.
+    assert out["decided"] == 1 and out["job"] is None
+    assert ai_agent.get_chat(s["user"], s["chat"])["chat"]["status"] == "idle"
+    fake, _out = _start(s["user"], s["chat"], "Тогда ничего не трогай", monkeypatch, _text("Ок, не удаляю."))
+    assert "отклонил" in fake.calls[0][-2]["content"]
     assert ai_agent.get_chat(s["user"], s["chat"])["actions"][0]["status"] == "rejected"
 
 
@@ -558,7 +558,8 @@ def test_ai_api(db, monkeypatch):
     assert chat["chat"]["status"] == "waiting" and action["summary"] == "Отправить на модерацию «Поиск»"
     assert client.post(f"/api/web/ai/actions/{action['id']}/decide", headers=other, json={"approve": True}).status_code == 404
     decided = client.post(f"/api/web/ai/actions/{action['id']}/decide", headers=auth, json={"approve": False}).json()
-    assert decided["action"]["status"] == "rejected" and decided["job"]
+    # Простой отказ — без нового хода ИИ; «Сделать иначе» (с причиной) ход запускает.
+    assert decided["action"]["status"] == "rejected" and decided["job"] is None
 
     assert client.patch(f"/api/web/ai/chats/{created['id']}", headers=auth, json={"title": "Модерация"}).json()["title"] == "Модерация"
     assert client.delete(f"/api/web/ai/chats/{created['id']}", headers=auth).json() == {"ok": True}

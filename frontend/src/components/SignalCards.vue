@@ -8,16 +8,14 @@
     </small>
   </h2>
   <div v-if="visible.length" class="sigs">
-    <article v-for="s in visible" :key="s.key" class="sig">
+    <article v-for="s in visible" :key="s.uid" class="sig">
       <div class="sig__top">
         <span class="st" :class="s.severity === 'critical' ? 'st--bad' : 'st--warn'">
           <TriangleAlert :size="14" aria-hidden="true" />
           {{ s.severity === 'critical' ? 'Срочно' : 'Стоит посмотреть' }}
         </span>
         <span v-if="showProject" class="sig__ws">{{ niceQuotes(s.workspace_name) || 'Все проекты' }}</span>
-        <button class="sig__hide" type="button" v-tip="'Скрыть до завтра'" aria-label="Скрыть до завтра" @click="hide(s)">
-          <X :size="15" aria-hidden="true" />
-        </button>
+        <span class="sig__hide"><SnoozeMenu :problem="s" @snoozed="onSnoozed" /></span>
       </div>
       <h3>{{ s.title }}</h3>
       <p v-if="s.note">{{ s.note }}</p>
@@ -44,7 +42,7 @@
     :plain="bare"
     :text="
       hiddenCount
-        ? 'Остальное вы скрыли до завтра — больше ничего не требует внимания.'
+        ? 'Остальное вы скрыли — больше ничего не требует внимания. Скрытое — в строке ниже.'
         : 'Сегодня всё спокойно: сервис не нашёл ничего, что требует внимания. Можно поискать, где вырасти.'
     "
   >
@@ -54,23 +52,30 @@
       </RouterLink>
     </template>
   </EmptyState>
+  <SnoozedList :items="hiddenItems" @changed="emit('changed')" />
 </template>
 
 <script setup>
-import { computed, ref } from 'vue'
+import { computed } from 'vue'
 import { RouterLink, useRouter } from 'vue-router'
-import { Radar, Sparkles, TriangleAlert, X } from '@lucide/vue'
+import { Radar, Sparkles, TriangleAlert } from '@lucide/vue'
 import EmptyState from './ui/EmptyState.vue'
+import SnoozeMenu from './SnoozeMenu.vue'
+import SnoozedList from './SnoozedList.vue'
 import { errorDetail } from '../api/web'
 import { putHomeQuestion } from '../composables/useHomeAsk'
-import { isoDay, niceQuotes, problemLink } from '../utils/format'
+import { useSnoozed } from '../composables/useSnoozed'
+import { niceQuotes, problemLink } from '../utils/format'
 
 /**
  * «Сервис заметил» простого режима: проблемы из сводки (без «к сведению») карточками.
- * Крестик прячет сигнал до завтра — в этом браузере, сервер о нём не знает.
+ * «⋯» скрывает сигнал на сервере (на 7 дней, «так задумано» или весь тип) — он уходит из счётчиков,
+ * дайджеста и уведомлений; внизу свёрнутая строка «Скрыто: N» с «Показать снова». @changed — перечитать сводку.
  */
 const props = defineProps({
   problems: { type: Array, default: () => [] },
+  /** Строки hidden из сводки: что скрыто через «⋯». */
+  hidden: { type: Array, default: () => [] },
   /** На общей главной — подпись проекта у каждой карточки. */
   showProject: Boolean,
   /** Проект страницы: «Спросить» уходит в его чат, без него — в общий. */
@@ -83,43 +88,32 @@ const props = defineProps({
   balanceRefreshing: Boolean,
 })
 
-const STORE = 'aimarketing-hidden-signals'
+const emit = defineEmits(['changed'])
 const router = useRouter()
-const today = isoDay(new Date())
-
-function readHidden() {
-  try {
-    const all = JSON.parse(localStorage.getItem(STORE) || '{}')
-    // Скрытое вчера и раньше снова показываем и заодно чистим.
-    return Object.fromEntries(Object.entries(all).filter(([, day]) => day === today))
-  } catch {
-    return {}
-  }
-}
-const hidden = ref(readHidden())
+// Скрытое раньше в этом браузере («до завтра», localStorage) больше не читаем — скрытия живут на сервере.
+const { mark, isGone } = useSnoozed(() => props.problems)
 
 const signals = computed(() =>
   props.problems
-    .filter((p) => p.severity === 'critical' || p.severity === 'warning')
+    .filter((p) => (p.severity === 'critical' || p.severity === 'warning') && !isGone(p))
     .map((p) => ({
       ...p,
-      key: [p.kind, p.workspace_id, p.account_id, p.campaign_row_id, p.title].join('|'),
+      uid: [p.key || p.kind, p.workspace_id, p.account_id, p.campaign_row_id, p.title].join('|'),
       link: problemLink(p),
       note: [p.object_name, p.detail ? errorDetail(p.detail) : ''].filter(Boolean).join(' · '),
     }))
     .sort((a, b) => Number(b.severity === 'critical') - Number(a.severity === 'critical')),
 )
-const open = computed(() => signals.value.filter((s) => !hidden.value[s.key]))
-const visible = computed(() => open.value.slice(0, props.limit))
-const hiddenCount = computed(() => signals.value.length - open.value.length)
+const visible = computed(() => signals.value.slice(0, props.limit))
+// В «Скрыто» — то, что было бы карточкой: срочное и «стоит посмотреть», плюс скрытые типы целиком.
+const hiddenItems = computed(() =>
+  props.hidden.filter((h) => h.mode === 'type' || h.severity === 'critical' || h.severity === 'warning'),
+)
+const hiddenCount = computed(() => hiddenItems.value.length)
 
-function hide(s) {
-  hidden.value = { ...hidden.value, [s.key]: today }
-  try {
-    localStorage.setItem(STORE, JSON.stringify(hidden.value))
-  } catch {
-    // Без хранилища сигнал скроется только до перезагрузки.
-  }
+function onSnoozed(g) {
+  mark(g)
+  emit('changed')
 }
 
 function ask(s) {
@@ -230,25 +224,18 @@ function ask(s) {
   outline: 2px solid var(--ink);
   outline-offset: 2px;
 }
+/* «⋯» в углу карточки — тихая кнопка без рамки, чтобы не спорить с главным действием. */
 .sig__hide {
-  display: grid;
+  display: flex;
   flex-shrink: 0;
-  place-items: center;
-  width: 26px;
-  height: 26px;
-  margin: -4px -6px -4px auto;
-  padding: 0;
-  border: 0;
-  border-radius: 8px;
-  background: none;
-  color: var(--faint);
-  cursor: pointer;
+  margin: -6px -8px -6px auto;
 }
 .sig__ws + .sig__hide {
   margin-left: 0;
 }
-.sig__hide:hover {
-  background: var(--line);
-  color: var(--ink);
+.sig__hide :deep(.ui-menu__btn:not(.is-open):not(:hover)) {
+  border-color: transparent;
+  background: none;
+  color: var(--faint);
 }
 </style>

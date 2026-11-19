@@ -12,11 +12,21 @@
   <!-- Простой режим: решения, сигналы проекта, неделя в цифрах и главные кампании. -->
   <template v-else-if="!expert">
     <PendingDecisions :ws-id="ws.id" />
+    <div v-if="setup" class="ccard setup-card">
+      <ListChecks class="setup-card__ico" aria-hidden="true" />
+      <div class="setup-card__text">
+        <b>Проект готов на {{ setup.done }} из {{ setup.total }}</b>
+        <small>Осталось: {{ setup.missing.join(', ') }}</small>
+      </div>
+      <button class="btn btn--accent btn--sm" type="button" @click="setupOpen = true">Доделать</button>
+    </div>
     <SignalCards
       :problems="data.problems"
+      :hidden="data.hidden || []"
       :ws-id="ws.id"
       :balance-refreshing="refreshing"
       @refresh-balance="refresh"
+      @changed="reloadAll"
     />
     <p v-if="money" class="ccard ccard--note money-line">
       <Wallet aria-hidden="true" />
@@ -181,7 +191,8 @@
         </RouterLink>
       </div>
       <p v-if="!data.problems.length" class="empty">Ничего не горит: токены живы, бюджет и KPI в норме.</p>
-      <ProblemList v-else :problems="data.problems" />
+      <ProblemList v-else :problems="data.problems" @changed="reloadAll" />
+      <SnoozedList :items="data.hidden || []" @changed="reloadAll" />
     </section>
 
     <div class="split">
@@ -242,11 +253,14 @@
       </section>
     </div>
   </template>
+
+  <!-- «Подготовим проект»: «Доделать» на карточке или ссылка «Настроить» из сигналов (?setup=1). -->
+  <ProjectSetup v-if="ws" :open="setupOpen" :ws-id="ws.id" @close="closeSetup" @saved="onSetupSaved" />
 </template>
 
 <script setup>
-import { computed, onMounted, ref } from 'vue'
-import { RouterLink } from 'vue-router'
+import { computed, onMounted, ref, watch } from 'vue'
+import { RouterLink, useRoute, useRouter } from 'vue-router'
 import {
   ChartLine,
   ChevronRight,
@@ -255,6 +269,7 @@ import {
   CircleDashed,
   ExternalLink,
   History,
+  ListChecks,
   Megaphone,
   OctagonAlert,
   RefreshCw,
@@ -271,8 +286,10 @@ import HomeHeadline from '../../components/HomeHeadline.vue'
 import KpiTile from '../../components/KpiTile.vue'
 import MetricGrid from '../../components/MetricGrid.vue'
 import PendingDecisions from '../../components/PendingDecisions.vue'
+import ProjectSetup from '../../components/ProjectSetup.vue'
 import ProblemList from '../../components/ProblemList.vue'
 import SignalCards from '../../components/SignalCards.vue'
+import SnoozedList from '../../components/SnoozedList.vue'
 import TrendChart from '../../components/TrendChart.vue'
 import PageHeader from '../../components/ui/PageHeader.vue'
 import UiRibbon from '../../components/ui/UiRibbon.vue'
@@ -299,6 +316,7 @@ import {
   rub,
 } from '../../utils/format'
 import { countedHow } from '../../utils/glossary'
+import { setupProgress } from '../../utils/projectSetup'
 import { CHART_METRICS, METRIC_BY_KEY } from './metrics'
 import { useWs } from './context'
 
@@ -310,7 +328,9 @@ const ACTION_RESULT = {
   failed: { tone: 'bad', label: 'Не принято' },
 }
 
-const { ws } = useWs()
+const { ws, patch } = useWs()
+const route = useRoute()
+const router = useRouter()
 const { expert } = useExpert()
 const data = ref(null)
 const loading = ref(false)
@@ -398,6 +418,11 @@ async function load() {
   }
 }
 
+// Скрыли сигнал или вернули его — строка «как дела» тоже считается только по видимым проблемам.
+function reloadAll() {
+  return Promise.all([load(), headline.value?.load()])
+}
+
 async function refresh() {
   refreshing.value = true
   refreshText.value = 'Запрашиваем расход за сегодня и балансы…'
@@ -415,10 +440,60 @@ async function refresh() {
   }
 }
 
+// --- «Подготовим проект» ---------------------------------------------------------------------------
+
+/** Карточка «Проект готов на N из 5» — пока нет цели Метрики или шаблона ссылки. */
+const setup = computed(() => setupProgress(ws.value))
+const setupOpen = ref(route.query.setup === '1')
+
+watch(
+  () => route.query.setup,
+  (v) => {
+    if (v === '1') setupOpen.value = true
+  },
+)
+
+function closeSetup() {
+  setupOpen.value = false
+  if (route.query.setup) {
+    const query = { ...route.query }
+    delete query.setup
+    router.replace({ query, hash: route.hash })
+  }
+}
+
+function onSetupSaved(updated) {
+  if (updated) patch(updated)
+  load()
+}
+
 onMounted(load)
 </script>
 
 <style scoped>
+/* «Проект готов на 3 из 5»: что осталось настроить и «Доделать». */
+.setup-card {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  margin-top: 16px;
+}
+.setup-card__ico {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  color: var(--muted);
+}
+.setup-card__text {
+  flex: 1 1 220px;
+  min-width: 0;
+}
+.setup-card__text small {
+  display: block;
+  margin-top: 2px;
+  color: var(--muted);
+}
 /* Строка денег простого режима: остаток, запас и ссылка в кабинет Директа. */
 .money-line {
   display: flex;

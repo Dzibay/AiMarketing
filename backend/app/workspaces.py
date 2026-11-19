@@ -87,11 +87,21 @@ def normalize_ai_style(raw: dict | None) -> dict:
     return out
 
 
-def ai_style_prompt(ws: dict) -> str:
-    """Тон и обращение проекта — строкой для подсказки ИИ."""
+def tone_own(raw) -> bool:
+    """Тон проекта задан явно; иначе действует тон по умолчанию из аккаунта («Как в аккаунте»)."""
+    return isinstance(raw, dict) and raw.get("tone") in AI_TONES
+
+
+def ai_style_prompt(ws: dict, default_tone: str = "") -> str:
+    """Тон и обращение проекта — строкой для подсказки ИИ.
+
+    Свой тон проекта важнее тона аккаунта (default_tone); без обоих — спокойный.
+    """
     style = normalize_ai_style(ws.get("ai_style"))
+    own = ws["ai_tone_own"] if "ai_tone_own" in ws else tone_own(ws.get("ai_style"))
+    tone = style["tone"] if own or default_tone not in AI_TONES else default_tone
     return (
-        f"Тон текстов для клиентов — {AI_TONES[style['tone']]}. "
+        f"Тон текстов для клиентов — {AI_TONES[tone]}. "
         f"К клиентам в объявлениях обращаемся {AI_ADDRESS[style['address']]}."
     )
 
@@ -103,7 +113,9 @@ def _clean_ai_style(current: dict, patch: dict) -> dict:
 
         if merged["model_class"] not in {c["id"] for c in ai.chat_classes()["items"]}:
             raise YandexError("model-class", "Эта модель сейчас недоступна")
-    return merged
+    # Пустой или неизвестный тон — «как в аккаунте»: храним пустым, чтобы действовал тон аккаунта.
+    own = tone_own(patch) if "tone" in patch else tone_own(current)
+    return merged if own else {**merged, "tone": ""}
 
 
 def fact_key(raw) -> str:
@@ -307,6 +319,7 @@ _WS_COLUMNS = """
     w.kpi_type, w.kpi_target, w.monthly_budget_kopecks, w.goal_id, w.ai_notes, w.ai_access, w.brief,
     w.ai_facts, w.ai_style, w.archived_at, w.created_at, w.updated_at,
     cl.name AS client_name, cl.kpi_type AS client_kpi_type, cl.kpi_target AS client_kpi_target,
+    cl.ai_notes AS client_ai_notes, cl.ai_facts AS client_ai_facts,
     m.name AS counter_name, m.site AS counter_site, m.enabled AS counter_enabled,
     y.yandex_login AS counter_login,
     (SELECT COUNT(*) FROM workspace_campaigns wc WHERE wc.workspace_id = w.id) AS campaigns_count,
@@ -351,7 +364,11 @@ def _ws_out(row: dict) -> dict:
         "brief": normalize_brief(row.get("brief")),
         "ai_access": normalize_ai_access(row.get("ai_access")),
         "ai_style": normalize_ai_style(row.get("ai_style")),
+        "ai_tone_own": tone_own(row.get("ai_style")),
         "ai_facts": normalize_ai_facts(row.get("ai_facts")),
+        # «Что ИИ знает о клиенте» — общее для всех проектов клиента (личные заметки клиента сюда не идут).
+        "client_ai_notes": (row.get("client_ai_notes") or "") if row["client_row_id"] else "",
+        "client_ai_facts": normalize_ai_facts(row.get("client_ai_facts")) if row["client_row_id"] else [],
         "archived": row.get("archived_at") is not None,
         "locked": bool(row.get("_locked")),
         "campaigns_count": int(row.get("campaigns_count") or 0),
@@ -664,23 +681,108 @@ def _edit_facts(user_id: int, workspace_id: int, edit) -> list[dict]:
     return facts
 
 
-def remember_ai_facts(user_id: int, workspace_id: int, items: list[dict]) -> list[dict]:
-    """Запомнить ответы маркетолога разом: [{key, question, answer}]; тот же key заменяет прежний ответ."""
+FACT_SCOPES = ("site", "client")
+
+
+def _project_client(user_id: int, workspace_id: int) -> int | None:
+    with pool.connection() as conn:
+        row = conn.execute(
+            "SELECT client_row_id FROM workspaces WHERE id = %s AND user_id = %s", (workspace_id, user_id)
+        ).fetchone()
+    if row is None:
+        raise YandexError("not-found")
+    return row["client_row_id"]
+
+
+def save_ai_facts(
+    user_id: int, workspace_id: int, items: list[dict], *, scope: str = "site"
+) -> tuple[list[dict], str]:
+    """Запомнить ответы маркетолога разом: [{key, question, answer}]; тот же key заменяет прежний ответ.
+
+    scope «client» — для всего клиента проекта: ответ виден ИИ во всех его проектах, а прежний ответ с тем же key
+    у этого сайта убирается (иначе он перекрыл бы новый). Проект без клиента помнит у себя.
+    Возвращает факты проекта и где ответы запомнены на самом деле: «client» или «site».
+    """
     at = datetime.now(timezone.utc).isoformat()
     new = {f["key"]: {**f, "at": at} for f in normalize_ai_facts(items)}
     if not new:
         raise YandexError("args", "Нужны key и answer")
-    return _edit_facts(user_id, workspace_id, lambda facts: [*(f for f in facts if f["key"] not in new), *new.values()])
+    client_id = _project_client(user_id, workspace_id) if scope == "client" else None
+    if client_id is not None:
+        from app.clients import remember_client_facts
+
+        remember_client_facts(user_id, client_id, list(new.values()))
+        return _edit_facts(user_id, workspace_id, lambda facts: [f for f in facts if f["key"] not in new]), "client"
+    facts = _edit_facts(user_id, workspace_id, lambda facts: [*(f for f in facts if f["key"] not in new), *new.values()])
+    return facts, "site"
 
 
-def remember_ai_fact(user_id: int, workspace_id: int, *, key: str, question: str, answer: str) -> list[dict]:
+def remember_ai_facts(user_id: int, workspace_id: int, items: list[dict], *, scope: str = "site") -> list[dict]:
+    """Как save_ai_facts, но возвращает только факты проекта."""
+    return save_ai_facts(user_id, workspace_id, items, scope=scope)[0]
+
+
+def remember_ai_fact(
+    user_id: int, workspace_id: int, *, key: str, question: str, answer: str, scope: str = "site"
+) -> list[dict]:
     """Запомнить ответ маркетолога; тот же key заменяет прежний ответ."""
-    return remember_ai_facts(user_id, workspace_id, [{"key": key, "question": question, "answer": answer}])
+    return remember_ai_facts(
+        user_id, workspace_id, [{"key": key, "question": question, "answer": answer}], scope=scope
+    )
 
 
-def forget_ai_fact(user_id: int, workspace_id: int, key: str) -> dict:
+def forget_ai_fact(user_id: int, workspace_id: int, key: str, scope: str = "site") -> dict:
+    """Забыть ответ у этого сайта или (scope «client») у всего клиента проекта."""
+    if scope not in FACT_SCOPES:
+        raise YandexError("args", "Где забыть: у этого сайта или у всего клиента")
     key = fact_key(key)
+    if scope == "client":
+        client_id = _project_client(user_id, workspace_id)
+        if client_id is None:  # ответ сайта с тем же key не трогаем: просили забыть ответ клиента
+            raise YandexError("no-client", "Проект не входит в папку клиента")
+        from app.clients import forget_client_fact
+
+        forget_client_fact(user_id, client_id, key)
+        return get_workspace(user_id, workspace_id)
     _edit_facts(user_id, workspace_id, lambda facts: [f for f in facts if f["key"] != key])
+    return get_workspace(user_id, workspace_id)
+
+
+def _check_room(facts: list[dict], key: str, who: str) -> None:
+    """Есть ли место для ответа с этим key: тот же key заменяется, новый — только если память не полна."""
+    if len(facts) >= MAX_AI_FACTS and all(f["key"] != key for f in facts):
+        raise YandexError(
+            "facts-full", f"{who} уже {MAX_AI_FACTS} запомненных ответов — сначала забудьте лишний, потом перенесите"
+        )
+
+
+def move_ai_fact(user_id: int, workspace_id: int, key: str, scope: str) -> dict:
+    """Перенести запомненный ответ: «для этого сайта» ↔ «для всего клиента»."""
+    if scope not in FACT_SCOPES:
+        raise YandexError("args", "Куда перенести: для этого сайта или для всего клиента")
+    key = fact_key(key)
+    ws = get_workspace(user_id, workspace_id)
+    if ws["client_id"] is None:
+        raise YandexError("no-client", "Проект не входит в папку клиента")
+    source = ws["ai_facts"] if scope == "client" else ws["client_ai_facts"]
+    fact = next((f for f in source if f["key"] == key), None)
+    if fact is None:
+        raise YandexError("not-found", "Такого ответа нет")
+    from app.clients import forget_client_fact, remember_client_facts
+
+    # Память ограничена MAX_AI_FACTS: перенос в полную память молча вытеснил бы самый старый ответ — не переносим.
+    if scope == "client":
+        _check_room(ws["client_ai_facts"], key, "У клиента")
+        remember_client_facts(user_id, ws["client_id"], [fact])
+        _edit_facts(user_id, workspace_id, lambda facts: [f for f in facts if f["key"] != key])
+    else:
+
+        def add(facts: list[dict]) -> list[dict]:
+            _check_room(facts, key, "У сайта")  # под блокировкой строки проекта
+            return [*(f for f in facts if f["key"] != key), fact]
+
+        _edit_facts(user_id, workspace_id, add)
+        forget_client_fact(user_id, ws["client_id"], key)
     return get_workspace(user_id, workspace_id)
 
 

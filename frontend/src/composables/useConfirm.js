@@ -17,11 +17,13 @@ const VERBS = [
 
 // check: { label, hint, confirmText } — флажок под текстом; тогда ответ — false (отмена) или { checked },
 // а подпись кнопки при отмеченном флажке меняется на check.confirmText.
+// dismissValue — ответ, если окно закрыли крестиком, Esc, кликом мимо или открыли поверх другое
+// (по умолчанию false, как «Отмена»): так вторую кнопку («Нет, …») можно отличить от «передумал».
 export function askConfirm(
   message,
-  { title = 'Подтвердите действие', confirmText, cancelText = 'Отмена', danger, check = null } = {},
+  { title = 'Подтвердите действие', confirmText, cancelText = 'Отмена', danger, check = null, dismissValue = false } = {},
 ) {
-  if (current.value) current.value.resolve(false)
+  if (current.value) current.value.dismiss()
   const text = String(message)
   const verb = VERBS.find(([re]) => re.test(text))
   return new Promise((resolve) => {
@@ -38,6 +40,10 @@ export function askConfirm(
         const checked = !!current.value?.check?.value
         current.value = null
         resolve(value && check ? { checked } : value)
+      },
+      dismiss: () => {
+        current.value = null
+        resolve(dismissValue)
       },
     }
   })
@@ -58,7 +64,7 @@ export function askText(
     danger = false,
   } = {},
 ) {
-  if (current.value) current.value.resolve(false)
+  if (current.value) current.value.dismiss()
   return new Promise((resolve) => {
     current.value = {
       message,
@@ -71,6 +77,10 @@ export function askText(
         const text = current.value?.input?.value ?? ''
         current.value = null
         resolve(ok ? text : null)
+      },
+      dismiss: () => {
+        current.value = null
+        resolve(null)
       },
     }
   })

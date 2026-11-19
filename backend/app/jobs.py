@@ -53,6 +53,10 @@ STALE_AFTER_SECONDS = 5 * 60
 # всегда оставался свободным для действий пользователя.
 HEAVY_KINDS = ("load_account", "load_counter")
 
+# Служебные задачи расписания, которые только шлют уведомления (срочное, сигналы, дайджест, напоминание
+# о тарифе): это не синхронизация, в списке задач пользователя их не показываем.
+SYSTEM_KINDS = ("urgent_check", "notify_signals", "plan_reminder", "send_digest")
+
 
 def backoff_seconds(attempt: int) -> int:
     """Пауза перед повтором после попытки №attempt (1, 2, …): 30 с, 60 с, 120 с … до 30 мин."""
@@ -310,20 +314,21 @@ def get_job(user_id: int, job_id: int) -> dict | None:
 
 
 def list_jobs(user_id: int, *, active: bool = False, limit: int = 50) -> list[dict]:
+    """Задачи пользователя для кабинета — без служебных SYSTEM_KINDS."""
     limit = max(1, min(int(limit), 200))
     with pool.connection() as conn:
         if active:
             rows = conn.execute(
                 """
                 SELECT * FROM jobs
-                WHERE user_id = %s AND status IN ('queued', 'running')
+                WHERE user_id = %s AND status IN ('queued', 'running') AND kind <> ALL(%s)
                 ORDER BY id DESC LIMIT %s
                 """,
-                (user_id, limit),
+                (user_id, list(SYSTEM_KINDS), limit),
             ).fetchall()
         else:
             rows = conn.execute(
-                "SELECT * FROM jobs WHERE user_id = %s ORDER BY id DESC LIMIT %s",
-                (user_id, limit),
+                "SELECT * FROM jobs WHERE user_id = %s AND kind <> ALL(%s) ORDER BY id DESC LIMIT %s",
+                (user_id, list(SYSTEM_KINDS), limit),
             ).fetchall()
     return [public_job(row) for row in rows]

@@ -4,8 +4,9 @@
       <template #description>
         <UiMore page="queries" lead="Где есть что разобрать: ИИ делит новые запросы на «наши» и мусор.">
           <p>
-            Решаете вы — группами внутри сайта. Новые запросы сервис забирает из Директа сам, а размечает их ИИ только
-            когда вы нажмёте кнопку в проекте.
+            Решаете вы — группами внутри сайта. Новые запросы сервис забирает из Директа сам и сразу бесплатно
+            сортирует: что уже отсекается в Директе, что вы минусовали раньше и что в брифе «не наше». Остальные
+            размечает ИИ — только когда вы нажмёте кнопку в проекте или «Разметить все проекты».
           </p>
         </UiMore>
       </template>
@@ -24,6 +25,19 @@
       <template #action><RouterLink class="btn btn--accent" to="/cabinet/connections">Подключить Яндекс</RouterLink></template>
     </EmptyState>
     <template v-else>
+      <UiNotice v-if="newTotal || allJob.busy">
+        <template v-if="allJob.busy">{{ allJob.text || 'Размечаем запросы…' }}</template>
+        <template v-else>
+          {{ num(newTotal) }} {{ plural(newTotal, 'новый запрос', 'новых запроса', 'новых запросов') }} в
+          {{ newProjects }} {{ plural(newProjects, 'проекте', 'проектах', 'проектах') }} ещё без разметки — ИИ
+          разложит их на «в минус» и «целевые».
+        </template>
+        <template #action>
+          <button class="btn btn--accent btn--sm" type="button" :disabled="allJob.busy" @click="classifyAll">
+            {{ allJob.busy ? 'Размечаем…' : 'Разметить все проекты' }}
+          </button>
+        </template>
+      </UiNotice>
       <div class="ccard">
         <div v-for="p in queue" :key="p.id" class="prow">
           <div class="prow__main">
@@ -47,7 +61,12 @@
           </div>
         </div>
       </div>
-      <QueryHighlights v-if="highlights" :costly="highlights.costly" :removed="highlights.removed_30d" />
+      <QueryHighlights
+        v-if="highlights"
+        :costly="highlights.costly"
+        :removed="highlights.removed_30d"
+        @changed="onHighlightsChanged"
+      />
       <ExpertHint>Общая таблица запросов по всем сайтам, фильтры и пакетное применение</ExpertHint>
     </template>
   </template>
@@ -56,7 +75,10 @@
     <PageHeader>
       <template #description>
         <UiMore page="queries" lead="Запросы из Директа по всем проектам.">
-          <p>Загрузить новые и разметить их ИИ — в проекте: у каждого свой бриф и память.</p>
+          <p>
+            Новые запросы сразу проходят бесплатные правила: Директ, память решений и бриф. Остальные размечает ИИ — в
+            проекте или кнопкой «Разметить все проекты»: у каждого проекта свой бриф и память.
+          </p>
           <p>
             Разметка раскладывает запросы во вкладки «В минус» и «Целевые» — принять предложения можно здесь сразу по
             всем проектам.
@@ -127,9 +149,15 @@
         </ul>
       </UiNotice>
 
-      <p v-if="tab === 'new' && data?.counts.new" class="hint">
-        Эти запросы ещё не размечены — откройте проект и нажмите «Разметить с ИИ».
-      </p>
+      <UiNotice v-if="(tab === 'new' && data?.counts.new) || allJob.busy">
+        <template v-if="allJob.busy">{{ allJob.text || 'Размечаем запросы…' }}</template>
+        <template v-else>Эти запросы ещё не размечены — ИИ разложит их на «в минус» и «целевые».</template>
+        <template #action>
+          <button class="btn btn--accent btn--sm" type="button" :disabled="allJob.busy" @click="classifyAll">
+            {{ allJob.busy ? 'Размечаем…' : 'Разметить все проекты' }}
+          </button>
+        </template>
+      </UiNotice>
 
       <UiSkeleton v-if="loading && !data" variant="table" :count="5" label="Загружаем запросы" />
       <EmptyState v-else-if="!data" :icon="CloudOff" :text="loadError || 'Не удалось загрузить запросы.'" plain>
@@ -270,17 +298,96 @@
       </template>
     </Modal>
   </template>
+
+  <Modal :open="allJob.open" title="Разметить все проекты" @close="allJob.open = false">
+    <template v-if="allJob.est">
+      <ul class="apply-summary">
+        <li>
+          Запросов к разметке: <strong>{{ num(allJob.est.queries) }}</strong> в {{ allJob.est.projects.length }}
+          {{ plural(allJob.est.projects.length, 'проекте', 'проектах', 'проектах') }}
+          <span v-if="allJob.est.rules" class="cell-note">
+            {{ num(allJob.est.rules) }} закроют память решений, бриф и Директ — без ИИ
+          </span>
+        </li>
+        <li v-if="allJob.est.ai">Уйдёт в ИИ: <strong>{{ num(allJob.est.ai) }}</strong></li>
+        <li v-if="allJob.est.percent !== null">
+          Расход ≈ <strong>{{ limitPct(allJob.est.percent) }}</strong> месячного лимита
+          <span v-if="allJob.est.left_percent !== null" class="cell-note">
+            осталось {{ limitPct(allJob.est.left_percent) }}
+          </span>
+        </li>
+      </ul>
+      <ul class="mprev__list qall__list">
+        <li v-for="p in allJob.est.projects.slice(0, ALL_SHOWN)" :key="p.id">
+          <b>{{ niceQuotes(p.name) }}</b>
+          <span>
+            {{ num(p.queries) }}<template v-if="p.new > p.queries"> из {{ num(p.new) }}</template>
+            {{ words(Math.max(p.new || 0, p.queries)) }}<template v-if="p.percent !== null">
+              · ≈ {{ limitPct(p.percent) }}</template
+            ><template v-if="!p.fits"> · не хватит лимита</template>
+          </span>
+        </li>
+        <li v-if="allJob.est.projects.length > ALL_SHOWN">
+          <span>и ещё {{ allJob.est.projects.length - ALL_SHOWN }} — по убыванию расхода</span>
+        </li>
+      </ul>
+      <p v-if="allCapped" class="field-hint">
+        За один раз размечаем до {{ num(allJob.est.per_project) }} самых дорогих новых запросов в проекте — остальные
+        следующим нажатием.
+      </p>
+      <p v-if="allJob.est.ai_error" class="notice notice--warn">
+        {{ allJob.est.ai_error }}
+        <template v-if="allJob.est.rules">Разметим только то, что закрывают правила.</template>
+      </p>
+      <p v-else-if="allShort" class="notice notice--warn">
+        <template v-if="allFirst">
+          Лимита хватит на первые {{ allFirst }} из {{ allJob.est.projects.length }}
+          {{ plural(allJob.est.projects.length, 'проекта', 'проектов', 'проектов') }} — остальные подождут следующего
+          месяца или повышения лимита.
+        </template>
+        <template v-else-if="allAiFits > 0">
+          Лимита хватит ≈ на {{ num(allAiFits) }} из {{ num(allJob.est.ai) }} запросов — остальные подождут следующего
+          месяца или повышения лимита.
+        </template>
+        <template v-else>
+          Остатка лимита не хватит даже на один вызов — ИИ не запустится.
+          <template v-if="allJob.est.rules">Разметим только то, что закрывают правила.</template>
+        </template>
+      </p>
+      <p v-else-if="allJob.est.ai" class="field-hint">Лимита хватит на все проекты.</p>
+      <p v-if="allJob.est.ai && !allJob.est.ai_error" class="field-hint">
+        {{
+          allJob.est.calibrated
+            ? 'Оценка — по прошлым вызовам ИИ.'
+            : 'Оценка приблизительная: после первых разметок станет точнее.'
+        }}
+        Остаток лимита — в настройках. Проекты идут по очереди, начиная с тех, где на новые запросы ушло больше денег.
+      </p>
+    </template>
+    <template #footer>
+      <button class="btn btn--ghost" type="button" @click="allJob.open = false">Отмена</button>
+      <button class="btn btn--accent" type="button" :disabled="allAiFits <= 0 && !allJob.est?.rules" @click="runAll">
+        {{ allAiFits <= 0 ? 'Разметить правилами' : 'Разметить' }}
+      </button>
+    </template>
+  </Modal>
 </template>
+
+<script>
+// «Разметить все проекты» живёт дольше страницы: ушли и вернулись — снова показываем ход той же задачи.
+// Одна на вкладку: job — последнее состояние, progress — куда слать ход, done — итог (тост ровно один раз).
+let allRun = null
+</script>
 
 <script setup>
 import { usePageContext } from '../composables/usePageContext'
 import UiSkeleton from '../components/ui/UiSkeleton.vue'
-import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { RouterLink } from 'vue-router'
-import { errorText, jobProgressText, webApi, wsApi } from '../api/web'
+import { errorText, jobProgressText, waitJob, webApi, wsApi } from '../api/web'
 import { pushToast } from '../composables/useToasts'
 import { undoAction } from '../composables/useUndo'
-import { formatDateTime, niceQuotes, num, plural, rubles } from '../utils/format'
+import { aiUsageText, formatDateTime, limitPct, niceQuotes, num, plural, rubles } from '../utils/format'
 import { useHead } from '../utils/useHead'
 import TermHint from '../components/TermHint.vue'
 import ExpertHint from '../components/ExpertHint.vue'
@@ -316,7 +423,7 @@ function queueLine(p) {
   if (c.negative)
     return {
       st: 'warn',
-      text: `ИИ предлагает в минус ${c.negative} ${words(c.negative)}${p.negative_cost_rub ? ` · на них ушло ${rubles(p.negative_cost_rub)}` : ''}`,
+      text: `Предложено в минус: ${c.negative} ${words(c.negative)}${p.negative_cost_rub ? ` · на них ушло ${rubles(p.negative_cost_rub)}` : ''}`,
       btn: 'Разобрать',
     }
   if (c.new)
@@ -382,6 +489,23 @@ const projectInfo = computed(() =>
 )
 const previewCount = computed(() => preview.groups.reduce((n, g) => n + g.items.length, 0))
 
+// «Разметить все проекты»: оценка, одно подтверждение и одна задача на все проекты с новыми запросами.
+const ALL_SHOWN = 8
+const allJob = reactive({ open: false, est: null, busy: false, text: '' })
+const newTotal = computed(() => (data.value?.projects || []).reduce((n, p) => n + (p.counts?.new || 0), 0))
+const newProjects = computed(() => (data.value?.projects || []).filter((p) => p.counts?.new).length)
+// Сколько проектов подряд с начала очереди разметим целиком — задача идёт в том же порядке.
+const allFirst = computed(() => {
+  const ps = allJob.est?.projects || []
+  const i = ps.findIndex((p) => !p.fits)
+  return i < 0 ? ps.length : i
+})
+const allShort = computed(() => !!allJob.est && allFirst.value < allJob.est.projects.length)
+// Сколько запросов успеет разметить ИИ: всё, что влезает, минус закрытое правилами.
+const allAiFits = computed(() => (allJob.est ? allJob.est.fits_queries - allJob.est.rules : 0))
+// В каком-то проекте новых запросов больше, чем берём за раз.
+const allCapped = computed(() => (allJob.est?.projects || []).some((p) => p.new > p.queries))
+
 // Плитки только с ненулевыми числами: нули ничего не сообщают.
 const tiles = computed(() => {
   const d = data.value
@@ -430,7 +554,14 @@ function toggleAll(on) {
 
 async function loadHighlights() {
   if (expert.value) return
-  highlights.value = await webApi.queriesHighlights().catch(() => null)
+  // Сбой перечитывания — оставляем прежние плашки, а не прячем их.
+  highlights.value = await webApi.queriesHighlights().catch(() => highlights.value)
+}
+
+// Минус-слово из плашки (или его отмена) меняет и список запросов, и сами плашки.
+function onHighlightsChanged() {
+  load()
+  loadHighlights()
 }
 
 async function load() {
@@ -537,9 +668,128 @@ async function applySelected() {
   }
 }
 
+async function classifyAll() {
+  if (allJob.busy) return
+  allJob.busy = true
+  allJob.text = 'Считаем объём и расход…'
+  let est
+  try {
+    est = await webApi.queriesClassifyEstimate()
+  } catch (err) {
+    pushToast(errorText(err), 'error')
+    return
+  } finally {
+    allJob.busy = false
+    allJob.text = ''
+  }
+  if (!est.queries) {
+    pushToast('Новых запросов нет — размечать нечего', 'info')
+    await load()
+    return
+  }
+  Object.assign(allJob, { open: true, est })
+}
+
+/** Ждёт задачу и дольше общего таймаута: она ещё идёт на сервере, а зависшую сервер сам переведёт в ошибку. */
+async function followJob(job, onProgress) {
+  for (;;) {
+    try {
+      return await waitJob(job, (current) => {
+        job = current
+        onProgress(current)
+      })
+    } catch (err) {
+      if (err.code !== 'job-timeout') throw err
+    }
+  }
+}
+
+/** Запускает (или подхватывает) задачу «Разметить все» на всю вкладку; итог — один тост, даже если страницу закрыли. */
+function trackAll(start) {
+  const run = { job: null, progress: null }
+  const progress = (job) => {
+    run.job = job
+    run.progress?.(job)
+  }
+  run.done = start(progress)
+    .then(allResultToast, (err) => pushToast(errorText(err), 'error'))
+    .finally(() => {
+      if (allRun === run) allRun = null
+    })
+  allRun = run
+  return run
+}
+
+// Новая задача: POST вернёт уже идущую, если её запустили раньше (одна на пользователя).
+const startAll = (progress) => {
+  let last = null
+  const remember = (job) => {
+    last = job
+    progress(job)
+  }
+  return webApi.queriesClassify(remember).catch((err) => {
+    if (err.code === 'job-timeout' && last) return followJob(last, remember)
+    throw err
+  })
+}
+
+let alive = true
+onBeforeUnmount(() => {
+  alive = false
+})
+
+/** Показывает на странице ход задачи «Разметить все» и после неё перечитывает списки. */
+async function showAll(run) {
+  allJob.busy = true
+  allJob.text = run.job ? `Разметка: ${jobProgressText(run.job)}` : 'Размечаем запросы…'
+  run.progress = (job) => {
+    allJob.text = `Разметка: ${jobProgressText(job)}`
+  }
+  await run.done
+  if (!alive) return
+  allJob.busy = false
+  allJob.text = ''
+  allJob.est = null
+  await load()
+  loadHighlights()
+}
+
+function runAll() {
+  allJob.open = false
+  showAll(allRun || trackAll(startAll))
+}
+
+/** Задача «Разметить все» уже идёт (запустили до перехода сюда, до перезагрузки или в другой вкладке). */
+async function resumeAll() {
+  if (!allRun) {
+    const res = await webApi.jobs({ active: true }).catch(() => null)
+    const job = res?.items?.find((j) => j.kind === 'classify_all_queries')
+    if (!job || !alive) return
+    if (!allRun) trackAll((progress) => followJob(job, progress))
+  }
+  showAll(allRun)
+}
+
+/** Итог «Разметить все» — тостом. */
+function allResultToast(res) {
+  if (!res.labeled) {
+    pushToast(res.ai_error ? `ИИ не разметил запросы: ${res.ai_error}` : 'Размечать нечего', res.ai_error ? 'error' : 'info')
+  } else {
+    const parts = [
+      `Размечено: ${res.projects} ${plural(res.projects, 'проект', 'проекта', 'проектов')}, ${num(res.labeled)} ${words(res.labeled)}`,
+      `в минус ${num(res.negative)}, целевых ${num(res.target)}`,
+    ]
+    if (res.left) parts.push(`ещё без разметки ${num(res.left)}`)
+    if (res.usage) parts.push(aiUsageText(res.usage))
+    pushToast(parts.join('; '), 'ok')
+    if (res.ai_error) pushToast(`ИИ разобрал не всё: ${res.ai_error}`, 'warn')
+  }
+}
+
 onMounted(() => {
   load()
   loadHighlights()
+  resumeAll()
 })
 watch(expert, loadHighlights)
 
@@ -576,6 +826,10 @@ usePageContext(() => {
 
 .mprev + .mprev {
   margin-top: 16px;
+}
+
+.qall__list {
+  margin: 12px 0;
 }
 
 .mprev__h {

@@ -35,6 +35,7 @@ from app.clients import (
     assign_metrika_counter,
     create_client,
     delete_client,
+    forget_client_fact,
     list_clients,
     update_client,
 )
@@ -42,8 +43,12 @@ from app.adgroups import (
     create_adgroup,
     delete_adgroups,
     list_adgroups,
+    regions_overview,
+    regions_plan,
+    set_regions,
     update_adgroup,
 )
+from app.geo import suggest_regions
 from app.ads import (
     _ad_row as _ad_db_row,
     bulk_ad_action,
@@ -82,7 +87,7 @@ from app.rules import (
 from app.password_reset import request_password_reset, reset_password
 from app.settings_store import consent_url, cookies_url, offer_url, privacy_url, public_base_url
 from app.sync_runs import list_sync_runs
-from app.undo import undo_preview
+from app.undo import undo_group_preview, undo_preview
 from app.telegram_notify import (
     create_link_code,
     get_telegram_status,
@@ -100,6 +105,7 @@ from app.users import (
     set_name,
     set_ui,
 )
+from app.users import get_ai_prefs, set_ai_prefs
 from app.web_auth import make_session, require_web_identity, require_web_user, verify_session
 from app.workspaces import ensure_workspaces, list_workspaces
 from app.yandex import (
@@ -161,6 +167,7 @@ class ClientBody(BaseModel):
     name: str = ""
     site: str = ""
     notes: str = ""
+    ai_notes: str = ""
     kpi_type: str = ""
     kpi_target: float | None = None
     monthly_budget_rub: float | None = None
@@ -170,6 +177,7 @@ class ClientPatchBody(BaseModel):
     name: str | None = None
     site: str | None = None
     notes: str | None = None
+    ai_notes: str | None = None
     kpi_type: str | None = None
     kpi_target: float | None = None
     monthly_budget_rub: float | None = None
@@ -214,6 +222,12 @@ class AdGroupPatchBody(BaseModel):
 
 class AdGroupIdsBody(BaseModel):
     adgroup_ids: list[int] = Field(default_factory=list)
+
+
+class RegionsBody(BaseModel):
+    # Минус перед id — «кроме»; dry_run — только «было → станет» для подтверждения, без записи в Директ.
+    region_ids: list[int] = Field(default_factory=list, max_length=500)
+    dry_run: bool = False
 
 
 class SitelinkBody(BaseModel):
@@ -521,6 +535,34 @@ def web_patch_me_ui(body: dict, user_id: int = Depends(require_web_identity)) ->
     """
     try:
         return {"user": set_ui(user_id, body)}
+    except UsersError as exc:
+        raise _http(exc) from exc
+
+
+class AiPrefsBody(BaseModel):
+    rules: str | None = None
+    tone: str | None = None
+
+
+def _ai_prefs_out(prefs: dict) -> dict:
+    from app.workspaces import AI_TONES
+
+    return {**prefs, "tones": list(AI_TONES)}
+
+
+@router.get("/me/ai")
+def web_get_me_ai(user_id: int = Depends(require_web_identity)) -> dict:
+    """«Мои правила для ИИ» и тон по умолчанию — для всех чатов аккаунта."""
+    try:
+        return _ai_prefs_out(get_ai_prefs(user_id))
+    except UsersError as exc:
+        raise _http(exc) from exc
+
+
+@router.patch("/me/ai")
+def web_patch_me_ai(body: AiPrefsBody, user_id: int = Depends(require_web_identity)) -> dict:
+    try:
+        return _ai_prefs_out(set_ai_prefs(user_id, rules=body.rules, tone=body.tone))
     except UsersError as exc:
         raise _http(exc) from exc
 
@@ -884,6 +926,78 @@ def web_patch_client(
         raise _http(exc) from exc
 
 
+class ClientFactBody(BaseModel):
+    key: str = ""
+
+
+@router.post("/clients/{client_id}/ai-facts/forget")
+def web_forget_client_fact(
+    client_id: int, body: ClientFactBody, user_id: int = Depends(require_web_user)
+) -> dict:
+    """Забыть ответ, который ИИ запомнил для всего клиента; возвращает клиента."""
+    try:
+        return forget_client_fact(user_id, client_id, body.key)
+    except YandexError as exc:
+        raise _http(exc) from exc
+
+
+# Файлы клиента для ИИ: видны во всех проектах клиента. Лимиты — как у файлов проекта.
+
+
+class ClientFileBody(BaseModel):
+    filename: str = ""
+    data: str
+
+
+class ClientFilePatchBody(BaseModel):
+    enabled: bool
+
+
+def _client_files(fn, *args, **kwargs) -> dict:
+    try:
+        return fn(*args, **kwargs)
+    except YandexError as exc:
+        raise _http(exc) from exc
+
+
+@router.get("/clients/{client_id}/context-files")
+def web_client_files(client_id: int, user_id: int = Depends(require_web_user)) -> dict:
+    from app.context_files import list_client_files
+
+    return _client_files(list_client_files, user_id, client_id)
+
+
+@router.post("/clients/{client_id}/context-files")
+def web_client_file_upload(client_id: int, body: ClientFileBody, user_id: int = Depends(require_web_user)) -> dict:
+    """.txt, .md или zip с ними (base64)."""
+    from app.context_files import upload_client
+
+    return _client_files(upload_client, user_id, client_id, filename=body.filename, data=body.data)
+
+
+@router.patch("/clients/{client_id}/context-files/{file_id}")
+def web_client_file_patch(
+    client_id: int, file_id: int, body: ClientFilePatchBody, user_id: int = Depends(require_web_user)
+) -> dict:
+    from app.context_files import set_client_enabled
+
+    return _client_files(set_client_enabled, user_id, client_id, file_id, body.enabled)
+
+
+@router.delete("/clients/{client_id}/context-files")
+def web_client_files_clear(client_id: int, user_id: int = Depends(require_web_user)) -> dict:
+    from app.context_files import delete_client_file
+
+    return _client_files(delete_client_file, user_id, client_id)
+
+
+@router.delete("/clients/{client_id}/context-files/{file_id}")
+def web_client_file_delete(client_id: int, file_id: int, user_id: int = Depends(require_web_user)) -> dict:
+    from app.context_files import delete_client_file
+
+    return _client_files(delete_client_file, user_id, client_id, file_id)
+
+
 @router.delete("/clients/{client_id}")
 def web_delete_client(client_id: int, user_id: int = Depends(require_web_user)) -> dict:
     try:
@@ -1003,6 +1117,24 @@ def web_queries_highlights(user_id: int = Depends(require_web_user)) -> dict:
         return portfolio_highlights(user_id)
     except YandexError as exc:
         raise _http(exc) from exc
+
+
+@router.post("/queries/classify/estimate")
+def web_queries_classify_estimate(user_id: int = Depends(require_web_user)) -> dict:
+    """«Разметить все проекты» без вызова ИИ: сколько запросов, сколько закроют правила, доля месячного лимита."""
+    from app.query_cleaning import estimate_classify_all
+
+    try:
+        return estimate_classify_all(user_id)
+    except YandexError as exc:
+        raise _http(exc) from exc
+
+
+@router.post("/queries/classify")
+def web_queries_classify(user_id: int = Depends(require_web_user)) -> dict:
+    """Одна задача на все проекты с новыми запросами — та же разметка, что кнопкой в проекте."""
+    job = submit("classify_all_queries", user_id, {}, priority=PRIORITY_USER, max_attempts=2)
+    return {"job": public_job(job)}
 
 
 @router.get("/direct/campaigns")
@@ -1145,6 +1277,45 @@ def web_patch_adgroup(
 def web_delete_adgroups(body: AdGroupIdsBody, user_id: int = Depends(require_web_user)) -> dict:
     try:
         return delete_adgroups(user_id, body.adgroup_ids)
+    except YandexError as exc:
+        raise _http(exc) from exc
+
+
+@router.get("/direct/regions/search")
+def web_search_regions(q: str = "", user_id: int = Depends(require_web_user)) -> dict:
+    """Подсказки к полю «Регионы»: город или область по названию."""
+    return suggest_regions(user_id, q[:100])
+
+
+@router.get("/direct/campaigns/{campaign_row_id}/regions")
+def web_campaign_regions(campaign_row_id: int, user_id: int = Depends(require_web_user)) -> dict:
+    try:
+        return regions_overview(user_id, campaign_row_id)
+    except YandexError as exc:
+        raise _http(exc) from exc
+
+
+@router.post("/direct/campaigns/{campaign_row_id}/regions")
+def web_set_campaign_regions(
+    campaign_row_id: int, body: RegionsBody, user_id: int = Depends(require_web_user)
+) -> dict:
+    """Регионы всем группам кампании; dry_run — только «было → станет»."""
+    try:
+        if body.dry_run:
+            return regions_plan(user_id, body.region_ids, campaign_row_id=campaign_row_id)
+        return set_regions(user_id, body.region_ids, campaign_row_id=campaign_row_id)
+    except YandexError as exc:
+        raise _http(exc) from exc
+
+
+@router.post("/direct/adgroups/{adgroup_row_id}/regions")
+def web_set_adgroup_regions(
+    adgroup_row_id: int, body: RegionsBody, user_id: int = Depends(require_web_user)
+) -> dict:
+    try:
+        if body.dry_run:
+            return regions_plan(user_id, body.region_ids, adgroup_row_ids=[adgroup_row_id])
+        return set_regions(user_id, body.region_ids, adgroup_row_ids=[adgroup_row_id])
     except YandexError as exc:
         raise _http(exc) from exc
 
@@ -1360,10 +1531,12 @@ def web_action_logs(
     kind: str = "",
     before_id: int | None = None,
     workspace_id: int | None = None,
+    campaign_row_id: int | None = None,
     limit: int = 50,
     user_id: int = Depends(require_web_user),
 ) -> dict:
-    """Журнал по всем проектам; workspace_id — фильтр проекта (список и так только свой: user_id)."""
+    """Журнал по всем проектам; workspace_id — фильтр проекта (список и так только свой: user_id),
+    campaign_row_id — изменения одной кампании (её группы, объявления, фразы)."""
     return {
         "items": list_action_logs(
             user_id,
@@ -1372,8 +1545,42 @@ def web_action_logs(
             source=source or None,
             kind=kind or None,
             before_id=before_id,
+            campaign_row_id=campaign_row_id,
         )
     }
+
+
+class UndoGroupBody(BaseModel):
+    ids: list[int]
+
+
+def _group_ids(raw: str) -> list[int]:
+    try:
+        return [int(x) for x in raw.split(",") if x.strip()]
+    except ValueError as exc:
+        raise _http(YandexError("args", "Неверный список записей")) from exc
+
+
+@router.get("/actions/undo-group")
+def web_action_undo_group_preview(ids: str = "", user_id: int = Depends(require_web_user)) -> dict:
+    """Окно «Отменить» для задачи с несколькими записями: каждая словами, что вернуть нельзя и почему."""
+    try:
+        return undo_group_preview(user_id, _group_ids(ids))
+    except YandexError as exc:
+        raise _http(exc) from exc
+
+
+@router.post("/actions/undo-group")
+def web_action_undo_group(body: UndoGroupBody, user_id: int = Depends(require_web_user)) -> dict:
+    """Откат нескольких записей одной задачей; откатываются только доступные (preview.log_ids)."""
+    try:
+        preview = undo_group_preview(user_id, body.ids)
+    except YandexError as exc:
+        raise _http(exc) from exc
+    if not preview["available"]:
+        raise _http(YandexError("undo", preview["reason"]))
+    job = submit("undo_action", user_id, {"log_ids": preview["log_ids"]}, priority=PRIORITY_USER, max_attempts=1)
+    return {"job": public_job(job)}
 
 
 @router.get("/actions/{log_id}/undo")

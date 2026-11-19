@@ -177,3 +177,18 @@ def test_jobs_are_private(db):
     assert get_job(stranger, job["id"]) is None
     assert list_jobs(stranger) == []
     assert [j["id"] for j in list_jobs(owner, active=True)] == [job["id"]]
+
+
+def test_system_kinds_are_not_listed(db):
+    """Ежечасная проверка срочного и прочие служебные задачи не попадают в «Идёт синхронизация»."""
+    user = make_user(db)
+    sync = submit("sync_goals", user, {"counter_row_id": 1})
+    for kind in ("urgent_check", "notify_signals", "send_digest"):
+        submit(kind, user, priority=PRIORITY_BACKGROUND)
+    submit("plan_reminder", user, {"ends_at": "2026-12-01", "days": 3}, priority=PRIORITY_BACKGROUND)
+    assert [j["id"] for j in list_jobs(user, active=True)] == [sync["id"]]
+    assert [j["id"] for j in list_jobs(user)] == [sync["id"]]
+    # По id задача по-прежнему читается: её ждут те, кто её поставил.
+    with db.connection() as conn:
+        urgent = conn.execute("SELECT id FROM jobs WHERE kind = 'urgent_check'").fetchone()
+    assert get_job(user, urgent["id"])["kind"] == "urgent_check"

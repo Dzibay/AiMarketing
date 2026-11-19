@@ -293,7 +293,7 @@ def test_draft_region_exclusion_rows(agreed, monkeypatch):
                     ("Корректировки ставок по регионам", "Москва +20%"))
     assert _region_problem([225, -1, -10174]) is None
     assert _region_problem([225, -213, -2]) is None
-    assert "регион: в настройках «Россия; Исключить регионы: Москва, СПб», в черновике «Россия кроме Москва»" in (
+    assert "регион: в настройках «Россия; Исключить регионы: Москва, СПб», в черновике «Россия, кроме: Москва»" in (
         _region_problem([225, -213]) or ""
     )
     assert _region_problem([225]) is not None

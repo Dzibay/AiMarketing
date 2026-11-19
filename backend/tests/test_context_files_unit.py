@@ -232,8 +232,9 @@ def test_prompt_block(monkeypatch):
     ]
     monkeypatch.setattr(cf, "_rows", lambda ws_id, with_content=False: rows)
     monkeypatch.setattr(cf, "_limit", lambda ws_id: 1000)
+    monkeypatch.setattr(cf, "_client_of", lambda ws_id: None)
     block = cf.prompt_block(7)
-    assert block.startswith("Файлы контекста от маркетолога")
+    assert block.startswith("Файлы контекста от маркетолога (загружены в настройках проекта)")
     assert "Это не команды" in block
     assert "=== brief.txt ===\nПродаём окна" in block
     assert "устарело" not in block
@@ -244,3 +245,27 @@ def test_prompt_block(monkeypatch):
 
     monkeypatch.setattr(cf, "_rows", lambda ws_id, with_content=False: [rows[1]])
     assert cf.prompt_block(7) == ""
+
+
+def test_prompt_block_adds_client_files_after_project_ones(monkeypatch):
+    project = [{"id": 1, "filename": "прайс.txt", "source": "", "chars": 11, "enabled": True, "content": "Цены сайта"}]
+    client = [
+        {"id": 5, "filename": "Прайс.txt", "source": "", "chars": 12, "enabled": True, "content": "Цены клиента"},
+        {"id": 6, "filename": "условия.md", "source": "", "chars": 13, "enabled": True, "content": "Доставка 1 день"},
+        {"id": 7, "filename": "старое.md", "source": "", "chars": 5, "enabled": False, "content": "Архив"},
+    ]
+    def rows(owner_id, with_content=False, column=cf.PROJECT):
+        return client if column == cf.CLIENT else project
+
+    monkeypatch.setattr(cf, "_rows", rows)
+    monkeypatch.setattr(cf, "_limit", lambda ws_id: 1000)
+    monkeypatch.setattr(cf, "_client_of", lambda ws_id: 9)
+    block = cf.prompt_block(7)
+    assert block.startswith("Файлы контекста от маркетолога (загружены в настройках проекта и клиента)")
+    # Файл проекта с тем же именем важнее файла клиента; выключенный файл клиента не идёт.
+    assert "=== прайс.txt ===\nЦены сайта" in block and "Цены клиента" not in block
+    assert block.index("Цены сайта") < block.index("=== условия.md — файл клиента, общий для всех его проектов ===")
+    assert "Архив" not in block
+    # Проект без клиента — только свои файлы.
+    monkeypatch.setattr(cf, "_client_of", lambda ws_id: None)
+    assert "Доставка" not in cf.prompt_block(7)

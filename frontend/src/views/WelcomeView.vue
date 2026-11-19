@@ -144,7 +144,15 @@
             ваши сайты, а правки в Директе вносит только после вашего «Выполнить».
           </p>
           <p v-if="!overview" class="empty">Собираем сигналы…</p>
-          <SignalCards v-else :problems="overview.problems || []" show-project bare :limit="3" />
+          <SignalCards
+            v-else
+            :problems="overview.problems || []"
+            :hidden="overview.hidden || []"
+            show-project
+            bare
+            :limit="3"
+            @changed="loadOverview"
+          />
         </template>
 
         <p v-if="!step.done && step.detail" class="start__detail" :class="DETAIL_TONES[step.status]">
@@ -204,6 +212,8 @@
         </div>
       </section>
     </template>
+
+    <ProjectSetup :open="setupId !== null" :ws-id="setupId" @close="setupId = null" @saved="onSetupSaved" />
   </div>
 </template>
 
@@ -220,6 +230,7 @@ import {
   Sparkles,
   TriangleAlert,
 } from '@lucide/vue'
+import ProjectSetup from '../components/ProjectSetup.vue'
 import RoleChoice from '../components/RoleChoice.vue'
 import SignalCards from '../components/SignalCards.vue'
 import YandexConnectButton from '../components/YandexConnectButton.vue'
@@ -249,6 +260,8 @@ const adding = ref(null)
 const selected = ref('')
 const counters = ref({ items: [], projects_limit: null, projects_used: 0 })
 const overview = ref(null)
+// Новый сайт, для которого открыто «Подготовим проект» (как в «Подключениях»).
+const setupId = ref(null)
 let timer = 0
 
 const wizard = computed(() => state.value?.wizard || { steps: [], current: null, complete: false })
@@ -327,6 +340,8 @@ async function addSite(c) {
   try {
     const ws = await wsApi.fromCounter(c.counter_id)
     pushToast(`${niceQuotes(ws.name) || c.site || c.counter_id} добавлен`)
+    // Вернули из архива — проект уже настроен; новый — сразу предлагаем подготовить.
+    if (c.state === 'available') setupId.value = ws.id
     await Promise.all([loadCounters(), loadWorkspaces(true).catch(() => null), load()])
   } catch (err) {
     pushToast(errorText(err), 'error')
@@ -335,6 +350,12 @@ async function addSite(c) {
     busy.value = false
     adding.value = null
   }
+}
+
+// Цель и шаблон ссылки — шаги «Что ещё настроить»: перечитываем их вместе со списком проектов.
+function onSetupSaved() {
+  loadWorkspaces(true).catch(() => null)
+  load()
 }
 
 async function skip() {

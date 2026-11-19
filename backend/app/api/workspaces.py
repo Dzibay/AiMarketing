@@ -19,6 +19,7 @@ from app.api.web import _http, _start_job
 from app.db import pool
 from app.direct_sync import get_campaign
 from app.budgets import validate_args
+from app.campaign_budget import budget_info, change_budget
 from app.job_handlers import submit
 from app.jobs import PRIORITY_USER, public_job
 from app.journal import list_action_logs
@@ -772,6 +773,44 @@ def ws_patch_campaign_settings(
         raise _http(exc) from exc
 
 
+class CampaignBudgetBody(BaseModel):
+    """Одна сумма — в той единице, в которой живёт бюджет кампании."""
+
+    weekly_budget_rub: float | None = Field(default=None, gt=0, allow_inf_nan=False)
+    daily_budget_rub: float | None = Field(default=None, gt=0, allow_inf_nan=False)
+
+
+@router.get("/{workspace_id}/campaigns/{campaign_row_id}/budget")
+def ws_campaign_budget(workspace_id: int, campaign_row_id: int, user_id: int = Depends(require_web_user)) -> dict:
+    """Бюджет кампании (в неделю или в день) и расход за эту неделю/сегодня — из базы, без Директа."""
+    _ws_campaign(user_id, workspace_id, campaign_row_id)
+    try:
+        return budget_info(user_id, campaign_row_id)
+    except YandexError as exc:
+        raise _http(exc) from exc
+
+
+@router.post("/{workspace_id}/campaigns/{campaign_row_id}/budget")
+def ws_set_campaign_budget(
+    workspace_id: int,
+    campaign_row_id: int,
+    body: CampaignBudgetBody,
+    user_id: int = Depends(require_web_user),
+) -> dict:
+    """Новый бюджет одной кампании; в «Истории» — запись с откатом «Вернуть как было»."""
+    _ws_campaign(user_id, workspace_id, campaign_row_id)
+    try:
+        return change_budget(
+            user_id,
+            workspace_id,
+            campaign_row_id,
+            weekly_budget_rub=body.weekly_budget_rub,
+            daily_budget_rub=body.daily_budget_rub,
+        )
+    except YandexError as exc:
+        raise _http(exc) from exc
+
+
 @router.post("/{workspace_id}/campaigns/{campaign_row_id}/duplicate")
 def ws_duplicate_campaign(
     workspace_id: int,
@@ -820,9 +859,11 @@ def ws_actions(
     source: str = "",
     kind: str = "",
     before_id: int | None = None,
+    campaign_row_id: int | None = None,
     limit: int = 50,
     user_id: int = Depends(require_web_user),
 ) -> dict:
+    """campaign_row_id — «Недавние изменения» и «Вся история» одной кампании."""
     _ws(user_id, workspace_id)
     return {
         "items": list_action_logs(
@@ -832,6 +873,7 @@ def ws_actions(
             source=source or None,
             kind=kind or None,
             before_id=before_id,
+            campaign_row_id=campaign_row_id,
         )
     }
 

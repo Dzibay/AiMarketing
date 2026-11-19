@@ -615,6 +615,8 @@ def workspace_summary(user_id: int, workspace_id: int) -> dict:
         "today_updated_at": overview.get("today_updated_at"),
         "row": row,
         "problems": problems,
+        # Скрытые сигналы проекта — строка «Скрыто: N» под списком.
+        "hidden": [h for h in overview.get("hidden") or [] if workspace_id in h["workspace_ids"]],
         "week": {
             "date_from": week["date_from"],
             "date_to": week["date_to"],
@@ -682,6 +684,13 @@ def _money_url(problems: list[dict]) -> str:
     return first["direct_url"]
 
 
+def _shortest_money(problems: list[dict]) -> dict | None:
+    """Видимая проблема «деньги» с самым коротким запасом дней. Скрытую («⋯», snoozes) строка «как дела»
+    не повторяет: деньги в ней — только из проблем сводки, как money_out и money_url."""
+    money = [p for p in problems if p["kind"] == "balance" and p.get("days_on_balance") is not None]
+    return min(money, key=lambda p: p["days_on_balance"]) if money else None
+
+
 def _base_facts(days: int, problems: list[dict]) -> dict:
     return {
         "days": days,
@@ -729,11 +738,12 @@ def workspace_headline(user_id: int, workspace_id: int, days: int = 7) -> dict:
     kpi = a["kpi"] if a["kpi"] and a["kpi"]["status"] != "none" else None
     base = f"/w/{workspace_id}"
     numbers = _numbers(days, date_from, date_to, a["totals"], a["previous"], a["compare"])
+    money = _shortest_money(problems)
     facts = {
         **_base_facts(days, problems),
         "accounts": row.get("accounts", 0),
         "stats_loaded": bool(row.get("stats_synced_at") or a["direct_updated_at"]),
-        "money_days": row.get("days_on_balance"),
+        "money_days": money["days_on_balance"] if money else None,
         "kpi": kpi,
         "project": "",
         "cost": numbers["cost"],
@@ -771,15 +781,19 @@ def home_headline(user_id: int, days: int = 7) -> dict:
     if focus and kpi:
         own = [c for c in p["campaigns"] if c["project"]["id"] == focus["id"]]
         worst = _worst_campaign(own, focus["id"])
-    days_left = [r for r in rows if r["days_on_balance"] is not None]
-    shortest = min(days_left, key=lambda r: r["days_on_balance"]) if days_left else None
+    shortest = _shortest_money(overview["problems"])
+    money_project = ""
+    if shortest and len(rows) > 1:
+        # Логин нескольких проектов — называем первый из них, как в списке проектов.
+        names = [r["name"] for r in rows if r["id"] in (shortest.get("workspace_ids") or [])]
+        money_project = names[0] if names else shortest.get("workspace_name") or ""
     goal_link = f"/w/{single['id']}/settings" if single else None
     facts = {
         **_base_facts(days, overview["problems"]),
         "accounts": sum(r["accounts"] for r in rows),
         "stats_loaded": any(r["stats_synced_at"] for r in rows if r["accounts"]) or numbers["cost"] > 0,
         "money_days": shortest["days_on_balance"] if shortest else None,
-        "money_project": shortest["name"] if shortest and len(rows) > 1 else "",
+        "money_project": money_project,
         "kpi": kpi,
         "project": focus["name"] if focus and not single else "",
         "cost": numbers["cost"],

@@ -47,9 +47,26 @@
           :placeholder="q.options.length ? 'Свой вариант или уточнение' : 'Ваш ответ'"
           :aria-label="`Ответ на вопрос ${q.n}`"
         />
-        <small v-if="q.multiple || q.remember" class="hint">
-          {{ [q.multiple ? 'Можно выбрать несколько' : '', q.remember ? 'Запомню для этого клиента и больше не спрошу' : ''].filter(Boolean).join(' · ') }}
+        <small v-if="q.multiple || (q.remember && !q.scope)" class="hint">
+          {{ [q.multiple ? 'Можно выбрать несколько' : '', q.remember && !q.scope ? 'Запомню для этого сайта и больше не спрошу' : ''].filter(Boolean).join(' · ') }}
         </small>
+        <div v-if="q.remember && q.scope" class="ai-question__scope">
+          <small class="hint">Запомню и больше не спрошу:</small>
+          <div class="seg seg--sm" role="radiogroup" :aria-label="`Где запомнить ответ на вопрос ${q.n}`">
+            <button
+              v-for="s in SCOPES"
+              :key="s.id"
+              type="button"
+              role="radio"
+              :class="{ active: scopeOf(q) === s.id }"
+              :aria-checked="scopeOf(q) === s.id"
+              :disabled="disabled"
+              @click="scopes[q.n] = s.id"
+            >
+              {{ s.label }}
+            </button>
+          </div>
+        </div>
       </div>
       <textarea
         v-model="comment"
@@ -74,7 +91,9 @@
           <span v-if="a.skipped" class="hint">без ответа</span>
           <template v-else>
             {{ a.answer }}
-            <span v-if="isRemembered(i)" class="chip">запомнено</span>
+            <span v-if="isRemembered(i)" class="chip">
+              {{ isForClient(i) ? 'запомнено для клиента' : 'запомнено' }}
+            </span>
           </template>
         </li>
       </ul>
@@ -89,7 +108,10 @@
 </template>
 
 <script setup>
-/** Карточка вопросов ИИ перед работой: варианты ответа и свой текст; ответы с key запоминаются для клиента. */
+/**
+ * Карточка вопросов ИИ перед работой: варианты ответа и свой текст. Ответы с key запоминаются: для этого сайта
+ * или, если у проекта есть клиент (у вопроса есть scope), — на выбор для всего клиента.
+ */
 import { computed, reactive, ref } from 'vue'
 import UiStatus from '../../components/ui/UiStatus.vue'
 
@@ -104,6 +126,10 @@ const emit = defineEmits(['submit'])
 const STATUS = { pending: 'ждёт ответа', done: 'отвечено', rejected: 'без ответа' }
 const TONES = { pending: 'wait', done: 'ok', rejected: 'off', error: 'bad' }
 const NEED_TEXT = { image_gen: 'Генерация картинок временно недоступна' }
+const SCOPES = [
+  { id: 'site', label: 'для этого сайта' },
+  { id: 'client', label: 'для всего клиента' },
+]
 
 function locked(q, option) {
   const need = q.needs?.[option]
@@ -120,6 +146,8 @@ const result = computed(() => props.action.result || {})
 
 const picked = reactive({})
 const texts = reactive({})
+// Где запомнить ответ: по умолчанию — как предложил ИИ (критерий успеха — для клиента, остальное — для сайта).
+const scopes = reactive({})
 const comment = ref('')
 const hint = ref('')
 
@@ -140,11 +168,21 @@ function isRemembered(index) {
   return !!key && (result.value.remembered || []).includes(key)
 }
 
+function isForClient(index) {
+  const key = questions.value[index]?.key
+  return !!key && (result.value.remembered_client || []).includes(key)
+}
+
+function scopeOf(q) {
+  return scopes[q.n] || q.scope
+}
+
 function submit() {
   const answers = questions.value.map((q) => ({
     n: q.n,
     selected: picked[q.n] || [],
     text: (texts[q.n] || '').trim(),
+    ...(q.remember && q.scope ? { scope: scopeOf(q) } : {}),
   }))
   if (!comment.value.trim() && !answers.some((a) => a.selected.length || a.text)) {
     hint.value = 'Ответьте хотя бы на один вопрос или напишите комментарий'
@@ -157,3 +195,12 @@ function skip() {
   emit('submit', { skip: true, comment: comment.value.trim() })
 }
 </script>
+
+<style scoped>
+.ai-question__scope {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem 0.6rem;
+}
+</style>

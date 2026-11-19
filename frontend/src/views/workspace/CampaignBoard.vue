@@ -100,6 +100,7 @@
             @change="toggle(n)"
           />
           <span class="board-chips__text">−{{ n.text }}</span>
+          <BoardRule :item="n" />
           <button
             class="board-x"
             type="button"
@@ -128,33 +129,15 @@
 
     <BoardSection name="extras" title="Расширения" :stages="stagesOf('extras')" :tables="tables.extras">
       <BoardFacts v-if="build.extras.length" :items="build.extras" />
-      <template v-if="build.sitelinks.length">
-        <h5 class="board__subhead">Быстрые ссылки</h5>
-        <ul class="board-links">
-          <li
-            v-for="l in build.sitelinks"
-            :key="l.text"
-            :class="{ 'is-pending': l.pending, 'is-off': !isOn(l) }"
-          >
-            <UiCheckbox v-if="l.pending" :checked="isOn(l)" :disabled="disabled" :aria-label="l.text" @change="toggle(l)" />
-            <strong>{{ l.text }}</strong>
-            <small v-if="l.description">{{ l.description }}</small>
-            <small v-if="l.href" class="board-links__href">{{ l.href }}</small>
-          </li>
-        </ul>
-      </template>
-      <template v-if="build.callouts.length">
-        <h5 class="board__subhead">Уточнения</h5>
-        <ul class="board-chips">
-          <li v-for="c in build.callouts" :key="c.text" :class="{ 'is-pending': c.pending, 'is-off': !isOn(c) }">
-            <UiCheckbox v-if="c.pending" :checked="isOn(c)" :disabled="disabled" :aria-label="c.text" @change="toggle(c)" />
-            <span class="board-chips__text">{{ c.text }}</span>
-          </li>
-        </ul>
-      </template>
-      <p v-if="!build.extras.length && !build.sitelinks.length && !build.callouts.length" class="hint">
-        Быстрые ссылки и уточнения — после объявлений. С ними объявление крупнее и заметнее в выдаче.
+      <p v-if="!build.extras.length && !boardSitelinks.length && !boardCallouts.length" class="hint">
+        Быстрые ссылки и уточнения — после объявлений. С ними объявление крупнее и заметнее в выдаче. Можно вписать
+        свои — ИИ возьмёт их в кампанию.
       </p>
+      <BoardExtras
+        v-if="build.groups.length || boardSitelinks.length || boardCallouts.length"
+        :sitelinks="boardSitelinks"
+        :callouts="boardCallouts"
+      />
     </BoardSection>
 
     <BoardSection name="settings" title="Настройки" :stages="stagesOf('settings')" :tables="tables.settings">
@@ -168,6 +151,17 @@
           <span class="board-checks__icon" aria-hidden="true">{{ CHECK_ICONS[c.state] }}</span>
           <span>{{ c.label }}</span>
           <small v-if="c.note">{{ c.note }}</small>
+          <!-- Группы спорят за запросы: ИИ подберёт минус-слова между ними и покажет правки на доске. -->
+          <button
+            v-if="c.ask && !locked"
+            class="btn btn--xs board-checks__ask"
+            type="button"
+            v-tip="'ИИ подберёт минус-слова между группами и покажет правки здесь — на согласование'"
+            :disabled="disabled"
+            @click="emit('ask', c.ask)"
+          >
+            Развести группы
+          </button>
         </li>
       </ul>
 
@@ -275,19 +269,22 @@
 <script setup>
 /**
  * Доска сборки новой кампании рядом с чатом: разделы по этапам сверху вниз, галочки и решения по
- * ждущим таблицам, правки маркетолога (фразы, группы, заголовки, тексты и картинки), предпросмотр и проверка
- * готовности. Данные — build из get_chat; правки уходят через edit(ops) и возвращают чат целиком.
+ * ждущим таблицам, правки маркетолога (фразы, группы, заголовки, тексты, картинки, быстрые ссылки и уточнения),
+ * предпросмотр и проверка готовности (с правилами Директа). Данные — build из get_chat; правки уходят через
+ * edit(ops) и возвращают чат целиком.
  * Кампания, собранная одной доской (build.held), согласуется одним решением в разделе «Готовность».
  */
-import { computed, nextTick, onMounted, provide, reactive, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, provide, reactive, ref, watch } from 'vue'
 import UiCheckbox from '../../components/ui/UiCheckbox.vue'
 import { RouterLink } from 'vue-router'
 import { aiApi } from '../../api/web'
 import { askConfirm } from '../../composables/useConfirm'
 import { plural } from '../../utils/format'
 import CampaignNextStep from '../../components/CampaignNextStep.vue'
+import BoardExtras from './BoardExtras.vue'
 import BoardFacts from './BoardFacts.vue'
 import BoardGroup from './BoardGroup.vue'
+import BoardRule from './BoardRule.vue'
 import BoardSection from './BoardSection.vue'
 
 const props = defineProps({
@@ -436,6 +433,24 @@ const audienceCount = computed(() => props.build.groups.reduce((n, g) => n + (g.
 const imageCount = computed(() => props.build.groups.reduce((n, g) => n + (g.images || []).filter(isOn).length, 0))
 const adsStarted = computed(() => props.build.stages.some((s) => s.key === 'ads' && s.status !== 'todo'))
 
+// Быстрые ссылки и уточнения доски: из таблиц этапа, а нет их там — из карточки создания (без повторов по группам).
+function boardLinks(key) {
+  if (props.build[key]?.length) return props.build[key]
+  const seen = new Set()
+  const out = []
+  for (const g of props.build.groups) {
+    for (const item of g[key] || []) {
+      const id = item.text.toLowerCase()
+      if (seen.has(id)) continue
+      seen.add(id)
+      out.push(item)
+    }
+  }
+  return out
+}
+const boardSitelinks = computed(() => boardLinks('sitelinks'))
+const boardCallouts = computed(() => boardLinks('callouts'))
+
 // Раздел, о котором сейчас речь: последняя ждущая таблица или карточка создания.
 const active = computed(() => {
   if (props.build.draft?.status === 'pending') return 'ready'
@@ -480,6 +495,7 @@ function toggle(item) {
 function setOn(item, on) {
   const list = off[item.action_id] || []
   off[item.action_id] = on ? list.filter((n) => n !== item.n) : [...new Set([...list, item.n])]
+  scheduleChecks()
 }
 
 function offOf(table) {
@@ -488,13 +504,62 @@ function offOf(table) {
 
 function setOff(id, list) {
   off[id] = [...list]
+  scheduleChecks()
 }
+
+// Галочки — и на сервер: пределы доски, «Готовность» и ИИ считают те же строки, что отмечены здесь.
+// Правка уходит вместе с ними, одни галочки — чуть погодя, пачкой.
+const CHECKS_DELAY = 600
+let checksTimer = null
+let checksRun = null
+
+function checksOp() {
+  return { op: 'checks', off: Object.fromEntries(pendingTables.value.map((t) => [t.id, off[t.id] || []])) }
+}
+
+function checksDirty() {
+  return pendingTables.value.some((t) => {
+    const list = off[t.id] || []
+    return (t.args?.rows || []).some((r) => (r.checked === false) !== list.includes(r.n))
+  })
+}
+
+function scheduleChecks() {
+  clearTimeout(checksTimer)
+  checksTimer = setTimeout(syncChecks, CHECKS_DELAY)
+}
+
+/** Отменить отложенную отправку галочек и дождаться начатой. */
+async function settleChecks() {
+  clearTimeout(checksTimer)
+  checksTimer = null
+  while (checksRun) await checksRun
+}
+
+async function syncChecks() {
+  checksTimer = null
+  // По одной отправке за раз: две сразу спорили бы за одну таблицу.
+  while (checksRun) await checksRun
+  // ИИ отвечает или идёт решение — отправим, когда доска освободится.
+  if (props.disabled || busy.value || locked.value || !checksDirty()) return
+  checksRun = props.edit([checksOp()]).finally(() => {
+    checksRun = null
+  })
+  await checksRun
+}
+
+watch(
+  () => props.disabled,
+  (now) => !now && checksDirty() && scheduleChecks(),
+)
+onBeforeUnmount(() => clearTimeout(checksTimer))
 
 async function edit(ops) {
   if (disabled.value) return false
   busy.value = true
   try {
-    return await props.edit(ops)
+    await settleChecks()
+    return await props.edit([checksOp(), ...ops])
   } finally {
     busy.value = false
   }
@@ -504,7 +569,8 @@ async function edit(ops) {
 async function remove(kind, group, items) {
   const ops = []
   for (const item of items) {
-    if (item.pending && !item.added) setOn(item, false)
+    // Ссылка из общей строки «A, B» (shared): галочка сняла бы всю строку — убираем правкой.
+    if (item.pending && !item.added && !item.shared) setOn(item, false)
     // Картинка — по хэшу; подпись — для заметки ИИ.
     else if (kind === 'image') ops.push({ op: 'remove', kind, group, text: item.hash, name: item.text })
     else ops.push({ op: 'remove', kind, group, text: item.text })
@@ -517,7 +583,9 @@ async function addNegative() {
   if (text && (await edit([{ op: 'add', kind: 'negative', text }]))) negative.value = ''
 }
 
-function decide(id, payload) {
+// Решение несёт свои строки — галочки отдельно не отправляем, но и не шлём их наперегонки с решением.
+async function decide(id, payload) {
+  await settleChecks()
   emit('decide', id, payload)
 }
 
@@ -538,6 +606,7 @@ async function decideBoard(approve) {
     )
     if (!sure) return
   }
+  await settleChecks()
   const rows = approve ? Object.fromEntries(heldTables.value.map((t) => [t.id, chosenOf(t)])) : {}
   emit('board', { approve, rows, comment })
 }
@@ -614,3 +683,11 @@ function showAction(actionId) {
 
 defineExpose({ show, showAction })
 </script>
+
+<style scoped>
+.board-checks__ask {
+  grid-column: 2;
+  justify-self: start;
+  margin-top: 0.2rem;
+}
+</style>

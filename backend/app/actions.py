@@ -1463,6 +1463,28 @@ def _bulk_undo(action: str, done: list[dict]) -> dict | None:
 # --- Модерация ---------------------------------------------------------------------------------
 
 
+def _mark_sent_to_moderation(user_id: int, campaign: dict, ad_ids: list[int]) -> list[int]:
+    """Отправленные объявления (и кампания, если ещё не принята) — «на модерации» до следующего чтения
+    из Директа: итог модерации берём только из него, а не из старого или пустого статуса строки.
+    synced_at не трогаем. → id строк объявлений."""
+    if not ad_ids:
+        return []
+    with pool.connection() as conn:
+        rows = conn.execute(
+            """
+            UPDATE direct_ads SET status = 'MODERATION'
+            WHERE user_id = %s AND account_id = %s AND ad_id = ANY(%s)
+            RETURNING id
+            """,
+            (user_id, campaign["account_id"], ad_ids),
+        ).fetchall()
+        conn.execute(
+            "UPDATE direct_campaigns SET status = 'MODERATION' WHERE id = %s AND user_id = %s AND status <> 'ACCEPTED'",
+            (campaign["id"], user_id),
+        )
+    return sorted(int(r["id"]) for r in rows)
+
+
 def moderate_campaign(user_id: int, campaign_row_id: int) -> dict:
     """Отправляет на модерацию все объявления-черновики кампании."""
     row = _campaign_full(user_id, campaign_row_id)
@@ -1477,11 +1499,19 @@ def moderate_campaign(user_id: int, campaign_row_id: int) -> dict:
     ids = [int(a["Id"]) for a in drafts if a.get("Id")]
     sent = 0
     errors: list[str] = []
+    sent_ids: list[int] = []
     for chunk in direct_api.chunks(ids, 10_000):
         result = direct_api.call(token, row["client_login"], "ads", "moderate", {"SelectionCriteria": {"Ids": chunk}})
         item_errs = direct_api.item_errors(result, "ModerateResults")
         sent += len(chunk) - len(item_errs)
         errors.extend(text for _i, text in item_errs)
+        failed = {i for i, _text in item_errs}
+        sent_ids.extend(ad_id for i, ad_id in enumerate(chunk) if i not in failed)
+    try:
+        ad_rows = _mark_sent_to_moderation(user_id, row, sent_ids)
+    except Exception:  # отправка в Директ уже прошла — запись в журнал важнее отметки
+        log.warning("moderation mark failed for campaign %s", campaign_row_id, exc_info=True)
+        ad_rows = []
     status = "ok" if not errors else ("partial" if sent else "error")
     out = {"drafts": len(ids), "sent": sent, "errors": errors[:20], "status": status}
     log_action(
@@ -1491,6 +1521,8 @@ def moderate_campaign(user_id: int, campaign_row_id: int) -> dict:
         out,
         status,
         title=f"На модерацию: «{row['name']}» — {sent} объявл.",
+        # Какие объявления ушли — по ним срочное ждёт итог модерации (urgent.moderation_outcome).
+        targets=[f"campaign:{campaign_row_id}", *(f"ad:{i}" for i in ad_rows)],
     )
     if status == "error":
         raise YandexError("direct", errors[0])

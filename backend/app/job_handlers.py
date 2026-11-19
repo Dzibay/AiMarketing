@@ -25,7 +25,13 @@ from app.keywords import sync_campaign_keywords
 from app.metrika_sync import canonical_counters, sync_counter_goals
 from app.negative_lists import apply_negative_list
 from app.notifications import notify, notify_signals
-from app.query_cleaning import apply_decisions, classify_queries, sync_workspace_queries
+from app.query_cleaning import (
+    apply_decisions,
+    classify_all_queries,
+    classify_queries,
+    label_after_load,
+    sync_workspace_queries,
+)
 from app.rules import run_enabled_rules_for_user
 from app.search_queries import sync_campaign_search_queries
 from app.stats import sync_direct_stats_for_user, sync_stats_for_user, sync_stats_range
@@ -95,6 +101,9 @@ def _load_account(user_id: int, payload: dict, progress: Progress) -> dict:
             sync_balances_for_user(user_id, [account_id])
         except Exception:
             log.exception("balance after load_account %s", account_id)
+    if result.get("status") == "ok" and "queries" in (result.get("stages") or []):
+        # Свежие запросы — сразу через бесплатные правила: без ИИ и без лимита.
+        result["rules"] = label_after_load(user_id, account_id=account_id)
     return result
 
 
@@ -124,7 +133,8 @@ def _sync_search_queries(user_id: int, payload: dict, progress: Progress) -> dic
     queries = sync_campaign_search_queries(user_id, campaign_row_id, days=days)
     progress(1, 2, "Статистика групп и фраз")
     entities = sync_campaign_entity_stats(user_id, campaign_row_id, days=days)
-    return {"queries": queries, "entities": entities, "status": "ok"}
+    rules = label_after_load(user_id, campaign_row_ids=[campaign_row_id])
+    return {"queries": queries, "entities": entities, "rules": rules, "status": "ok"}
 
 
 def _sync_goals(user_id: int, payload: dict, progress: Progress) -> dict:
@@ -228,6 +238,13 @@ def _notify_signals(user_id: int, payload: dict, progress: Progress) -> dict:
     return {"sent": notify_signals(user_id)}
 
 
+def _urgent_check(user_id: int, payload: dict, progress: Progress) -> dict:
+    """Ежечасная проверка срочного: новые события и отложенный на утро Telegram."""
+    from app.urgent import run
+
+    return run(user_id)
+
+
 LOAD_KINDS = ("load_account", "load_counter", "sync_connection")
 
 
@@ -256,11 +273,17 @@ def _notify_load_failed(job: dict, error: str) -> None:
 
 
 def _sync_workspace_queries(user_id: int, payload: dict, progress: Progress) -> dict:
-    return sync_workspace_queries(user_id, {**payload, "workspace_id": _int(payload, "workspace_id")}, progress)
+    workspace_id = _int(payload, "workspace_id")
+    result = sync_workspace_queries(user_id, {**payload, "workspace_id": workspace_id}, progress)
+    return {**result, "rules": label_after_load(user_id, workspace_ids=[workspace_id])}
 
 
 def _classify_queries(user_id: int, payload: dict, progress: Progress) -> dict:
     return classify_queries(user_id, {**payload, "workspace_id": _int(payload, "workspace_id")}, progress)
+
+
+def _classify_all_queries(user_id: int, payload: dict, progress: Progress) -> dict:
+    return classify_all_queries(user_id, payload, progress)
 
 
 def _apply_query_decisions(user_id: int, payload: dict, progress: Progress) -> dict:
@@ -305,8 +328,11 @@ def _bulk_budget(user_id: int, payload: dict, progress: Progress) -> dict:
 
 
 def _undo_action(user_id: int, payload: dict, progress: Progress) -> dict:
-    from app.undo import run_undo
+    from app.undo import run_undo, run_undo_group
 
+    # log_ids — несколько записей разом: «Вернуть как было» у предложения ИИ или «Отменить» у задачи.
+    if payload.get("log_ids"):
+        return run_undo_group(user_id, payload["log_ids"], progress)
     return run_undo(user_id, _int(payload, "log_id"), progress)
 
 
@@ -380,6 +406,7 @@ HANDLERS: dict[str, Handler] = {
     "ai_chat": _ai_chat,
     "sync_workspace_queries": _sync_workspace_queries,
     "classify_queries": _classify_queries,
+    "classify_all_queries": _classify_all_queries,
     "apply_query_decisions": _apply_query_decisions,
     "brief_draft": _brief_draft,
     "undo_action": _undo_action,
@@ -394,6 +421,7 @@ HANDLERS: dict[str, Handler] = {
     "fix_links": _fix_links,
     "plan_reminder": _plan_reminder,
     "notify_signals": _notify_signals,
+    "urgent_check": _urgent_check,
 }
 
 
@@ -468,5 +496,9 @@ def run_job(job: dict, worker_id: str) -> str:
     if undo_log_id is not None and isinstance(result, dict):
         # Кабинет покажет «Отменить» в сообщении о результате.
         result = {**result, "undo_log_id": undo_log_id}
+    elif 1 < len(set(undoable)) <= 50 and isinstance(result, dict):
+        # Несколько записей с откатом — «Отменить» вернёт их все разом (окно покажет каждую словами;
+        # 50 — предел группового отката undo.MAX_GROUP).
+        result = {**result, "undo_log_ids": sorted(set(undoable))}
     complete(job["id"], worker_id, result)
     return "done"

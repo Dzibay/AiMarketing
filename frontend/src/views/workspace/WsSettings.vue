@@ -129,7 +129,7 @@
 
       <template v-else-if="tab === 'biz'">
         <BriefPanel />
-        <ContextFilesPanel />
+        <ContextFilesPanel @open-client="openClientFiles" />
       </template>
 
       <template v-else-if="tab === 'ai'">
@@ -168,6 +168,10 @@
               </button>
             </div>
           </div>
+          <p v-if="!style.tone" class="hint">
+            Тон по умолчанию и общие правила для всех проектов — в
+            <RouterLink to="/cabinet/settings/ai">настройках аккаунта</RouterLink>.
+          </p>
 
           <template v-if="models?.configured && models.items.length > 1">
             <h3 class="style-h">Какой моделью отвечать</h3>
@@ -199,6 +203,10 @@
             aria-label="Заметки для ИИ"
             placeholder="Например: без обещаний скидок; регион — только Москва; кампанию «Бренд» не трогать"
           />
+          <p v-if="currentClient" class="hint client-ai-line">
+            Общее для клиента «{{ niceQuotes(currentClient.name) }}»: {{ clientAiSummary }} —
+            <button class="link-btn" type="button" @click="go('client')">изменить</button>
+          </p>
           <p v-if="notesError" class="form-error">{{ notesError }}</p>
           <div class="form-actions">
             <button class="btn btn--accent" type="submit" :disabled="notesBusy || !helperChanged">
@@ -284,6 +292,7 @@
             </p>
           </div>
         </div>
+        <h3 v-if="currentClient" class="style-h">Для этого сайта</h3>
         <p v-if="!ws.ai_facts?.length" class="empty">Пока ничего: ИИ запоминает только то, что вы сами ответили или подтвердили.</p>
         <ul v-else class="ai-facts__list">
           <li v-for="f in ws.ai_facts" :key="f.key" class="ai-facts__item">
@@ -292,11 +301,51 @@
               <span>{{ f.answer }}</span>
               <small v-if="f.at">{{ formatDateTime(f.at) }}</small>
             </div>
-            <button class="btn btn--ghost" type="button" :disabled="!!forgetting" @click="forgetFact(f)">
-              {{ forgetting === f.key ? 'Забываем…' : 'Забыть' }}
-            </button>
+            <div class="row-actions">
+              <button
+                v-if="currentClient"
+                class="btn btn--ghost"
+                type="button"
+                :disabled="!!factBusy"
+                @click="moveFact(f, 'client')"
+              >
+                {{ factBusy === `move:${f.key}` ? 'Переносим…' : 'Для всего клиента' }}
+              </button>
+              <button class="btn btn--ghost" type="button" :disabled="!!factBusy" @click="forgetFact(f)">
+                {{ factBusy === `site:${f.key}` ? 'Забываем…' : 'Забыть' }}
+              </button>
+            </div>
           </li>
         </ul>
+        <template v-if="currentClient">
+          <h3 class="style-h">Для всего клиента «{{ niceQuotes(currentClient.name) }}»</h3>
+          <p class="hint">ИИ учитывает это во всех проектах клиента. Если у сайта свой ответ на тот же вопрос — ИИ берёт его.</p>
+          <p v-if="!clientFacts.length" class="empty">Пока ничего.</p>
+          <ul v-else class="ai-facts__list">
+            <li v-for="f in clientFacts" :key="f.key" class="ai-facts__item">
+              <div class="ai-facts__text">
+                <strong>{{ f.question || f.key }}</strong>
+                <span>{{ f.answer }}</span>
+                <small v-if="siteFactKeys.has(f.key)">У этого сайта свой ответ — здесь действует он.</small>
+                <small v-else-if="f.at">{{ formatDateTime(f.at) }}</small>
+              </div>
+              <div class="row-actions">
+                <button
+                  v-if="!siteFactKeys.has(f.key)"
+                  class="btn btn--ghost"
+                  type="button"
+                  :disabled="!!factBusy"
+                  @click="moveFact(f, 'site')"
+                >
+                  {{ factBusy === `move:${f.key}` ? 'Переносим…' : 'Только для этого сайта' }}
+                </button>
+                <button class="btn btn--ghost" type="button" :disabled="!!factBusy" @click="forgetClientFact(f)">
+                  {{ factBusy === `client:${f.key}` ? 'Забываем…' : 'Забыть' }}
+                </button>
+              </div>
+            </li>
+          </ul>
+        </template>
       </section>
 
       <template v-else-if="tab === 'cabs'">
@@ -468,8 +517,21 @@
               <UiNumber v-model="clientEdit.monthly_budget_rub" suffix="₽" placeholder="не задан" />
             </div>
             <div v-field class="field field--wide">
-              <label>Заметки</label>
-              <textarea v-model="clientEdit.notes" rows="3" maxlength="5000" placeholder="Контакты, договорённости, особенности"></textarea>
+              <label>Что ИИ знает о клиенте</label>
+              <textarea
+                v-model="clientEdit.ai_notes"
+                rows="5"
+                maxlength="3000"
+                placeholder="Договорённости и запреты, что считать успехом, как клиент платит, каким тоном писать"
+              ></textarea>
+              <small class="field-hint">
+                ИИ читает это во всех проектах клиента. Если в проекте написано иначе — ИИ слушается проекта.
+              </small>
+            </div>
+            <div v-field class="field field--wide">
+              <label>Заметки для себя</label>
+              <textarea v-model="clientEdit.notes" rows="3" maxlength="5000" placeholder="Контакты, напоминания"></textarea>
+              <small class="field-hint">ИИ их не читает.</small>
             </div>
             <div class="form-actions">
               <button class="btn btn--accent" type="submit" :disabled="clientBusy || !clientChanged">Сохранить клиента</button>
@@ -485,6 +547,21 @@
               </UiMenu>
             </div>
           </form>
+          <template v-if="clientFacts.length">
+            <h3 class="style-h">Что ИИ запомнил для всего клиента</h3>
+            <ul class="ai-facts__list">
+              <li v-for="f in clientFacts" :key="f.key" class="ai-facts__item">
+                <div class="ai-facts__text">
+                  <strong>{{ f.question || f.key }}</strong>
+                  <span>{{ f.answer }}</span>
+                  <small v-if="f.at">{{ formatDateTime(f.at) }}</small>
+                </div>
+                <button class="btn btn--ghost" type="button" :disabled="!!factBusy" @click="forgetClientFact(f)">
+                  {{ factBusy === `client:${f.key}` ? 'Забываем…' : 'Забыть' }}
+                </button>
+              </li>
+            </ul>
+          </template>
           <p class="hint">
             Проекты клиента:
             <template v-for="(w, i) in clientProjects" :key="w.id">
@@ -527,6 +604,12 @@
           </div>
         </template>
       </section>
+      <!-- Файлы клиента: ИИ читает их во всех проектах клиента. Счётчик нужен окну «Удалить клиента». -->
+      <ContextFilesPanel
+        v-if="tab === 'client' && currentClient"
+        :client="currentClient"
+        @changed="loadWorkspaces(true)"
+      />
 
       <ExpertHint>Доступ ИИ, память помощника, кабинеты и кампании, шаблон ссылки, клиент и архив</ExpertHint>
     </div>
@@ -536,7 +619,7 @@
 <script setup>
 import UiSkeleton from '../../components/ui/UiSkeleton.vue'
 import { askConfirm } from '../../composables/useConfirm'
-import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
 import {
   Archive,
@@ -593,11 +676,18 @@ const TABS = [
 ]
 // Старые якоря секций и вкладки, скрытые в простом режиме, ведут на ближайшую понятную вкладку.
 const ALIASES = { brief: 'biz', 'context-files': 'biz', links: 'utm' }
-const SIMPLE_FALLBACK = { access: 'ai', mem: 'ai' }
+const SIMPLE_FALLBACK = { access: 'ai', mem: 'ai', client: 'ai' }
 
 // Пока к проекту не привязано ни одной кампании, кабинеты нужны и в простом режиме — иначе их не подключить.
+// Папка клиента у проекта с клиентом видна и в простом режиме: там «Что ИИ знает о клиенте».
 const tabs = computed(() =>
-  TABS.filter((t) => expert.value || !t.expert || (t.id === 'cabs' && !ws.value.campaigns_count)),
+  TABS.filter(
+    (t) =>
+      expert.value ||
+      !t.expert ||
+      (t.id === 'cabs' && !ws.value.campaigns_count) ||
+      (t.id === 'client' && ws.value.client_id != null),
+  ),
 )
 const tab = computed(() => {
   const raw = route.hash.slice(1)
@@ -608,7 +698,14 @@ const tab = computed(() => {
 })
 
 function go(id) {
-  router.replace({ query: route.query, hash: id === tabs.value[0].id ? '' : `#${id}` })
+  return router.replace({ query: route.query, hash: id === tabs.value[0].id ? '' : `#${id}` })
+}
+
+// «Открыть файлы клиента» во вкладке «Бизнес»: вкладка «Клиент» и сразу к его файлам.
+async function openClientFiles() {
+  await go('client')
+  await nextTick()
+  document.getElementById('client-files')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
 }
 
 // --- Основное ---------------------------------------------------------------------------------
@@ -699,10 +796,16 @@ const currentClient = computed(() => clients.value.find((c) => c.id === ws.value
 const clientProjects = computed(() => workspaces.value.filter((w) => w.client_id === ws.value.client_id))
 const clientBusy = ref(false)
 const clientDraft = reactive({ name: '', monthly_budget_rub: '' })
-const clientEdit = reactive({ name: '', monthly_budget_rub: '', notes: '' })
+// notes — личные заметки маркетолога (ИИ их не читает), ai_notes — «Что ИИ знает о клиенте» для всех его проектов.
+const clientEdit = reactive({ name: '', monthly_budget_rub: '', notes: '', ai_notes: '' })
 
 function clientFields(c) {
-  return { name: c?.name || '', monthly_budget_rub: c?.monthly_budget_rub ?? '', notes: c?.notes || '' }
+  return {
+    name: c?.name || '',
+    monthly_budget_rub: c?.monthly_budget_rub ?? '',
+    notes: c?.notes || '',
+    ai_notes: c?.ai_notes || '',
+  }
 }
 
 watch(currentClient, (c) => Object.assign(clientEdit, clientFields(c)), { immediate: true })
@@ -712,6 +815,7 @@ const clientChanged = computed(() => {
   return (
     clientEdit.name !== base.name ||
     clientEdit.notes !== base.notes ||
+    clientEdit.ai_notes !== base.ai_notes ||
     numOrNull(clientEdit.monthly_budget_rub) !== numOrNull(base.monthly_budget_rub)
   )
 })
@@ -760,6 +864,7 @@ function saveClient() {
     await webApi.patchClient(currentClient.value.id, {
       name: clientEdit.name,
       notes: clientEdit.notes,
+      ai_notes: clientEdit.ai_notes,
       monthly_budget_rub: numOrNull(clientEdit.monthly_budget_rub),
     })
     await loadWorkspaces(true)
@@ -783,7 +888,19 @@ function archiveClient(client, archived) {
 async function removeClient(client) {
   const left = workspaces.value.filter((w) => w.client_id === client.id).length
   const tail = left ? ` Его проекты (${left}) останутся, просто без клиента.` : ''
-  if (!(await askConfirm(`Удалить клиента «${niceQuotes(client.name)}»?${tail}`))) return
+  // Память ИИ о клиенте удаляется вместе с ним и не возвращается — называем, что именно пропадёт.
+  const lost = []
+  if ((client.ai_notes || '').trim()) lost.push('заметка «Что ИИ знает о клиенте»')
+  const facts = client.ai_facts?.length || 0
+  if (facts) lost.push(`${facts} ${plural(facts, 'запомненный ответ', 'запомненных ответа', 'запомненных ответов')}`)
+  const files = client.files_count || 0
+  if (files) lost.push(`${files} ${plural(files, 'файл', 'файла', 'файлов')} клиента для ИИ`)
+  const memory = lost.length
+    ? ` Удалится и то, что ИИ знает о клиенте во всех его проектах: ${lost.join(', ')}. Вернуть это будет нельзя — ` +
+      'чтобы сохранить, отправьте клиента в архив.'
+    : ''
+  const text = `Удалить клиента «${niceQuotes(client.name)}»?${tail}${memory}`
+  if (!(await askConfirm(text, { confirmText: 'Удалить', danger: true }))) return
   return clientRun(async () => {
     await webApi.deleteClient(client.id)
     if (ws.value.client_id === client.id) await reload()
@@ -1049,7 +1166,9 @@ async function saveAi() {
 
 // --- Вкладка «Помощник»: тон, обращение, модель по умолчанию и заметки ------------------------------
 
+// '' — «Как в аккаунте»: действует тон по умолчанию из настроек аккаунта.
 const TONES = [
+  { id: '', label: 'Как в аккаунте' },
   { id: 'calm', label: 'Спокойный' },
   { id: 'sell', label: 'Продающий' },
   { id: 'expert', label: 'Экспертный' },
@@ -1061,7 +1180,8 @@ const ADDRESS = [
 
 function styleFromWs(w) {
   const st = w.ai_style || {}
-  return { tone: st.tone || 'calm', address: st.address || 'vy', model_class: st.model_class || '' }
+  const tone = w.ai_tone_own === false ? '' : st.tone || 'calm'
+  return { tone, address: st.address || 'vy', model_class: st.model_class || '' }
 }
 
 const style = reactive(styleFromWs(ws.value))
@@ -1108,19 +1228,60 @@ async function saveHelper() {
   }
 }
 
-const forgetting = ref('')
+// --- Что ИИ запомнил: для этого сайта и для всего клиента ------------------------------------------
 
-async function forgetFact(fact) {
-  if (!await askConfirm(`Забыть ответ «${fact.question || fact.key}»? ИИ спросит об этом снова.`)) return
-  forgetting.value = fact.key
+const clientFacts = computed(() => currentClient.value?.ai_facts || [])
+const siteFactKeys = computed(() => new Set((ws.value.ai_facts || []).map((f) => f.key)))
+// Строка «Общее для клиента: … — изменить» во вкладке «Помощник».
+const clientAiSummary = computed(() => {
+  const text = (currentClient.value?.ai_notes || '').split(/\s+/).filter(Boolean).join(' ')
+  const short = text.length > 90 ? `${text.slice(0, 89).trimEnd()}…` : text
+  const n = clientFacts.value.length
+  const facts = n ? `запомнено ${n} ${plural(n, 'ответ', 'ответа', 'ответов')}` : ''
+  return [short, facts].filter(Boolean).join(' · ') || 'пока ничего не задано'
+})
+// Какой ответ сейчас в работе: «site:ключ», «client:ключ» или «move:ключ».
+const factBusy = ref('')
+
+async function factRun(id, fn, done) {
+  factBusy.value = id
   try {
-    patch(await aiApi.forgetFact(ws.value.id, fact.key))
-    pushToast('Ответ забыт', 'ok')
+    await fn()
+    pushToast(done, 'ok')
   } catch (err) {
     pushToast(errorText(err), 'error')
   } finally {
-    forgetting.value = ''
+    factBusy.value = ''
   }
+}
+
+async function forgetFact(fact) {
+  if (!await askConfirm(`Забыть ответ «${fact.question || fact.key}»? ИИ спросит об этом снова.`)) return
+  await factRun(`site:${fact.key}`, async () => patch(await aiApi.forgetFact(ws.value.id, fact.key)), 'Ответ забыт')
+}
+
+async function forgetClientFact(fact) {
+  const question = `Забыть ответ «${fact.question || fact.key}» во всех проектах клиента? ИИ спросит об этом снова.`
+  if (!await askConfirm(question)) return
+  await factRun(
+    `client:${fact.key}`,
+    async () => {
+      await webApi.forgetClientFact(currentClient.value.id, fact.key)
+      await loadWorkspaces(true)
+    },
+    'Ответ забыт',
+  )
+}
+
+function moveFact(fact, scope) {
+  return factRun(
+    `move:${fact.key}`,
+    async () => {
+      patch(await aiApi.moveFact(ws.value.id, fact.key, scope))
+      await loadWorkspaces(true)
+    },
+    scope === 'client' ? 'Теперь это общее для клиента' : 'Теперь это только для этого сайта',
+  )
 }
 
 // --- Архив ------------------------------------------------------------------------------------
@@ -1308,5 +1469,14 @@ onMounted(() => {
 }
 .ai-simple .meta-note {
   margin: 0;
+}
+/* В кабинете акцент — цвет текста: ссылку «изменить» отличает подчёркивание. */
+.client-ai-line .link-btn {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.ai-facts__item .row-actions {
+  flex: none;
+  justify-content: flex-end;
 }
 </style>

@@ -103,6 +103,57 @@ def single_undoable(ids: list[int]) -> int | None:
     return ids[0] if len(ids) == 1 else None
 
 
+# Предложение ИИ, которое сейчас выполняется: его записи журнала помечаются целью «ai_action:N» —
+# так карточка в чате находит, что вернуть («Вернуть как было»), без отдельной колонки.
+AI_ACTION_TARGET = "ai_action:"
+_ai_action: contextvars.ContextVar[int | None] = contextvars.ContextVar("journal_ai_action", default=None)
+
+
+@contextmanager
+def for_ai_action(action_id: int | None):
+    token = _ai_action.set(int(action_id) if action_id else None)
+    try:
+        yield
+    finally:
+        _ai_action.reset(token)
+
+
+def ai_action_target(action_id: int) -> str:
+    return f"{AI_ACTION_TARGET}{int(action_id)}"
+
+
+def ai_action_logs(user_id: int, action_ids: list[int]) -> dict[int, list[dict]]:
+    """Записи журнала, сделанные выполнением предложений ИИ: {id предложения: [записи по порядку]}.
+
+    Откаты («Откат: …») копируют цели исходной записи — их не берём (undo_of)."""
+    ids = sorted({int(i) for i in action_ids or []})
+    if not ids:
+        return {}
+    with pool.connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT id, action, title, status, undo, undone_at, targets, created_at
+            FROM action_logs
+            WHERE user_id = %s AND undo_of IS NULL AND targets && %s
+            ORDER BY id
+            """,
+            (user_id, [ai_action_target(i) for i in ids]),
+        ).fetchall()
+    wanted = {ai_action_target(i): i for i in ids}
+    out: dict[int, list[dict]] = {}
+    for r in rows:
+        for t in r["targets"] or []:
+            if t in wanted:
+                out.setdefault(wanted[t], []).append(r)
+    return out
+
+
+def can_undo(row: dict) -> bool:
+    """Запись можно откатить: есть шаги, выполнилась хотя бы частично и ещё не откачена."""
+    undo = row.get("undo") or {}
+    return bool(undo.get("steps")) and row.get("status") in ("ok", "partial") and not row.get("undone_at")
+
+
 def current_source() -> str:
     return _source.get()
 
@@ -343,6 +394,8 @@ def log_action(
         workspace_id = _workspace_for(user_id, payload)
     if targets is None:
         targets = [f"campaign:{i}" for i in sorted(_ids(payload))]
+    if _ai_action.get():
+        targets = [*targets, ai_action_target(_ai_action.get())]
     if undo is not None and not undo.get("steps"):
         undo = None
     with pool.connection() as conn:
@@ -387,13 +440,19 @@ def list_action_logs(
     source: str | None = None,
     kind: str | None = None,
     before_id: int | None = None,
+    campaign_row_id: int | None = None,
 ) -> list[dict]:
+    """campaign_row_id — только записи про эту кампанию, её группы, объявления и фразы."""
     limit = max(1, min(int(limit), 200))
     where = ["l.user_id = %s"]
     params: list = [user_id]
     if workspace_id is not None:
         where.append("l.workspace_id = %s")
         params.append(workspace_id)
+    if campaign_row_id:
+        rid = int(campaign_row_id)
+        where.append(_CAMPAIGN_FILTER)
+        params += [rid, user_id, rid, user_id, rid, user_id, rid, _payload_campaign_re(rid), _campaign_re(rid)]
     if source in ("user", "ai", "rule"):
         where.append("l.source = %s")
         params.append(source)
@@ -418,6 +477,11 @@ def list_action_logs(
             """,
             params,
         ).fetchall()
+    return describe_logs(user_id, rows)
+
+
+def describe_logs(user_id: int, rows: list[dict]) -> list[dict]:
+    """Строки журнала как в истории: заголовок, «было → стало» словами, кампании, откат."""
     # Кампании всех записей страницы — одним запросом: названия для строк и ссылки на кампанию в сервисе.
     parsed = [(_parse(r["payload"]), _parse(r["result"])) for r in rows]
     ids: list[int] = []
@@ -425,6 +489,37 @@ def list_action_logs(
         ids.extend(_row_campaigns(r, payload, result))
     campaigns = _campaign_cards(user_id, sorted(set(ids)))
     return [_log_out(r, campaigns, parsed=p) for r, p in zip(rows, parsed)]
+
+
+# Записи про кампанию: цель — сама кампания, её группа, объявление или фраза (цели ставит log_action),
+# а запрет площадок целей не пишет — его кампании только в ответе ({"campaign_row_id": N, …}).
+# Удалённых фраз, объявлений и групп в таблицах уже нет — по целям их запись не найти; кампания есть
+# в параметрах (campaign_row_ids), а у отката — в его параметрах (run_undo берёт их у исходной записи).
+_CAMPAIGN_FILTER = """(
+    l.targets && ARRAY(
+        SELECT 'campaign:' || %s::bigint
+        UNION ALL
+        SELECT 'adgroup:' || g.id FROM direct_adgroups g WHERE g.user_id = %s AND g.campaign_row_id = %s
+        UNION ALL
+        SELECT 'ad:' || a.id FROM direct_ads a JOIN direct_adgroups g ON g.id = a.adgroup_row_id
+        WHERE g.user_id = %s AND g.campaign_row_id = %s
+        UNION ALL
+        SELECT 'keyword:' || k.id FROM direct_keywords k JOIN direct_adgroups g ON g.id = k.adgroup_row_id
+        WHERE g.user_id = %s AND g.campaign_row_id = %s
+    )::text[]
+    OR l.payload ~ %s
+    OR (l.action = 'exclude_sites' AND l.result ~ %s)
+)"""
+
+
+def _campaign_re(rid: int) -> str:
+    return f'"campaign_row_id": ?{int(rid)}[^0-9]'
+
+
+def _payload_campaign_re(rid: int) -> str:
+    """Кампания в параметрах записи: «"campaign_row_id": N» или N в списке «"campaign_row_ids": [...]»
+    (ключи — как у _id_list)."""
+    return f'"campaign_(row_ids?|ids)": ?(\\[([^]]*[^0-9])?)?{int(rid)}[^0-9]'
 
 
 def _campaign_cards(user_id: int, ids: list[int]) -> dict[int, dict]:

@@ -92,6 +92,15 @@ def _enqueue_signals() -> None:
             submit("notify_signals", user_id)
 
 
+def _enqueue_urgent() -> None:
+    """Срочное (деньги, отказ модерации, кампания встала, расход без заявок, итог модерации) — раз в час;
+    один объект — не чаще раза в сутки, Telegram в тихие часы ждёт 9:00 (app.urgent)."""
+    active = active_user_ids()
+    for user_id in list_user_ids_with_accounts():
+        if user_id in active:
+            submit("urgent_check", user_id)
+
+
 def _sync_payments() -> None:
     """Сверка с ЮKassa: на случай, если уведомление не дошло, и чтобы подтянуть возвраты."""
     from app.payments import sync_open
@@ -153,6 +162,7 @@ SCHEDULES: dict[str, tuple[int, Callable[[], None]]] = {
     "purge_jobs": (86400, _purge_jobs),
     "plan_reminders": (3600, _enqueue_reminders),
     "signals": (6 * 3600, _enqueue_signals),
+    "urgent": (3600, _enqueue_urgent),
     "payments": (600, _sync_payments),
     "support_emails": (300, _support_emails),
     "alerts": (300, _check_alerts),

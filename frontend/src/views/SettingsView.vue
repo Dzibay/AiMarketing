@@ -64,6 +64,11 @@
         «В кабинете» — запись в колокольчике в верхней строке, «В Telegram» — сообщение от бота. Повторы одного события
         склеиваются: один и тот же сигнал приходит не чаще раза в неделю.
       </p>
+      <p class="hint">
+        «Срочное» проверяем каждый час и пишем об одном и том же не чаще раза в сутки. С 22:00 до 9:00 по Москве
+        запись появится в колокольчике сразу, а в Telegram — утром, если проблема ещё не решена. Скрытое через «⋯»
+        у сигнала не присылаем.
+      </p>
       <p v-if="!notifyPrefs" class="empty">{{ notifyError || 'Загружаем…' }}</p>
       <div v-else v-scroll-x class="table-scroll">
         <table class="table notify-prefs">
@@ -212,6 +217,48 @@
       </section>
     </template>
 
+    <form v-if="tab === 'ai'" class="panel" @submit.prevent="saveAiPrefs">
+      <h2>Мои правила для ИИ</h2>
+      <p class="hint">
+        ИИ читает это в каждом чате — общем и во всех проектах. Пишите то, что важно всегда: как вы работаете, чего не
+        делать, как с вами говорить. Правила клиента и проекта важнее этих: их задают в настройках проекта.
+      </p>
+      <p v-if="!aiPrefs" class="empty">{{ aiPrefsError || 'Загружаем…' }}</p>
+      <template v-else>
+        <div v-field class="field">
+          <label for="ai-rules">Правила</label>
+          <textarea
+            id="ai-rules"
+            v-model="aiRules"
+            class="ai-rules"
+            rows="6"
+            :maxlength="AI_RULES_MAX"
+            placeholder="Например: без обещаний скидок; ставки меняй не больше чем на 20% за раз; отвечай коротко"
+          ></textarea>
+          <small class="field-hint">{{ aiRules.length }} из {{ AI_RULES_MAX }} символов</small>
+        </div>
+        <h3 class="subhead">Тон объявлений по умолчанию</h3>
+        <p class="hint">Для проектов, где свой тон не выбран, и для текстов в общем чате.</p>
+        <div class="seg" role="group" aria-label="Тон объявлений по умолчанию">
+          <button
+            v-for="t in AI_TONES"
+            :key="t.id"
+            type="button"
+            :class="{ active: aiTone === t.id }"
+            :aria-pressed="aiTone === t.id"
+            @click="aiTone = t.id"
+          >
+            {{ t.label }}
+          </button>
+        </div>
+        <div class="row-actions ai-prefs__acts">
+          <button class="btn btn--accent" type="submit" :disabled="aiPrefsBusy || !aiPrefsChanged">
+            {{ aiPrefsBusy ? 'Сохраняем…' : 'Сохранить' }}
+          </button>
+        </div>
+      </template>
+    </form>
+
     <section v-if="tab === 'profile'" class="panel">
       <h2>Смена пароля</h2>
       <form class="pwd-form" @submit.prevent="changePassword">
@@ -254,11 +301,11 @@ const HOURS = Array.from({ length: 24 }, (_, h) => ({ value: h, label: `${String
 
 /**
  * tab: profile — почта, вход, пароль; notifications — что и куда присылать, Telegram и утренний дайджест;
- * interface — режим и тема.
+ * interface — режим и тема; ai — «Мои правила для ИИ» и тон по умолчанию для всех чатов.
  */
 const props = defineProps({ tab: { type: String, default: 'profile' } })
 
-const TAB_TITLES = { profile: 'Профиль', notifications: 'Уведомления', interface: 'Интерфейс' }
+const TAB_TITLES = { profile: 'Профиль', notifications: 'Уведомления', interface: 'Интерфейс', ai: 'ИИ' }
 // Вкладки — одна страница: при переходе между ними меняется только заголовок.
 watchEffect(() => useHead(`${TAB_TITLES[props.tab] || 'Настройки'} — Толк`, true))
 
@@ -437,6 +484,59 @@ async function sendDigest() {
   }
 }
 
+// --- «ИИ»: правила маркетолога для всех чатов и тон по умолчанию -----------------------------------
+
+const AI_RULES_MAX = 1000
+const AI_TONES = [
+  { id: '', label: 'Не задан' },
+  { id: 'calm', label: 'Спокойный' },
+  { id: 'sell', label: 'Продающий' },
+  { id: 'expert', label: 'Экспертный' },
+]
+const aiPrefs = ref(null)
+const aiPrefsError = ref('')
+const aiPrefsBusy = ref(false)
+const aiRules = ref('')
+const aiTone = ref('')
+const aiPrefsChanged = computed(
+  () => !!aiPrefs.value && (aiRules.value !== aiPrefs.value.rules || aiTone.value !== aiPrefs.value.tone),
+)
+
+function setAiPrefs(prefs) {
+  aiPrefs.value = { rules: prefs.rules || '', tone: prefs.tone || '' }
+  aiRules.value = aiPrefs.value.rules
+  aiTone.value = aiPrefs.value.tone
+}
+
+async function loadAiPrefs() {
+  aiPrefsError.value = ''
+  try {
+    setAiPrefs(await webApi.aiPrefs())
+  } catch (err) {
+    aiPrefsError.value = errorText(err)
+  }
+}
+
+async function saveAiPrefs() {
+  aiPrefsBusy.value = true
+  try {
+    setAiPrefs(await webApi.saveAiPrefs({ rules: aiRules.value, tone: aiTone.value }))
+    pushToast('Правила для ИИ сохранены')
+  } catch (err) {
+    pushToast(errorText(err), 'error')
+  } finally {
+    aiPrefsBusy.value = false
+  }
+}
+
+watch(
+  () => props.tab,
+  (tab) => {
+    if (tab === 'ai' && !aiPrefs.value) loadAiPrefs()
+  },
+  { immediate: true },
+)
+
 async function changePassword() {
   pwdBusy.value = true
   try {
@@ -560,6 +660,16 @@ onMounted(async () => {
 
 .pwd-form .field input {
   width: 100%;
+}
+
+/* «ИИ»: поле правил на всю ширину колонки до 720 px. */
+.ai-rules {
+  width: 100%;
+  max-width: 720px;
+}
+
+.ai-prefs__acts {
+  margin-top: 16px;
 }
 
 @media (max-width: 560px) {

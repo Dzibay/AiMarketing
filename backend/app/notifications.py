@@ -23,6 +23,13 @@ log = logging.getLogger(__name__)
 
 # Порядок — порядок строк в настройках. cabinet/telegram — включено ли по умолчанию.
 KINDS: dict[str, dict] = {
+    # Срочное (urgent.py): раз в сутки на объект, ночью Telegram ждёт 9:00.
+    "urgent": {
+        "label": "Срочное: кончаются деньги, кампания отклонена или встала, расход без заявок, итог модерации",
+        "cabinet": True,
+        "telegram": True,
+        "window_days": 1,
+    },
     "ai_answer": {
         "label": "ИИ ответил в закрытом чате",
         "cabinet": True,
@@ -148,20 +155,27 @@ def notify(
     severity: str = "info",
     dedup_key: str = "",
     telegram_text: str | None = None,
+    telegram_later: bool = False,
 ) -> int | None:
     """Сообщить о событии: запись в ленте и/или Telegram — по настройкам пользователя.
 
     Возвращает id записи (новой или обновлённой) или None, если в ленту не писали. Сбой не роняет
     вызывающий код: уведомление — побочный эффект.
+    telegram_later — тихие часы: запись в ленте сразу, а текст для Telegram ждёт в telegram_pending
+    (отправит flush_telegram утром, если событие ещё актуально).
     """
     try:
-        return _notify(user_id, kind, title, body, link, workspace_id, severity, dedup_key, telegram_text)
+        return _notify(
+            user_id, kind, title, body, link, workspace_id, severity, dedup_key, telegram_text, telegram_later
+        )
     except Exception:  # noqa: BLE001
         log.exception("Уведомление %s пользователю %s", kind, user_id)
         return None
 
 
-def _notify(user_id, kind, title, body, link, workspace_id, severity, dedup_key, telegram_text) -> int | None:
+def _notify(
+    user_id, kind, title, body, link, workspace_id, severity, dedup_key, telegram_text, telegram_later=False
+) -> int | None:
     spec = KINDS.get(kind)
     if spec is None:
         raise ValueError(f"неизвестное уведомление: {kind}")
@@ -208,15 +222,24 @@ def _notify(user_id, kind, title, body, link, workspace_id, severity, dedup_key,
             )
         elif row_id is None and dedup_key:
             # В кабинет не пишем, но повторы в Telegram тоже склеиваем: скрытая строка, сразу прочитанная.
-            conn.execute(
+            hidden_id = conn.execute(
                 """
                 INSERT INTO notifications (user_id, workspace_id, kind, severity, title, body, link, dedup_key,
                                            created_at, read_at, in_cabinet)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, FALSE)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, FALSE) RETURNING id
                 """,
                 (user_id, workspace_id, kind, severity, title, body, link, dedup_key, now, now),
-            )
+            ).fetchone()["id"]
+            if telegram_later and fresh and prefs["telegram"]:
+                row_id = int(hidden_id)  # только чтобы отложить Telegram; наружу не отдаём
         chat_id = user["telegram_chat_id"] or ""
+        if telegram_later and fresh and prefs["telegram"] and row_id is not None:
+            # Тихие часы: текст ждёт утра в самой записи.
+            conn.execute(
+                "UPDATE notifications SET telegram_pending = %s WHERE id = %s",
+                (telegram_text or _telegram_text(title, body, link), row_id),
+            )
+            fresh = False
     if fresh and prefs["telegram"] and chat_id:
         from app.telegram_notify import send_message
 
@@ -307,6 +330,7 @@ def notify_signals(user_id: int) -> int:
     from app.insights import get_signals
     from app.workspaces import list_workspaces
 
+    covered = _urgent_covered(user_id)
     sent = 0
     for ws in list_workspaces(user_id):
         try:
@@ -316,6 +340,13 @@ def notify_signals(user_id: int) -> int:
             continue
         for s in signals.get("suggestions") or []:
             if s["kind"] not in SIGNAL_KINDS:
+                continue
+            # Причину уже назвало срочное уведомление (деньги кончились, кампания отклонена или встала) —
+            # второй раз о том же не пишем.
+            if s.get("account_id") and s["account_id"] in covered["accounts"]:
+                continue
+            ids = s.get("campaign_row_ids") or []
+            if ids and all(i in covered["campaigns"] for i in ids):
                 continue
             key = f"signal:{ws['id']}:{s['kind']}:{s.get('account_id') or ''}"
             row = notify(
@@ -329,6 +360,57 @@ def notify_signals(user_id: int) -> int:
                 dedup_key=key,
             )
             sent += row is not None
+    return sent
+
+
+def _urgent_covered(user_id: int) -> dict:
+    """Что уже покрывают срочные уведомления — чтобы сигналы о затухании не повторяли их."""
+    try:
+        from app.urgent import covered
+
+        return covered(user_id)
+    except Exception:  # noqa: BLE001
+        log.exception("Срочное: что уже покрыто, пользователь %s", user_id)
+        return {"accounts": set(), "campaigns": set()}
+
+
+def flush_telegram(user_id: int, still_relevant, now=None) -> int:
+    """Утро после тихих часов: отложенные сообщения Telegram.
+
+    Каждую отложенную запись забираем (telegram_pending очищается сразу — второй воркер её не пошлёт) и
+    отправляем, только если событие ещё актуально (still_relevant(dedup_key)), запись моложе суток, Telegram
+    для этого события не выключили и её ещё не прочитали в кабинете. Возвращает число отправленных.
+    """
+    now = now or now_msk()
+    with pool.connection() as conn:
+        user = conn.execute("SELECT notify_prefs, telegram_chat_id FROM users WHERE id = %s", (user_id,)).fetchone()
+        rows = conn.execute(
+            """
+            WITH t AS (
+                SELECT id, telegram_pending AS text FROM notifications
+                WHERE user_id = %s AND telegram_pending <> '' FOR UPDATE
+            )
+            UPDATE notifications n SET telegram_pending = '' FROM t WHERE n.id = t.id
+            RETURNING n.id, n.kind, n.dedup_key, n.created_at, n.read_at, n.in_cabinet, t.text
+            """,
+            (user_id,),
+        ).fetchall()
+    if not rows or user is None:
+        return 0
+    prefs = prefs_from(user["notify_prefs"])
+    chat_id = user["telegram_chat_id"] or ""
+    sent = 0
+    for r in sorted(rows, key=lambda r: (r["created_at"], r["id"])):
+        if not chat_id or not prefs.get(r["kind"], {}).get("telegram"):
+            continue
+        if r["created_at"] < now - timedelta(days=1) or (r["in_cabinet"] and r["read_at"] is not None):
+            continue
+        if not still_relevant(r["dedup_key"]):
+            continue
+        from app.telegram_notify import send_message
+
+        send_message(chat_id, r["text"])
+        sent += 1
     return sent
 
 

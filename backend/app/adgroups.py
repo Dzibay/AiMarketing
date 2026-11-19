@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import logging
 
-from app import direct_api
+from app import direct_api, geo
 from app.db import pool
 from app.journal import log_action
 from app.sync_runs import finish_run, start_run
@@ -433,3 +433,271 @@ def _public(row: dict) -> dict:
         "stats_to": row["stats_to"].isoformat() if row.get("stats_to") else None,
         "synced_at": row["synced_at"].isoformat() if row.get("synced_at") else None,
     }
+
+
+# --- Регионы показа ------------------------------------------------------------------------------------
+#
+# Регионы живут в группах (RegionIds); регионы кампании — объединение регионов её групп. Смена у кампании ставит
+# один список всем её группам. Прежние регионы каждой группы читаем из Директа (локальная копия могла устареть) и
+# кладём в откат журнала: «Отменить» вернёт каждой группе её собственный список.
+
+REGIONS_MAX = 500
+PLAN_ITEMS = 20
+
+
+def _region_list(raw) -> list[int]:
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw or "[]")
+        except json.JSONDecodeError:
+            return []
+    return geo.parse_region_ids(raw)
+
+
+def _check_region_ids(user_id: int, region_ids) -> list[int]:
+    ids = geo.parse_region_ids(region_ids)
+    if not any(rid > 0 for rid in ids):
+        raise YandexError("args", "Выберите хотя бы один регион показа — «кроме» работает только вместе с ним")
+    if len(ids) > REGIONS_MAX:
+        raise YandexError("args", f"Слишком много регионов: не больше {REGIONS_MAX}")
+    unknown = geo.unknown_regions(user_id, ids)
+    if unknown:
+        raise YandexError("args", "Таких регионов нет в справочнике Директа: " + ", ".join(str(r) for r in unknown))
+    return ids
+
+
+_REGION_GROUPS_SQL = """
+    SELECT g.id, g.adgroup_id, g.name, g.region_ids, g.account_id, g.campaign_row_id,
+           c.name AS campaign_name, c.campaign_type, a.connection_id, a.client_login, a.enabled
+    FROM direct_adgroups g
+    JOIN direct_campaigns c ON c.id = g.campaign_row_id
+    JOIN direct_accounts a ON a.id = g.account_id
+    WHERE g.user_id = %s AND {where}
+    ORDER BY g.name, g.adgroup_id
+"""
+
+
+def _refresh_campaign_groups(user_id: int, camp: dict) -> set[int] | None:
+    """Группы кампании из Директа — в локальную копию: группа, добавленная в Директе после синка, тоже получит
+    регионы и попадёт в «изменится в X из Y». → id групп в Директе; Директ недоступен — None (работаем по копии)."""
+    try:
+        token = get_connection_access_token(camp["connection_id"], user_id)
+        items = fetch_adgroups(token, camp["client_login"], int(camp["campaign_id"]))
+    except YandexError as exc:
+        log.warning("регионы: группы кампании %s не обновились из Директа: %s", camp["id"], exc.code)
+        return None
+    except Exception:
+        log.exception("регионы: группы кампании %s не обновились из Директа", camp["id"])
+        return None
+    upsert_adgroups(user_id, camp["account_id"], int(camp["id"]), items)
+    return {int(item["adgroup_id"]) for item in items}
+
+
+def _region_groups(
+    user_id: int, *, campaign_row_id: int | None = None, adgroup_row_ids: list[int] | None = None
+) -> tuple[list[dict], str]:
+    """Группы, которым меняем регионы (с кабинетом и типом кампании), и подпись «кампании «…»» / «группы «…»»."""
+    if (campaign_row_id is None) == (not adgroup_row_ids):
+        raise YandexError("args", "Укажите кампанию или группы")
+    if campaign_row_id is not None:
+        camp = _campaign_row(user_id, int(campaign_row_id))
+        live_ids = _refresh_campaign_groups(user_id, camp)
+        with pool.connection() as conn:
+            rows = conn.execute(
+                _REGION_GROUPS_SQL.format(where="g.campaign_row_id = %s"), (user_id, int(campaign_row_id))
+            ).fetchall()
+        if live_ids is not None:
+            # Удалённые в Директе группы остались в копии — их не трогаем и не считаем.
+            rows = [r for r in rows if int(r["adgroup_id"]) in live_ids]
+        if not rows:
+            raise YandexError(
+                "empty", "В кампании нет групп — регионы задаются в группах. Обновите структуру из Директа или создайте группу"
+            )
+        return rows, f"кампании «{camp['name']}»"
+    ids = sorted({int(i) for i in adgroup_row_ids or []})
+    with pool.connection() as conn:
+        rows = conn.execute(_REGION_GROUPS_SQL.format(where="g.id = ANY(%s)"), (user_id, ids)).fetchall()
+    if len(rows) < len(ids):
+        raise YandexError("not-found")
+    if not all(r.get("enabled") for r in rows):
+        raise YandexError("disabled")
+    if len(rows) == 1:
+        return rows, f"группы «{rows[0]['name']}»"
+    campaigns = {r["campaign_name"] for r in rows}
+    return rows, f"групп кампании «{rows[0]['campaign_name']}»" if len(campaigns) == 1 else "нескольких групп"
+
+
+def _union(lists) -> list[int]:
+    out: list[int] = []
+    for ids in lists:
+        for rid in ids:
+            if rid not in out:
+                out.append(rid)
+    return out
+
+
+def regions_overview(user_id: int, campaign_row_id: int) -> dict:
+    """Регионы кампании и её групп по последнему синку — с названиями, для карточки кампании."""
+    camp = _campaign_row(user_id, campaign_row_id)
+    groups = list_adgroups(user_id, campaign_row_id)
+    regions = geo.load_regions(user_id)
+    lists = [_region_list(g["region_ids"]) for g in groups]
+    union = _union(lists)
+    return {
+        "campaign": {"id": camp["id"], "name": camp["name"]},
+        "region_ids": union,
+        "label": geo.region_label(union, regions) if groups else "—",
+        "same": len({frozenset(ids) for ids in lists}) <= 1,
+        "groups": [
+            {"id": g["id"], "name": g["name"], "region_ids": ids, "label": geo.region_label(ids, regions)}
+            for g, ids in zip(groups, lists)
+        ],
+        "selected": geo.regions_named(user_id, union),
+    }
+
+
+def regions_plan(
+    user_id: int, region_ids, *, campaign_row_id: int | None = None, adgroup_row_ids: list[int] | None = None
+) -> dict:
+    """«Было → станет» без записи в Директ — для подтверждения в кабинете и карточки ИИ."""
+    ids = _check_region_ids(user_id, region_ids)
+    rows, what = _region_groups(user_id, campaign_row_id=campaign_row_id, adgroup_row_ids=adgroup_row_ids)
+    regions = geo.load_regions(user_id)
+    lists = [_region_list(r["region_ids"]) for r in rows]
+    return {
+        "what": what,
+        "groups": len(rows),
+        "changed": sum(1 for current in lists if set(current) != set(ids)),
+        "mixed": len({frozenset(current) for current in lists}) > 1,
+        "before": geo.region_label(_union(lists), regions),
+        "after": geo.region_label(ids, regions),
+        "items": [
+            {"id": r["id"], "name": r["name"], "before": geo.region_label(current, regions)}
+            for r, current in list(zip(rows, lists))[:PLAN_ITEMS]
+        ],
+    }
+
+
+def set_regions(
+    user_id: int,
+    region_ids,
+    *,
+    campaign_row_id: int | None = None,
+    adgroup_row_ids: list[int] | None = None,
+    workspace_id: int | None = None,
+) -> dict:
+    """Ставит регионы группам кампании (или выбранным группам) в Директе и в локальной копии.
+
+    В журнал — «было → станет» и откат к прежним регионам каждой группы. Группы, где регионы уже такие, не
+    трогаем; ошибки отдельных групп возвращаются списком, остальные группы обновляются.
+    """
+    ids = _check_region_ids(user_id, region_ids)
+    rows, what = _region_groups(user_id, campaign_row_id=campaign_row_id, adgroup_row_ids=adgroup_row_ids)
+    by_account: dict[int, list[dict]] = {}
+    for row in rows:
+        by_account.setdefault(int(row["account_id"]), []).append(row)
+    before: list[int] = []
+    previous: dict[str, list[int]] = {}
+    updated: list[int] = []
+    same: list[int] = []
+    errors: list[str] = []
+    failure: YandexError | None = None
+    for items in by_account.values():
+        login = items[0]["client_login"]
+        # Группы ЕПК v5 не правит («используйте v501»); v501 принимает и обычные группы.
+        version = "v501" if any(r.get("campaign_type") == "UNIFIED_CAMPAIGN" for r in items) else "v5"
+        live: dict[int, list[int]] = {}
+        # Сбой кабинета (токен, чтение групп) — ошибка его групп, а не всего вызова: группы других кабинетов уже
+        # могли поменяться, и им нужны запись в журнале и откат.
+        try:
+            token = get_connection_access_token(items[0]["connection_id"], user_id)
+            for chunk in direct_api.chunks(items, 1000):
+                got = direct_api.get_all(
+                    token,
+                    login,
+                    "adgroups",
+                    {
+                        "SelectionCriteria": {"Ids": [int(r["adgroup_id"]) for r in chunk]},
+                        "FieldNames": ["Id", "RegionIds"],
+                    },
+                    "AdGroups",
+                )
+                for group in got:
+                    if group.get("Id") is not None:
+                        live[int(group["Id"])] = geo.parse_region_ids(group.get("RegionIds") or [])
+        except YandexError as exc:
+            failure = failure or exc
+            errors.extend(f"группа «{row['name']}»: {exc.message or exc.code}" for row in items)
+            continue
+        todo: list[tuple[dict, list[int]]] = []
+        for row in items:
+            current = live.get(int(row["adgroup_id"]))
+            if current is None:
+                errors.append(f"группа «{row['name']}»: её нет в Директе — обновите структуру кампании")
+                continue
+            before = _union([before, current])
+            if set(current) == set(ids):
+                same.append(int(row["id"]))
+            else:
+                todo.append((row, current))
+        for chunk in direct_api.chunks(todo, 1000):
+            try:
+                result = direct_api.call(
+                    token,
+                    login,
+                    "adgroups",
+                    "update",
+                    {"AdGroups": [{"Id": int(row["adgroup_id"]), "RegionIds": ids} for row, _current in chunk]},
+                    version=version,
+                )
+            except YandexError as exc:
+                failure = failure or exc
+                errors.extend(f"группа «{row['name']}»: {exc.message or exc.code}" for row, _current in chunk)
+                continue
+            failed = dict(direct_api.item_errors(result, "UpdateResults"))
+            for index, (row, current) in enumerate(chunk):
+                if index in failed:
+                    errors.append(f"группа «{row['name']}»: {failed[index]}")
+                else:
+                    updated.append(int(row["id"]))
+                    previous[str(row["id"])] = current
+    if updated or same:
+        with pool.connection() as conn:
+            conn.execute(
+                "UPDATE direct_adgroups SET region_ids = %s, synced_at = NOW() WHERE user_id = %s AND id = ANY(%s)",
+                (json.dumps(ids), user_id, updated + same),
+            )
+    if errors and not updated:
+        # Ничего не поменялось — журналу писать нечего, кабинет покажет причину.
+        if failure is not None:
+            raise failure
+        raise YandexError("direct", errors[0])
+    regions = geo.load_regions(user_id)
+    out = {
+        "groups": len(rows),
+        "updated": len(updated),
+        "unchanged": len(same),
+        "errors": errors[:20],
+        "before": geo.region_label(before, regions),
+        "after": geo.region_label(ids, regions),
+    }
+    if not updated:
+        return out
+    campaign_ids = sorted({int(r["campaign_row_id"]) for r in rows})
+    payload: dict = {"region_ids": ids, "adgroup_row_ids": [int(r["id"]) for r in rows][:200]}
+    if len(campaign_ids) == 1:
+        payload["campaign_row_id"] = campaign_ids[0]
+    else:
+        payload["campaign_row_ids"] = campaign_ids
+    log_action(
+        user_id,
+        "adgroups",
+        payload,
+        {"groups": len(rows), "updated": len(updated), "errors": errors[:20]},
+        "partial" if errors else "ok",
+        workspace_id=workspace_id,
+        title=f"Регионы {what}: {out['before']} → {out['after']}",
+        undo={"label": "Вернуть прежние регионы", "steps": [{"op": "adgroup_regions", "args": {"regions": previous}}]},
+        targets=[f"campaign:{campaign_row_id}"] if campaign_row_id is not None else [f"adgroup:{r['id']}" for r in rows],
+    )
+    return out

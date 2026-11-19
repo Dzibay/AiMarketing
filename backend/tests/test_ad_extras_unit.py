@@ -118,3 +118,13 @@ def test_decode_image():
         decode_image(base64.b64encode(b"hello").decode())
     with _raises("повреждён"):
         decode_image("не base64!")
+
+
+def test_clean_sitelinks_href_scheme_case():
+    # «Https://» с заглавной (клавиатура телефона) — схема строчными, а не https://Https://…
+    got = clean_sitelinks([
+        {"title": "Отзывы", "href": "Https://okna.ru/otzyvy"},
+        {"title": "Цены", "href": "HTTP://okna.ru/Price"},
+        {"title": "Доставка", "href": "okna.ru/d"},
+    ])
+    assert [s["href"] for s in got] == ["https://okna.ru/otzyvy", "http://okna.ru/Price", "https://okna.ru/d"]

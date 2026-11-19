@@ -40,7 +40,7 @@
 <script setup>
 import { computed, defineComponent, h, onBeforeUnmount, onMounted, ref } from 'vue'
 import { RouterLink, useRouter } from 'vue-router'
-import { Bell, CloudOff, CreditCard, Gauge, LifeBuoy, MessageSquare, Sparkles, TrendingDown, Zap } from '@lucide/vue'
+import { Bell, CloudOff, CreditCard, Gauge, LifeBuoy, MessageSquare, Siren, Sparkles, TrendingDown, Zap } from '@lucide/vue'
 import { errorText, notifyApi } from '../api/web'
 import { useHelp } from '../composables/useHelp'
 import { setNotifCount, usePending } from '../composables/usePending'
@@ -141,7 +141,9 @@ function onDocClick(event) {
 onMounted(() => document.addEventListener('click', onDocClick))
 onBeforeUnmount(() => document.removeEventListener('click', onDocClick))
 
+// Срочное приходит с severity 'error' — значок и так в красной плашке.
 const ICONS = {
+  urgent: Siren,
   ai_answer: MessageSquare,
   signal: TrendingDown,
   rule: Zap,

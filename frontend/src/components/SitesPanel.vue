@@ -136,6 +136,9 @@
     <div v-else class="form-actions sites__add">
       <button class="btn" type="button" @click="openAdd"><Plus :size="15" aria-hidden="true" />Добавить сайт</button>
     </div>
+
+    <!-- Сразу после «Добавить»: пять необязательных шагов, пока кампании и статистика грузятся. -->
+    <ProjectSetup :open="setupId !== null" :ws-id="setupId" @close="setupId = null" @saved="onSetupSaved" />
   </section>
 </template>
 
@@ -143,6 +146,7 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { RouterLink } from 'vue-router'
 import { Archive, ChevronRight, Ellipsis, EyeOff, Lock, Plus, Settings, Trash2, TriangleAlert, Undo2 } from '@lucide/vue'
+import ProjectSetup from './ProjectSetup.vue'
 import YandexConnectButton from './YandexConnectButton.vue'
 import ProjectAva from './ui/ProjectAva.vue'
 import { errorText, wsApi } from '../api/web'
@@ -167,6 +171,8 @@ const { subscription } = useProfile()
 const data = ref({ items: [], hidden: [], projects_limit: null, projects_used: 0 })
 const adding = ref(false)
 const busy = ref(null)
+// Новый проект, для которого открыто «Подготовим проект».
+const setupId = ref(null)
 
 const sites = computed(() => workspaces.value.filter((w) => !w.archived))
 const hidden = computed(() => data.value.hidden || [])
@@ -216,6 +222,8 @@ async function add(c) {
     const ws = await wsApi.fromCounter(c.counter_id)
     pushToast(`${niceQuotes(ws.name) || c.site || c.counter_id} добавлен. Загружаем кампании и статистику — обычно это занимает около минуты`)
     adding.value = false
+    // Вернули проект из архива — он уже настроен; новый — сразу предлагаем подготовить.
+    if (c.state === 'available') setupId.value = ws.id
     await Promise.all([load(), loadWorkspaces(true).catch(() => null)])
     emit('changed')
   } catch (err) {
@@ -224,6 +232,11 @@ async function add(c) {
   } finally {
     busy.value = null
   }
+}
+
+function onSetupSaved() {
+  loadWorkspaces(true).catch(() => null)
+  emit('changed')
 }
 
 async function archive(w) {

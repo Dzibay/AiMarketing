@@ -15,8 +15,10 @@ import json
 import logging
 import math
 import re
+import time
 from collections import defaultdict
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 
 from app import ai, billing
 from app.adgroups import _parse_phrases
@@ -47,6 +49,19 @@ VERDICTS = ("negative", "target")
 LEVELS = ("adgroup", "campaign")
 AI_BATCH = 40
 CLASSIFY_MAX = 500
+# Бесплатные правила после загрузки: до стольких новых запросов проекта за раз (сначала дорогие).
+# Загрузка заново кладёт все запросы периода, так что каждый раз проходим тот же верх очереди: держим его
+# небольшим, чтобы правила не тормозили загрузку (тысяча строк — доли секунды даже при сотнях минус-фраз).
+RULES_MAX = 1000
+# «Разметить все проекты»: по проекту — столько же запросов, сколько у кнопки в проекте.
+ALL_LIMIT = 300
+# Разметка проекта — одна за раз (кнопка в проекте и «Разметить все проекты»): вторая ждёт первую столько,
+# проверяя каждые CLASSIFY_POLL_SECONDS, и берёт то, что осталось без метки.
+CLASSIFY_WAIT_SECONDS = 15 * 60
+CLASSIFY_POLL_SECONDS = 3.0
+# Сбои самого ИИ и лимита (плюс ai-* и мост — ai.is_provider_error): после них «Разметить все проекты» размечает
+# остальные проекты только правилами. Прочие ошибки касаются одного проекта (удалили, закрыли, занят).
+AI_STOP_ERRORS = frozenset({"units-exhausted", "subscription-expired", "feature-locked"})
 APPLY_MAX = 500
 EXAMPLES_EACH = 40
 # Ответ ИИ на один запрос — около 50 токенов (id, вердикт, причина до 80 символов, фраза, уровень);
@@ -612,12 +627,58 @@ def _rows_for(user_id: int, workspace_id: int, norms: list[str]) -> dict[str, di
     return {r["norm"]: r for r in rows}
 
 
+def _kept_queries(user_id: int, workspace_id: int) -> list[dict]:
+    """Запросы проекта, которые резать нельзя: вы отметили их целевыми или по ним были конверсии
+    (если только вы сами не решили минусовать такой запрос)."""
+    with pool.connection() as conn:
+        rows = conn.execute(
+            f"""
+            WITH a AS ({_agg_sql()})
+            SELECT a.norm, a.query, a.conversions, a.campaign_row_ids, a.adgroup_row_ids,
+                   COALESCE(l.confirmed = TRUE AND l.verdict = 'target', FALSE) AS target
+            FROM a LEFT JOIN query_labels l ON l.workspace_id = %s AND l.query_norm = a.norm
+            WHERE (l.confirmed = TRUE AND l.verdict = 'target')
+               OR (a.conversions > 0 AND COALESCE(NOT (l.confirmed = TRUE AND l.verdict = 'negative'), TRUE))
+            ORDER BY a.conversions DESC, a.cost_kopecks DESC, a.norm
+            """,
+            (user_id, workspace_id, workspace_id),
+        ).fetchall()
+    return [{**r, "stems": stems(r["norm"])} for r in rows]
+
+
+def _kept_hits(phrase: str, level: str, row: dict, kept: list[dict], skip: set[str]) -> list[dict]:
+    """Нужные запросы, которые минус-фраза отсечёт там же, куда ляжет (группа или кампания запроса)."""
+    neg = stems(phrase)
+    if level == "adgroup" and row.get("adgroup_row_ids"):
+        key, places = "adgroup_row_ids", {int(g) for g in row["adgroup_row_ids"]}
+    else:
+        key, places = "campaign_row_ids", {int(c) for c in row.get("campaign_row_ids") or []}
+    out = []
+    for k in kept:
+        if k["norm"] in skip or not places.intersection(int(x) for x in k[key] or []):
+            continue
+        if blocks_stems(neg, k["stems"]):
+            out.append(
+                {
+                    "query_norm": k["norm"],
+                    "query": k["query"],
+                    "conversions": int(k["conversions"] or 0),
+                    "target": bool(k["target"]),
+                }
+            )
+    return out
+
+
 def check_phrases(user_id: int, workspace_id: int, items: list[dict]) -> list[dict]:
-    """Проверка правленых минус-фраз перед применением: ошибки формата и конфликты с ключами."""
+    """Проверка правленых минус-фраз перед применением: ошибки формата, конфликты с ключами
+    и нужные запросы (целевые по вашему решению или с конверсиями), которые фраза тоже отсечёт.
+    Запросы из этой же проверки нужными не считаем — их минусуют вместе."""
     require_workspace(user_id, workspace_id)
     items = [i for i in items or [] if isinstance(i, dict) and i.get("query_norm")][:APPLY_MAX]
     rows = _rows_for(user_id, workspace_id, [str(i["query_norm"]) for i in items])
     index = _keyword_index(user_id, sorted({int(c) for r in rows.values() for c in r["campaign_row_ids"]}))
+    kept = _kept_queries(user_id, workspace_id) if rows else []
+    together = {str(i["query_norm"]) for i in items}
     out = []
     for item in items:
         row = rows.get(str(item["query_norm"]))
@@ -626,6 +687,7 @@ def check_phrases(user_id: int, workspace_id: int, items: list[dict]) -> list[di
         level = effective_level(item.get("level"), row)
         problems = phrase_problems([phrase]) if phrase else ["Пустая минус-фраза"]
         conflicts = find_conflicts(phrase, level, row, index) if row and phrase else []
+        hits = _kept_hits(phrase, level, row, kept, together) if row and phrase else []
         out.append(
             {
                 "query_norm": item["query_norm"],
@@ -633,6 +695,8 @@ def check_phrases(user_id: int, workspace_id: int, items: list[dict]) -> list[di
                 "problems": problems,
                 "conflicts": [_conflict_out(k) for k in conflicts[:5]],
                 "conflicts_total": len(conflicts),
+                "targets_hit": hits[:5],
+                "targets_total": len(hits),
             }
         )
     return out
@@ -1035,10 +1099,17 @@ def _classify_plan(user_id: int, payload: dict) -> dict | None:
     if not rows:
         return None
     campaign_ids = sorted({int(c) for r in rows for c in r["campaign_row_ids"]})
+    labels, rest = _rule_split(user_id, workspace_id, ws.get("brief") or {}, rows)
+    return {"ws": ws, "workspace_id": workspace_id, "rows": rows, "labels": labels, "rest": rest, "campaign_ids": campaign_ids}
+
+
+def _rule_split(user_id: int, workspace_id: int, brief: dict, rows: list[dict]) -> tuple[list[dict], list[dict]]:
+    """Бесплатные правила по строкам очереди → (подсказки правил, остальное — для ИИ)."""
+    campaign_ids = sorted({int(c) for r in rows for c in r["campaign_row_ids"]})
     group_ids = sorted({int(g) for r in rows for g in r["adgroup_row_ids"]})
     negatives = _negatives_index(user_id, campaign_ids, group_ids)
     memory = _memory_rules(workspace_id)
-    brief_rules = _brief_rules(ws.get("brief") or {})
+    brief_rules = _brief_rules(brief)
     labels: list[dict] = []
     rest: list[dict] = []
     for r in rows:
@@ -1047,7 +1118,7 @@ def _classify_plan(user_id: int, payload: dict) -> dict | None:
             labels.append({**hit, "query_norm": r["norm"], "query": r["query"]})
         else:
             rest.append(r)
-    return {"ws": ws, "workspace_id": workspace_id, "rows": rows, "labels": labels, "rest": rest, "campaign_ids": campaign_ids}
+    return labels, rest
 
 
 def _classify_system(user_id: int, plan: dict) -> str:
@@ -1059,13 +1130,56 @@ def _classify_system(user_id: int, plan: dict) -> str:
     )
 
 
+@contextmanager
+def _classify_lock(workspace_id: int, progress: Progress) -> Iterator[None]:
+    """Разметка проекта — одна за раз: иначе кнопка в проекте и «Разметить все проекты» шлют в ИИ одни и те же
+    запросы и тратят лимит дважды. Advisory lock на сессии: соединение держим до конца разметки, транзакцию — нет.
+    Занято дольше CLASSIFY_WAIT_SECONDS — ошибка busy (задача повторится сама)."""
+    deadline = time.monotonic() + CLASSIFY_WAIT_SECONDS
+    with pool.connection() as conn:
+        while not conn.execute(
+            "SELECT pg_try_advisory_lock(hashtext('query_classify'), %s::int) AS ok", (workspace_id,)
+        ).fetchone()["ok"]:
+            if time.monotonic() >= deadline:
+                raise YandexError("busy", "Запросы этого проекта уже размечаются — дождитесь конца и повторите.")
+            progress(0, 0, "Ждём: запросы проекта уже размечаются")
+            time.sleep(CLASSIFY_POLL_SECONDS)
+        conn.commit()
+        try:
+            yield
+        finally:
+            conn.execute("SELECT pg_advisory_unlock(hashtext('query_classify'), %s::int)", (workspace_id,))
+
+
+def _unlabelled(workspace_id: int, batch: list[dict], relabel: bool) -> list[dict]:
+    """Строки пачки, которые всё ещё ждут ИИ: пока шла разметка, часть могли решить вы или закрыть правила
+    после загрузки. relabel — переразметка подсказок: пропускаем только решённые."""
+    with pool.connection() as conn:
+        taken = {
+            r["query_norm"]
+            for r in conn.execute(
+                "SELECT query_norm FROM query_labels WHERE workspace_id = %s AND query_norm = ANY(%s)"
+                + (" AND confirmed = TRUE" if relabel else ""),
+                (workspace_id, [r["norm"] for r in batch]),
+            ).fetchall()
+        }
+    return [r for r in batch if r["norm"] not in taken]
+
+
 def classify_queries(user_id: int, payload: dict, progress: Progress | None = None) -> dict:
     """Разметка очереди: сначала правила (Директ, память, бриф), остальное — ИИ пачками.
 
     ИИ — класс модели задачи «разметка» из админки. Перед каждой пачкой — проверка, что её оценка влезает
     в остаток лимита единиц: что успели — сохранено, остальное ждёт следующего периода.
+    rules_only — только правила, без ИИ (разметка всех проектов после того, как ИИ упёрся в лимит).
+    Одна разметка проекта за раз (_classify_lock); очередь берём уже под замком.
     """
     progress = progress or (lambda *_a: None)
+    with _classify_lock(int(payload.get("workspace_id") or 0), progress):
+        return _classify_queries(user_id, payload, progress)
+
+
+def _classify_queries(user_id: int, payload: dict, progress: Progress) -> dict:
     plan = _classify_plan(user_id, payload)
     if plan is None:
         return {"labeled": 0, "negative": 0, "target": 0, "rules": 0, "ai": None, "left": 0, "usage": None}
@@ -1077,7 +1191,7 @@ def classify_queries(user_id: int, payload: dict, progress: Progress | None = No
     ai_used: bool | None = None
     ai_error = None
     usage = None
-    if rest:
+    if rest and not payload.get("rules_only"):
         try:
             cfg = ai.load_config(user_id, "classify", workspace_id)
         except YandexError as exc:
@@ -1090,10 +1204,16 @@ def classify_queries(user_id: int, payload: dict, progress: Progress | None = No
             ratio = ai.chars_per_token(cfg)
             out_per = ai.out_tokens_per_unit(cfg, "classify", OUT_TOKENS_PER_QUERY)
             done = rules_n
+            relabel = bool(payload.get("relabel"))
             with ai.meter() as spent:
                 for start in range(0, len(rest), AI_BATCH):
-                    batch = rest[start : start + AI_BATCH]
+                    chunk = rest[start : start + AI_BATCH]
                     progress(done, len(rows), f"ИИ размечает запросы: {done} из {len(rows)}")
+                    done += len(chunk)
+                    # Уже размеченные за это время (вами, правилами после загрузки) в ИИ не шлём.
+                    batch = _unlabelled(workspace_id, chunk, relabel)
+                    if not batch:
+                        continue
                     try:
                         ai.check_budget(cfg, ai.units_for(cfg, *_batch_tokens(system, batch, ratio, out_per)))
                         got = ai_labels(cfg, system, batch)
@@ -1106,7 +1226,6 @@ def classify_queries(user_id: int, payload: dict, progress: Progress | None = No
                         break
                     suggest_labels(user_id, workspace_id, got)
                     labels += got
-                    done += len(batch)
             usage = ai.usage_out(spent, user_id)
     progress(len(rows), len(rows), "Готово")
     with pool.connection() as conn:
@@ -1152,16 +1271,8 @@ def estimate_classify(user_id: int, payload: dict) -> dict:
     except YandexError as exc:
         out["ai_error"] = ai.user_error(exc)
         return out
-    system = _classify_system(user_id, plan)
-    ratio = ai.chars_per_token(cfg)
-    out_per = ai.out_tokens_per_unit(cfg, "classify", OUT_TOKENS_PER_QUERY)
-    batches = [rest[i : i + AI_BATCH] for i in range(0, len(rest), AI_BATCH)]
-    needs = [ai.units_for(cfg, *_batch_tokens(system, b, ratio, out_per)) for b in batches]
-    out.update(
-        batches=len(batches),
-        percent=billing.share(user_id, sum(needs)),
-        calibrated=ratio != ai.CHARS_PER_TOKEN or out_per != OUT_TOKENS_PER_QUERY,
-    )
+    batches, needs, calibrated = _plan_needs(user_id, plan, cfg)
+    out.update(batches=len(batches), percent=billing.share(user_id, sum(needs)), calibrated=calibrated)
     left = ai.budget_left(cfg)
     if left is not None:
         out["left_percent"] = billing.share(user_id, max(left, 0.0))
@@ -1174,6 +1285,258 @@ def estimate_classify(user_id: int, payload: dict) -> dict:
             fits += len(b)
         out["fits"] = fits
     return out
+
+
+def _plan_needs(user_id: int, plan: dict, cfg: dict) -> tuple[list[list[dict]], list[float], bool]:
+    """Пачки ИИ по плану разметки и оценка каждой в единицах; calibrated — по фактическим замерам модели."""
+    rest = plan["rest"]
+    system = _classify_system(user_id, plan)
+    ratio = ai.chars_per_token(cfg)
+    out_per = ai.out_tokens_per_unit(cfg, "classify", OUT_TOKENS_PER_QUERY)
+    batches = [rest[i : i + AI_BATCH] for i in range(0, len(rest), AI_BATCH)]
+    needs = [ai.units_for(cfg, *_batch_tokens(system, b, ratio, out_per)) for b in batches]
+    return batches, needs, ratio != ai.CHARS_PER_TOKEN or out_per != OUT_TOKENS_PER_QUERY
+
+
+# --- Бесплатные правила после загрузки и разметка всех проектов ----------------------------------
+
+
+def fill_rule_labels(user_id: int, workspace_id: int, labels: list[dict]) -> int:
+    """Подсказки правил — только в пустые места: решения маркетолога и подсказки ИИ не трогаем."""
+    if not labels:
+        return 0
+    cols: dict[str, list] = {k: [] for k in ("norm", "query", "verdict", "reason", "phrase", "level", "source")}
+    for s in labels:
+        cols["norm"].append(s["query_norm"])
+        cols["query"].append(s.get("query") or s["query_norm"])
+        cols["verdict"].append(s["verdict"])
+        cols["reason"].append((s.get("reason") or "")[:300])
+        cols["phrase"].append(s.get("negative_phrase") or "")
+        cols["level"].append(s.get("level") if s.get("level") in LEVELS else "adgroup")
+        cols["source"].append(s.get("source") or "memory")
+    with pool.connection() as conn:
+        cur = conn.execute(
+            """
+            INSERT INTO query_labels (user_id, workspace_id, query_norm, query, verdict, reason,
+                                      negative_phrase, level, source, confirmed, updated_at)
+            SELECT %s, %s, t.norm, t.query, t.verdict, t.reason, t.phrase, t.level, t.source, FALSE, NOW()
+            FROM unnest(%s::text[], %s::text[], %s::text[], %s::text[], %s::text[], %s::text[], %s::text[])
+                 AS t(norm, query, verdict, reason, phrase, level, source)
+            ON CONFLICT (workspace_id, query_norm) DO NOTHING
+            """,
+            (user_id, workspace_id, *cols.values()),
+        )
+        return max(cur.rowcount, 0)
+
+
+def label_by_rules(user_id: int, workspace_id: int) -> int:
+    """Новые запросы проекта — через бесплатные правила (Директ, память решений, бриф): без ИИ и без лимита.
+
+    Размечаем только запросы без метки, остальные не трогаем. → сколько подсказок добавили.
+    """
+    ws = require_workspace(user_id, workspace_id)
+    with pool.connection() as conn:
+        rows = conn.execute(
+            f"""
+            WITH a AS ({_agg_sql()})
+            SELECT a.* FROM a LEFT JOIN query_labels l ON l.workspace_id = %s AND l.query_norm = a.norm
+            WHERE l.id IS NULL
+            ORDER BY a.cost_kopecks DESC, a.clicks DESC, a.norm
+            LIMIT %s
+            """,
+            (user_id, workspace_id, workspace_id, RULES_MAX),
+        ).fetchall()
+    if not rows:
+        return 0
+    labels, _rest = _rule_split(user_id, workspace_id, ws.get("brief") or {}, rows)
+    return fill_rule_labels(user_id, workspace_id, labels)
+
+
+def _loaded_workspaces(user_id: int, workspace_ids, campaign_row_ids, account_id) -> list[int]:
+    """Открытые проекты, чьи запросы только что загрузили: по проектам, кампаниям или кабинету."""
+    ids = {int(w) for w in workspace_ids or []}
+    with pool.connection() as conn:
+        if campaign_row_ids:
+            ids |= {
+                int(r["workspace_id"])
+                for r in conn.execute(
+                    "SELECT workspace_id FROM workspace_campaigns WHERE user_id = %s AND campaign_row_id = ANY(%s)",
+                    (user_id, [int(c) for c in campaign_row_ids]),
+                )
+            }
+        if account_id:
+            ids |= {
+                int(r["workspace_id"])
+                for r in conn.execute(
+                    """
+                    SELECT DISTINCT wc.workspace_id FROM workspace_campaigns wc
+                    JOIN direct_campaigns c ON c.id = wc.campaign_row_id
+                    WHERE wc.user_id = %s AND c.account_id = %s
+                    """,
+                    (user_id, int(account_id)),
+                )
+            }
+    if not ids:
+        return []
+    return sorted(int(w["id"]) for w in list_workspaces(user_id) if not w["locked"] and int(w["id"]) in ids)
+
+
+def label_after_load(
+    user_id: int, *, workspace_ids=None, campaign_row_ids=None, account_id: int | None = None
+) -> int:
+    """После загрузки запросов (кнопкой или по расписанию) — бесплатные правила по затронутым проектам.
+
+    Без ИИ, без лимита и без изменений в Директе. Сбой правил загрузку не роняет — только в лог.
+    """
+    try:
+        targets = _loaded_workspaces(user_id, workspace_ids, campaign_row_ids, account_id)
+    except Exception:
+        log.exception("rule labels after load: user %s", user_id)
+        return 0
+    n = 0
+    for workspace_id in targets:
+        try:
+            n += label_by_rules(user_id, workspace_id)
+        except Exception:
+            log.exception("rule labels after load: workspace %s", workspace_id)
+    return n
+
+
+def _pending_projects(user_id: int) -> list[dict]:
+    """Открытые проекты с запросами без разметки → [{id, name, new, cost}], сначала с большим расходом на них."""
+    out = []
+    for ws in list_workspaces(user_id):
+        if ws["locked"]:
+            continue
+        with pool.connection() as conn:
+            row = conn.execute(
+                f"""
+                WITH a AS ({_agg_sql()})
+                SELECT COUNT(*) AS n, COALESCE(SUM(a.cost_kopecks), 0) AS cost
+                FROM a LEFT JOIN query_labels l ON l.workspace_id = %s AND l.query_norm = a.norm
+                WHERE l.id IS NULL
+                """,
+                (user_id, ws["id"], ws["id"]),
+            ).fetchone()
+        if int(row["n"]):
+            out.append({"id": int(ws["id"]), "name": ws["name"], "new": int(row["n"]), "cost": int(row["cost"])})
+    out.sort(key=lambda p: (-p["cost"], p["name"].lower(), p["id"]))
+    return out
+
+
+def estimate_classify_all(user_id: int) -> dict:
+    """Оценка «Разметить все проекты» без вызова ИИ: по проектам с новыми запросами — сколько закроют правила,
+    сколько уйдёт в ИИ и какая это доля месячного лимита; сколько проектов успеем при нынешнем остатке.
+
+    Порядок — тот же, что у задачи: пачки идут подряд и останавливаются на первой, что не влезает в остаток;
+    дальше — только правила. Пользователю — только проценты.
+    """
+    out = {
+        "projects": [], "queries": 0, "rules": 0, "ai": 0, "percent": None, "left_percent": None,
+        "fits_projects": 0, "fits_queries": 0, "calibrated": False, "ai_error": None, "per_project": ALL_LIMIT,
+    }
+    pending = _pending_projects(user_id)
+    if not pending:
+        return out
+    cfg, room = None, None
+    try:
+        cfg = ai.load_config(user_id, "classify")
+        room = ai.budget_left(cfg)
+        ai.check_budget(cfg)
+    except YandexError as exc:
+        out["ai_error"] = ai.user_error(exc)
+        room = 0.0
+    spent = total = 0.0
+    stopped = False
+    for p in pending:
+        plan = _classify_plan(user_id, {"workspace_id": p["id"], "limit": ALL_LIMIT})
+        if plan is None:
+            continue
+        # queries — сколько возьмём за этот запуск (не больше ALL_LIMIT), new — сколько всего ждёт разметки.
+        item = {
+            "id": p["id"], "name": p["name"], "queries": len(plan["rows"]), "new": max(p["new"], len(plan["rows"])),
+            "rules": len(plan["labels"]), "ai": len(plan["rest"]), "percent": None, "fits": True,
+        }
+        done = item["rules"]
+        if plan["rest"] and cfg is not None:
+            batches, needs, calibrated = _plan_needs(user_id, plan, cfg)
+            out["calibrated"] = out["calibrated"] or calibrated
+            total += sum(needs)
+            item["percent"] = billing.share(user_id, sum(needs))
+            for b, need in zip(batches, needs):
+                if stopped or (room is not None and spent + need > room):
+                    stopped = True
+                    break
+                spent += need
+                done += len(b)
+        item["fits"] = done == item["queries"]
+        out["projects"].append(item)
+        out["queries"] += item["queries"]
+        out["rules"] += item["rules"]
+        out["ai"] += item["ai"]
+        out["fits_queries"] += done
+        out["fits_projects"] += int(item["fits"])
+    if cfg is not None and out["ai"]:
+        out["percent"] = billing.share(user_id, total)
+    if room is not None:
+        out["left_percent"] = billing.share(user_id, max(room, 0.0))
+    return out
+
+
+def ai_stopped(exc: YandexError) -> bool:
+    """Сбой самого ИИ или лимита — повторять ИИ в следующих проектах бессмысленно."""
+    code = exc.code or ""
+    return code.startswith("ai-") or ai.is_provider_error(code) or code in AI_STOP_ERRORS
+
+
+def classify_all_queries(user_id: int, payload: dict | None = None, progress: Progress | None = None) -> dict:
+    """Задача «Разметить все проекты»: по каждому проекту с новыми запросами — та же разметка, что кнопкой в проекте.
+
+    Порядок — как в оценке. Как только ИИ упёрся в лимит или сбоил, остальные проекты размечаем только
+    правилами: лимит не перерасходуем и сбой не повторяем. Проекты без новых запросов пропускаем.
+    """
+    progress = progress or (lambda *_a: None)
+    pending = _pending_projects(user_id)
+    total = len(pending)
+    sums = {"labeled": 0, "negative": 0, "target": 0, "rules": 0, "left": 0}
+    items: list[dict] = []
+    ai_error = None
+    with ai.meter() as spent:
+        for n, p in enumerate(pending):
+            name = p["name"]
+
+            def step(_done: int, _total: int, text: str, n=n, name=name) -> None:
+                progress(n, total, f"{name} — {text}")
+
+            step(0, 0, "Готовим очередь")
+            try:
+                res = classify_queries(
+                    user_id,
+                    {"workspace_id": p["id"], "limit": ALL_LIMIT, "rules_only": ai_error is not None},
+                    step,
+                )
+            except YandexError as exc:
+                # Сбой ИИ или лимита: дальше — только правила. Беда одного проекта (удалили, закрыли, занят) —
+                # его пропускаем, а ИИ для остальных не выключаем.
+                if ai_stopped(exc):
+                    ai_error = ai_error or ai.user_error(exc)
+                items.append({"id": p["id"], "name": name, "labeled": 0, "left": p["new"], "error": True})
+                sums["left"] += p["new"]
+                continue
+            if res.get("ai_error"):
+                ai_error = ai_error or res["ai_error"]
+            for key in sums:
+                sums[key] += int(res.get(key) or 0)
+            items.append({"id": p["id"], "name": name, "labeled": int(res["labeled"]), "left": int(res["left"])})
+    progress(total, total, "Готово")
+    return {
+        **sums,
+        "projects": sum(1 for x in items if x["labeled"]),
+        "skipped": sum(1 for x in items if x.get("error")),
+        "ai_error": ai_error,
+        "usage": ai.usage_out(spent, user_id),
+        "items": items,
+    }
 
 
 # --- Применение решений -------------------------------------------------------------------------

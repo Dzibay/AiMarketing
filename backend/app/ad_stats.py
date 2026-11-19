@@ -14,14 +14,14 @@ from collections import defaultdict
 from collections.abc import Callable
 
 from app import ads as ads_mod
-from app import ai, direct_api
+from app import ai, ai_memory, direct_api
 from app.brief import brief_prompt
 from app.db import pool
 from app.direct_reports import fetch_report
 from app.journal import journal_quiet, log_action
 from app.slices import _campaigns, _period
 from app.stats import _count, _rub_to_kopecks, goal_columns
-from app.workspaces import ai_style_prompt, require_workspace
+from app.workspaces import require_workspace
 from app.yandex import YandexError, get_connection_access_token
 
 log = logging.getLogger("app.ad_stats")
@@ -369,8 +369,10 @@ def ai_rewrite_ads(user_id: int, payload: dict, progress: Progress | None = None
         raise YandexError("type", "Переписать можно только текстовые и комбинаторные объявления")
     keywords = _group_keywords(user_id, list({ads[i]["adgroup_row_id"] for i in ids}))
     cfg = ai.load_config(user_id, "ads", workspace_id)
+    # Правила аккаунта, память клиента, тон и заметки проекта — тем же блоком, что в чате проекта.
+    memory = "\n".join(ai_memory.memory_lines(ws, ai_memory.account_prefs(user_id))).strip()
     system = _AI_SYSTEM.format(
-        brief=brief_prompt(ws) + "\n" + ai_style_prompt(ws),
+        brief=brief_prompt(ws) + "\n\n" + memory,
         title_len=ads_mod.TITLE_LEN,
         title2_len=ads_mod.TITLE2_LEN,
         text_len=ads_mod.TEXT_LEN,

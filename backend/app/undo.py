@@ -12,7 +12,7 @@ from collections import defaultdict
 from collections.abc import Callable
 
 from app.db import pool
-from app.journal import journal_quiet, log_action
+from app.journal import AI_ACTION_TARGET, _id_list, _parse, journal_quiet, log_action
 from app.yandex import YandexError
 
 log = logging.getLogger("app.undo")
@@ -226,6 +226,40 @@ def _bid_modifiers(user_id: int, args: dict) -> dict:
     return {"applied": len(res["previous"])}
 
 
+def _adgroup_regions(user_id: int, args: dict) -> dict:
+    """Прежние регионы — каждой группе свои; группы с одинаковым списком — одним вызовом."""
+    from app.adgroups import set_regions
+    from app.journal import _n
+
+    wanted = {int(k): [int(r) for r in v] for k, v in (args.get("regions") or {}).items() if v}
+    alive = set(_existing(user_id, "direct_adgroups", list(wanted)))
+    by_list: dict[tuple[int, ...], list[int]] = defaultdict(list)
+    for group_id, ids in wanted.items():
+        if group_id in alive:
+            by_list[tuple(ids)].append(group_id)
+    applied = done = 0
+    errors: list[str] = []
+    for ids, groups in by_list.items():
+        # Сбой одного списка не мешает вернуть остальные; уже вернувшиеся группы при повторе не тронутся.
+        try:
+            res = set_regions(user_id, list(ids), adgroup_row_ids=groups)
+        except YandexError as exc:
+            errors.append(exc.message or "Директ не принял изменение")
+            continue
+        applied += int(res.get("updated") or 0)
+        done += int(res.get("updated") or 0) + int(res.get("unchanged") or 0)
+        errors += [str(e) for e in res.get("errors") or []]
+    if errors:
+        # Шаг — с ошибкой: запись остаётся доступной для отката, а в тексте — что вернулось и что нет.
+        head = (
+            f"Прежние регионы вернулись у {_n(done, ('группы', 'групп', 'групп'))}, но не везде: "
+            if done
+            else "Прежние регионы не вернулись: "
+        )
+        raise YandexError("direct", (head + "; ".join(errors))[:500])
+    return {"applied": applied, "missing": len(wanted) - len(alive)}
+
+
 OPS: dict[str, Callable[[int, dict], dict]] = {
     "campaigns_action": _campaigns_action,
     "campaign_budgets": _campaign_budgets,
@@ -244,6 +278,7 @@ OPS: dict[str, Callable[[int, dict], dict]] = {
     "adgroups_delete": _adgroups_delete,
     "query_labels_restore": _query_labels_restore,
     "bid_modifiers": _bid_modifiers,
+    "adgroup_regions": _adgroup_regions,
 }
 
 
@@ -349,6 +384,15 @@ def describe_step(user_id: int, step: dict) -> str:
         return f"Вернуть ссылкам {_names(user_id, 'direct_campaigns', 'name', [a.get('campaign_row_id')])}: {own}"
     if op == "adgroups_delete":
         return f"Удалить группы: {_names(user_id, 'direct_adgroups', 'name', a.get('adgroup_row_ids'))}"
+    if op == "adgroup_regions":
+        from app import geo
+
+        prev = a.get("regions") or {}
+        names = _names(user_id, "direct_adgroups", "name", list(prev))
+        lists = {tuple(v) for v in prev.values()}
+        if len(lists) == 1:
+            return f"Вернуть регионы {geo.region_label(list(lists.pop()), geo.load_regions(user_id))}: {names}"
+        return f"Вернуть каждой группе прежние регионы: {names}"
     if op == "query_labels_restore":
         return f"Вернуть разметку запросов: {len(a.get('labels') or [])}"
     return str(op)
@@ -381,19 +425,22 @@ def _why_not(row: dict) -> str:
     return ""
 
 
-def _later_changes(user_id: int, row: dict) -> list[dict]:
-    targets = list(row.get("targets") or [])
+def _later_changes(user_id: int, row: dict, skip: list[int] | None = None) -> list[dict]:
+    """Более поздние изменения тех же объектов; skip — записи, которые откатываются вместе с этой.
+
+    Цель «ai_action:N» — метка предложения ИИ, а не объект: записи одного предложения друг другу не «позже»."""
+    targets = [t for t in row.get("targets") or [] if not str(t).startswith(AI_ACTION_TARGET)]
     if not targets:
         return []
     with pool.connection() as conn:
         rows = conn.execute(
             """
             SELECT id, title, created_at, source FROM action_logs
-            WHERE user_id = %s AND id > %s AND targets && %s
+            WHERE user_id = %s AND id > %s AND targets && %s AND id <> ALL(%s)
               AND undone_at IS NULL AND undo_of IS NULL AND status IN ('ok', 'partial')
             ORDER BY id LIMIT 5
             """,
-            (user_id, row["id"], targets),
+            (user_id, row["id"], targets, [int(i) for i in skip or []]),
         ).fetchall()
     return [
         {"id": r["id"], "title": r["title"], "source": r["source"], "created_at": r["created_at"].isoformat()}
@@ -445,7 +492,7 @@ def _claim(user_id: int, log_id: int) -> dict:
             """
             UPDATE action_logs SET undone_at = NOW()
             WHERE id = %s AND user_id = %s AND undone_at IS NULL AND undo IS NOT NULL AND status IN ('ok', 'partial')
-            RETURNING id, title, status, undo, workspace_id, targets
+            RETURNING id, title, status, undo, workspace_id, targets, payload
             """,
             (log_id, user_id),
         ).fetchone()
@@ -453,6 +500,16 @@ def _claim(user_id: int, log_id: int) -> dict:
         reason = _why_not(_load(user_id, log_id)) or "Откат уже выполняется"
         raise YandexError("undo", reason)
     return row
+
+
+def _campaign_ids(row: dict) -> list[int]:
+    """Кампании записи для её отката: из целей и из параметров — у удаления фраз, объявлений и групп
+    в целях только удалённые объекты, и без параметров откат пропал бы из истории кампании."""
+    ids = {int(t.split(":", 1)[1]) for t in row["targets"] or [] if t.startswith("campaign:")}
+    payload, _cut = _parse(row.get("payload"))
+    if isinstance(payload, dict):
+        ids.update(_id_list(payload))
+    return sorted(ids)
 
 
 def _release(log_id: int) -> None:
@@ -487,7 +544,7 @@ def run_undo(user_id: int, log_id: int, progress: Progress | None = None) -> dic
         raise
     ok = sum(1 for r in results if r["status"] == "ok")
     status = "ok" if ok == len(results) else ("partial" if ok else "error")
-    campaign_ids = sorted({int(t.split(":", 1)[1]) for t in row["targets"] or [] if t.startswith("campaign:")})
+    campaign_ids = _campaign_ids(row)
     summary = {"steps": [{k: v for k, v in r.items() if k != "result"} for r in results]}
     new_id = log_action(
         user_id,
@@ -509,3 +566,193 @@ def run_undo(user_id: int, log_id: int, progress: Progress | None = None) -> dic
         conn.execute("UPDATE action_logs SET undone_by = %s WHERE id = %s", (new_id, log_id))
     progress(len(steps), len(steps), "Готово")
     return {"status": status, "log_id": new_id, "undone": log_id, "steps": summary["steps"]}
+
+
+# --- Несколько записей разом ---------------------------------------------------------------------
+# «Вернуть как было» у выполненного предложения ИИ и «Отменить» у фоновой задачи, оставившей несколько
+# записей с откатом: окно показывает все записи словами, а откат идёт по каждой своим run_undo —
+# от новой к старой, чтобы значения вернулись на момент до первой.
+
+MAX_GROUP = 50  # окно по списку записей («Отменить» у задачи, оставившей несколько записей)
+MAX_DECISION = 1000  # все записи одного решения ИИ — откатываются все, но не безразмерно
+
+
+def _load_many(user_id: int, log_ids, limit: int = MAX_DECISION) -> list[dict]:
+    """Записи для отката разом. Больше limit — явная ошибка: молча откатить часть нельзя."""
+    ids = sorted({int(i) for i in log_ids or []})
+    if not ids:
+        raise YandexError("args", "Нечего возвращать")
+    if len(ids) > limit:
+        raise YandexError("args", f"Слишком много изменений разом — больше {limit}. Верните их по частям в «Истории».")
+    with pool.connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT id, action, title, source, status, payload, result, undo, undone_at, undone_by, undo_of,
+                   workspace_id, targets, created_at
+            FROM action_logs WHERE user_id = %s AND id = ANY(%s) AND undo_of IS NULL
+            ORDER BY id
+            """,
+            (user_id, ids),
+        ).fetchall()
+    if not rows:
+        raise YandexError("not-found")
+    return rows
+
+
+def _steps_of(row: dict) -> list[dict]:
+    return [s for s in (row.get("undo") or {}).get("steps") or [] if isinstance(s, dict)]
+
+
+def undo_group_preview(user_id: int, log_ids, *, title: str = "", limit: int = MAX_GROUP) -> dict:
+    """Что вернёт откат нескольких записей: каждая словами («было → стало» и шаги), что вернуть нельзя и почему.
+
+    → поля undo_preview плюс entries, blocked («Это вернуть нельзя: …»), undone (уже возвращено) и log_ids —
+    записи, которые откатятся. limit — сколько записей можно разом (у решения ИИ — все его записи)."""
+    from app.journal import describe_logs
+
+    rows = _load_many(user_id, log_ids, limit)
+    ids = [int(r["id"]) for r in rows]
+    shown = {int(e["id"]): e for e in describe_logs(user_id, rows)}
+    entries: list[dict] = []
+    blocked: list[str] = []
+    undone: list[str] = []
+    steps: list[str] = []
+    later: list[dict] = []
+    danger = partial = recreate = delete = False
+    for r in rows:
+        reason = _why_not(r)
+        own = _steps_of(r)
+        described = [describe_step(user_id, s) for s in own] if not reason else []
+        texts = _counted(described)
+        out = shown.get(int(r["id"])) or {}
+        name = out.get("title") or r["title"] or r["action"]
+        entries.append(
+            {
+                "log_id": r["id"],
+                "title": name,
+                "changes": out.get("changes") or [],
+                "available": not reason,
+                "reason": reason,
+                "steps": texts,
+            }
+        )
+        if r.get("undone_at"):
+            undone.append(name)
+            continue
+        if reason:
+            blocked.append(f"«{name}» — {reason[:1].lower()}{reason[1:]}")
+            continue
+        steps += described
+        danger = danger or bool((r.get("undo") or {}).get("danger"))
+        partial = partial or r["status"] == "partial"
+        recreate = recreate or any(s.get("op") == "keywords_recreate" for s in own)
+        delete = delete or any(
+            s.get("op") == "campaigns_action" and (s.get("args") or {}).get("action") == "delete" for s in own
+        )
+        # Окну хватит пяти более поздних изменений — дальше базу не спрашиваем (записей решения бывают сотни).
+        for item in _later_changes(user_id, r, ids) if len(later) < 5 else []:
+            if all(item["id"] != x["id"] for x in later):
+                later.append(item)
+    warnings: list[str] = []
+    if later:
+        warnings.append("После этого те же объекты меняли ещё раз — откат вернёт значения на момент до изменений.")
+    if partial:
+        warnings.append("Часть изменений выполнилась не полностью — откатится выполненная часть.")
+    if recreate:
+        warnings.append("Удалённые фразы добавятся заново, но без прежней статистики.")
+    if delete:
+        warnings.append("Кампания будет удалена в Директе.")
+    todo = [e["log_id"] for e in entries if e["available"]]
+    if todo:
+        reason = ""
+    elif undone and not blocked:
+        reason = "Это уже вернули"
+    else:
+        reason = "Это вернуть нельзя: " + "; ".join(blocked or undone)
+    return {
+        "log_ids": todo,
+        "title": title or (entries[0]["title"] if len(entries) == 1 else f"Изменений: {len(entries)}"),
+        "label": "Вернуть как было",
+        "danger": danger,
+        "available": bool(todo),
+        "reason": reason,
+        "entries": entries,
+        "steps": _counted(steps),
+        "blocked": blocked,
+        "undone": undone,
+        "warnings": warnings,
+        "later": sorted(later, key=lambda x: x["id"])[:5],
+    }
+
+
+def run_undo_group(user_id: int, log_ids, progress: Progress | None = None) -> dict:
+    """Откат нескольких записей: каждая своим run_undo, от новой к старой; сбой одной не останавливает другие.
+
+    Ошибка — только если не откатилось ничего."""
+    progress = progress or (lambda *_a: None)
+    todo = [r for r in reversed(_load_many(user_id, log_ids)) if not _why_not(r)]
+    if not todo:
+        raise YandexError("undo", "Это уже нечего возвращать")
+    total = sum(len(_steps_of(r)) for r in todo) or 1
+    done_n = 0
+    undone: list[int] = []
+    new_ids: list[int] = []
+    failed: list[dict] = []
+    steps: list[dict] = []
+    for r in todo:
+        base = done_n
+
+        def sub(n: int, _total: int, text: str = "", base: int = base) -> None:
+            progress(min(base + n, total), total, text)
+
+        try:
+            res = run_undo(user_id, int(r["id"]), sub)
+            undone.append(int(r["id"]))
+            new_ids.append(int(res["log_id"]))
+            steps += res.get("steps") or []
+        except YandexError as exc:
+            failed.append({"log_id": r["id"], "title": r["title"], "code": exc.code, "message": exc.message or ""})
+            steps.append({"op": "", "text": r["title"], "status": "error", "code": exc.code, "message": exc.message or ""})
+        except Exception:
+            log.exception("undo group %s", r["id"])
+            failed.append({"log_id": r["id"], "title": r["title"], "code": "internal", "message": "Сбой при откате"})
+            steps.append({"op": "", "text": r["title"], "status": "error", "code": "internal", "message": "Сбой при откате"})
+        done_n += len(_steps_of(r))
+    if not undone:
+        first = failed[0]
+        raise YandexError(first["code"] or "undo", first["message"] or "Не удалось вернуть")
+    ok = not failed and all(s.get("status") == "ok" for s in steps)
+    progress(total, total, "Готово")
+    return {"status": "ok" if ok else "partial", "undone": undone, "log_ids": new_ids, "failed": failed, "steps": steps}
+
+
+def ai_action_log_ids(user_id: int, action_id: int) -> list[int]:
+    """Записи журнала, сделанные выполнением предложения ИИ (его «Выполнить»)."""
+    from app.journal import ai_action_logs
+
+    with pool.connection() as conn:
+        row = conn.execute("SELECT id FROM ai_actions WHERE id = %s AND user_id = %s", (action_id, user_id)).fetchone()
+    if row is None:
+        raise YandexError("not-found")
+    return [int(r["id"]) for r in ai_action_logs(user_id, [action_id]).get(int(action_id), [])]
+
+
+def ai_action_undo_preview(user_id: int, action_id: int) -> dict:
+    """«Вернуть как было» в карточке ИИ: что вернётся — все записи журнала этого решения."""
+    ids = ai_action_log_ids(user_id, action_id)
+    if not ids:
+        return {
+            "log_ids": [],
+            "title": "Действие ИИ",
+            "label": "Вернуть как было",
+            "danger": False,
+            "available": False,
+            "reason": "Это вернуть нельзя: действие ничего не записало в «Историю»",
+            "entries": [],
+            "steps": [],
+            "blocked": [],
+            "undone": [],
+            "warnings": [],
+            "later": [],
+        }
+    return undo_group_preview(user_id, ids, title="Действие ИИ", limit=MAX_DECISION)

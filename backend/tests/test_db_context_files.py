@@ -1,4 +1,4 @@
-"""Файлы контекста проекта на настоящей БД: загрузка txt/zip через API, список, выключение, удаление,
+"""Файлы контекста проекта и клиента на настоящей БД: загрузка txt/zip через API, список, выключение, удаление,
 лимиты и текст файлов в системном промпте чата (модель подменена)."""
 
 import base64
@@ -240,3 +240,113 @@ def test_files_go_with_workspace(db):
     with db.connection() as conn:
         conn.execute("DELETE FROM workspaces WHERE id = %s", (ws,))
         assert conn.execute("SELECT COUNT(*) AS n FROM workspace_context_files").fetchone()["n"] == 0
+
+
+
+# --- Файлы клиента ---------------------------------------------------------------------------------
+
+
+def _curl(client_id, tail=""):
+    return f"/api/web/clients/{client_id}/context-files{tail}"
+
+
+def _client_seed(db):
+    from app.clients import create_client
+
+    user = make_user(db)
+    cid = create_client(user, name="Ромашка")["id"]
+    ws_a = make_workspace(db, user, 555, "Окна", client_id=cid)
+    ws_b = make_workspace(db, user, 556, "Двери", client_id=cid)
+    lone = make_workspace(db, user, 777, "Блог")
+    return user, cid, ws_a, ws_b, lone, TestClient(app), {"Authorization": f"Bearer {make_session(user)}"}
+
+
+def test_client_files_reach_every_project_of_the_client(db):
+    user, cid, ws_a, ws_b, lone, client, auth = _client_seed(db)
+    empty = client.get(_curl(cid), headers=auth)
+    assert empty.status_code == 200, empty.text
+    assert empty.json()["items"] == [] and empty.json()["limits"]["files"] == context_files.MAX_FILES
+
+    r = client.post(_curl(cid), json={"filename": "прайс.txt", "data": _b64("Замер бесплатно".encode())}, headers=auth)
+    assert r.status_code == 200, r.text
+    assert r.json()["added"] == ["прайс.txt"]
+    r = client.post(_curl(cid), json={"filename": "Условия.md", "data": _b64("Оплата по счёту".encode())}, headers=auth)
+    items = r.json()["items"]
+    assert [(f["filename"], f["state"]) for f in items] == [("прайс.txt", "on"), ("Условия.md", "on")]
+    price_id = items[0]["id"]
+    # У проекта свой файл с тем же именем (регистр не важен) — он важнее файла клиента.
+    own = client.post(_url(ws_a), json={"filename": "условия.md", "data": _b64("Оплата картой".encode())}, headers=auth)
+    assert own.status_code == 200, own.text
+
+    listed = client.get(_url(ws_a), headers=auth).json()
+    assert [f["filename"] for f in listed["items"]] == ["условия.md"]
+    assert listed["client"] == {"id": cid, "name": "Ромашка"}
+    assert [(f["filename"], f["state"]) for f in listed["client_items"]] == [("прайс.txt", "full"), ("Условия.md", "same")]
+    assert listed["usage"]["files"] == 2 and listed["usage"]["sent_chars"] == len("Оплата картой") + len("Замер бесплатно")
+
+    block = context_files.prompt_block(ws_a)
+    assert block.startswith("Файлы контекста от маркетолога (загружены в настройках проекта и клиента)")
+    assert "=== прайс.txt — файл клиента, общий для всех его проектов ===\nЗамер бесплатно" in block
+    assert "Оплата картой" in block and "Оплата по счёту" not in block
+    assert block.index("Оплата картой") < block.index("Замер бесплатно")
+    other = context_files.prompt_block(ws_b)
+    assert "Оплата по счёту" in other and "Замер бесплатно" in other and "Оплата картой" not in other
+    # Проект без клиента файлов клиента не видит.
+    assert context_files.prompt_block(lone) == ""
+    alone = client.get(_url(lone), headers=auth).json()
+    assert alone["client"] is None and alone["client_items"] == []
+
+    off = client.patch(_curl(cid, f"/{price_id}"), json={"enabled": False}, headers=auth)
+    assert off.status_code == 200, off.text
+    assert [(f["filename"], f["state"]) for f in off.json()["items"]][0] == ("прайс.txt", "off")
+    assert "Замер бесплатно" not in context_files.prompt_block(ws_b)
+    assert client.get(_url(ws_a), headers=auth).json()["client_items"][0]["state"] == "off"
+
+    clients = client.get("/api/web/clients", headers=auth).json()["items"]
+    assert [(c["id"], c["files_count"]) for c in clients] == [(cid, 2)]
+
+    # Файл проекта через адрес клиента не трогается, и наоборот.
+    project_file = listed["items"][0]["id"]
+    assert client.delete(_curl(cid, f"/{project_file}"), headers=auth).status_code == 404
+    assert client.delete(_url(ws_a, f"/{price_id}"), headers=auth).status_code == 404
+    r = client.delete(_curl(cid, f"/{price_id}"), headers=auth)
+    assert r.status_code == 200 and [f["filename"] for f in r.json()["items"]] == ["Условия.md"]
+
+    # Удалили клиента — его файлы удалены, файлы проекта остались.
+    assert client.delete(f"/api/web/clients/{cid}", headers=auth).status_code == 200
+    with db.connection() as conn:
+        rows = conn.execute("SELECT workspace_id, client_row_id FROM workspace_context_files").fetchall()
+    assert [(r["workspace_id"], r["client_row_id"]) for r in rows] == [(ws_a, None)]
+    assert "Оплата картой" in context_files.prompt_block(ws_a) and context_files.prompt_block(ws_b) == ""
+
+
+def test_client_files_are_private_and_limited(db, monkeypatch):
+    user, cid, ws_a, _, _, client, auth = _client_seed(db)
+    body = client.post(_curl(cid), json={"filename": "a.txt", "data": _b64(b"text")}, headers=auth).json()
+    file_id = body["items"][0]["id"]
+
+    stranger = {"Authorization": f"Bearer {make_session(make_user(db, 'x@example.com'))}"}
+    payload = {"filename": "b.txt", "data": _b64(b"x")}
+    assert client.get(_curl(cid), headers=stranger).status_code == 404
+    assert client.post(_curl(cid), json=payload, headers=stranger).status_code == 404
+    assert client.patch(_curl(cid, f"/{file_id}"), json={"enabled": False}, headers=stranger).status_code == 404
+    assert client.delete(_curl(cid, f"/{file_id}"), headers=stranger).status_code == 404
+    assert client.delete(_curl(cid), headers=stranger).status_code == 404
+    assert [f["enabled"] for f in client.get(_curl(cid), headers=auth).json()["items"]] == [True]
+
+    # Лимиты — как у проекта, и у клиента свои: файлы проекта их не съедают.
+    monkeypatch.setattr(context_files, "MAX_FILES", 2)
+    body = client.post(
+        _curl(cid), json={"filename": "z.zip", "data": _b64(_zip([(f"{i}.txt", b"t") for i in range(2)]))}, headers=auth
+    ).json()
+    assert body["added"] == ["0.txt"]
+    assert body["skipped"] == [{"name": "1.txt", "reason": "у клиента уже 2 файлов"}]
+    r = client.post(_url(ws_a), json={"filename": "z.zip", "data": _b64(_zip([("p1.txt", b"p"), ("p2.txt", b"p")]))}, headers=auth)
+    assert r.json()["added"] == ["p1.txt", "p2.txt"]
+
+    r = client.post(_curl(cid), json={"filename": "photo.jpg", "data": _b64(b"\xff\xd8")}, headers=auth)
+    assert r.status_code == 400
+    assert r.json()["detail"] == {"code": "context-file", "message": "Подходят только .txt, .md и .zip с ними"}
+
+    assert client.delete(_curl(cid), headers=auth).json()["items"] == []
+    assert len(client.get(_url(ws_a), headers=auth).json()["items"]) == 2

@@ -222,6 +222,41 @@ def set_name(user_id: int, name: str) -> dict:
     return public_user(user)
 
 
+AI_RULES_MAX = 1000
+
+
+def get_ai_prefs(user_id: int) -> dict:
+    """«Мои правила для ИИ» и тон по умолчанию: действуют во всех чатах аккаунта, и в общем тоже."""
+    with pool.connection() as conn:
+        row = conn.execute("SELECT ai_rules, ai_tone FROM users WHERE id = %s", (user_id,)).fetchone()
+    if row is None:
+        raise UsersError("not-found")
+    return {"rules": row["ai_rules"] or "", "tone": row["ai_tone"] or ""}
+
+
+def set_ai_prefs(user_id: int, *, rules: str | None = None, tone: str | None = None) -> dict:
+    """Меняет только присланное; пустой тон — «не задан» (в проектах — спокойный, если там свой не выбран)."""
+    from app.workspaces import AI_TONES
+
+    sets: list[str] = []
+    params: list = []
+    if rules is not None:
+        text = (rules or "").strip()
+        if len(text) > AI_RULES_MAX:
+            raise UsersError("ai-rules-too-long")
+        sets.append("ai_rules = %s")
+        params.append(text)
+    if tone is not None:
+        if tone and tone not in AI_TONES:
+            raise UsersError("ai-tone")
+        sets.append("ai_tone = %s")
+        params.append(tone)
+    if sets:
+        with pool.connection() as conn:
+            conn.execute(f"UPDATE users SET {', '.join(sets)} WHERE id = %s", (*params, user_id))
+    return get_ai_prefs(user_id)
+
+
 def _ui_value(key: str, value):
     """Одно значение настроек интерфейса; кривое — ошибка, а не молчаливая правка."""
     if key == "role":

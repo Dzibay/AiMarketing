@@ -17,8 +17,15 @@ def _facts(**over) -> dict:
     return facts
 
 
-def _ws(ws_id: int, campaigns: int = 0, template: bool = False, goal: bool = False) -> dict:
-    return {"id": ws_id, "name": f"site{ws_id}.ru", "campaigns": campaigns, "has_template": template, "has_goal": goal}
+def _ws(ws_id: int, campaigns: int = 0, template: bool = False, goal: bool = False, locked: bool = False) -> dict:
+    return {
+        "id": ws_id,
+        "name": f"site{ws_id}.ru",
+        "campaigns": campaigns,
+        "has_template": template,
+        "has_goal": goal,
+        "locked": locked,
+    }
 
 
 def _steps(result: dict) -> dict:
@@ -87,9 +94,46 @@ def test_links_lead_to_the_workspace_that_still_needs_the_step():
     steps = _steps(build_onboarding(_facts(workspaces=workspaces), telegram_available=True))
     assert steps["workspace"]["done"]
     assert steps["campaigns"]["done"] and steps["campaigns"]["to"] == "/w/1/settings"
-    assert steps["link_template"]["done"]
+    # Шаблон есть только у второго проекта — шаг не сделан, ведём в проект с кампаниями, где его нет.
+    assert not steps["link_template"]["done"] and steps["link_template"]["status"] == "todo"
+    assert steps["link_template"]["to"] == "/w/3/settings#links"
     # Цели нет нигде — ведём в проект, где уже есть кампании.
     assert not steps["goals"]["done"] and steps["goals"]["to"] == "/w/2/settings"
+    assert steps["goals"]["status"] == "todo"
+
+
+def test_template_and_goal_count_per_project():
+    workspaces = [_ws(1, campaigns=1, template=True, goal=True), _ws(2, campaigns=1, goal=True), _ws(3, goal=True)]
+    steps = _steps(build_onboarding(_facts(workspaces=workspaces), telegram_available=True))
+    # Один проект с шаблоном не закрывает шаг за остальные.
+    assert not steps["link_template"]["done"]
+    # Не «в работе» со спиннером: ждать нечего, нужно настроить остальные проекты.
+    assert steps["link_template"]["status"] == "todo"
+    assert steps["link_template"]["detail"] == "Готово в 1 из 3 проектов, осталось: «site2.ru», «site3.ru»"
+    assert steps["link_template"]["to"] == "/w/2/settings#links"
+    # Цель есть у всех — шаг сделан.
+    assert steps["goals"]["done"] and steps["goals"]["status"] == "done"
+
+    many = [_ws(i, template=i == 1) for i in range(1, 6)]
+    step = _steps(build_onboarding(_facts(workspaces=many), telegram_available=True))["link_template"]
+    assert step["detail"].endswith("осталось: «site2.ru», «site3.ru» и ещё 2")
+
+
+def test_locked_projects_do_not_hold_the_steps():
+    """Проект сверх лимита тарифа не настроить — шаги по нему не ждут и в его настройки не ведут."""
+    workspaces = [_ws(1, campaigns=2, template=True, goal=True), _ws(2, campaigns=3, locked=True)]
+    steps = _steps(build_onboarding(_facts(workspaces=workspaces), telegram_available=True))
+    assert steps["link_template"]["done"] and steps["goals"]["done"]
+    assert steps["link_template"]["detail"] == "" and steps["goals"]["detail"] == ""
+
+    # Открытых без шага двое из трёх, закрытый не считается и не упоминается.
+    workspaces = [_ws(1, template=True), _ws(2, campaigns=1), _ws(3, campaigns=5, locked=True)]
+    step = _steps(build_onboarding(_facts(workspaces=workspaces), telegram_available=True))["link_template"]
+    assert not step["done"]
+    assert step["detail"] == "Готово в 1 из 2 проектов, осталось: «site2.ru»"
+    assert step["to"] == "/w/2/settings#links"
+    campaigns = _steps(build_onboarding(_facts(workspaces=workspaces), telegram_available=True))["campaigns"]
+    assert campaigns["to"] == "/w/1/settings"
 
 
 def test_link_template_points_to_the_links_panel():

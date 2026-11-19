@@ -406,6 +406,8 @@ export function problemLink(p) {
   if (p.campaign_row_id && ws) return { to: `/w/${ws}/campaigns/${p.campaign_row_id}`, label: 'К кампании' }
   if (CONNECTION_PROBLEMS.has(p.kind)) return { to: '/cabinet/connections', label: 'К подключениям' }
   if ((p.kind === 'budget' || p.kind === 'kpi') && ws) return { to: `/w/${ws}/settings`, label: 'Настройки' }
+  // «Проект не настроен» — сразу на экран «Подготовим проект».
+  if (p.kind === 'setup' && ws) return { to: `/w/${ws}/summary?setup=1`, label: 'Настроить' }
   if (ws) return { to: `/w/${ws}/summary`, label: 'Открыть' }
   return null
 }

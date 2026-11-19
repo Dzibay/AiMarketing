@@ -40,7 +40,11 @@ SELECT
     w.name,
     (SELECT COUNT(*) FROM workspace_campaigns wc WHERE wc.workspace_id = w.id) AS campaigns,
     w.url_template <> '' AS has_template,
-    w.goal_id IS NOT NULL AS has_goal
+    w.goal_id IS NOT NULL AS has_goal,
+    -- Как workspaces.active_rank: проекты сверх лимита тарифа (новые) закрыты и не правятся.
+    (SELECT COUNT(*) FROM workspaces o
+       WHERE o.user_id = w.user_id AND o.archived_at IS NULL
+         AND (o.created_at, o.id) < (w.created_at, w.id)) AS active_rank
 FROM workspaces w
 WHERE w.user_id = %s AND w.archived_at IS NULL
 ORDER BY w.id
@@ -61,6 +65,11 @@ def load_facts(user_id: int) -> dict:
     }
     for key in ("metrika_connections", "direct_connections", "direct_accounts", "direct_loaded", "load_errors"):
         facts[key] = int(row.get(key) or 0)
+    limit = None
+    if workspaces:
+        from app.workspaces import projects_limit
+
+        limit = projects_limit(user_id)
     facts["workspaces"] = [
         {
             "id": int(w["id"]),
@@ -68,17 +77,45 @@ def load_facts(user_id: int) -> dict:
             "campaigns": int(w["campaigns"]),
             "has_template": bool(w["has_template"]),
             "has_goal": bool(w["has_goal"]),
+            "locked": limit is not None and int(w["active_rank"] or 0) >= limit,
         }
         for w in workspaces
     ]
     return facts
 
 
+def _open(workspaces: list[dict]) -> list[dict]:
+    """Проекты, которые можно править: закрытые тарифом (locked) шаги не закроют и вести в них незачем."""
+    return [w for w in workspaces if not w.get("locked")]
+
+
 def _pick(workspaces: list[dict], missing) -> dict | None:
-    """Куда вести: проект с кампаниями, где шага нет, иначе любое без шага, иначе первое."""
+    """Куда вести: проект с кампаниями, где шага нет, иначе любое без шага, иначе первое. Закрытые — в последнюю очередь."""
+    workspaces = _open(workspaces) or workspaces
     with_campaigns = [w for w in workspaces if w["campaigns"] and missing(w)]
     without = [w for w in workspaces if missing(w)]
     return (with_campaigns or without or workspaces or [None])[0]
+
+
+def _per_project(workspaces: list[dict], key: str) -> tuple[bool, dict]:
+    """Шаг по каждому проекту: сделан, только когда он есть во всех. Часть — подпись, какие проекты остались.
+
+    Раньше хватало одного проекта с шаблоном/целью — и второй сайт оставался без них незамеченным.
+    """
+    if not workspaces:
+        return False, {"status": "blocked", "detail": "Сначала создайте проект"}
+    # Закрытые тарифом проекты не в счёт: их не настроить, пока они сверх лимита.
+    workspaces = _open(workspaces)
+    missing = [w for w in workspaces if not w[key]]
+    if not missing:
+        return True, {}
+    if len(missing) == len(workspaces):
+        return False, {}
+    names = ", ".join(f"«{w['name']}»" for w in missing[:2])
+    more = len(missing) - 2
+    detail = f"Готово в {len(workspaces) - len(missing)} из {len(workspaces)} проектов, осталось: {names}"
+    # Не «progress»: тот статус крутит спиннер и опрашивает сервер, а здесь ждать нечего — нужно действие.
+    return False, {"detail": detail + (f" и ещё {more}" if more > 0 else "")}
 
 
 def _step(step_id: str, title: str, hint: str, done: bool, to: str | None, **extra) -> dict:
@@ -240,27 +277,30 @@ def build_onboarding(facts: dict, *, telegram_available: bool) -> dict:
         )
     )
 
+    # Шаблон и цель — у каждого проекта свои: шаг сделан, когда они есть во всех.
     target = _pick(workspaces, lambda w: not w["has_template"])
+    done, extra = _per_project(workspaces, "has_template")
     steps.append(
         _step(
             "link_template",
             "Задать шаблон ссылки",
             "Эталонная ссылка сайта с utm-метками — по ней проверяем ссылки объявлений",
-            any(w["has_template"] for w in workspaces),
+            done,
             f"/w/{target['id']}/settings#links" if target else None,
-            **({} if has_ws else blocked),
+            **extra,
         )
     )
 
     target = _pick(workspaces, lambda w: not w["has_goal"])
+    done, extra = _per_project(workspaces, "has_goal")
     steps.append(
         _step(
             "goals",
             "Подключить цели Метрики",
             "Выберите основную цель — по ней считаются конверсии, CPA и ДРР",
-            any(w["has_goal"] for w in workspaces),
+            done,
             f"/w/{target['id']}/settings" if target else None,
-            **({} if has_ws else blocked),
+            **extra,
         )
     )
 

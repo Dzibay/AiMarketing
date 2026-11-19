@@ -44,6 +44,7 @@
           >
             {{ item.text }}
           </button>
+          <BoardRule :item="item" />
           <small class="board-lines__len" :class="{ 'tone-bad': item.text.length > limit }">
             {{ item.text.length }}/{{ limit }}
           </small>
@@ -81,6 +82,7 @@
 /** Заголовки или тексты группы на доске: правка по щелчку со счётчиком знаков, «×» и новая строка. */
 import { computed, inject, nextTick, ref } from 'vue'
 import UiCheckbox from '../../components/ui/UiCheckbox.vue'
+import BoardRule from './BoardRule.vue'
 
 const props = defineProps({
   items: { type: Array, required: true },

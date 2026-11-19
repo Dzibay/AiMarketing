@@ -66,8 +66,29 @@ def test_facts_come_from_existing_tables(db):
     assert facts["telegram_linked"] and facts["email_verified"] and facts["asked_ai"] and facts["decided_ai"]
     assert facts["metrika_connections"] == 1
     assert facts["workspaces"] == [
-        {"id": ws, "name": "site.ru", "campaigns": 1, "has_template": True, "has_goal": True}
+        {"id": ws, "name": "site.ru", "campaigns": 1, "has_template": True, "has_goal": True, "locked": False}
     ]
+
+
+def test_projects_over_the_plan_limit_are_locked(db):
+    """Проект сверх лимита тарифа (новее) закрыт: шаблон и цель по нему чек-лист не ждёт."""
+    from app import plans
+
+    user = make_user(db)
+    first = make_workspace(db, user, 1, "first.ru", goal_id=7)
+    second = make_workspace(db, user, 2, "second.ru")
+    with db.connection() as conn:
+        conn.execute("UPDATE workspaces SET url_template = 'https://first.ru/?utm_source=yandex' WHERE id = %s", (first,))
+    plans.set_subscription(user, overrides={"projects_limit": 1})
+    facts = onboarding.load_facts(user)
+    assert {w["id"]: w["locked"] for w in facts["workspaces"]} == {first: False, second: True}
+    steps = _steps(onboarding.build_onboarding(facts, telegram_available=False))
+    assert steps["link_template"]["done"] and steps["goals"]["done"]
+
+    plans.set_subscription(user, overrides={"projects_limit": None})
+    steps = _steps(onboarding.get_onboarding(user))
+    assert not steps["link_template"]["done"]
+    assert steps["link_template"]["detail"] == "Готово в 1 из 2 проектов, осталось: «second.ru»"
 
 
 def test_other_users_data_does_not_count(db):

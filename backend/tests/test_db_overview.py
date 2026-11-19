@@ -179,8 +179,9 @@ def test_where_it_burns(db):
         ("warning", "stopped"),
         ("warning", "spend_spike"),
         ("warning", "cpa_spike"),
+        ("info", "setup"),  # новый проект без цели и шаблона ссылки
     }
-    assert _problems(overview, "Вектор") == [("critical", "moderation")]
+    assert _problems(overview, "Вектор") == [("critical", "moderation"), ("info", "setup")]
 
     token = [p for p in overview["problems"] if p["kind"] == "token"]
     assert len(token) == 1 and token[0]["severity"] == "critical"
@@ -192,6 +193,31 @@ def test_where_it_burns(db):
 
     stopped = next(p for p in overview["problems"] if p["kind"] == "stopped")
     assert stopped["object_name"] == "РСЯ" and stopped["campaign_row_id"]
+
+
+def test_setup_mark_on_project_rows(db):
+    """Простой обзор: «Не настроен» на карточке нового проекта без цели или шаблона, пока сигнал не скрыт."""
+    from app import snoozes
+
+    s = _seed(db)
+    _sql(db, "UPDATE workspaces SET url_template = 'https://romashka.ru/?utm_source=yandex' WHERE id = %s", (s["ws_r"],))
+    overview = build_overview(s["user"], TODAY)
+    rows = {r["id"]: r for r in overview["workspaces"]}
+    assert rows[s["ws_v"]]["setup_missing"] == ["цели", "шаблона ссылки"]
+    assert rows[s["ws_r"]]["setup_missing"] == ["цели"]
+    assert rows[None]["setup_missing"] == []
+
+    # Сигнал скрыт — карточка тоже молчит.
+    setup = next(p for p in overview["problems"] if p["kind"] == "setup" and p["workspace_id"] == s["ws_v"])
+    assert snoozes.create(s["user"], setup["key"], "days") == {"ok": True}
+    rows = {r["id"]: r for r in build_overview(s["user"], TODAY)["workspaces"]}
+    assert rows[s["ws_v"]]["setup_missing"] == []
+    assert rows[s["ws_r"]]["setup_missing"] == ["цели"]
+
+    # Проекту больше 30 дней — уже работает, отметки нет.
+    _sql(db, "UPDATE workspaces SET created_at = NOW() - INTERVAL '40 days' WHERE id = %s", (s["ws_r"],))
+    rows = {r["id"]: r for r in build_overview(s["user"], TODAY)["workspaces"]}
+    assert rows[s["ws_r"]]["setup_missing"] == []
 
 
 def test_overview_is_private(db):

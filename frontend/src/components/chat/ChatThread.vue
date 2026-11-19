@@ -151,7 +151,12 @@
             >
               <span class="done-check"><Check aria-hidden="true" /></span>
               <strong class="action-card__title">{{ a.label }}</strong>
-              <span class="action-card__state">{{ a.status === 'done' ? 'выполнено' : 'выполняется…' }}</span>
+              <span class="action-card__state">
+                {{ a.status !== 'done' ? 'выполняется…' : returned(a) ? 'возвращено' : 'выполнено' }}
+              </span>
+              <button v-if="canUndo(a)" class="action-card__fold" type="button" @click="undoAi = a.id">
+                Вернуть как было
+              </button>
               <button class="action-card__fold" type="button" :aria-expanded="false" @click="unfolded[a.id] = true">
                 Подробнее
               </button>
@@ -214,7 +219,26 @@
                 <summary>Результат</summary>
                 <pre>{{ pretty(a.result) }}</pre>
               </details>
-              <p v-if="a.status === 'rejected' && a.error" class="hint">{{ a.error }}</p>
+              <p v-if="a.status === 'rejected' && a.decline_reason" class="hint">Причина: {{ a.decline_reason }}</p>
+              <p v-else-if="a.status === 'rejected' && a.error" class="hint">{{ a.error }}</p>
+              <!-- Выполнено: вернуть все изменения этого решения разом (окно сначала покажет их словами). -->
+              <div v-if="canUndo(a) || returned(a)" class="action-card__buttons">
+                <button v-if="canUndo(a)" class="btn btn--ghost btn--sm" type="button" @click="undoAi = a.id">
+                  <RotateCcw aria-hidden="true" />
+                  Вернуть как было
+                </button>
+                <span v-else class="hint">Изменения вернули — запись об этом есть в «Истории».</span>
+              </div>
+              <p v-if="canRedo(a) && !redo[a.id]" class="hint redo-hint">
+                Можно объяснить, как надо, — ИИ переделает.
+                <button class="ai-check__link" type="button" @click="redo[a.id] = true">Сделать иначе</button>
+              </p>
+              <ChatRedoForm
+                v-if="redo[a.id] && a.id && (a.status === 'pending' || canRedo(a))"
+                :busy="deciding"
+                @submit="(r) => submitRedo(a, r)"
+                @cancel="redo[a.id] = false"
+              />
               <div v-if="a.status === 'pending' && a.id" class="action-card__buttons action-card__buttons--split">
                 <!-- На телефоне этот ряд прилипает к низу экрана: «Выполнить» во всю ширину, «Позже» — в «⋯». -->
                 <div class="action-card__acts">
@@ -233,20 +257,34 @@
                   </button>
                   <button class="btn btn--ghost" type="button" :disabled="deciding" @click="decide(a, false)">Отклонить</button>
                   <UiMenu v-if="phone || panel" :disabled="deciding">
+                    <UiMenuItem :icon="PencilLine" hint="объясните, как надо, — ИИ переделает" @click="redo[a.id] = true">
+                      Сделать иначе
+                    </UiMenuItem>
                     <UiMenuItem :icon="Clock" hint="решить можно здесь или в «Ждёт решения»" @click="setLater(a, true)">
                       Позже
                     </UiMenuItem>
                   </UiMenu>
-                  <button
-                    v-else
-                    class="btn btn--ghost"
-                    type="button"
-                    :disabled="deciding"
-                    v-tip="'Свернуть карточку: решить можно позже здесь или в «Ждёт решения»'"
-                    @click="setLater(a, true)"
-                  >
-                    Позже
-                  </button>
+                  <template v-else>
+                    <button
+                      class="btn btn--ghost"
+                      type="button"
+                      :disabled="deciding"
+                      :aria-expanded="!!redo[a.id]"
+                      v-tip="'Объяснить, как надо, — ИИ переделает предложение'"
+                      @click="redo[a.id] = !redo[a.id]"
+                    >
+                      Сделать иначе
+                    </button>
+                    <button
+                      class="btn btn--ghost"
+                      type="button"
+                      :disabled="deciding"
+                      v-tip="'Свернуть карточку: решить можно позже здесь или в «Ждёт решения»'"
+                      @click="setLater(a, true)"
+                    >
+                      Позже
+                    </button>
+                  </template>
                 </div>
                 <span v-if="allOff(a) && !phone && !panel" class="hint">Сняты все строки — отклоните действие</span>
                 <UiCheckbox
@@ -257,7 +295,8 @@
                   Больше не спрашивать для «{{ a.categories.map((c) => c.label).join('», «') }}»
                 </UiCheckbox>
                 <p v-if="!expert && !panel" class="action-card__note">
-                  Ничего не изменится, пока вы не нажмёте «Выполнить». Вернуть как было можно в «Истории».
+                  Ничего не изменится, пока вы не нажмёте «Выполнить». Вернуть как было можно потом здесь же или в
+                  «Истории».
                 </p>
               </div>
             </div>
@@ -312,6 +351,7 @@
         </template>
       </UiNotice>
     </div>
+    <UndoDialog :ai-action-id="undoAi" @close="undoAi = null" @done="loadChat(chatId)" />
   </div>
 </template>
 
@@ -337,7 +377,9 @@ import AiItemsCard from '../../views/workspace/AiItemsCard.vue'
 import AiPlanCard from '../../views/workspace/AiPlanCard.vue'
 import AiQuestionsCard from '../../views/workspace/AiQuestionsCard.vue'
 import UiCheckbox from '../ui/UiCheckbox.vue'
+import UndoDialog from '../UndoDialog.vue'
 import ChatRate from './ChatRate.vue'
+import ChatRedoForm from './ChatRedoForm.vue'
 import UiMenu from '../ui/UiMenu.vue'
 import UiMenuItem from '../ui/UiMenuItem.vue'
 import UiNotice from '../ui/UiNotice.vue'
@@ -390,10 +432,24 @@ const {
   allOff,
   planProgress,
   decide,
+  declineWith,
+  canRedo,
   respond,
+  loadChat,
   scroller,
   onScroll,
 } = useChat()
+
+// «Сделать иначе»: открытые формы причины по id действия; отправка отклоняет с причиной — ИИ переделает.
+const redo = reactive({})
+async function submitRedo(a, { reason, comment }) {
+  if (await declineWith(a, reason, comment)) redo[a.id] = false
+}
+
+// «Вернуть как было» у выполненного предложения: id действия для окна отката (null — окно закрыто).
+const undoAi = ref(null)
+const canUndo = (a) => ['done', 'error'].includes(a.status) && !!a.id && (a.undo?.undoable || 0) > 0
+const returned = (a) => !!a.undo?.undone && !a.undo?.undoable
 // Ответ готовится дольше 10 секунд — подсказка, что ждать на странице не обязательно (useAnswerWatch).
 const LONG_WAIT_MS = 10000
 const longWait = ref(false)

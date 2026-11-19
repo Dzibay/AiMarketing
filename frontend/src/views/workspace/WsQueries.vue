@@ -93,19 +93,43 @@
               </span>
             </header>
             <ul class="rcard__list">
-              <li v-for="q in g.items.slice(0, GROUP_SHOWN)" :key="q.query_norm">
+              <li v-for="q in openAll[g.key] ? g.items : g.items.slice(0, GROUP_SHOWN)" :key="q.query_norm">
                 <span class="rcard__q">
-                  {{ q.query }}
-                  <small v-if="g.misc && phraseOf(q) !== q.query_norm" class="meta-note">минус «{{ phraseOf(q) }}»</small>
+                  <span v-tip="openWhy[g.key] ? '' : reasonOf(q)">{{ q.query }}</span>
+                  <button
+                    v-if="g.misc || g.user"
+                    v-tip="'Выбрать слова для минус-фразы'"
+                    class="link-btn rcard__phrase"
+                    type="button"
+                    :disabled="!!busy"
+                    @click="phraseRow = q"
+                  >
+                    {{ phraseLabel(q) }}
+                  </button>
+                  <small v-if="openWhy[g.key] && reasonOf(q)" class="rcard__reason">{{ reasonOf(q) }}</small>
                 </span>
                 <span class="rcard__cost">{{ rubles(q.cost_rub) }}</span>
+                <button
+                  v-tip="'Это не мусор — перенести в полезные'"
+                  class="rcard__x"
+                  type="button"
+                  aria-label="Это не мусор"
+                  :disabled="!!busy"
+                  @click="setSimpleVerdict(q, 'target')"
+                >
+                  <X :size="14" aria-hidden="true" />
+                </button>
               </li>
             </ul>
-            <p v-if="g.items.length > GROUP_SHOWN" class="meta-note">и ещё {{ g.items.length - GROUP_SHOWN }}</p>
-            <ul v-if="openWhy[g.key]" class="rcard__why">
-              <li v-for="r in g.reasons" :key="r">{{ r }}</li>
-              <li v-if="!g.reasons.length">ИИ не оставил пояснения.</li>
-            </ul>
+            <button
+              v-if="g.items.length > GROUP_SHOWN"
+              class="link-btn rcard__more"
+              type="button"
+              @click="openAll[g.key] = !openAll[g.key]"
+            >
+              {{ openAll[g.key] ? 'Свернуть' : `Показать ещё ${g.items.length - GROUP_SHOWN}` }}
+            </button>
+            <p v-if="openWhy[g.key] && !g.hasReasons" class="meta-note">ИИ не оставил пояснения.</p>
             <p v-if="g.conflicts" class="rcard__warn">
               {{ g.conflicts }} {{ plural(g.conflicts, 'запрос заденет', 'запроса заденут', 'запросов заденут') }} ваши
               ключевые фразы — их пропустим и спросим отдельно.
@@ -122,14 +146,20 @@
         </div>
       </template>
 
-      <div v-if="targets.length" class="ccard tri-ok">
+      <div v-if="useful.length" class="ccard tri-ok">
         <div class="prow">
           <div class="prow__main">
             <span class="st st--ok">
               <CircleCheck :size="15" aria-hidden="true" />
-              {{ num(counts.target) }} {{ plural(counts.target, 'полезный запрос', 'полезных запроса', 'полезных запросов') }}
+              {{ num(local.target) }} {{ plural(local.target, 'полезный запрос', 'полезных запроса', 'полезных запросов') }}
             </span>
-            <span class="meta-note">С ними всё в порядке — ИИ считает их целевыми.</span>
+            <span class="meta-note">
+              {{
+                local.rescued
+                  ? 'Отметки «не мусор» запомним, когда примените решения или нажмёте «Всё верно».'
+                  : 'С ними всё в порядке — ИИ считает их целевыми.'
+              }}
+            </span>
           </div>
           <div class="prow__acts">
             <button class="btn btn--ghost" type="button" :disabled="!!busy" @click="keepTargets">Всё верно, запомнить</button>
@@ -139,17 +169,20 @@
           </div>
         </div>
         <ul v-if="showTargets" class="rcard__list tri-ok__list">
-          <li v-for="q in targets.slice(0, 50)" :key="q.query_norm">
+          <li v-for="q in useful.slice(0, 50)" :key="q.query_norm">
             <span class="rcard__q">
               {{ q.query }}
-              <small v-if="q.label?.reason" class="meta-note">{{ q.label.reason }}</small>
+              <small v-if="reasonOf(q)" class="meta-note">{{ reasonOf(q) }}</small>
             </span>
             <span class="rcard__cost">
               {{ rubles(q.cost_rub) }}<template v-if="q.conversions"> · {{ num(q.conversions) }} конв.</template>
             </span>
+            <button class="link-btn rcard__junk" type="button" :disabled="!!busy" @click="setSimpleVerdict(q, 'negative')">
+              это мусор
+            </button>
           </li>
         </ul>
-        <p v-if="showTargets && targets.length > 50" class="meta-note">Показаны 50 самых дорогих.</p>
+        <p v-if="showTargets && useful.length > 50" class="meta-note">Показаны 50 самых дорогих.</p>
       </div>
 
       <QueryHighlights
@@ -157,6 +190,17 @@
         :costly="highlights.costly"
         :removed="highlights.removed_30d"
         :workspace-id="ws.id"
+        @changed="load()"
+      />
+
+      <QueryMinusDialog
+        :row="phraseRow"
+        :workspace-id="ws.id"
+        :initial-phrase="phraseRow ? decisions[phraseRow.query_norm]?.negative_phrase || '' : null"
+        :initial-level="phraseRow ? decisions[phraseRow.query_norm]?.level || '' : ''"
+        pick
+        @close="phraseRow = null"
+        @pick="onPhrasePicked"
       />
 
       <ExpertHint>Фильтры, таблица всех запросов, ручная правка минус-фраз и память решений</ExpertHint>
@@ -447,6 +491,7 @@
                       type="text"
                       maxlength="4096"
                       aria-label="Минус-фраза"
+                      placeholder="весь запрос целиком"
                       @input="touch(q.query_norm)"
                       @change="scheduleCheck([q.query_norm])"
                     />
@@ -458,11 +503,21 @@
                       @change="touch(q.query_norm); scheduleCheck([q.query_norm])"
                     />
                   </div>
+                  <QueryWords
+                    class="decision__words"
+                    small
+                    :query="q.query"
+                    :model-value="decisions[q.query_norm].negative_phrase"
+                    @update:model-value="setPhrase(q, $event)"
+                  />
                   <p v-if="checkOf(q)?.problems.length" class="decision__warn tone-bad">
                     {{ checkOf(q).problems.join('; ') }}
                   </p>
                   <p v-if="checkOf(q)?.total" class="decision__warn tone-warn">
                     Заденет ваши ключи: {{ conflictText(checkOf(q)) }}
+                  </p>
+                  <p v-if="checkOf(q)?.targetsTotal" class="decision__warn tone-warn">
+                    Отсечёт и нужные запросы — целевые или с заявками: {{ keptText(checkOf(q)) }}
                   </p>
                 </template>
                 <div v-else-if="decisions[q.query_norm].verdict === 'target'" class="check-row decision__kw">
@@ -726,6 +781,8 @@ import UiSkeleton from '../../components/ui/UiSkeleton.vue'
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import EmptyState from '../../components/ui/EmptyState.vue'
 import QueryHighlights from '../../components/QueryHighlights.vue'
+import QueryMinusDialog from '../../components/QueryMinusDialog.vue'
+import QueryWords from '../../components/QueryWords.vue'
 import UiCheckbox from '../../components/ui/UiCheckbox.vue'
 import UiListTools from '../../components/ui/UiListTools.vue'
 import UiRowMore from '../../components/ui/UiRowMore.vue'
@@ -733,7 +790,7 @@ import UiSelect from '../../components/ui/UiSelect.vue'
 import UiNotice from '../../components/ui/UiNotice.vue'
 import UiSwitch from '../../components/ui/UiSwitch.vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
-import { CircleCheck, Search } from '@lucide/vue'
+import { CircleCheck, Search, X } from '@lucide/vue'
 import ExpertHint from '../../components/ExpertHint.vue'
 import Modal from '../../components/ui/Modal.vue'
 import { useExpert } from '../../composables/useExpert'
@@ -746,6 +803,7 @@ import { pushToast } from '../../composables/useToasts'
 import { undoAction } from '../../composables/useUndo'
 import { campaignLabel, repeatedNames } from '../../utils/campaignNames'
 import { aiUsageText, formatDate, formatDateTime, limitPct, num, plural, rubles } from '../../utils/format'
+import { commonWords, phraseCovers } from '../../utils/queryWords'
 import { useWs } from './context'
 
 const TABS = [
@@ -779,7 +837,7 @@ const PERIODS = [7, 14, 30]
 const days = ref(14)
 // Пока период не выбирали руками, он повторяет уже загруженный — чип не спорит с подписью «Запросы за …».
 const daysPicked = ref(false)
-const busy = ref('') // sync | classify | apply
+const busy = ref('') // sync | classify | apply | check (ждём проверку и ответ про общее слово)
 const busyText = ref('')
 const filters = reactive({ search: '', campaign: '', minCost: '', noConv: false })
 const selected = ref(new Set())
@@ -867,8 +925,10 @@ const plan = computed(() => {
   const neg = list.filter((i) => i.verdict === 'negative')
   // Та же фраза уже отсекает запрос везде — в Директ ничего не уйдёт, решение просто запомним.
   const known = neg.filter((i) => {
-    const blocked = byNorm.value[i.query_norm]?.blocked_by
-    return blocked && blocked.toLowerCase() === (i.negative_phrase || '').trim().toLowerCase()
+    const row = byNorm.value[i.query_norm]
+    // Пустая фраза — значит, минусуем запрос целиком.
+    const phrase = (i.negative_phrase || row?.query || '').trim().toLowerCase()
+    return row?.blocked_by && row.blocked_by.toLowerCase() === phrase
   })
   const fresh = neg.filter((i) => !known.includes(i))
   return {
@@ -902,42 +962,122 @@ const GROUP_SHOWN = 5
 const targets = ref([])
 const showTargets = ref(false)
 const openWhy = reactive({})
+// Группа мусора раскрыта целиком (по умолчанию видно GROUP_SHOWN строк).
+const openAll = reactive({})
+// Запрос, у которого выбираем слова минус-фразы (окно со словами-«таблетками»).
+const phraseRow = ref(null)
 const highlights = ref(null)
 
 function phraseOf(q) {
   return (decisions[q.query_norm]?.negative_phrase || q.query).trim().toLowerCase()
 }
 
-function makeGroup(key, title, list, misc = false) {
+function phraseLabel(q) {
+  const own = (decisions[q.query_norm]?.negative_phrase || '').trim()
+  return !own || phraseOf(q) === q.query_norm ? 'минус — весь запрос' : `минус «${phraseOf(q)}»`
+}
+
+/** Решение по строке поменяли вы: «не мусор» у мусора ИИ или «это мусор» у полезного. */
+function movedByUser(q) {
+  const d = decisions[q.query_norm]
+  return !!d?.verdict && d.verdict !== (q.label?.verdict || null)
+}
+
+/** Причина у каждой строки: от ИИ, а если решение поменяли вы — об этом. */
+function reasonOf(q) {
+  if (movedByUser(q)) return decisions[q.query_norm].verdict === 'target' ? 'Вы отметили: не мусор' : 'Вы отметили как мусор'
+  return q.label?.reason || ''
+}
+
+const sumCost = (list) => list.reduce((s, q) => s + (q.cost_rub || 0), 0)
+
+// Простой режим: мусор и полезные — по решениям на экране (до применения они живут здесь, как и в таблице).
+const junk = computed(() =>
+  [...items.value, ...targets.value].filter((q) => decisions[q.query_norm]?.verdict === 'negative'),
+)
+const useful = computed(() => {
+  const list = [...items.value, ...targets.value].filter((q) => decisions[q.query_norm]?.verdict === 'target')
+  // Перенесённые вами — первыми: их видно сразу, и вернуть можно тут же.
+  return [...list.filter(movedByUser), ...list.filter((q) => !movedByUser(q))]
+})
+// Счётчики сервера с поправкой на правки: загружено не больше SIMPLE_LIMIT, остальное — как пришло.
+const local = computed(() => {
+  const c = counts.value
+  const d = data.value || {}
+  return {
+    negative: Math.max(0, c.negative - items.value.length) + junk.value.length,
+    negativeCost: Math.max(0, (d.negative_cost_rub || 0) - sumCost(items.value)) + sumCost(junk.value),
+    target: Math.max(0, c.target - targets.value.length) + useful.value.length,
+    edited: [...items.value, ...targets.value].some(movedByUser),
+    rescued: items.value.some((q) => decisions[q.query_norm]?.verdict === 'target'),
+  }
+})
+
+function makeGroup(key, title, list, kind = '') {
   return {
     key,
     title,
-    misc,
+    misc: kind === 'misc',
+    user: kind === 'user',
     items: list,
-    cost: list.reduce((s, q) => s + (q.cost_rub || 0), 0),
-    conflicts: list.filter((q) => q.conflicts_total).length,
-    reasons: [...new Set(list.map((q) => q.label?.reason).filter(Boolean))].slice(0, 3),
+    cost: sumCost(list),
+    // Фразу поменяли — считаем по свежей проверке, иначе по метке ИИ.
+    conflicts: list.filter((q) => (checkOf(q) || { total: q.conflicts_total }).total).length,
+    hasReasons: list.some((q) => reasonOf(q)),
   }
 }
 
 // У ИИ нет категорий причин, зато общая минус-фраза — естественная группа: одна фраза отсекает их все.
 const junkGroups = computed(() => {
   const by = new Map()
-  for (const q of items.value) {
+  for (const q of junk.value) {
     const phrase = phraseOf(q)
     if (!by.has(phrase)) by.set(phrase, [])
     by.get(phrase).push(q)
   }
   const groups = []
+  const mine = []
   const rest = []
   for (const [phrase, list] of by) {
     if (list.length > 1) groups.push(makeGroup(phrase, `«${phrase}»`, list))
+    else if (movedByUser(list[0])) mine.push(list[0])
     else rest.push(list[0])
   }
   groups.sort((a, b) => b.cost - a.cost)
-  if (rest.length) groups.push(makeGroup('*', groups.length ? 'Разные запросы' : 'Мусорные запросы', rest, true))
+  if (mine.length) groups.push(makeGroup('+', 'Отмечено вами', mine, 'user'))
+  if (rest.length) groups.push(makeGroup('*', groups.length ? 'Разные запросы' : 'Мусорные запросы', rest, 'misc'))
   return groups
 })
+
+/**
+ * «Это не мусор» / «это мусор» в простом режиме — только решение на экране, в Директ уходит по «Минусовать».
+ * Полезный запрос, который уже отсекает фраза одной из групп ИИ, попадает в эту группу, иначе — в «Отмечено вами».
+ */
+function setSimpleVerdict(q, verdict) {
+  const d = decisions[q.query_norm]
+  if (!d) return
+  d.verdict = verdict
+  if (verdict === 'negative' && !d.negative_phrase.trim()) {
+    const group = junkGroups.value
+      .filter((g) => !g.misc && !g.user && phraseCovers(g.key, q.query))
+      .sort((a, b) => b.items.length - a.items.length)[0]
+    if (group) d.negative_phrase = group.key
+  }
+  if (verdict === 'target') showTargets.value = true
+  touch(q.query_norm)
+  if (verdict === 'negative') scheduleCheck([q.query_norm])
+}
+
+function onPhrasePicked({ phrase, level }) {
+  const q = phraseRow.value
+  phraseRow.value = null
+  const d = q && decisions[q.query_norm]
+  if (!d) return
+  d.negative_phrase = phrase
+  d.level = levelFor(q, level || d.level)
+  touch(q.query_norm)
+  scheduleCheck([q.query_norm])
+}
 
 function periodDays() {
   const d = data.value
@@ -954,16 +1094,19 @@ const summary = computed(() => {
       title: 'Запросов пока нет',
       note: `Загрузим из Директа, по каким запросам показывалась реклама за ${days.value} дней, и ИИ разберёт их.`,
     }
-  if (c.negative) {
+  const own = local.value
+  if (own.negative) {
     const span = periodDays()
-    const weekly = span > 0 ? Math.round(((d.negative_cost_rub || 0) / span) * 7) : 0
+    const weekly = span > 0 ? Math.round((own.negativeCost / span) * 7) : 0
     const n = junkGroups.value.length
+    const what = `${num(own.negative)} ${plural(own.negative, 'мусорный запрос', 'мусорных запроса', 'мусорных запросов')} на ${rubles(own.negativeCost)}`
     let note = 'Разложили по минус-фразам — проверьте группы и минусуйте.'
     if (weekly > 0) note += ` Экономия — около ${rubles(weekly)} в неделю.`
     if (c.new) note += ` Ещё ${num(c.new)} ${plural(c.new, 'новый запрос', 'новых запроса', 'новых запросов')} без разметки.`
     return {
       state: 'junk',
-      title: `ИИ нашёл ${num(c.negative)} ${plural(c.negative, 'мусорный запрос', 'мусорных запроса', 'мусорных запросов')} на ${rubles(d.negative_cost_rub)}`,
+      // После ваших правок это уже не только находка ИИ.
+      title: own.edited ? `К минусу ${what}` : `ИИ нашёл ${what}`,
       note,
       allLabel: n > 1 ? `Минусовать все ${n} ${plural(n, 'группу', 'группы', 'групп')}` : 'Минусовать всё',
     }
@@ -995,36 +1138,107 @@ function negativeItem(q) {
   }
 }
 
-function minusGroup(g) {
-  return apply(g.items.map(negativeItem))
+function targetItem(q) {
+  return {
+    query_norm: q.query_norm,
+    verdict: 'target',
+    negative_phrase: '',
+    level: decisions[q.query_norm]?.level || 'campaign',
+    add_keyword: false,
+    adgroup_row_id: null,
+  }
+}
+
+/** Вместе с минусом запоминаем и отмеченные «не мусор» — иначе после перезагрузки они вернутся в мусор. */
+function withRescued(list) {
+  const rescued = items.value.filter(
+    (q) => decisions[q.query_norm]?.verdict === 'target' && q.label?.verdict === 'negative',
+  )
+  return [...list, ...rescued.map(targetItem)]
+}
+
+/**
+ * Массовое «В минус»: если у нескольких запросов есть общее слово, предлагаем минусовать его одним словом.
+ * Предлоги, слова ваших ключей и полезных запросов не предлагаем; слово проверяем на сервере — без конфликтов
+ * с ключами и без запросов, которые вы отметили целевыми или по которым были заявки.
+ * rows — запросы к минусу, avoid — запросы, которые резать нельзя.
+ * → 'word' — фразы заменили словом, 'whole' — минусуем как было, 'cancel' — окно закрыли, ничего не делаем.
+ */
+async function offerCommonWord(rows, avoid = []) {
+  if (rows.length < 2) return 'whole'
+  const skip = rows.flatMap((q) => q.matched_keywords || [])
+  const candidates = commonWords(
+    rows.map((q) => q.query),
+    { skip, avoid: avoid.map((q) => q.query) },
+  ).slice(0, 3)
+  for (const c of candidates) {
+    const hit = c.indices.map((i) => rows[i])
+    let res
+    try {
+      res = await wsApi.queriesCheck(
+        ws.value.id,
+        hit.map((q) => ({
+          query_norm: q.query_norm,
+          negative_phrase: c.word,
+          level: decisions[q.query_norm]?.level || 'campaign',
+        })),
+      )
+    } catch {
+      return 'whole' // без проверки слово не предлагаем — минусуем как было
+    }
+    const bad = (it) => (it.problems || []).length || it.conflicts_total || it.targets_total
+    if ((res.items || []).some(bad)) continue
+    const n = hit.length
+    // «Нет» — явный ответ: минусуем запросами целиком; крестик, Esc или клик мимо — передумали (null).
+    const ok = await askConfirm(
+      `У ${n} ${plural(n, 'запроса', 'запросов', 'запросов')} есть слово «${c.word}» — минусовать его? Одно минус-слово отсечёт эти запросы и похожие на них в будущем.`,
+      { title: 'Общее слово', confirmText: 'Да, словом', cancelText: 'Нет, запросами целиком', dismissValue: null },
+    )
+    if (ok === null) return 'cancel'
+    if (!ok) return 'whole'
+    for (const q of hit) {
+      decisions[q.query_norm].negative_phrase = c.word
+      touch(q.query_norm)
+    }
+    scheduleCheck(hit.map((q) => q.query_norm))
+    return 'word'
+  }
+  return 'whole'
+}
+
+async function minusGroup(g) {
+  // Пока проверяем общее слово и ждём ответа, кнопки заняты: второй клик не запишет группу дважды.
+  if (busy.value) return
+  busy.value = 'check'
+  let choice = 'whole'
+  try {
+    // У группы ИИ фраза уже общая; общее слово ищем в «Разных запросах» и «Отмечено вами».
+    if ((g.misc || g.user) && g.items.length > 1) choice = await offerCommonWord(g.items, useful.value)
+  } finally {
+    busy.value = ''
+  }
+  if (choice === 'cancel') return
+  return apply(withRescued(g.items.map(negativeItem)))
 }
 
 async function minusAll() {
-  const list = items.value
+  if (busy.value) return
+  const list = junk.value
   const ok = await askConfirm(
     `Добавить в минус-фразы ${list.length} ${plural(list.length, 'запрос', 'запроса', 'запросов')}? Запросы, которые заденут ваши ключевые фразы, пропустим. Действие можно откатить.`,
     { title: 'Минусовать всё', confirmText: 'Минусовать' },
   )
-  if (ok) await apply(list.map(negativeItem))
+  if (ok) await apply(withRescued(list.map(negativeItem)))
 }
 
 async function keepTargets() {
-  const list = targets.value
+  if (busy.value) return
+  const list = useful.value
   const ok = await askConfirm(
     `Запомнить ${list.length} ${plural(list.length, 'запрос', 'запроса', 'запросов')} как целевые? ИИ больше не будет их разбирать; в Директе ничего не изменится.`,
     { title: 'Полезные запросы', confirmText: 'Запомнить' },
   )
-  if (!ok) return
-  await apply(
-    list.map((q) => ({
-      query_norm: q.query_norm,
-      verdict: 'target',
-      negative_phrase: '',
-      level: decisions[q.query_norm]?.level || 'campaign',
-      add_keyword: false,
-      adgroup_row_id: null,
-    })),
-  )
+  if (ok) await apply(list.map(targetItem))
 }
 
 async function loadSimple() {
@@ -1067,7 +1281,8 @@ function initDecision(q) {
   const l = q.label
   decisions[q.query_norm] = {
     verdict: l?.verdict || null,
-    negative_phrase: l?.negative_phrase || q.query,
+    // Пусто — минусуем запрос целиком; слова-«таблетки» тогда ждут выбора.
+    negative_phrase: l?.negative_phrase || '',
     level: levelFor(q, l?.level || 'adgroup'),
     add_keyword: false,
     adgroup_row_id: q.adgroups[0]?.id || null,
@@ -1091,6 +1306,12 @@ function conflictText(c) {
   return c.total > c.conflicts.length ? `${list} и ещё ${c.total - c.conflicts.length}` : list
 }
 
+/** Нужные запросы (целевые или с заявками), которые фраза тоже отсечёт: «a», «b» и ещё N. */
+function keptText(c) {
+  const list = c.targets.map((k) => `«${k.query}»`).join(', ')
+  return c.targetsTotal > c.targets.length ? `${list} и ещё ${c.targetsTotal - c.targets.length}` : list
+}
+
 function checkKey(d) {
   return `${d.level}|${(d.negative_phrase || '').trim()}`
 }
@@ -1102,7 +1323,8 @@ function checkOf(q) {
   const c = checks[q.query_norm]
   if (c && c.key === checkKey(d)) return c
   const l = q.label
-  if (l?.verdict === 'negative' && l.negative_phrase === d.negative_phrase.trim() && l.level === d.level)
+  // Пустая фраза (весь запрос) проверяется заново: у метки конфликты посчитаны по её фразе.
+  if (l?.verdict === 'negative' && l.negative_phrase && l.negative_phrase === d.negative_phrase.trim() && l.level === d.level)
     return { problems: [], conflicts: q.conflicts, total: q.conflicts_total }
   return null
 }
@@ -1132,6 +1354,8 @@ async function runChecks() {
         problems: it.problems || [],
         conflicts: it.conflicts || [],
         total: it.conflicts_total || 0,
+        targets: it.targets_hit || [],
+        targetsTotal: it.targets_total || 0,
       }
     }
   } catch {
@@ -1147,13 +1371,28 @@ function setVerdict(q, verdict) {
   if (d.verdict === 'negative') scheduleCheck([q.query_norm])
 }
 
-function markSelected(verdict) {
+async function markSelected(verdict) {
   const norms = [...selected.value].filter((n) => decisions[n])
   for (const n of norms) {
     decisions[n].verdict = verdict
     touch(n)
   }
-  if (verdict === 'negative') scheduleCheck(norms)
+  if (verdict !== 'negative') return
+  scheduleCheck(norms)
+  // Общее слово у выбранных — одной минус-фразой; целевые среди остальных не задеваем.
+  const chosen = new Set(norms)
+  const rows = items.value.filter((q) => chosen.has(q.query_norm))
+  const avoid = items.value.filter((q) => !chosen.has(q.query_norm) && decisions[q.query_norm]?.verdict === 'target')
+  await offerCommonWord(rows, avoid)
+}
+
+/** Фраза из слов-«таблеток» в строке таблицы. */
+function setPhrase(q, phrase) {
+  const d = decisions[q.query_norm]
+  if (!d) return
+  d.negative_phrase = phrase
+  touch(q.query_norm)
+  scheduleCheck([q.query_norm])
 }
 
 function setLevelSelected(level) {
@@ -1270,8 +1509,11 @@ async function sync() {
       busyText.value = `Загрузка: ${jobProgressText(job)}`
     })
     const errors = res.errors || []
+    // Бесплатные правила после загрузки: память решений, бриф и минус-фразы Директа — без ИИ и без лимита.
+    const rules = Number(res.rules) || 0
     pushToast(
       `Загружено запросов: ${num(res.queries)} из ${res.campaigns} ${plural(res.campaigns, 'кампании', 'кампаний', 'кампаний')}` +
+        (rules ? `. Сразу разобрали по памяти, брифу и Директу: ${num(rules)}` : '') +
         (errors.length ? `. Не вышло: ${errors.map((e) => e.name).join(', ')}` : ''),
       errors.length ? 'warn' : 'ok',
     )
@@ -1673,12 +1915,61 @@ usePageContext(() => {
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
-.rcard__why {
-  margin: 0;
-  padding: 10px 12px 10px 28px;
-  border-radius: 10px;
-  background: var(--line);
+.rcard__list li > .rcard__cost {
+  margin-left: auto;
+}
+.rcard__reason {
   color: var(--muted);
+}
+/* «минус — весь запрос» / «минус «…»» под запросом: открывает выбор слов. */
+.rcard__phrase {
+  display: block;
+  margin-top: 1px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 500;
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+.rcard__phrase:hover:not(:disabled) {
+  color: var(--ink);
+}
+/* × «Это не мусор» у строки мусора. */
+.rcard__x {
+  display: inline-grid;
+  flex-shrink: 0;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  margin: -4px -6px;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: none;
+  color: var(--faint);
+  cursor: pointer;
+  align-self: center;
+}
+.rcard__x:hover:not(:disabled),
+.rcard__x:focus-visible {
+  background: var(--line);
+  color: var(--ink);
+}
+.rcard__x:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+.rcard__junk {
+  flex-shrink: 0;
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+.rcard__junk:hover:not(:disabled) {
+  color: var(--danger);
+}
+.rcard__more {
+  align-self: flex-start;
   font-size: 13px;
 }
 .rcard__warn {
@@ -1689,6 +1980,9 @@ usePageContext(() => {
 .rcard__acts {
   margin-top: auto;
   padding-top: 4px;
+}
+.decision__words {
+  margin-top: 6px;
 }
 .tri-ok__list {
   padding: 14px 18px 16px;

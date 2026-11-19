@@ -25,12 +25,8 @@
   </div>
 
   <template v-else-if="!expert">
-    <template v-if="tab === 'settings'">
-      <p class="camp-back"><button class="btn btn--ghost" type="button" @click="setTab('structure')">← К кампании</button></p>
-      <CampaignSettingsForm :key="`c${campaignId}`" :workspace="ws" :campaign-id="campaignId" :campaign="campaign" @saved="loadRow" />
-    </template>
-
-    <template v-else>
+    <!-- Полная форма настроек — только у эксперта; здесь бюджет меняется одним полем («Изменить бюджет»). -->
+    <template v-if="!loadError">
       <UiSkeleton v-if="!row" variant="tiles" :count="3" label="Загружаем кампанию" />
       <template v-else>
         <p class="camp-lead">
@@ -69,8 +65,8 @@
                 text="Директ берёт деньги только за клики по объявлениям. В отдельные дни расход бывает выше дневного бюджета, но за неделю Директ укладывается в лимит."
             /></span>
             <b>{{ rub(row.cost_kopecks || 0) }}</b>
-            <small v-if="weekBudget">{{ pct(budgetShare, 0) }} недельного бюджета</small>
-            <small v-else>{{ num(row.clicks || 0) }} {{ plural(row.clicks || 0, 'клик', 'клика', 'кликов') }}</small>
+            <!-- Долю бюджета показывает блок ниже — за неделю Директа с понедельника; здесь скользящие 7 дней. -->
+            <small>{{ num(row.clicks || 0) }} {{ plural(row.clicks || 0, 'клик', 'клика', 'кликов') }}</small>
           </div>
           <div class="bigstat">
             <span>Заявки<TermHint term="leads" /></span>
@@ -87,23 +83,31 @@
         <div class="ccard camp-budget">
           <div class="prow">
             <div class="prow__main">
-              <b>
-                {{ dailyBudget ? `Бюджет ${rubles(dailyBudget)} в день` : 'Бюджет задан стратегией' }}<TermHint
-                  :term="dailyBudget ? 'week_budget' : 'strategy'"
-                />
-              </b>
-              <span class="meta-note">
-                <template v-if="weekBudget">
-                  За 7 дней потрачено {{ rub(row.cost_kopecks || 0) }} — {{ pct(budgetShare, 0) }} от {{ rubles(weekBudget) }}
-                </template>
-                <template v-else>Сколько тратить в неделю, Директ решает по настройкам стратегии</template>
-              </span>
-              <span v-if="weekBudget" class="hbar__track camp-budget__track">
-                <span class="hbar__fill" :style="{ width: `${Math.min(budgetShare, 100)}%` }"></span>
+              <b>{{ budgetTitle }}<TermHint :term="budgetInfo?.kind || dailyBudget ? 'week_budget' : 'strategy'" /></b>
+              <span class="meta-note">{{ budgetNote }}</span>
+              <span v-if="budgetPct != null" class="hbar__track camp-budget__track">
+                <span class="hbar__fill" :style="{ width: `${Math.min(budgetPct, 100)}%` }"></span>
               </span>
             </div>
-            <div class="prow__acts">
-              <button class="btn btn--ghost" type="button" @click="setTab('settings')">Изменить</button>
+            <div v-if="budgetInfo?.editable" class="prow__acts">
+              <button class="btn btn--ghost" type="button" @click="budgetOpen = true">
+                {{ budgetInfo.amount_rub ? 'Изменить бюджет' : 'Задать бюджет' }}
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Регионы показа: в Директе они у групп, здесь — сразу для всей кампании (правка с журналом и откатом). -->
+        <div v-if="regionsInfo?.groups?.length" class="ccard camp-regions">
+          <div class="prow">
+            <div class="prow__main">
+              <b>Регионы</b>
+              <span class="meta-note">
+                {{ regionsInfo.label }}<template v-if="!regionsInfo.same"> — у групп разные</template>
+              </span>
+            </div>
+            <div v-if="state !== 'ARCHIVED'" class="prow__acts">
+              <button class="btn btn--ghost" type="button" @click="regionsOpen = true">Изменить</button>
             </div>
           </div>
         </div>
@@ -161,7 +165,9 @@
 
         <h3 class="section-h">
           Недавние изменения
-          <RouterLink class="home-link" :to="`/w/${ws.id}/history`">Вся история</RouterLink>
+          <RouterLink class="home-link" :to="{ path: `/w/${ws.id}/history`, query: { campaign: String(campaignId) } }">
+            Вся история
+          </RouterLink>
         </h3>
         <EmptyState v-if="!recent.length" art="history" text="В этой кампании пока ничего не меняли. ИИ посмотрит статистику и подскажет, с чего начать.">
           <template #action>
@@ -177,6 +183,11 @@
               <b>{{ keepNumbers(a.title || a.action) }}</b>
               <span class="meta-note camp-act-meta">{{ formatDateTime(a.created_at) }}<ActionWho :source="a.source" /></span>
             </div>
+            <!-- Окно отката покажет, что вернётся, и спросит подтверждение. -->
+            <button v-if="a.undo" class="btn btn--ghost btn--sm" type="button" @click="openUndo(a.id, loadRecent)">
+              Вернуть
+            </button>
+            <span v-else-if="a.undone_at" class="meta-note">возвращено</span>
           </div>
         </div>
       </template>
@@ -196,7 +207,7 @@
             />
             <span v-if="login">кабинет {{ login }}</span>
             <span v-if="directId">№ {{ directId }}</span>
-            <span v-if="dailyBudget != null">бюджет {{ rubles(dailyBudget) }}/день</span>
+            <span v-if="budgetShort">{{ budgetShort }}</span>
           </p>
         </div>
         <div class="row-actions">
@@ -206,6 +217,9 @@
           </button>
           <RouterLink class="btn btn--accent" :to="aiLink"><Sparkles aria-hidden="true" />Разобрать с ИИ</RouterLink>
           <UiMenu label="Другие действия с кампанией">
+            <UiMenuItem v-if="budgetInfo?.editable" :icon="Wallet" :disabled="busy" @click="budgetOpen = true">
+              Изменить бюджет
+            </UiMenuItem>
             <UiMenuItem :icon="Copy" :disabled="busy" @click="duplicateOpen = true">Копия</UiMenuItem>
             <UiMenuItem
               :icon="Send"
@@ -277,7 +291,7 @@
       :campaign-id="campaignId"
       @loaded="campaign = $event"
     />
-    <CampaignSettingsForm v-else :key="`c${campaignId}`" :workspace="ws" :campaign-id="campaignId" :campaign="campaign" @saved="loadRow" />
+    <CampaignSettingsForm v-else :key="`c${campaignId}`" :workspace="ws" :campaign-id="campaignId" :campaign="campaign" @saved="onBudgetSaved(null)" />
 
     <DuplicateDialog
       :open="duplicateOpen"
@@ -287,6 +301,23 @@
       @done="onDuplicated"
     />
   </template>
+
+  <BudgetDialog
+    :open="budgetOpen"
+    :workspace-id="ws.id"
+    :campaign-id="campaignId"
+    :name="name"
+    :info="budgetInfo"
+    @close="budgetOpen = false"
+    @saved="onBudgetSaved"
+  />
+  <RegionsDialog
+    :open="regionsOpen"
+    :campaign-id="campaignId"
+    :group="null"
+    @close="regionsOpen = false"
+    @done="onRegionsDone"
+  />
 </template>
 
 <script setup>
@@ -310,10 +341,13 @@ import {
   Sparkles,
   Trash2,
   TriangleAlert,
+  Wallet,
 } from '@lucide/vue'
 import ActionWho from '../../components/ActionWho.vue'
+import BudgetDialog from '../../components/BudgetDialog.vue'
 import CampaignStructure from '../../components/CampaignStructure.vue'
 import ExpertHint from '../../components/ExpertHint.vue'
+import RegionsDialog from '../../components/RegionsDialog.vue'
 import TermHint from '../../components/TermHint.vue'
 import TrendChart from '../../components/TrendChart.vue'
 import EmptyState from '../../components/ui/EmptyState.vue'
@@ -327,9 +361,9 @@ import { confirmCampaignArchive, confirmCampaignToggle } from '../../utils/campa
 import { useExpert } from '../../composables/useExpert'
 import { campaignHealth, campaignReason } from '../../utils/campaignHealth'
 import CampaignNextStep from '../../components/CampaignNextStep.vue'
-import { errorText, wsApi } from '../../api/web'
+import { errorText, webApi, wsApi } from '../../api/web'
 import { pushToast } from '../../composables/useToasts'
-import { undoAction } from '../../composables/useUndo'
+import { openUndo, undoAction } from '../../composables/useUndo'
 import {
   KPI_PLAIN,
   campaignStatus,
@@ -395,11 +429,79 @@ const health = computed(() => campaignHealth(row.value || {}, kpi.value))
 // Почему не показывается и что сделать — у работающей кампании тоже: деньги кончились, отклонены объявления.
 const reason = computed(() => (row.value ? campaignReason(row.value) : null))
 
-// Недельный бюджет — семь дневных: столько Директ может потратить за период статистики.
-const weekBudget = computed(() => (dailyBudget.value ? dailyBudget.value * 7 : null))
-const budgetShare = computed(() =>
-  weekBudget.value ? Math.round((row.value?.cost_kopecks || 0) / (weekBudget.value * 100) * 100) : 0,
-)
+// Бюджет кампании как в Директе: в неделю (автостратегии, ЕПК) или в день (ручные ставки ТГО) — и расход
+// за эту неделю с понедельника или за сегодня. Нет статистики за период — без процента.
+const budgetInfo = ref(null)
+const budgetOpen = ref(false)
+const budgetUnit = computed(() => (budgetInfo.value?.kind === 'weekly' ? 'в неделю' : 'в день'))
+// Лимит в Директе задан без НДС, а расход в отчётах — с НДС: долю считаем по расходу без НДС.
+const budgetSpent = computed(() => {
+  const b = budgetInfo.value
+  return b?.has_data ? (b.spent_net_kopecks ?? b.spent_kopecks ?? null) : null
+})
+const budgetPct = computed(() => {
+  const b = budgetInfo.value
+  if (!b?.amount_rub || budgetSpent.value == null) return null
+  return Math.round((budgetSpent.value / (b.amount_rub * 100)) * 100)
+})
+const budgetTitle = computed(() => {
+  const b = budgetInfo.value
+  if (b?.kind && b.amount_rub)
+    return `До ${rubles(b.amount_rub)} ${budgetUnit.value}${budgetPct.value != null ? `, потрачено ${pct(budgetPct.value, 0)}` : ''}`
+  if (b?.kind) return b.kind === 'weekly' ? 'Без ограничения на неделю' : 'Без ограничения на день'
+  return dailyBudget.value ? `Бюджет ${rubles(dailyBudget.value)} в день` : 'Бюджет задан стратегией'
+})
+const budgetNote = computed(() => {
+  const b = budgetInfo.value
+  if (b?.kind && b.amount_rub) {
+    const period = b.kind === 'weekly' ? 'С понедельника' : 'Сегодня'
+    if (budgetSpent.value == null) return `${period} расход ещё не загрузился`
+    return `${period} потрачено ${rub(budgetSpent.value)} без НДС из ${rubles(b.amount_rub)}`
+  }
+  if (b?.kind) return 'Директ тратит столько, сколько позволяет стратегия. Можно задать предел.'
+  return 'Сколько тратить в неделю, Директ решает по настройкам стратегии'
+})
+const budgetShort = computed(() => {
+  const b = budgetInfo.value
+  if (b?.kind && b.amount_rub) return `бюджет ${rubles(b.amount_rub)}/${b.kind === 'weekly' ? 'нед.' : 'день'}`
+  return dailyBudget.value != null && !b?.kind ? `бюджет ${rubles(dailyBudget.value)}/день` : ''
+})
+async function loadBudget() {
+  const id = campaignId.value
+  try {
+    const data = await wsApi.campaignBudget(ws.value.id, id)
+    if (id === campaignId.value) budgetInfo.value = data
+  } catch {
+    // Без суммы блок покажет прежний текст «задан стратегией» — не ошибка страницы.
+    if (id === campaignId.value) budgetInfo.value = null
+  }
+}
+
+function onBudgetSaved(info) {
+  if (info) budgetInfo.value = info
+  else loadBudget()
+  loadRow()
+}
+
+// Регионы кампании по последней загрузке групп: названия, «кроме …» и пометка, если у групп они разные.
+const regionsInfo = ref(null)
+const regionsOpen = ref(false)
+
+async function loadRegions() {
+  const id = campaignId.value
+  try {
+    const data = await webApi.campaignRegions(id)
+    if (id === campaignId.value) regionsInfo.value = data
+  } catch {
+    // Не загрузились — строку просто не показываем, страница работает.
+    if (id === campaignId.value) regionsInfo.value = null
+  }
+}
+
+function onRegionsDone() {
+  loadRegions()
+  loadRecent()
+}
 
 const kpiNow = computed(() => {
   const r = row.value
@@ -434,12 +536,20 @@ const groups = computed(() => {
     .sort((a, b) => b.cost - a.cost)
 })
 
-function touches(payload, id) {
-  if (!payload) return false
-  if (Number(payload.campaign_row_id) === id) return true
-  return ['campaign_row_ids', 'campaign_ids'].some((k) => (payload[k] || []).map(Number).includes(id))
+// «Недавние изменения»: сервер сам отбирает записи про кампанию, её группы, объявления и фразы.
+const RECENT = 3
+const recent = computed(() => actions.value.slice(0, RECENT))
+const recentParams = (id) => ({ campaign_row_id: id, limit: RECENT })
+
+async function loadRecent() {
+  const id = campaignId.value
+  try {
+    const data = await wsApi.actions(ws.value.id, recentParams(id))
+    if (id === campaignId.value) actions.value = data.items || []
+  } catch {
+    // Список недавних — подсказка; не загрузился — оставляем прежний.
+  }
 }
-const recent = computed(() => actions.value.filter((a) => touches(a.payload, campaignId.value)).slice(0, 3))
 
 // График над «Что внутри»: 14 дней кампании и пунктиром — 14 дней до них.
 const TREND_METRICS = [
@@ -475,9 +585,10 @@ async function loadSimple() {
   structLoading.value = true
   structError.value = ''
   loadTrend()
+  loadRegions()
   const [s, a] = await Promise.allSettled([
     wsApi.campaign(ws.value.id, id),
-    wsApi.actions(ws.value.id, { limit: 100 }),
+    wsApi.actions(ws.value.id, recentParams(id)),
   ])
   if (id !== campaignId.value) return
   if (s.status === 'fulfilled') {
@@ -500,6 +611,7 @@ function setTab(name) {
 
 function reloadCampaign() {
   loadRow()
+  loadBudget()
   if (!expert.value) loadSimple()
 }
 
@@ -592,7 +704,12 @@ watch(
     structure.value = null
     actions.value = []
     loadError.value = ''
+    budgetInfo.value = null
+    budgetOpen.value = false
+    regionsInfo.value = null
+    regionsOpen.value = false
     loadRow()
+    loadBudget()
     loadSimple()
   },
   { immediate: true },
@@ -653,8 +770,17 @@ usePageContext(() => {
 .camp-back {
   margin: 0 0 12px;
 }
-.camp-budget {
+.camp-budget,
+.camp-regions {
   margin-top: 12px;
+}
+.camp-regions .prow__main {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.camp-regions .meta-note {
+  margin: 0;
 }
 .camp-trend {
   margin-top: 12px;

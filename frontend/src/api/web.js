@@ -173,6 +173,9 @@ export const wsApi = {
   campaign: (id, cid) => request(`${WS(id)}/campaigns/${cid}`),
   campaignSettings: (id, cid) => request(`${WS(id)}/campaigns/${cid}/settings`),
   updateCampaignSettings: (id, cid, changes) => patch(`${WS(id)}/campaigns/${cid}/settings`, { changes }),
+  // Бюджет одной кампании: сумма в неделю/день и расход; правка одним числом (в «Истории» — с откатом).
+  campaignBudget: (id, cid) => request(`${WS(id)}/campaigns/${cid}/budget`),
+  setCampaignBudget: (id, cid, payload) => post(`${WS(id)}/campaigns/${cid}/budget`, payload),
   duplicate: (id, cid, payload, onProgress) => runJob(`${WS(id)}/campaigns/${cid}/duplicate`, payload, onProgress),
   moderate: (id, cid) => post(`${WS(id)}/campaigns/${cid}/moderate`),
   actions: (id, params = {}) => request(`${WS(id)}/actions${query(params)}`),
@@ -236,6 +239,12 @@ export const supportApi = {
 export const undoApi = {
   preview: (logId) => request(`/api/web/actions/${logId}/undo`),
   run: (logId, onProgress) => runJob(`/api/web/actions/${logId}/undo`, undefined, onProgress),
+  // Несколько записей разом — «Отменить» у задачи, оставившей несколько записей с откатом.
+  groupPreview: (ids) => request(`/api/web/actions/undo-group?ids=${ids.map(Number).join(',')}`),
+  groupRun: (ids, onProgress) => runJob('/api/web/actions/undo-group', { ids }, onProgress),
+  // «Вернуть как было» у выполненного предложения ИИ: все записи журнала этого решения.
+  aiPreview: (actionId) => request(`/api/web/ai/actions/${actionId}/undo`),
+  aiRun: (actionId, onProgress) => runJob(`/api/web/ai/actions/${actionId}/undo`, undefined, onProgress),
 }
 
 /** ИИ-ассистент: общие модели сервиса, шкала лимита, чаты проекта, согласование действий. */
@@ -283,6 +292,9 @@ export const aiApi = {
   /** exclude — id строк, с которых сняли галочки: их в действии не будет. */
   decide: (actionId, approve, remember = false, exclude = []) =>
     post(`/api/web/ai/actions/${actionId}/decide`, { approve, remember, exclude }),
+  // «Сделать иначе»: отказ с причиной (быстрая причина и/или «Как надо») — ИИ сразу переделает.
+  decline: (actionId, reason = '', comment = '') =>
+    post(`/api/web/ai/actions/${actionId}/decide`, { approve: false, reason, comment }),
   /** «Позже» (on) или «Решить сейчас» → { action }. */
   snooze: (actionId, on = true) => post(`/api/web/ai/actions/${actionId}/${on ? 'snooze' : 'unsnooze'}`, {}),
   /** Перенос «Позже», сохранённых раньше в браузере → { ids }. */
@@ -320,8 +332,13 @@ export const aiApi = {
     post(`${WS(workspaceId)}/experiments/${id}/review`, payload),
   /** Итог вручную: { verdict, conclusion } или { cancel: true } → обновлённый список. */
   finishExperiment: (workspaceId, id, payload) => post(`${WS(workspaceId)}/experiments/${id}/finish`, payload),
-  /** Забыть ответ маркетолога, который ИИ запомнил; возвращает проект. */
-  forgetFact: (workspaceId, key) => post(`${WS(workspaceId)}/ai-facts/forget`, { key }),
+  /**
+   * Забыть ответ маркетолога, который ИИ запомнил; scope: 'site' — у проекта, 'client' — у всего клиента.
+   * Возвращает проект.
+   */
+  forgetFact: (workspaceId, key, scope = 'site') => post(`${WS(workspaceId)}/ai-facts/forget`, { key, scope }),
+  /** Перенести запомненный ответ: scope 'client' — для всего клиента, 'site' — только для этого сайта. */
+  moveFact: (workspaceId, key, scope) => post(`${WS(workspaceId)}/ai-facts/move`, { key, scope }),
   /** Сколько предложений ИИ ждут решения во всех проектах: { count }. */
   pendingCount: () => request('/api/web/ai/pending/count'),
   /**
@@ -344,6 +361,10 @@ export const webApi = {
    * Шлём только меняемые ключи, null сбрасывает ключ; hints_seen дополняет сохранённый список. Ответ — { user }.
    */
   updateUi: (patch) => request('/api/web/me/ui', { method: 'PATCH', body: JSON.stringify(patch) }),
+  /** «Мои правила для ИИ» и тон по умолчанию для всех чатов: { rules, tone, tones }. */
+  aiPrefs: () => request('/api/web/me/ai'),
+  /** { rules?, tone? } — тон '' значит «не задан»; ответ — { rules, tone, tones }. */
+  saveAiPrefs: (patch) => request('/api/web/me/ai', { method: 'PATCH', body: JSON.stringify(patch) }),
   /**
    * Тариф, расход лимита за период, тарифы для перехода (цены со скидкой), история,
    * payments_enabled / payments_test и платежи [{ id, plan_name, amount_rub, status, status_label, applied,
@@ -399,6 +420,14 @@ export const webApi = {
   patchClient: (id, payload) =>
     request(`/api/web/clients/${id}`, { method: 'PATCH', body: JSON.stringify(payload) }),
   deleteClient: (id) => request(`/api/web/clients/${id}`, { method: 'DELETE' }),
+  /** Забыть ответ, который ИИ запомнил для всего клиента; возвращает клиента. */
+  forgetClientFact: (id, key) => post(`/api/web/clients/${id}/ai-facts/forget`, { key }),
+  /** Файлы клиента для ИИ: видны во всех проектах клиента. */
+  clientFiles: (id) => request(`/api/web/clients/${id}/context-files`),
+  uploadClientFile: (id, payload) => post(`/api/web/clients/${id}/context-files`, payload),
+  setClientFile: (id, fileId, enabled) => patch(`/api/web/clients/${id}/context-files/${fileId}`, { enabled }),
+  deleteClientFile: (id, fileId) => del(`/api/web/clients/${id}/context-files/${fileId}`),
+  clearClientFiles: (id) => del(`/api/web/clients/${id}/context-files`),
   assignDirectClient: (accountId, clientId) =>
     request(`/api/web/direct/${accountId}/client`, {
       method: 'PUT',
@@ -433,6 +462,8 @@ export const webApi = {
   /** «Все проекты»: общая очередь разбора поисковых запросов, у строки — её проект. */
   queries: (params = {}) => request(`/api/web/queries${query(params)}`),
   queriesHighlights: () => request('/api/web/queries/highlights'),
+  queriesClassifyEstimate: () => post('/api/web/queries/classify/estimate'),
+  queriesClassify: (onProgress) => runJob('/api/web/queries/classify', undefined, onProgress),
   bulkAction: (payload) =>
     request('/api/web/direct/campaigns/actions', { method: 'POST', body: JSON.stringify(payload) }),
   createCampaign: (payload) =>
@@ -453,6 +484,19 @@ export const webApi = {
     request('/api/web/direct/adgroups/delete', {
       method: 'POST',
       body: JSON.stringify({ adgroup_ids: ids }),
+    }),
+  // Регионы показа: подсказки по названию, регионы кампании и смена (dryRun — только «было → станет»).
+  searchRegions: (q) => request(`/api/web/direct/regions/search?q=${encodeURIComponent(q)}`),
+  campaignRegions: (id) => request(`/api/web/direct/campaigns/${id}/regions`),
+  setCampaignRegions: (id, regionIds, dryRun = false) =>
+    request(`/api/web/direct/campaigns/${id}/regions`, {
+      method: 'POST',
+      body: JSON.stringify({ region_ids: regionIds, dry_run: dryRun }),
+    }),
+  setAdGroupRegions: (id, regionIds, dryRun = false) =>
+    request(`/api/web/direct/adgroups/${id}/regions`, {
+      method: 'POST',
+      body: JSON.stringify({ region_ids: regionIds, dry_run: dryRun }),
     }),
   createAd: (payload) =>
     request('/api/web/direct/ads', { method: 'POST', body: JSON.stringify(payload) }),
@@ -531,6 +575,10 @@ export const webApi = {
   /** Строка «как дела» и три числа по всем проектам за 7 или 30 дней. */
   headline: (period = 7) => request(`/api/web/overview/headline${query({ period })}`),
   overviewRefresh: (onProgress) => runJob('/api/web/overview/refresh', undefined, onProgress),
+  /** «⋯» у сигнала: mode — days (на 7 дней), intended («так задумано»), type (весь тип для клиента/проекта). */
+  snoozeProblem: (key, mode) => post('/api/web/overview/snoozes', { key, mode }),
+  /** «Показать снова» в строке «Скрыто». */
+  unsnoozeProblem: (id) => del(`/api/web/overview/snoozes/${id}`),
   digestSettings: () => request('/api/web/digest'),
   updateDigest: (payload) => request('/api/web/digest', { method: 'PUT', body: JSON.stringify(payload) }),
   digestPreview: () => request('/api/web/digest/preview'),
@@ -578,6 +626,10 @@ export const ERRORS = {
   'project-locked': 'Проект не входит в ваш тариф.',
   'projects-limit': 'На вашем тарифе больше проектов не добавить.',
   'name-too-long': 'Имя — не длиннее 120 символов.',
+  'ai-rules-too-long': 'Правила для ИИ — не длиннее 1000 символов.',
+  'ai-tone': 'Такого тона нет — выберите из списка.',
+  'no-client': 'Проект не входит в папку клиента.',
+  'facts-full': 'Запомненных ответов уже 30 — сначала забудьте лишний.',
   'ui-unknown': 'Не получилось сохранить настройку интерфейса.',
   'ui-value': 'Не получилось сохранить настройку интерфейса.',
   'too-soon': 'Письмо уже отправлено — повторить можно через минуту.',
@@ -665,6 +717,7 @@ export const JOB_LABELS = {
   duplicate_campaign: 'Копирование кампании',
   sync_workspace_queries: 'Синк поисковых запросов проекта',
   classify_queries: 'Разметка запросов ИИ',
+  classify_all_queries: 'Разметка запросов всех проектов',
   apply_query_decisions: 'Применение решений по запросам',
   brief_draft: 'Черновик брифа по сайту',
   undo_action: 'Откат действия',
@@ -678,6 +731,10 @@ export const JOB_LABELS = {
   ads_ab: 'Новые варианты объявлений',
   fix_links: 'Ссылки по шаблону сайта',
   set_campaign_ref: 'Свой ref в ссылках кампании',
+  // Служебные: в список задач кабинета не попадают (jobs.SYSTEM_KINDS), подписи — на всякий случай.
+  urgent_check: 'Проверка срочного',
+  notify_signals: 'Уведомления о сигналах',
+  plan_reminder: 'Напоминание о тарифе',
 }
 
 export function jobProgressText(job) {

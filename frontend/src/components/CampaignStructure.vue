@@ -16,6 +16,13 @@
         <div>
           <h2>Группы объявлений</h2>
           <p class="hint">Выберите группу — объявления и фразы ниже отфильтруются по ней.</p>
+          <p v-if="regionsInfo && adgroups.length" class="regions-line">
+            <span>
+              Регионы кампании: <b>{{ regionsInfo.label }}</b>
+              <template v-if="!regionsInfo.same"> — у групп разные</template>
+            </span>
+            <button class="btn btn--ghost btn--xs" type="button" @click="openRegions(null)">Изменить</button>
+          </p>
         </div>
         <form v-if="!groupBlock" class="filters filters--inline" @submit.prevent="createGroup">
           <input
@@ -60,6 +67,7 @@
             <strong>{{ g.name }}</strong>
             <small>
               {{ g.status ? CAMPAIGN_STATUSES[g.status] || g.status : '—' }} · ID {{ g.adgroup_id }}
+              <template v-if="groupRegionLabel(g)"> · {{ groupRegionLabel(g) }}</template>
               <template v-if="g.period_clicks || g.period_impressions">
                 · {{ num(g.period_clicks) }} кликов · {{ rub(g.period_cost_kopecks) }}
                 <template v-if="g.period_conversions"> · {{ num(g.period_conversions) }} конв.</template>
@@ -70,6 +78,7 @@
           <div class="row-actions" @click.stop @keydown.stop>
             <UiMenu size="sm" :label="`Действия с группой «${g.name}»`">
               <UiMenuItem :icon="Pencil" @click="renameGroup(g)">Переименовать</UiMenuItem>
+              <UiMenuItem :icon="MapPin" @click="openRegions(g)">Регионы</UiMenuItem>
               <UiMenuItem :icon="Trash2" danger @click="removeGroup(g)">Удалить</UiMenuItem>
             </UiMenu>
           </div>
@@ -79,10 +88,15 @@
     </section>
 
     <section v-if="selectedGroupRow" class="panel">
-      <h2>Минус-фразы группы «{{ selectedGroupRow.name }}»</h2>
-      <p class="hint">По одной фразе на строку. Пустой список очищает минус-фразы группы в Директе.</p>
+      <h2>Группа «{{ selectedGroupRow.name }}»</h2>
+      <p class="regions-line">
+        <span>Регионы: <b>{{ groupRegionLabel(selectedGroupRow) || '—' }}</b></span>
+        <button class="btn btn--ghost btn--xs" type="button" @click="openRegions(selectedGroupRow)">Изменить</button>
+      </p>
       <div v-field class="field">
+        <label>Минус-фразы группы</label>
         <textarea v-model="negForm.text" rows="5" placeholder="бесплатно&#10;скачать" />
+        <p class="field-hint">По одной фразе на строку. Пустой список очищает минус-фразы группы в Директе.</p>
       </div>
       <div class="form-actions">
         <button class="btn btn--accent" type="button" :disabled="busy" @click="saveNegatives">Сохранить минус-фразы</button>
@@ -383,6 +397,14 @@
         </button>
       </template>
     </Modal>
+
+    <RegionsDialog
+      :open="regionsDialog.open"
+      :campaign-id="campaignId"
+      :group="regionsDialog.group"
+      @close="regionsDialog.open = false"
+      @done="load"
+    />
   </div>
 </template>
 
@@ -395,12 +417,13 @@ import UiMenu from './ui/UiMenu.vue'
 import UiMenuItem from './ui/UiMenuItem.vue'
 import UiSelect from './ui/UiSelect.vue'
 import AdExtrasFields from './AdExtrasFields.vue'
+import RegionsDialog from './RegionsDialog.vue'
 import { emptyExtras, extrasDiff, extrasEmpty, extrasFromApi, extrasPayload, extrasProblem } from '../utils/adExtras'
 import { errorText, jobProgressText, webApi, wsApi } from '../api/web'
 import { pushToast } from '../composables/useToasts'
 import { undoAction } from '../composables/useUndo'
 import { CAMPAIGN_STATES, CAMPAIGN_STATUSES, formatDate, formatDateTime, num, rub, rubles } from '../utils/format'
-import { Pencil, Plus, Trash2 } from '@lucide/vue'
+import { MapPin, Pencil, Plus, Trash2 } from '@lucide/vue'
 
 const props = defineProps({
   workspaceId: { type: Number, required: true },
@@ -428,6 +451,9 @@ const selectedQueries = ref(new Set())
 const kwSearch = ref('')
 const groupForm = reactive({ name: '' })
 const groupInput = ref(null)
+// Регионы кампании и групп с названиями; окно смены — для всей кампании (group: null) или одной группы.
+const regionsInfo = ref(null)
+const regionsDialog = reactive({ open: false, group: null })
 const adModal = reactive({ open: false, item: null })
 const adForm = reactive({
   adgroup_row_id: '',
@@ -563,6 +589,7 @@ async function load() {
     ads.value = data.ads || []
     keywords.value = data.keywords || []
     emit('loaded', data.campaign)
+    loadRegions()
     selectedAds.value = new Set()
     selectedKeywords.value = new Set()
     if (selectedGroup.value) {
@@ -573,6 +600,24 @@ async function load() {
   } catch (err) {
     pushToast(errorText(err), 'error')
   }
+}
+
+// Регионы — отдельным запросом: не загрузились — строка «Регионы» просто не показывается.
+async function loadRegions() {
+  try {
+    regionsInfo.value = await webApi.campaignRegions(props.campaignId)
+  } catch {
+    regionsInfo.value = null
+  }
+}
+
+function groupRegionLabel(g) {
+  return regionsInfo.value?.groups?.find((item) => item.id === g.id)?.label || ''
+}
+
+function openRegions(g) {
+  regionsDialog.group = g ? { id: g.id, name: g.name } : null
+  regionsDialog.open = true
 }
 
 async function loadSearchQueries() {
@@ -700,8 +745,8 @@ function createGroup() {
     groupForm.name = ''
     pushToast(
       hadGroups
-        ? 'Группа создана с регионами первой группы кампании (поменять можно в Директе)'
-        : 'Группа создана (регион — Россия, поменять можно в Директе)',
+        ? 'Группа создана с регионами первой группы кампании. Поменять — в меню группы, пункт «Регионы»'
+        : 'Группа создана, регион — Россия. Поменять — в меню группы, пункт «Регионы»',
       'info',
       undoAction(res, load),
     )
@@ -915,3 +960,15 @@ onMounted(() => {
   loadSearchQueries()
 })
 </script>
+
+<style scoped>
+/* Строка «Регионы: … · Изменить» в панели групп и в карточке выбранной группы. */
+.regions-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem 0.6rem;
+  margin: 0.35rem 0 0.8rem;
+  font-size: 0.9rem;
+}
+</style>

@@ -652,8 +652,8 @@ def test_campaign_build_checks_ready():
     build = ai_agent.campaign_build(rows, link_template=True)
     checks = {c["key"]: c["state"] for c in build["checks"]}
     assert checks == {
-        "stages": "ok", "keywords": "ok", "ads": "ok", "unique": "ok", "link": "ok", "negatives": "warn", "extras": "warn",
-        "settings": "warn",
+        "stages": "ok", "keywords": "ok", "ads": "ok", "unique": "ok", "rules": "ok", "overlap": "ok", "link": "ok",
+        "negatives": "warn", "extras": "warn", "settings": "warn",
     }
     assert build["ready"] is True
     # Одинаковые объявления у групп — Директ так не пропустит.

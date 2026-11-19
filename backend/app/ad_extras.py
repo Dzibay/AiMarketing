@@ -10,6 +10,7 @@ from __future__ import annotations
 import base64
 import binascii
 import logging
+import re
 
 from app import direct_api
 from app.yandex import YandexError
@@ -36,8 +37,12 @@ def _bad(message: str) -> YandexError:
 
 
 def _href(value) -> str:
+    """Адрес быстрой ссылки: без схемы — https://; «Https://» (заглавную ставит клавиатура телефона) — строчными."""
     href = str(value or "").strip()[:1024]
-    if href and not href.startswith(("http://", "https://")):
+    scheme = re.match(r"https?://", href, re.I)
+    if scheme:
+        href = scheme.group(0).lower() + href[scheme.end():]
+    elif href:
         href = "https://" + href
     return href
 

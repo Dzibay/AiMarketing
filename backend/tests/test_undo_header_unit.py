@@ -88,5 +88,6 @@ def test_job_result_untouched_without_single_entry(monkeypatch):
     def none(user_id, payload, progress):
         return {"applied": 0}
 
-    assert _run(monkeypatch, two) == {"applied": 3}
+    # Несколько записей — «Отменить» вернёт их все разом (undo_log_ids), а не одну.
+    assert _run(monkeypatch, two) == {"applied": 3, "undo_log_ids": [1, 2]}
     assert _run(monkeypatch, none) == {"applied": 0}

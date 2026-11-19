@@ -59,6 +59,7 @@
         >
           {{ k.text }}<small v-if="k.value">{{ k.value }}</small>
         </button>
+        <BoardRule :item="k" />
       </li>
       <li v-if="group.keywords.length > KEYWORDS_SHOWN" class="board-chips__more">
         <button class="ai-check__link" type="button" @click="expanded = !expanded">
@@ -173,6 +174,7 @@ import AdPreview from './AdPreview.vue'
 import BoardAudiences from './BoardAudiences.vue'
 import BoardImages from './BoardImages.vue'
 import BoardLines from './BoardLines.vue'
+import BoardRule from './BoardRule.vue'
 
 const props = defineProps({
   group: { type: Object, required: true },

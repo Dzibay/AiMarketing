@@ -26,6 +26,8 @@ PACE_UNDER_PCT = 85
 PACE_UNDER_MIN_DAY = 8  # недорасход в первую неделю месяца — норма
 STATS_STALE_HOURS = 36
 TOKEN_WARN_DAYS = 7
+# «Проект не настроен» — только для новых проектов: старые уже работают, им хватает карточки в сводке проекта.
+SETUP_FRESH_DAYS = 30
 
 ANOMALY_BASE_DAYS = 14
 ANOMALY_MIN_ACTIVE_DAYS = 5
@@ -259,6 +261,16 @@ def rejected_detail(rows: list[dict], limit: int = 3) -> str:
     return "; ".join(shown) + (f" и ещё {more}" if more > 0 else "")
 
 
+def rejected_reasons(rows: list[dict]) -> list[str]:
+    """Причины отказа модерации без повторов — снимок для скрытия «так задумано» (новая причина → покажем)."""
+    reasons: list[str] = []
+    for r in rows:
+        if r.get("status") == "REJECTED":
+            reasons.append(str(r.get("reason") or "").strip())
+        reasons.extend(str(extra.get("reason") or "").strip() for extra in r.get("extras") or [])
+    return sorted({x for x in reasons if x})
+
+
 def _problem(severity: str, kind: str, title: str, detail: str = "", **where) -> dict:
     workspace_ids = where.get("workspace_ids") or [where.get("workspace_id")]
     return {
@@ -298,6 +310,7 @@ def _load(user_id: int, date_from: date, date_to: date) -> dict:
             """
             SELECT w.id, w.name, w.site, w.client_row_id, w.kpi_type, w.kpi_target,
                    w.monthly_budget_kopecks, w.counter_id, w.counter_row_id,
+                   w.goal_id, w.url_template, w.created_at,
                    m.enabled AS counter_enabled, m.connection_id AS counter_connection_id
             FROM workspaces w
             LEFT JOIN metrika_counters m ON m.id = w.counter_row_id
@@ -453,6 +466,31 @@ def budget_texts(budget: dict) -> tuple[str, str] | None:
     return None
 
 
+def setup_missing(ws: dict) -> list[str]:
+    """Чего не хватает проекту из главного на экране «Подготовим проект»: цели и шаблона ссылки."""
+    missing = []
+    if not ws.get("goal_id"):
+        missing.append("цели")
+    if not str(ws.get("url_template") or "").strip():
+        missing.append("шаблона ссылки")
+    return missing
+
+
+def _setup_problem(ws: dict, now: datetime, where: dict) -> dict | None:
+    """Новый проект (моложе SETUP_FRESH_DAYS) без цели или шаблона ссылки — тихая проблема со ссылкой на настройку."""
+    created = _aware(ws.get("created_at"))
+    missing = setup_missing(ws)
+    if not missing or created is None or now - created > timedelta(days=SETUP_FRESH_DAYS):
+        return None
+    why = []
+    if "цели" in missing:
+        why.append("без цели не посчитать заявки и их цену")
+    if "шаблона ссылки" in missing:
+        why.append("без шаблона не проверить ссылки объявлений")
+    detail = "; ".join(why)
+    return _problem("info", "setup", f"Проект не настроен: нет {' и '.join(missing)}", detail[:1].upper() + detail[1:], **where)
+
+
 def _budget_problems(budget: dict | None, where: dict, *, label: str = "") -> list[dict]:
     texts = budget_texts(budget) if budget else None
     if not texts:
@@ -460,7 +498,13 @@ def _budget_problems(budget: dict | None, where: dict, *, label: str = "") -> li
     title, detail = texts
     title = f"{label}: {title}" if label else _sentence(title)
     severity = "info" if budget["status"] == "under" else "warning"
-    return [_problem(severity, "budget", title, detail, **where)]
+    problem = _problem(severity, "budget", title, detail, **where)
+    # Для скрытия «так задумано» (snoozes): смена статуса бюджета — новая причина.
+    problem["metric"] = {"reasons": [budget["status"]]}
+    if label:
+        # Бюджет папки-клиента — свой ключ скрытия, не тот же, что у бюджета проекта.
+        problem["level"] = "client"
+    return [problem]
 
 
 # --- Строка «как дела» ----------------------------------------------------------------------
@@ -805,6 +849,10 @@ def build_overview(user_id: int, today: date | None = None, now: datetime | None
                 )
             )
 
+        if ws_id is not None and (setup := _setup_problem(ws, now, where)):
+            problems.append(setup)
+            rows[ws_id]["setup_missing"] = setup_missing(ws)
+
         problems.extend(_budget_problems(budget, where))
 
         if kpi["status"] in ("warn", "bad"):
@@ -910,6 +958,7 @@ def build_overview(user_id: int, today: date | None = None, now: datetime | None
                 # Кнопка сигнала «Пополнить в Директе» открывает кабинет именно этого логина.
                 balance_problem["direct_url"] = direct_url
                 balance_problem["days_on_balance"] = balance_days
+                balance_problem["metric"] = {"balance": balance, "days": balance_days}  # снимок для snoozes
                 problems.append(balance_problem)
         if a["stats_error"]:
             severity = "critical" if a["stats_error"] in _TOKEN_ERRORS else "warning"
@@ -983,6 +1032,7 @@ def build_overview(user_id: int, today: date | None = None, now: datetime | None
                     "critical", "moderation", "Кампания отклонена модерацией", c.get("status_clarification") or "", **where
                 )
             )
+            problems[-1]["metric"] = {"reasons": [c.get("status_clarification") or ""]}
         elif c["status"] == "MODERATION":
             problems.append(_problem("info", "moderation", "Кампания на модерации", **where))
         if c["state"] == "OFF" and campaign_week_cost.get(key, 0) > 0:
@@ -1008,11 +1058,13 @@ def build_overview(user_id: int, today: date | None = None, now: datetime | None
                     **where,
                 )
             )
+            problems[-1]["metric"] = {"count": c["rejected_ads"], "reasons": rejected_reasons(rejected_list)}
         elif c["state"] == "ON" and any(r.get("extras") for r in rejected_list):
             # Объявление показывается, а быстрые ссылки или картинка — нет.
             problems.append(
                 _problem("info", "ads_rejected", "Отклонены дополнения объявлений", rejected_detail(rejected_list), **where)
             )
+            problems[-1]["metric"] = {"count": 0, "reasons": rejected_reasons(rejected_list)}
         if c["state"] == "ON" and key in campaign_history:
             row = rows.get(ws_id) or {}
             cpa_target = (
@@ -1031,6 +1083,17 @@ def build_overview(user_id: int, today: date | None = None, now: datetime | None
     problems.sort(
         key=lambda p: (SEVERITY_ORDER[p["severity"]], p["workspace_name"].lower(), p["object_name"].lower())
     )
+    # Скрытое пользователем («⋯» у сигнала) — вне списков и счётчиков; строки «Скрыто» — отдельно.
+    from app import snoozes
+
+    problems, hidden_problems = snoozes.apply(
+        user_id,
+        problems,
+        ws_client={w["id"]: w["client_row_id"] for w in workspaces},
+        ws_names={w["id"]: w["name"] for w in workspaces},
+        client_names={c["id"]: c["name"] for c in data["clients"]},
+        now=now,
+    )
     for row in [*rows.values(), *folders.values()]:
         row["problems"] = {"critical": 0, "warning": 0, "info": 0}
     for p in problems:
@@ -1044,6 +1107,10 @@ def build_overview(user_id: int, today: date | None = None, now: datetime | None
     for row in [*rows.values(), *folders.values()]:
         counts = row["problems"]
         row["severity"] = next((sev for sev in ("critical", "warning", "info") if counts[sev]), "")
+    # «Не настроен» на карточке простого обзора — пока виден сигнал «Проект не настроен» (свежий и не скрыт).
+    shown_setup = {p["workspace_id"] for p in problems if p["kind"] == "setup"}
+    for ws_id, row in rows.items():
+        row["setup_missing"] = row.get("setup_missing", []) if ws_id in shown_setup else []
 
     totals = defaultdict(int)
     for row in rows.values():
@@ -1065,6 +1132,7 @@ def build_overview(user_id: int, today: date | None = None, now: datetime | None
         "totals": dict(totals),
         "by_day": by_day,
         "problems": problems,
+        "hidden": hidden_problems,
         # Деньги на счетах по логинам: кончились и меньше всего дней — сверху.
         "balances": sorted(balances, key=balance_order),
     }

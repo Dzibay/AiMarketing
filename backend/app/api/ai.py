@@ -87,6 +87,10 @@ class DecideBody(BaseModel):
     remember: bool = False
     # id строк карточки, с которых сняли галочки: их в действии не будет.
     exclude: list[str] = []
+    # «Сделать иначе»: быстрая причина (ai_agent.DECLINE_REASONS) и «Как надо» — отказ с ними сразу
+    # запускает новый ход ИИ.
+    reason: str = ""
+    comment: str = ""
 
 
 class DecideAllBody(BaseModel):
@@ -101,7 +105,7 @@ class SnoozeBody(BaseModel):
 
 
 class AnswerBody(BaseModel):
-    # [{n, selected: [вариант…], text}] — n — номер вопроса в карточке.
+    # [{n, selected: [вариант…], text, scope?}] — n — номер вопроса в карточке; scope — «site» или «client».
     answers: list[dict] = []
     comment: str = ""
     skip: bool = False
@@ -155,6 +159,13 @@ class ExperimentFinishBody(BaseModel):
 
 class ForgetFactBody(BaseModel):
     key: str
+    # site — ответ этого сайта, client — ответ для всего клиента проекта.
+    scope: str = "site"
+
+
+class MoveFactBody(BaseModel):
+    key: str
+    scope: str
 
 
 def _call(fn, *args, **kwargs):
@@ -254,7 +265,13 @@ def experiment_finish(
 
 @router.post("/workspaces/{workspace_id}/ai-facts/forget")
 def workspace_forget_fact(workspace_id: int, body: ForgetFactBody, user_id: int = Depends(require_web_user)) -> dict:
-    return _call(workspaces.forget_ai_fact, user_id, workspace_id, body.key)
+    return _call(workspaces.forget_ai_fact, user_id, workspace_id, body.key, body.scope)
+
+
+@router.post("/workspaces/{workspace_id}/ai-facts/move")
+def workspace_move_fact(workspace_id: int, body: MoveFactBody, user_id: int = Depends(require_web_user)) -> dict:
+    """Запомненный ответ — «для этого сайта» или «для всего клиента»; возвращает проект."""
+    return _call(workspaces.move_ai_fact, user_id, workspace_id, body.key, body.scope)
 
 
 @router.get("/ai/chats")
@@ -410,10 +427,32 @@ def chat_decide_all(chat_id: int, body: DecideAllBody, user_id: int = Depends(re
 @router.post("/ai/actions/{action_id}/decide")
 def action_decide(action_id: int, body: DecideBody, user_id: int = Depends(require_web_user)) -> dict:
     out = _call(ai_agent.decide_action, user_id, action_id, approve=body.approve, remember=body.remember,
-                exclude=body.exclude)
+                exclude=body.exclude, reason=body.reason, comment=body.comment)
     if body.approve:
         events.record(user_id, "action_applied", action_id=action_id)
     return out
+
+
+@router.get("/ai/actions/{action_id}/undo")
+def action_undo_preview(action_id: int, user_id: int = Depends(require_web_user)) -> dict:
+    """«Вернуть как было»: записи журнала этого решения словами и что вернуть нельзя."""
+    from app.undo import ai_action_undo_preview
+
+    return _call(ai_action_undo_preview, user_id, action_id)
+
+
+@router.post("/ai/actions/{action_id}/undo")
+def action_undo(action_id: int, user_id: int = Depends(require_web_user)) -> dict:
+    """Возвращает все изменения решения разом — задачей отката (как «Откатить» в «Истории»)."""
+    from app.job_handlers import submit
+    from app.jobs import PRIORITY_USER, public_job
+    from app.undo import ai_action_undo_preview
+
+    preview = _call(ai_action_undo_preview, user_id, action_id)
+    if not preview["available"]:
+        raise _http(YandexError("undo", preview["reason"]))
+    job = submit("undo_action", user_id, {"log_ids": preview["log_ids"]}, priority=PRIORITY_USER, max_attempts=1)
+    return {"job": public_job(job)}
 
 
 @router.post("/ai/actions/{action_id}/snooze")

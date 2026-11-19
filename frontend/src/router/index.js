@@ -117,6 +117,13 @@ const router = createRouter({
           meta: neutral('settings', 'Настройки'),
         },
         {
+          path: 'cabinet/settings/ai',
+          name: 'settings-ai',
+          component: () => import('../views/SettingsView.vue'),
+          props: { tab: 'ai' },
+          meta: neutral('settings', 'Настройки'),
+        },
+        {
           path: 'cabinet/plan',
           name: 'plan',
           component: () => import('../views/PlanView.vue'),

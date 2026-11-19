@@ -1,6 +1,7 @@
 """Сбои ИИ и генератора картинок в кабинете — словами пользователя, технический текст — в журнал и лог.
 Без БД и сети: вызовы ИИ и запись ai_errors подменены."""
 
+import contextlib
 from types import SimpleNamespace
 
 import httpx
@@ -185,6 +186,9 @@ def _classify(monkeypatch, labels_side):
     monkeypatch.setattr(query_cleaning, "_batch_tokens", lambda *a: (10, 10))
     monkeypatch.setattr(query_cleaning, "AI_BATCH", 1)
     monkeypatch.setattr(query_cleaning, "pool", FakePool())
+    # Замок проекта и сверка пачки с уже размеченным — запросы к базе: здесь их нет.
+    monkeypatch.setattr(query_cleaning, "_classify_lock", lambda *a: contextlib.nullcontext())
+    monkeypatch.setattr(query_cleaning, "_unlabelled", lambda workspace_id, batch, relabel: batch)
     monkeypatch.setattr(query_cleaning, "ai_labels", labels_side)
     monkeypatch.setattr(ai, "chars_per_token", lambda cfg: 3.0)
     monkeypatch.setattr(ai, "out_tokens_per_unit", lambda cfg, task, default: 10)
@@ -260,7 +264,7 @@ def test_rewrite_ads_partial_failure_is_human(monkeypatch):
     monkeypatch.setattr(ad_stats, "_workspace_ads", lambda user_id, ws_id, ids: ads)
     monkeypatch.setattr(ad_stats, "_group_keywords", lambda user_id, ids: {})
     monkeypatch.setattr(ad_stats, "brief_prompt", lambda ws: "")
-    monkeypatch.setattr(ad_stats, "ai_style_prompt", lambda ws: "")
+    monkeypatch.setattr(ad_stats.ai_memory, "account_prefs", lambda user_id: {})
     monkeypatch.setattr(ad_stats, "_ad_block", lambda *a: "объявление")
     monkeypatch.setattr(ad_stats, "clean_suggestion", lambda ad, got: {"titles": ["Окна"]})
     monkeypatch.setattr(ad_stats, "AI_BATCH", 1)

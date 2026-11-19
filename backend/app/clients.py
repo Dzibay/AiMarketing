@@ -2,19 +2,26 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 
+from psycopg.types.json import Jsonb
+
 from app.db import pool
+from app.workspaces import MAX_AI_FACTS, fact_key, normalize_ai_facts
 from app.yandex import YandexError
 
 KPI_TYPES = ("", "cpa", "drr")
+# «Что ИИ знает о клиенте»: договорённости, запреты, критерий успеха, схема оплаты, тон — для всех проектов клиента.
+AI_NOTES_MAX = 3000
 
 _CLIENT_COLUMNS = """
-    c.id, c.name, c.site, c.notes, c.kpi_type, c.kpi_target, c.monthly_budget_kopecks,
+    c.id, c.name, c.site, c.notes, c.ai_notes, c.ai_facts, c.kpi_type, c.kpi_target, c.monthly_budget_kopecks,
     c.archived_at, c.created_at, c.updated_at,
     (SELECT COUNT(*) FROM direct_accounts d WHERE d.client_row_id = c.id) AS direct_count,
     (SELECT COUNT(*) FROM metrika_counters m WHERE m.client_row_id = c.id) AS metrika_count,
-    (SELECT COUNT(*) FROM workspaces w WHERE w.client_row_id = c.id AND w.archived_at IS NULL) AS workspace_count
+    (SELECT COUNT(*) FROM workspaces w WHERE w.client_row_id = c.id AND w.archived_at IS NULL) AS workspace_count,
+    (SELECT COUNT(*) FROM workspace_context_files f WHERE f.client_row_id = c.id) AS files_count
 """
 
 
@@ -29,7 +36,10 @@ def _client_out(row: dict) -> dict:
         "id": row["id"],
         "name": row["name"],
         "site": row["site"],
+        # Личные заметки маркетолога — ИИ их не читает.
         "notes": row["notes"],
+        "ai_notes": row.get("ai_notes") or "",
+        "ai_facts": normalize_ai_facts(row.get("ai_facts")),
         "kpi_type": row["kpi_type"],
         "kpi_target": float(target) if target is not None else None,
         "monthly_budget_rub": budget / 100 if budget is not None else None,
@@ -40,6 +50,8 @@ def _client_out(row: dict) -> dict:
         "direct_count": int(row.get("direct_count") or 0),
         "metrika_count": int(row.get("metrika_count") or 0),
         "workspace_count": int(row.get("workspace_count") or 0),
+        # Файлы клиента для ИИ (видны во всех его проектах).
+        "files_count": int(row.get("files_count") or 0),
     }
 
 
@@ -112,6 +124,7 @@ def create_client(
     name: str,
     site: str = "",
     notes: str = "",
+    ai_notes: str = "",
     kpi_type: str = "",
     kpi_target: float | None = None,
     monthly_budget_rub: float | None = None,
@@ -119,8 +132,8 @@ def create_client(
     with pool.connection() as conn:
         row = conn.execute(
             """
-            INSERT INTO clients (user_id, name, site, notes, kpi_type, kpi_target, monthly_budget_kopecks)
-            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            INSERT INTO clients (user_id, name, site, notes, ai_notes, kpi_type, kpi_target, monthly_budget_kopecks)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
             RETURNING id
             """,
             (
@@ -128,6 +141,7 @@ def create_client(
                 _clean_name(name),
                 (site or "").strip()[:300],
                 (notes or "").strip()[:5000],
+                (ai_notes or "").strip()[:AI_NOTES_MAX],
                 _clean_kpi_type(kpi_type),
                 _clean_kpi_target(kpi_target),
                 _clean_budget(monthly_budget_rub),
@@ -149,6 +163,9 @@ def update_client(user_id: int, client_id: int, **fields) -> dict:
     if "notes" in fields:
         sets.append("notes = %s")
         params.append((fields["notes"] or "").strip()[:5000])
+    if "ai_notes" in fields:
+        sets.append("ai_notes = %s")
+        params.append((fields["ai_notes"] or "").strip()[:AI_NOTES_MAX])
     if "kpi_type" in fields:
         sets.append("kpi_type = %s")
         params.append(_clean_kpi_type(fields["kpi_type"]))
@@ -176,8 +193,41 @@ def update_client(user_id: int, client_id: int, **fields) -> dict:
     return get_client(user_id, client_id)
 
 
+def _edit_client_facts(user_id: int, client_id: int, edit) -> list[dict]:
+    with pool.connection() as conn:
+        row = conn.execute(
+            "SELECT ai_facts FROM clients WHERE id = %s AND user_id = %s FOR UPDATE", (client_id, user_id)
+        ).fetchone()
+        if row is None:
+            raise YandexError("not-found")
+        facts = edit(normalize_ai_facts(row["ai_facts"]))[-MAX_AI_FACTS:]
+        conn.execute("UPDATE clients SET ai_facts = %s, updated_at = NOW() WHERE id = %s", (Jsonb(facts), client_id))
+    return facts
+
+
+def remember_client_facts(user_id: int, client_id: int, items: list[dict]) -> list[dict]:
+    """Запомнить ответы для всего клиента: [{key, question, answer, at?}]; тот же key заменяет прежний ответ."""
+    now = datetime.now(timezone.utc).isoformat()
+    new = {f["key"]: {**f, "at": f.get("at") or now} for f in normalize_ai_facts(items)}
+    if not new:
+        raise YandexError("args", "Нужны key и answer")
+    return _edit_client_facts(
+        user_id, client_id, lambda facts: [*(f for f in facts if f["key"] not in new), *new.values()]
+    )
+
+
+def forget_client_fact(user_id: int, client_id: int, key: str) -> dict:
+    """Забыть ответ, запомненный для всего клиента."""
+    key = fact_key(key)
+    _edit_client_facts(user_id, client_id, lambda facts: [f for f in facts if f["key"] != key])
+    return get_client(user_id, client_id)
+
+
 def delete_client(user_id: int, client_id: int) -> None:
-    """Кабинеты и счётчики остаются, просто без клиента (ON DELETE SET NULL)."""
+    """Кабинеты и счётчики остаются, просто без клиента (ON DELETE SET NULL).
+
+    Память ИИ о клиенте (заметка, ответы) и файлы клиента удаляются вместе с ним — кабинет предупреждает об этом.
+    """
     with pool.connection() as conn:
         row = conn.execute(
             "DELETE FROM clients WHERE id = %s AND user_id = %s RETURNING id",

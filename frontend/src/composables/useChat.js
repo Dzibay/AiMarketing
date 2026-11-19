@@ -711,6 +711,46 @@ export function provideChat({ general, ws, basePath, reloadWs, panel = false, pa
     }
   }
 
+  /**
+   * «Сделать иначе»: отказ с причиной (быстрая причина и/или «Как надо») — ИИ сразу переделает.
+   * Работает и у ждущей карточки, и у уже отклонённой (пока разговор не ушёл дальше). → true, если принято.
+   */
+  async function declineWith(action, reason, comment) {
+    deciding.value = true
+    try {
+      const res = await aiApi.decline(action.id, reason || '', comment || '')
+      if (res?.remembered?.length) reloadWs()
+      // «Не трогай эту кампанию», но кампанию по предложению не поняли — в память ничего не записано.
+      else if (Array.isArray(res?.remembered)) pushToast('Не понял, какую кампанию не трогать, — ИИ уточнит в чате')
+      stickToBottom = true
+      await loadChat(chatId.value)
+      return true
+    } catch (err) {
+      pushToast(errorText(err), 'error')
+      loadChat(chatId.value, true)
+      return false
+    } finally {
+      deciding.value = false
+    }
+  }
+
+  // Последнее сообщение разговора без итогов вызовов: карточка из него — ещё «текущая».
+  const lastTurnId = computed(() => {
+    const messages = chat.value ? data.value.messages : []
+    for (let i = messages.length - 1; i >= 0; i -= 1) if (messages[i].role !== 'tool') return messages[i].id
+    return null
+  })
+  // Под отклонённой без причины карточкой можно объяснить, как надо, — пока ИИ не отвечает и разговор
+  // не ушёл дальше (как на сервере: и после ошибки хода).
+  const canRedo = (a) =>
+    a.status === 'rejected' &&
+    !a.decline_reason &&
+    !a.detached &&
+    !!a.id &&
+    status.value !== 'running' &&
+    !pendingActions.value.some((x) => !x.detached) &&
+    a.message_id === lastTurnId.value
+
   /** Ответ в карточке вопросов или плана; когда решать больше нечего, ИИ продолжает. */
   async function respond(request) {
     deciding.value = true
@@ -919,6 +959,8 @@ export function provideChat({ general, ws, basePath, reloadWs, panel = false, pa
     planProgress,
     decide,
     decideAll,
+    declineWith,
+    canRedo,
     respond,
     rateMessage,
     editBoard,

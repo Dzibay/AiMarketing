@@ -141,6 +141,9 @@
                 >
                   {{ c.state === 'ON' ? 'Остановить' : 'Запустить' }}
                 </UiMenuItem>
+                <UiMenuItem v-if="canBudget(c)" :icon="Wallet" :disabled="busy" @click="budgetFor = c">
+                  Изменить бюджет
+                </UiMenuItem>
                 <UiMenuItem v-if="duplicable" :icon="Copy" :disabled="busy" @click="$emit('duplicate', c)">
                   Копия
                 </UiMenuItem>
@@ -201,12 +204,21 @@
         Снять выбор
       </button>
     </div>
+
+    <BudgetDialog
+      :open="!!budgetFor"
+      :workspace-id="budgetFor ? wsOf(budgetFor) : null"
+      :campaign-id="budgetFor?.campaign_row_id"
+      :name="budgetFor?.name || ''"
+      @close="budgetFor = null"
+      @saved="onBudgetSaved"
+    />
   </div>
 </template>
 
 <script setup>
-import { computed, reactive, ref } from 'vue'
-import { RouterLink, useRouter } from 'vue-router'
+import { computed, reactive, ref, watch } from 'vue'
+import { RouterLink, useRoute, useRouter } from 'vue-router'
 import {
   Archive,
   ArchiveRestore,
@@ -216,7 +228,9 @@ import {
   Pause,
   Play,
   Search,
+  Wallet,
 } from '@lucide/vue'
+import BudgetDialog from './BudgetDialog.vue'
 import EmptyState from './ui/EmptyState.vue'
 import UiListTools from './ui/UiListTools.vue'
 import UiRowMore from './ui/UiRowMore.vue'
@@ -252,9 +266,47 @@ const props = defineProps({
   duplicable: { type: Boolean, default: true },
   archivable: { type: Boolean, default: true },
 })
-const emit = defineEmits(['update:selected', 'toggle', 'duplicate', 'archive', 'unarchive'])
+// budget — бюджет строки поменяли (окно «Изменить бюджет» или откат): список можно перечитать.
+const emit = defineEmits(['update:selected', 'toggle', 'duplicate', 'archive', 'unarchive', 'budget'])
 
 const router = useRouter()
+const route = useRoute()
+
+// «Изменить бюджет» в «⋯»: одно число в той единице, в которой бюджет живёт в Директе. Сервис правит
+// только ТГО и ЕПК; новая сумма видна в строке сразу, не дожидаясь, пока родитель перечитает список.
+const BUDGET_TYPES = new Set(['TEXT_CAMPAIGN', 'UNIFIED_CAMPAIGN'])
+const budgetFor = ref(null)
+const budgetPatch = reactive({})
+
+function wsOf(c) {
+  return c?.project?.id || Number(route.params.wsId) || null
+}
+
+function canBudget(c) {
+  return c.state !== 'ARCHIVED' && BUDGET_TYPES.has(c.type) && !!wsOf(c)
+}
+
+function onBudgetSaved(info) {
+  const id = info?.campaign_row_id
+  if (id && info.kind && info.amount_rub) {
+    budgetPatch[id] =
+      info.kind === 'weekly'
+        ? { weekly_budget_rub: info.amount_rub, daily_budget_rub: null }
+        : { weekly_budget_rub: null, daily_budget_rub: info.amount_rub }
+  } else {
+    // Откат: прежнюю сумму знает только сервер — снимаем свою поправку и просим перечитать список.
+    for (const key of Object.keys(budgetPatch)) delete budgetPatch[key]
+  }
+  emit('budget', info)
+}
+
+// Родитель перечитал список — в нём уже настоящие суммы.
+watch(
+  () => props.items,
+  () => {
+    for (const key of Object.keys(budgetPatch)) delete budgetPatch[key]
+  },
+)
 
 const VIEWS = [
   { id: 'all', label: 'Все' },
@@ -352,7 +404,8 @@ const budgetTotal = computed(() => {
 })
 
 // Бюджет к одной мере — за неделю: так его можно сортировать и складывать.
-function withExtras(c) {
+function withExtras(item) {
+  const c = budgetPatch[item.campaign_row_id] ? { ...item, ...budgetPatch[item.campaign_row_id] } : item
   const week = c.weekly_budget_rub || (c.daily_budget_rub ? c.daily_budget_rub * 7 : null)
   return { ...c, budget_week_rub: week, project_name: c.project?.name }
 }

@@ -26,6 +26,33 @@ def web_overview(user_id: int = Depends(require_web_user)) -> dict:
     return build_overview(user_id)
 
 
+class SnoozeBody(BaseModel):
+    key: str
+    mode: str  # days | intended | type
+
+
+@router.post("/overview/snoozes")
+def web_snooze_problem(body: SnoozeBody, user_id: int = Depends(require_web_user)) -> dict:
+    """«⋯» у сигнала: скрыть на 7 дней, «так задумано» или весь тип для клиента (проекта)."""
+    from app.snoozes import SnoozeError, create
+
+    try:
+        return create(user_id, body.key, body.mode)
+    except SnoozeError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@router.delete("/overview/snoozes/{snooze_id}")
+def web_unsnooze_problem(snooze_id: int, user_id: int = Depends(require_web_user)) -> dict:
+    """«Показать снова» в строке «Скрыто»."""
+    from app.snoozes import SnoozeError, remove
+
+    try:
+        return remove(user_id, snooze_id)
+    except SnoozeError as exc:
+        raise HTTPException(404, str(exc)) from exc
+
+
 @router.get("/overview/headline")
 def web_overview_headline(period: int = 7, user_id: int = Depends(require_web_user)) -> dict:
     """Строка «как дела» и три числа за 7 или 30 дней — первый блок главной."""

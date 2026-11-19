@@ -514,8 +514,8 @@ def test_parse_region_ids():
 
 def test_region_label():
     assert geo.region_label([213, 2], REGIONS) == "Москва, Санкт-Петербург"  # нет в справочнике — подпись из KNOWN_REGIONS
-    assert geo.region_label([225, -1], REGIONS) == "Россия кроме Москва и Московская область"
-    assert geo.region_label([-213]) == "кроме Москва"
+    assert geo.region_label([225, -1], REGIONS) == "Россия, кроме: Москва и Московская область"
+    assert geo.region_label([-213]) == "кроме: Москва"
     assert geo.region_label([1, 2, 213, 43], limit=2) == "Москва и Московская область, Санкт-Петербург и ещё 2"
     assert geo.region_label([999999]) == "999999"
     assert geo.region_label([]) == "—"
@@ -544,7 +544,7 @@ def test_copy_geo_plan(regions):
     )
     assert other.summary == (
         "Копия «Поиск Москва» на новое гео: копия «Поиск Татарстан» в кабинет okna-spb"
-        " → Республика Татарстан кроме Казань; оригинал работает"
+        " → Республика Татарстан, кроме: Казань; оригинал работает"
     )
 
 

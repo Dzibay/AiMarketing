@@ -1,17 +1,18 @@
 <template>
-  <template v-if="costly.length">
+  <template v-if="rows.length">
     <h2 class="section-h">
       Самые дорогие запросы без заявок
       <small class="cgroup__n">ещё не убраны в минус</small>
     </h2>
     <div class="ccard qhl">
-      <div v-for="q in costly" :key="`${q.project?.id || ''}:${q.query_norm}`" class="prow">
+      <div v-for="q in rows" :key="keyOf(q)" class="prow">
         <div class="prow__main">
           <b class="qhl__q">{{ q.query }}</b>
           <small>{{ where(q) }}</small>
         </div>
         <div class="prow__acts">
           <span class="qhl__cost">{{ rubles(q.cost_rub) }}</span>
+          <button class="btn btn--ghost btn--sm" type="button" @click="minusRow = q">В минус</button>
           <RouterLink class="btn btn--ghost btn--sm" :to="chatLink(q)">
             <Sparkles :size="15" aria-hidden="true" />
             Разобрать с ИИ
@@ -20,6 +21,13 @@
       </div>
     </div>
   </template>
+
+  <QueryMinusDialog
+    :row="minusRow"
+    :workspace-id="minusRow ? minusRow.project?.id || workspaceId : null"
+    @close="minusRow = null"
+    @done="onMinused"
+  />
 
   <h2 class="section-h">Что уже убрано</h2>
   <div class="ccard qhl qhl--done">
@@ -44,19 +52,41 @@
 </template>
 
 <script setup>
+import { computed, ref } from 'vue'
 import { RouterLink } from 'vue-router'
 import { Check, Sparkles } from '@lucide/vue'
 import CountUp from './ui/CountUp.vue'
+import QueryMinusDialog from './QueryMinusDialog.vue'
 import { niceQuotes, num, plural, rubles } from '../utils/format'
 
 const props = defineProps({
-  /** Дорогие запросы без заявок: query, query_norm, cost_rub, clicks, campaigns, project? */
+  /** Дорогие запросы без заявок: query, query_norm, cost_rub, clicks, campaigns, label, adgroups, project? */
   costly: { type: Array, default: () => [] },
   /** Минус-фразы за 30 дней: phrases, queries. */
   removed: { type: Object, default: () => ({ phrases: 0, queries: 0 }) },
-  /** Проект строки — для ссылки в чат; без него — текущий. */
+  /** Проект строки — для ссылки в чат и «В минус»; без него — текущий. */
   workspaceId: { type: [Number, String], default: null },
 })
+// changed — запрос ушёл в минус или это отменили: страница может перезагрузить свои данные.
+const emit = defineEmits(['changed'])
+
+// Убранные в минус строки прячем сразу: список приходит от страницы и обновится при её перезагрузке.
+const minusRow = ref(null)
+const hidden = ref(new Set())
+const rows = computed(() => props.costly.filter((q) => !hidden.value.has(keyOf(q))))
+
+function keyOf(q) {
+  return `${q.project?.id || ''}:${q.query_norm}`
+}
+
+function onMinused({ row, undone }) {
+  const next = new Set(hidden.value)
+  if (undone) next.delete(keyOf(row))
+  else next.add(keyOf(row))
+  hidden.value = next
+  if (!undone) minusRow.value = null
+  emit('changed')
+}
 
 function where(q) {
   const clicks = `${num(q.clicks)} ${plural(q.clicks, 'клик', 'клика', 'кликов')}, заявок нет`

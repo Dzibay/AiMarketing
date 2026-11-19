@@ -1,9 +1,13 @@
 <template>
-  <section id="context-files" class="panel">
+  <section :id="client ? 'client-files' : 'context-files'" class="panel">
     <div class="panel__head">
       <div>
-        <h2>Файлы для ИИ</h2>
-        <p class="hint">
+        <h2>{{ client ? 'Файлы клиента для ИИ' : 'Файлы для ИИ' }}</h2>
+        <p v-if="client" class="hint">
+          Прайс, условия, договорённости — .txt и .md по одному или zip-архивом. ИИ читает эти файлы во всех
+          проектах клиента. Если у проекта есть файл с тем же именем, ИИ читает файл проекта.
+        </p>
+        <p v-else class="hint">
           Контекст проекта текстом: .txt и .md по одному или zip-архивом с ними — например, выгрузка диалога из ChatGPT.
           ИИ читает эти файлы в каждом чате проекта.
         </p>
@@ -43,7 +47,8 @@
       </ul>
     </div>
 
-    <template v-if="items.length">
+    <!-- Лимит — у проекта: в него идут и файлы проекта, и файлы клиента. -->
+    <template v-if="!client && (items.length || clientItems.length)">
       <div class="ctx-usage">
         <p class="ctx-usage__text">
           При каждом ответе ИИ читает <b>{{ num(usage.sent_chars) }}</b> из {{ num(usage.chars) }}
@@ -88,7 +93,9 @@
           Файлы идут в промпт по порядку загрузки — выключите ненужные, и ИИ увидит следующие.
         </p>
       </div>
+    </template>
 
+    <template v-if="items.length">
       <ul class="ctx-files">
         <li v-for="f in items" :key="f.id" class="ctx-files__item" :class="{ 'is-off': !f.enabled }">
           <UiCheckbox
@@ -117,19 +124,48 @@
         </button>
       </div>
     </template>
-    <p v-else-if="loaded" class="hint">Файлов пока нет — ИИ знает о проекте только бриф и заметки.</p>
+    <p v-else-if="loaded" class="hint">{{ emptyText }}</p>
+
+    <template v-if="!client && clientInfo && clientItems.length">
+      <h3 class="subhead">Файлы клиента «{{ niceQuotes(clientInfo.name) }}»</h3>
+      <p class="hint">Общие для всех проектов клиента — ИИ читает их после файлов проекта.</p>
+      <ul class="ctx-files">
+        <li
+          v-for="f in clientItems"
+          :key="f.id"
+          class="ctx-files__item"
+          :class="{ 'is-off': f.state === 'off' || f.state === 'same' }"
+        >
+          <span class="ctx-files__main ctx-files__name">
+            {{ f.filename }}
+            <small class="cell-note">
+              {{ num(f.chars) }} {{ plural(f.chars, 'символ', 'символа', 'символов') }}
+              <template v-if="f.source"> · из {{ f.source }}</template>
+            </small>
+          </span>
+          <span class="chip" :class="STATES[f.state]?.cls">{{ stateText(f) }}</span>
+        </li>
+      </ul>
+      <div class="form-actions">
+        <button class="btn btn--ghost" type="button" @click="emit('open-client')">Открыть файлы клиента</button>
+      </div>
+    </template>
   </section>
 </template>
 
 <script setup>
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import UiCheckbox from '../../components/ui/UiCheckbox.vue'
-import { errorText, wsApi } from '../../api/web'
+import { errorText, webApi, wsApi } from '../../api/web'
 import { askConfirm } from '../../composables/useConfirm'
 import { pushToast } from '../../composables/useToasts'
 import { readFileBase64 } from '../../utils/adExtras'
-import { formatDateTime, num, plural } from '../../utils/format'
+import { formatDateTime, niceQuotes, num, plural } from '../../utils/format'
 import { useWs } from './context'
+
+// client — панель файлов клиента (вкладка «Клиент»); без него — файлы проекта и, только для чтения, его клиента.
+const props = defineProps({ client: { type: Object, default: null } })
+const emit = defineEmits(['open-client', 'changed'])
 
 const { ws } = useWs()
 
@@ -138,6 +174,8 @@ const STATES = {
   cut: { cls: 'chip--warning' },
   out: { cls: 'chip--critical' },
   off: { cls: 'chip--info' },
+  on: { cls: 'chip--ok' },
+  same: { cls: 'chip--info' },
 }
 const EXTENSIONS = ['.txt', '.md', '.zip']
 
@@ -160,6 +198,27 @@ const uploadText = ref('')
 const busyId = ref(null)
 const dragOver = ref(false)
 const fileInput = ref(null)
+const clientItems = ref([])
+const clientInfo = ref(null)
+
+// Чьи файлы: клиента или проекта (смена папки клиента у проекта меняет и список файлов клиента).
+const ownerKey = computed(() =>
+  props.client ? `client:${props.client.id}` : `ws:${ws.value?.id}:${ws.value?.client_id ?? ''}`,
+)
+const cid = () => props.client.id
+const api = {
+  list: () => (props.client ? webApi.clientFiles(cid()) : wsApi.contextFiles(ws.value.id)),
+  upload: (body) => (props.client ? webApi.uploadClientFile(cid(), body) : wsApi.uploadContextFile(ws.value.id, body)),
+  toggle: (id, on) => (props.client ? webApi.setClientFile(cid(), id, on) : wsApi.setContextFile(ws.value.id, id, on)),
+  remove: (id) => (props.client ? webApi.deleteClientFile(cid(), id) : wsApi.deleteContextFile(ws.value.id, id)),
+  clear: () => (props.client ? webApi.clearClientFiles(cid()) : wsApi.clearContextFiles(ws.value.id)),
+}
+
+const emptyText = computed(() => {
+  if (props.client) return 'Файлов пока нет. Загрузите прайс или условия — ИИ увидит их во всех проектах клиента.'
+  if (clientItems.value.length) return 'Своих файлов у проекта нет — ИИ читает файлы клиента ниже.'
+  return 'Файлов пока нет — ИИ знает о проекте только бриф и заметки.'
+})
 
 const limitChanged = computed(() => !!limitDraft.value && limitDraft.value !== usage.value.limit)
 
@@ -175,11 +234,15 @@ function stateText(f) {
   if (f.state === 'full') return 'целиком'
   if (f.state === 'cut') return `обрезан до ${num(f.sent)}`
   if (f.state === 'out') return 'не поместился'
+  if (f.state === 'on') return 'включён'
+  if (f.state === 'same') return 'заменён файлом проекта'
   return 'выключен'
 }
 
 function apply(res) {
   items.value = res.items || []
+  clientItems.value = res.client_items || []
+  clientInfo.value = res.client || null
   if (res.usage) {
     // Несохранённую правку лимита не затираем при загрузке файлов.
     if (!limitDraft.value || limitDraft.value === usage.value.limit) limitDraft.value = res.usage.limit
@@ -210,12 +273,14 @@ async function saveLimit() {
 
 async function load() {
   error.value = ''
+  const key = ownerKey.value
   try {
-    apply(await wsApi.contextFiles(ws.value.id))
+    const res = await api.list()
+    if (key === ownerKey.value) apply(res)
   } catch (err) {
-    error.value = errorText(err)
+    if (key === ownerKey.value) error.value = errorText(err)
   } finally {
-    loaded.value = true
+    if (key === ownerKey.value) loaded.value = true
   }
 }
 
@@ -251,7 +316,7 @@ async function upload(files) {
       uploadText.value = files.length > 1 ? `Загружаем ${i + 1} из ${files.length}…` : 'Загружаем…'
       try {
         const data = await readFileBase64(file)
-        const res = await wsApi.uploadContextFile(ws.value.id, { filename: file.name, data })
+        const res = await api.upload({ filename: file.name, data })
         apply(res)
         added += res.added.length
         replaced += res.replaced.length
@@ -269,7 +334,8 @@ async function upload(files) {
     const parts = []
     if (added) parts.push(`добавлено ${added}`)
     if (replaced) parts.push(`заменено ${replaced}`)
-    pushToast(`Файлы для ИИ: ${parts.join(', ')}`, 'ok')
+    pushToast(`${props.client ? 'Файлы клиента' : 'Файлы'} для ИИ: ${parts.join(', ')}`, 'ok')
+    emit('changed')
   }
 }
 
@@ -277,7 +343,7 @@ async function toggle(f, enabled) {
   busyId.value = f.id
   error.value = ''
   try {
-    apply(await wsApi.setContextFile(ws.value.id, f.id, enabled))
+    apply(await api.toggle(f.id, enabled))
   } catch (err) {
     error.value = errorText(err)
     await load()
@@ -287,7 +353,8 @@ async function toggle(f, enabled) {
 }
 
 async function remove(f) {
-  const ok = await askConfirm(`Удалить «${f.filename}»? ИИ перестанет его учитывать.`, {
+  const where = props.client ? ' во всех проектах клиента' : ''
+  const ok = await askConfirm(`Удалить «${f.filename}»? ИИ перестанет его учитывать${where}.`, {
     confirmText: 'Удалить',
     danger: true,
   })
@@ -295,7 +362,8 @@ async function remove(f) {
   busyId.value = f.id
   error.value = ''
   try {
-    apply(await wsApi.deleteContextFile(ws.value.id, f.id))
+    apply(await api.remove(f.id))
+    emit('changed')
   } catch (err) {
     error.value = errorText(err)
   } finally {
@@ -304,7 +372,8 @@ async function remove(f) {
 }
 
 async function clearAll() {
-  const ok = await askConfirm(`Удалить все файлы для ИИ (${items.value.length})?`, {
+  const whose = props.client ? 'файлы клиента' : 'файлы'
+  const ok = await askConfirm(`Удалить все ${whose} для ИИ (${items.value.length})?`, {
     confirmText: 'Удалить все',
     danger: true,
   })
@@ -312,25 +381,25 @@ async function clearAll() {
   error.value = ''
   problems.value = []
   try {
-    apply(await wsApi.clearContextFiles(ws.value.id))
+    apply(await api.clear())
+    emit('changed')
   } catch (err) {
     error.value = errorText(err)
   }
 }
 
 onMounted(load)
-watch(
-  () => ws.value?.id,
-  (next, prev) => {
-    if (next && next !== prev) {
-      items.value = []
-      problems.value = []
-      limitDraft.value = 0
-      loaded.value = false
-      load()
-    }
-  },
-)
+watch(ownerKey, (next, prev) => {
+  if (next && next !== prev) {
+    items.value = []
+    clientItems.value = []
+    clientInfo.value = null
+    problems.value = []
+    limitDraft.value = 0
+    loaded.value = false
+    load()
+  }
+})
 </script>
 
 <style scoped>

@@ -39,6 +39,7 @@ KNOWN_REGIONS = {
     35: "Краснодар",
 }
 _TYPE_ORDER = {"Country": 0, "Region": 1, "Administrative area": 1, "City": 2}
+# Типы регионов Директа по-русски; неизвестный тип — без подписи, английское слово пользователю не показываем.
 _TYPE_LABELS = {
     "Country": "страна",
     "Region": "округ",
@@ -46,6 +47,10 @@ _TYPE_LABELS = {
     "City": "город",
     "Village": "населённый пункт",
     "City district": "район города",
+    "District": "район",
+    "Federal district": "федеральный округ",
+    "Continent": "континент",
+    "World": "весь мир",
 }
 
 _lock = threading.Lock()
@@ -160,7 +165,7 @@ def search_regions(user_id: int, query: str, limit: int = SEARCH_LIMIT) -> dict:
             {
                 "id": region["id"],
                 "name": region["name"],
-                "type": _TYPE_LABELS.get(region["type"], region["type"]),
+                "type": _TYPE_LABELS.get(region["type"], ""),
                 "path": _path(source, region),
             }
             for *_, region in ranked[: max(1, min(limit, 50))]
@@ -198,7 +203,7 @@ def unknown_regions(user_id: int, region_ids: list[int]) -> list[int]:
 
 
 def region_label(region_ids: list[int], regions: dict[int, dict] | None = None, limit: int = 6) -> str:
-    """«Москва, Санкт-Петербург кроме Зеленограда»; пустой список — «—»."""
+    """«Москва, Санкт-Петербург, кроме: Зеленоград»; пустой список — «—»."""
     regions = regions or {}
     plus = [rid for rid in region_ids if rid > 0]
     minus = [-rid for rid in region_ids if rid < 0]
@@ -209,7 +214,7 @@ def region_label(region_ids: list[int], regions: dict[int, dict] | None = None, 
 
     text = names(plus)
     if minus:
-        text = (text + " " if text else "") + "кроме " + names(minus)
+        text = (text + ", " if text else "") + "кроме: " + names(minus)
     return text or "—"
 
 
@@ -701,3 +706,91 @@ def set_campaign_regions(
         targets=[f"campaign:{campaign_row_id}"],
     )
     return {"groups": len(groups), "updated": len(updated), "errors": errors[:20]}
+
+
+# --- Выбор регионов в кабинете ----------------------------------------------------------------------------
+#
+# Поле поиска в карточке кампании и группы: город или область по названию, как их пишут люди («питер», «екб»,
+# «Казань»). Порядок: точное совпадение, начало названия, начало слова, вхождение; при равенстве — сперва
+# города и области, потом страны и округа, потом сёла и районы. Номер региона тоже находится — для тех, кто
+# знает id Директа.
+
+_PICK_ORDER = {"City": 0, "Administrative area": 0, "Country": 1, "Region": 1}
+
+
+def _plain(text) -> str:
+    """Название для сравнения: строчные, «ё» → «е», дефисы — пробелы («Санкт-Петербург» = «санкт петербург»)."""
+    return _norm(str(text or "").replace("-", " "))
+
+
+def _pick_rank(name: str, query: str) -> int | None:
+    if name == query:
+        return 0
+    if name.startswith(query):
+        return 1
+    if any(word.startswith(query) for word in name.split()):
+        return 2
+    if query in name:
+        return 3
+    return None
+
+
+def _source(regions: dict[int, dict]) -> dict[int, dict]:
+    """Справочник Директа, а без него — основные регионы с родителями и типами."""
+    if regions:
+        return regions
+    return {
+        rid: {
+            "id": rid,
+            "name": name,
+            "type": _KNOWN_TYPES.get(rid, "City"),
+            "parent": _KNOWN_PARENTS.get(rid, 225),
+        }
+        for rid, name in KNOWN_REGIONS.items()
+    }
+
+
+def _region_item(source: dict[int, dict], region: dict) -> dict:
+    return {
+        "id": region["id"],
+        "name": region["name"],
+        "type": _TYPE_LABELS.get(region["type"], ""),
+        "path": _path(source, region),
+    }
+
+
+def suggest_regions(user_id: int, query: str, limit: int = SEARCH_LIMIT) -> dict:
+    """Подсказки к полю «Регионы»: {"regions": [{id, name, type, path}], "note"?}; пустой запрос — пусто."""
+    q = _plain(query)
+    if not q:
+        return {"regions": []}
+    regions = load_regions(user_id)
+    source = _source(regions)
+    queries = [q]
+    alias = _ALIASES.get(_stem(q)) if " " not in q else None
+    if alias and alias not in queries:
+        queries.append(alias)
+    ranked = []
+    for region in source.values():
+        name = _plain(region["name"])
+        ranks = [r for r in (_pick_rank(name, text) for text in queries) if r is not None]
+        if q.isdigit() and int(q) == region["id"]:
+            ranks.append(0)
+        if not ranks:
+            continue
+        ranked.append((min(ranks), _PICK_ORDER.get(region["type"], 2), len(name), region["id"], region))
+    ranked.sort(key=lambda item: item[:4])
+    out: dict = {"regions": [_region_item(source, region) for *_, region in ranked[: max(1, min(limit, 50))]]}
+    if not regions:
+        out["note"] = "Справочник регионов Директа сейчас недоступен — показываю только крупные города"
+    return out
+
+
+def regions_named(user_id: int, region_ids: list[int]) -> list[dict]:
+    """Выбранные регионы с названиями для поля выбора: [{id, name, type, path, minus}], минус — «кроме»."""
+    source = _source(load_regions(user_id))
+    out = []
+    for rid in parse_region_ids(region_ids):
+        region = source.get(abs(rid)) or {"id": abs(rid), "name": _name(source, abs(rid)), "type": "", "parent": None}
+        out.append({**_region_item(source, region), "minus": rid < 0})
+    return out

@@ -28,12 +28,19 @@
     </EmptyState>
     <template v-else>
       <PendingDecisions />
-      <SignalCards :problems="data.problems" show-project :balance-refreshing="refreshing" @refresh-balance="refresh" />
+      <SignalCards
+        :problems="data.problems"
+        :hidden="data.hidden || []"
+        show-project
+        :balance-refreshing="refreshing"
+        @refresh-balance="refresh"
+        @changed="reloadAll"
+      />
       <MoneyBlock :balances="data.balances" :refreshing="refreshing" @refresh="refresh" />
 
       <h2 class="section-h"><span class="hico" aria-hidden="true"><Layers /></span>Проекты <span class="cgroup__n">{{ projectCards.length }}</span></h2>
       <div class="pstrip">
-        <RouterLink v-for="w in projectCards" :key="w.id" class="pcard" :to="`/w/${w.id}/summary`">
+        <RouterLink v-for="w in projectCards" :key="w.id" class="pcard" :to="w.to">
           <b class="pname"><ProjectAva :project="w" :size="24" :status="false" /><span class="pname__t">{{ niceQuotes(w.name) }}</span></b>
           <span class="st" :class="`st--${w.status.tone}`">
             <component :is="w.status.icon" :size="14" aria-hidden="true" />
@@ -286,11 +293,12 @@
               : 'Ничего не горит: токены живы, балансы, бюджеты и KPI в норме.'
           }}
         </p>
-        <ProblemList v-else :problems="visibleProblems" show-project />
+        <ProblemList v-else :problems="visibleProblems" show-project @changed="reloadAll" />
         <div v-if="filteredProblems.length > visibleProblems.length" class="pager">
           <span class="sync-status">Показано {{ visibleProblems.length }} из {{ filteredProblems.length }}</span>
           <button class="btn btn--ghost" type="button" @click="showAllProblems = true">Показать все</button>
         </div>
+        <SnoozedList :items="data.hidden || []" @changed="reloadAll" />
       </section>
     </template>
   </template>
@@ -299,7 +307,7 @@
 <script setup>
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { RouterLink, useRouter } from 'vue-router'
-import { CircleCheck, Flame, Layers, Lock, RefreshCw, Search, Sparkles, TriangleAlert } from '@lucide/vue'
+import { CircleCheck, CircleDashed, Flame, Layers, Lock, RefreshCw, Search, Sparkles, TriangleAlert } from '@lucide/vue'
 import ExpertHint from '../components/ExpertHint.vue'
 import HomeAsk from '../components/HomeAsk.vue'
 import HomeHeadline from '../components/HomeHeadline.vue'
@@ -310,6 +318,7 @@ import PendingDecisions from '../components/PendingDecisions.vue'
 import ProblemList from '../components/ProblemList.vue'
 import RoleCard from '../components/RoleCard.vue'
 import SignalCards from '../components/SignalCards.vue'
+import SnoozedList from '../components/SnoozedList.vue'
 import TermHint from '../components/TermHint.vue'
 import EmptyState from '../components/ui/EmptyState.vue'
 import PageHeader from '../components/ui/PageHeader.vue'
@@ -408,6 +417,8 @@ const STATUS = {
   bad: { tone: 'bad', icon: TriangleAlert, text: 'Есть проблема' },
   warn: { tone: 'warn', icon: TriangleAlert, text: 'Стоит посмотреть' },
   ok: { tone: 'ok', icon: CircleCheck, text: 'Всё в порядке' },
+  // Новый проект без цели или шаблона ссылки (сигнал «Проект не настроен» не скрыт) — карточка ведёт в настройку.
+  setup: { tone: 'warn', icon: CircleDashed, text: 'Не настроен' },
 }
 
 /** Карточка проекта простыми словами: статус по сигналам и KPI, одна строка итога недели. */
@@ -416,9 +427,17 @@ const projectCards = computed(() =>
     .filter((w) => w.id != null)
     .map((w) => {
       const kpiBad = w.kpi?.type && (w.kpi.status === 'warn' || w.kpi.status === 'bad')
-      const status = w.severity === 'critical' ? STATUS.bad : w.severity === 'warning' || kpiBad ? STATUS.warn : STATUS.ok
+      const locked = lockedIds.value.has(w.id)
+      const setup = !locked && w.setup_missing?.length
+      const status =
+        w.severity === 'critical' ? STATUS.bad
+        : w.severity === 'warning' || kpiBad ? STATUS.warn
+        : setup ? STATUS.setup
+        : STATUS.ok
+      const to = setup ? `/w/${w.id}/summary?setup=1` : `/w/${w.id}/summary`
       let verdict
-      if (lockedIds.value.has(w.id)) verdict = 'Доступен на тарифе выше'
+      if (locked) verdict = 'Доступен на тарифе выше'
+      else if (status === STATUS.setup) verdict = `Нет ${w.setup_missing.join(' и ')} — нажмите, чтобы настроить`
       else if (w.kpi?.type && w.kpi.value != null) {
         const k = w.kpi
         const target = k.target == null ? '' : `, цель ${k.type === 'cpa' ? rubles(k.target) : pct(k.target)}`
@@ -426,7 +445,7 @@ const projectCards = computed(() =>
       }
       else if (w.spend_7d) verdict = `${rub(w.spend_7d)} за неделю, ${num(w.conversions_7d || 0)} ${leadWord(w.conversions_7d || 0)}`
       else verdict = 'За неделю расхода не было'
-      return { ...w, status, verdict }
+      return { ...w, status, verdict, to }
     })
     .sort(
       (a, b) =>
@@ -617,6 +636,11 @@ async function load() {
   } finally {
     loading.value = false
   }
+}
+
+// Скрыли сигнал или вернули его — строка «как дела» тоже считается только по видимым проблемам.
+function reloadAll() {
+  return Promise.all([load(), headline.value?.load()])
 }
 
 async function refresh() {
