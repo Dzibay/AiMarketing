@@ -54,6 +54,13 @@ KINDS: dict[str, dict] = {
         "telegram": True,
         "window_days": 1,
     },
+    # Долгая операция, запущенная человеком, упала или прошла частично (operation_notify.py).
+    "operation": {
+        "label": "Не получилось или получилось частично: минус-фразы, бюджеты, копирование и другие операции",
+        "cabinet": True,
+        "telegram": True,
+        "window_days": 0,
+    },
     "limit": {
         "label": "Лимит ИИ израсходован на 80 % и на 100 %",
         "cabinet": True,
@@ -258,6 +265,8 @@ def _out(row: dict) -> dict:
         "workspace_id": row["workspace_id"],
         "created_at": row["created_at"].isoformat(),
         "read": row["read_at"] is not None,
+        # «Повторить для оставшихся» / «Повторить» у сбоя операции: {job_id, label}; None — кнопки нет.
+        "retry": {"label": row["retry"]["label"]} if isinstance(row.get("retry"), dict) else None,
     }
 
 
@@ -309,14 +318,31 @@ def purge(days: int = KEEP_DAYS) -> int:
 
 
 def badges(user_id: int) -> dict:
-    """Счётчики шапки одним запросом: решения, уведомления, непрочитанные ответы поддержки."""
-    from app import support
-    from app.ai_agent import pending_count
+    """Счётчики шапки одним запросом: решения, уведомления, непрочитанные ответы поддержки.
 
+    projects — отметки проектов в меню и переключателе: [{id, pending, urgent: [«деньги на исходе», …]}]
+    только у проектов, где что-то есть. Счётчик шапки при выбранном проекте берёт pending своего проекта.
+    """
+    from app import support
+    from app.ai_agent import pending_by_project
+
+    pending = pending_by_project(user_id)
+    try:
+        from app.urgent import project_signals
+
+        signals = project_signals(user_id)
+    except Exception:  # noqa: BLE001 — без красных точек шапка всё равно нужна
+        log.exception("Срочные отметки проектов, пользователь %s", user_id)
+        signals = {}
+    ids = sorted(set(pending["projects"]) | set(signals))
     return {
-        "pending": pending_count(user_id)["count"],
+        "pending": pending["count"],
         "notifications": unread_count(user_id),
         "support": support.unread_count(user_id),
+        "projects": [
+            {"id": ws_id, "pending": pending["projects"].get(ws_id, 0), "urgent": signals.get(ws_id, [])}
+            for ws_id in ids
+        ],
     }
 
 

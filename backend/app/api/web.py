@@ -593,6 +593,17 @@ def web_notifications_read(body: NotificationsReadBody, user_id: int = Depends(r
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@router.post("/notifications/{notification_id}/retry")
+def web_notification_retry(notification_id: int, user_id: int = Depends(require_web_user)) -> dict:
+    """«Повторить для оставшихся» / «Повторить» у записи о сбое операции — та же задача снова."""
+    from app.operation_notify import retry
+
+    try:
+        return {"job": retry(user_id, notification_id)}
+    except YandexError as exc:
+        raise _http(exc) from exc
+
+
 @router.get("/notifications/settings")
 def web_notification_settings(user_id: int = Depends(require_web_user)) -> dict:
     return notifications.get_prefs(user_id)

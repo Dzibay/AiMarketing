@@ -62,9 +62,10 @@
       <div class="ccard">
         <div
           v-for="a in d.items"
+          :id="`hrow-${a.id}`"
           :key="a.id"
           class="hrow"
-          :class="{ 'is-undone': a.undone_at, 'is-open': open.has(a.id) }"
+          :class="{ 'is-undone': a.undone_at, 'is-open': open.has(a.id), 'is-target': target === a.id }"
         >
           <i class="hrow__kind">
             <component :is="ACTION_ICONS[a.action] || CircleDot" :size="16" aria-hidden="true" />
@@ -209,7 +210,7 @@
 </template>
 
 <script setup>
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
 import {
   Archive,
@@ -508,7 +509,28 @@ watch(
     campaign.value = campaignOf(q)
   },
 )
-onMounted(() => fetchPage())
+// ?log=<id> — ссылка из колокольчика на сбой операции: строка раскрыта и подсвечена.
+const target = ref(Number(route.query.log) || 0)
+async function focusTarget() {
+  if (!target.value || !items.value.some((a) => a.id === target.value)) return
+  open.value = new Set([...open.value, target.value])
+  await nextTick()
+  document.getElementById(`hrow-${target.value}`)?.scrollIntoView({ block: 'center' })
+}
+// Уже на «Истории», а в колокольчике выбрали другую запись: свежий список и новая подсветка.
+watch(
+  () => route.query.log,
+  async (q) => {
+    target.value = Number(q) || 0
+    if (!target.value) return
+    if (!items.value.some((a) => a.id === target.value)) await reload()
+    await focusTarget()
+  },
+)
+onMounted(async () => {
+  await fetchPage()
+  await focusTarget()
+})
 </script>
 
 <style scoped>
@@ -543,6 +565,9 @@ onMounted(() => fetchPage())
   gap: 14px;
   padding: 14px 18px;
   border-top: 1px solid var(--line);
+}
+.hrow.is-target {
+  background: var(--lime-soft);
 }
 .hrow:first-child {
   border-top: 0;

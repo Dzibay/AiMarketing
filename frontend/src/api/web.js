@@ -194,6 +194,10 @@ export const wsApi = {
     return res.job ? waitJob(res.job, onProgress) : res.result
   },
   queriesCheck: (id, items) => post(`${WS(id)}/queries/check`, { items }),
+  /** Минус-фраза задевает ключи: готовые выходы с тем, что получится (ничего не меняет). */
+  queriesResolveOptions: (id, payload) => post(`${WS(id)}/queries/resolve/options`, payload),
+  /** Применить выбранный выход — минус-фраза или ключи в кавычки; запись в историю с откатом. */
+  queriesResolve: (id, payload) => post(`${WS(id)}/queries/resolve`, payload),
   queriesMemory: (id, params = {}) => request(`${WS(id)}/queries/memory${query(params)}`),
   queriesForget: (id, queryNorms) => post(`${WS(id)}/queries/forget`, { query_norms: queryNorms }),
   briefDraft: (id, site, onProgress) => runJob(`${WS(id)}/brief/draft`, { site }, onProgress),
@@ -201,12 +205,17 @@ export const wsApi = {
 
 /** Колокольчик: лента уведомлений, счётчики шапки одним запросом и настройки «событие × куда». */
 export const notifyApi = {
-  /** { pending, notifications, support } — решения, непрочитанные уведомления, ответы поддержки. */
+  /**
+   * { pending, notifications, support, projects } — решения, непрочитанные уведомления, ответы поддержки;
+   * projects: [{ id, pending, urgent: ['деньги на исходе', …] }] — отметки проектов в меню и переключателе.
+   */
   badges: () => request('/api/web/me/badges'),
   /** { items: [{ id, kind, severity, title, body, link, created_at, read }], unread }. */
   list: (limit = 50) => request(`/api/web/notifications${query({ limit })}`),
   /** Отметить прочитанными: { ids } | { link } | { all: true } → { marked, unread }. */
   read: (payload) => request('/api/web/notifications/read', { method: 'POST', body: JSON.stringify(payload) }),
+  /** «Повторить для оставшихся» / «Повторить» у записи о сбое операции → { job }. */
+  retry: (id) => request(`/api/web/notifications/${id}/retry`, { method: 'POST' }),
   /** { events: [{ kind, label, cabinet, telegram }], telegram_available, telegram_linked }. */
   settings: () => request('/api/web/notifications/settings'),
   /** { kind: { cabinet?, telegram? } } → те же настройки. */
@@ -245,6 +254,17 @@ export const undoApi = {
   // «Вернуть как было» у выполненного предложения ИИ: все записи журнала этого решения.
   aiPreview: (actionId) => request(`/api/web/ai/actions/${actionId}/undo`),
   aiRun: (actionId, onProgress) => runJob(`/api/web/ai/actions/${actionId}/undo`, undefined, onProgress),
+}
+
+/** «Защита бюджета»: переключатели проекта и «Включить у всех клиентов» на главной. */
+export const protectApi = {
+  /** { workspace_id, target_cpa_rub, allowed, items: [{ key, title, caption, enabled, threshold_kind, value, threshold_text, needs_target, money }] } */
+  get: (wsId) => request(`${WS(wsId)}/budget-protection`),
+  /** payload: { enabled, threshold_kind?, value? } → то же, что get. */
+  set: (wsId, key, payload) => put(`${WS(wsId)}/budget-protection/${key}`, payload),
+  /** { items: [{ workspace_id, name, client_name, target_cpa_rub, checks }], protected, total, allowed } */
+  plan: () => request('/api/web/budget-protection/all'),
+  applyAll: (workspaceIds) => post('/api/web/budget-protection/all', { workspace_ids: workspaceIds }),
 }
 
 /** ИИ-ассистент: общие модели сервиса, шкала лимита, чаты проекта, согласование действий. */

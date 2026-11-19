@@ -211,16 +211,21 @@ def patch_negatives(user_id: int, *, campaigns: dict | None = None, adgroups: di
     campaigns / adgroups — {row_id: {"add": [...], "remove": [...]}}.
     → {"campaigns": {row_id: {"added", "removed", "name"}}, "adgroups": {...}, "skipped": [...], "errors": [...]}
     """
+    if not _normalize(campaigns) and not _normalize(adgroups):
+        return {"campaigns": {}, "adgroups": {}, "skipped": [], "errors": []}
+    with negatives_lock(user_id):
+        return patch_negatives_locked(user_id, campaigns=campaigns, adgroups=adgroups)
+
+
+def patch_negatives_locked(user_id: int, *, campaigns: dict | None = None, adgroups: dict | None = None) -> dict:
+    """То же, что patch_negatives, но замок negatives_lock уже взят вызывающим (он не реентерабелен)."""
     camp_changes = _normalize(campaigns)
     group_changes = _normalize(adgroups)
     out: dict = {"campaigns": {}, "adgroups": {}, "skipped": [], "errors": []}
-    if not camp_changes and not group_changes:
-        return out
-    with negatives_lock(user_id):
-        if camp_changes:
-            _patch_kind(user_id, "campaigns", camp_changes, out)
-        if group_changes:
-            _patch_kind(user_id, "adgroups", group_changes, out)
+    if camp_changes:
+        _patch_kind(user_id, "campaigns", camp_changes, out)
+    if group_changes:
+        _patch_kind(user_id, "adgroups", group_changes, out)
     return out
 
 

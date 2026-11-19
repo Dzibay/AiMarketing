@@ -19,12 +19,14 @@ from app.digest import send_digest
 from app.direct_balance import sync_balances_for_user
 from app.direct_sync import sync_account_campaigns
 from app.entity_stats import sync_campaign_entity_stats
-from app.journal import acting_as, collect_undoable, single_undoable
+from app.journal import acting_as, collect_logged, collect_undoable, single_undoable
 from app.jobs import PRIORITY_BACKGROUND, PRIORITY_USER, complete, enqueue, fail, heartbeat, set_progress
 from app.keywords import sync_campaign_keywords
 from app.metrika_sync import canonical_counters, sync_counter_goals
 from app.negative_lists import apply_negative_list
 from app.notifications import notify, notify_signals
+from app.operation_notify import is_operation, notify_failed, notify_result
+from app.plain_errors import plain_error
 from app.query_cleaning import (
     apply_decisions,
     classify_all_queries,
@@ -248,8 +250,8 @@ def _urgent_check(user_id: int, payload: dict, progress: Progress) -> dict:
 LOAD_KINDS = ("load_account", "load_counter", "sync_connection")
 
 
-def _notify_load_failed(job: dict, error: str) -> None:
-    """Загрузка данных не удалась окончательно (попытки кончились) — запись в колокольчике."""
+def _notify_load_failed(job: dict, error_code: str, error: str = "") -> None:
+    """Загрузка данных не удалась окончательно (попытки кончились) — запись в колокольчике, причина словами."""
     payload = job.get("payload") or {}
     user_id = int(job["user_id"])
     what, key = "Подключение к Яндексу", f"connection:{payload.get('connection_id')}"
@@ -265,7 +267,7 @@ def _notify_load_failed(job: dict, error: str) -> None:
         user_id,
         "load_error",
         f"Не удалось загрузить данные: {what}",
-        body=error[:300] or "Попробуем снова по расписанию. Если повторится — переподключите Яндекс.",
+        body=f"Причина: {plain_error(error_code, error)[:300]}. Попробуем снова по расписанию.",
         link="/cabinet/connections",
         severity="error",
         dedup_key=f"load:{key}",
@@ -476,19 +478,23 @@ def run_job(job: dict, worker_id: str) -> str:
         daemon=True,
     ).start()
     try:
-        with collect_undoable() as undoable:
+        with collect_undoable() as undoable, collect_logged() as logged:
             result = handler(job["user_id"], job.get("payload") or {}, progress)
     except YandexError as exc:
         status = fail(job, worker_id, error_code=exc.code, error=exc.message or "")
         log.warning("job %s %s: %s → %s", job["id"], job["kind"], exc.code, status)
         if status == "error" and job["kind"] in LOAD_KINDS:
-            _notify_load_failed(job, exc.message or "")
+            _notify_load_failed(job, exc.code, exc.message or "")
+        elif status == "error" and is_operation(job):
+            notify_failed(job, exc.code, exc.message or "", logged)
         return status
     except Exception as exc:
         log.exception("job %s %s", job["id"], job["kind"])
         status = fail(job, worker_id, error_code="internal", error=str(exc)[:300])
         if status == "error" and job["kind"] in LOAD_KINDS:
-            _notify_load_failed(job, "")
+            _notify_load_failed(job, "internal")
+        elif status == "error" and is_operation(job):
+            notify_failed(job, "internal", "", logged)
         return status
     finally:
         done.set()
@@ -501,4 +507,7 @@ def run_job(job: dict, worker_id: str) -> str:
         # 50 — предел группового отката undo.MAX_GROUP).
         result = {**result, "undo_log_ids": sorted(set(undoable))}
     complete(job["id"], worker_id, result)
+    if is_operation(job):
+        # Частичный успех — в колокольчик; полный — гасит прежнюю запись о сбое того же объекта.
+        notify_result(job, result, logged)
     return "done"

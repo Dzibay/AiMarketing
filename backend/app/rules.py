@@ -54,6 +54,10 @@ KEYWORD_ONLY_ACTIONS = {"set_bid"}
 QUERY_ONLY_ACTIONS = {"negative_adgroup", "negative_campaign"}
 QUERY_ALLOWED_ACTIONS = {"negative_adgroup", "negative_campaign", "notify"}
 QUERY_ALLOWED_TYPES = {"spend_no_conv", "cpc_above", "cpa_above"}
+# Порог в рублях или «в N раз больше целевой цены заявки проекта» (cpa_x): цена берётся при каждой проверке.
+THRESHOLD_KINDS = {"rub", "cpa_x"}
+CPA_X_TYPES = {"spend_no_conv", "cpa_above", "cpa_below"}
+NO_TARGET_CPA = "В проекте не задана цена заявки — правило не проверялось"
 
 
 def create_rule(
@@ -74,6 +78,8 @@ def create_rule(
     target: str = "campaign",
     action_pct: float | None = None,
     scope_campaign_row_id: int | None = None,
+    threshold_kind: str = "rub",
+    template: str | None = None,
 ) -> dict:
     target_n = (target or "campaign").strip() or "campaign"
     if target_n not in RULE_TARGETS:
@@ -93,6 +99,7 @@ def create_rule(
     pct = _validate_pct(action, action_pct)
     scope_workspace_id = _validate_workspace(user_id, scope_workspace_id)
     scope_campaign_row_id = _validate_campaign(user_id, scope_campaign_row_id, scope_account_id, scope_workspace_id)
+    threshold_kind = _validate_threshold_kind(threshold_kind, rule_type, scope_workspace_id)
     with pool.connection() as conn:
         row = conn.execute(
             """
@@ -100,9 +107,9 @@ def create_rule(
                 user_id, name, enabled, dry_run, scope_account_id,
                 rule_type, threshold_value, lookback_days, action, cooldown_hours,
                 goal_row_id, action_budget_rub, target, action_bid_rub, scope_workspace_id, action_pct,
-                scope_campaign_row_id
+                scope_campaign_row_id, threshold_kind, template
             )
-            VALUES (%s, %s, TRUE, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            VALUES (%s, %s, TRUE, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             RETURNING *
             """,
             (
@@ -122,9 +129,58 @@ def create_rule(
                 scope_workspace_id,
                 pct,
                 scope_campaign_row_id,
+                threshold_kind,
+                template,
             ),
         ).fetchone()
     return _public_rule(_with_names(row))
+
+
+def _validate_threshold_kind(kind: str | None, rule_type: str, workspace_id: int | None) -> str:
+    """Порог в ценах заявки — только у денежных типов и только у правила проекта: цена заявки — его."""
+    kind = (kind or "rub").strip() or "rub"
+    if kind not in THRESHOLD_KINDS:
+        raise YandexError("rule-type")
+    if kind == "cpa_x":
+        if rule_type not in CPA_X_TYPES:
+            raise YandexError("rule-type", "В ценах заявки задаётся только порог расхода или цены заявки")
+        if not workspace_id:
+            raise YandexError("rule-type", "Порог в ценах заявки — только у правила проекта")
+    return kind
+
+
+def target_cpa_of(row: dict) -> Decimal | None:
+    """Цена заявки из строки проекта (kpi_* и client_kpi_*): цель проекта важнее цели клиента. ДРР не подходит."""
+    kind = row.get("kpi_type") or row.get("client_kpi_type")
+    target = row.get("kpi_target") if row.get("kpi_type") else row.get("client_kpi_target")
+    if kind == "cpa" and target is not None and Decimal(str(target)) > 0:
+        return Decimal(str(target))
+    return None
+
+
+def project_target_cpa_rub(user_id: int, workspace_id: int | None) -> Decimal | None:
+    """Целевая цена заявки проекта, ₽: своя цель проекта, а без неё — цель клиента."""
+    if not workspace_id:
+        return None
+    with pool.connection() as conn:
+        row = conn.execute(
+            """
+            SELECT w.kpi_type, w.kpi_target, cl.kpi_type AS client_kpi_type, cl.kpi_target AS client_kpi_target
+            FROM workspaces w LEFT JOIN clients cl ON cl.id = w.client_row_id
+            WHERE w.id = %s AND w.user_id = %s
+            """,
+            (workspace_id, user_id),
+        ).fetchone()
+    return target_cpa_of(row) if row else None
+
+
+def rule_threshold_rub(user_id: int, rule: dict) -> Decimal | None:
+    """Порог правила в рублях (у бюджетных типов — в процентах). None — в проекте нет цены заявки."""
+    value = Decimal(str(rule.get("threshold_value") or 0))
+    if (rule.get("threshold_kind") or "rub") != "cpa_x":
+        return value
+    cpa = project_target_cpa_rub(user_id, rule.get("scope_workspace_id"))
+    return (value * cpa).quantize(Decimal("0.01")) if cpa is not None else None
 
 
 def _validate_workspace(user_id: int, workspace_id: int | None) -> int | None:
@@ -247,6 +303,7 @@ def update_rule(user_id: int, rule_id: int, **fields) -> dict:
         "scope_campaign_row_id",
         "target",
         "rule_type",
+        "threshold_kind",
     }
     updates = {k: v for k, v in fields.items() if k in allowed}
     if not updates:
@@ -279,6 +336,13 @@ def update_rule(user_id: int, rule_id: int, **fields) -> dict:
     rule_type_n = updates.get("rule_type") or current.get("rule_type")
     action_n = updates.get("action") or current.get("action") or "pause"
     _validate_target_combo(target_n, rule_type_n, action_n)
+    if updates.keys() & {"threshold_kind", "rule_type", "scope_workspace_id"}:
+        workspace_n = updates["scope_workspace_id"] if "scope_workspace_id" in updates else current.get("scope_workspace_id")
+        kind_n = _validate_threshold_kind(
+            updates.get("threshold_kind") or current.get("threshold_kind"), rule_type_n, workspace_n
+        )
+        if "threshold_kind" in updates:
+            updates["threshold_kind"] = kind_n
     if "goal_row_id" in updates:
         updates["goal_row_id"] = (
             None
@@ -442,6 +506,8 @@ def _public_rule(row: dict) -> dict:
         "campaign_name": row.get("campaign_name") or "",
         "rule_type": row["rule_type"],
         "threshold_value": float(row["threshold_value"] or 0),
+        "threshold_kind": row.get("threshold_kind") or "rub",
+        "template": row.get("template") or None,
         "lookback_days": row["lookback_days"],
         "action": row["action"],
         "cooldown_hours": row["cooldown_hours"],
@@ -945,14 +1011,24 @@ def _run_rule(user_id: int, rule_id: int, *, force_dry_run: bool | None = None) 
 
     dry = rule["dry_run"] if force_dry_run is None else force_dry_run
     target = rule.get("target") or "campaign"
-    if target == "keyword":
-        matched = _matching_keywords(user_id, rule)
-    elif target == "query":
-        matched = _matching_queries(user_id, rule)
-    else:
-        matched = _matching_campaigns(user_id, rule)
     action = rule["action"] or "pause"
     applied, error = 0, ""
+    # Порог «в N цен заявки» пересчитывается в рубли по цели проекта на момент проверки.
+    threshold = rule_threshold_rub(user_id, rule)
+    if threshold is None:
+        matched, error = [], NO_TARGET_CPA
+    else:
+        relative = (rule.get("threshold_kind") or "rub") == "cpa_x"
+        rule = {**rule, "threshold_value": threshold}
+        if target == "keyword":
+            matched = _matching_keywords(user_id, rule)
+        elif target == "query":
+            matched = _matching_queries(user_id, rule)
+        else:
+            matched = _matching_campaigns(user_id, rule)
+        if relative:
+            for m in matched:
+                m["reason"] = f"{m['reason']}; порог {_rub(threshold * 100)} от цены заявки"
     if matched and not dry:
         applied, error = _apply(user_id, rule, target, action, matched)
 
@@ -986,7 +1062,7 @@ def _run_rule(user_id: int, rule_id: int, *, force_dry_run: bool | None = None) 
             body=(f"Не всё применилось: {error}. " if error else "")
             + names
             + (f" и ещё {len(matched) - 3}" if len(matched) > 3 else ""),
-            link="/cabinet/autopilot",
+            link=_rule_link(rule, action, dry),
             workspace_id=rule.get("scope_workspace_id"),
             severity="error" if error else "info",
             dedup_key=f"rule:{rule_id}",
@@ -1005,6 +1081,17 @@ def _run_rule(user_id: int, rule_id: int, *, force_dry_run: bool | None = None) 
         "error": error,
         "items": matched,
     }
+
+
+def _rule_link(rule: dict, action: str, dry: bool) -> str:
+    """Куда ведёт уведомление. «Защита бюджета» живёт в обычном режиме: остановку вернуть из истории проекта,
+    сообщение — посмотреть кампании проекта. Остальные правила — в автопилоте (экспертный режим)."""
+    ws_id = rule.get("scope_workspace_id")
+    if not rule.get("template") or not ws_id:
+        return "/cabinet/autopilot"
+    if action != "notify" and not dry:
+        return f"/w/{ws_id}/history"
+    return f"/w/{ws_id}/campaigns"
 
 
 def run_enabled_rules_for_user(user_id: int) -> int:

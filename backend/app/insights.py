@@ -680,7 +680,9 @@ def _data_notes(infos: list[dict], accounts: dict[int, dict], ends: dict[int, da
     for aid, account in accounts.items():
         name = account["name"]
         if account.get("stats_error"):
-            notes.append(f"Логин {name}: статистика не обновляется ({account['stats_error']})")
+            from app.plain_errors import plain_error
+
+            notes.append(f"Логин {name}: статистика не обновляется — {plain_error(account['stats_error'])}")
         if ends.get(aid) is None:
             notes.append(f"Логин {name}: статистика ещё не загружена")
         elif ends[aid] < date_to:

@@ -87,9 +87,11 @@
               v-tip="[niceQuotes(ws.name), projectHint(ws)].filter(Boolean).join(' — ')"
               @click="pick(ws.id)"
             >
-              <ProjectAva :project="ws" />
+              <ProjectAva :project="ws" urgent />
               <span class="menu-item__text">{{ niceQuotes(ws.name) }}</span>
+              <span v-if="!ws.locked && projectMarkText(ws.id)" class="mark-sr">— {{ projectMarkText(ws.id) }}</span>
               <Lock v-if="ws.locked" class="pswitch__lock" aria-label="не входит в тариф" />
+              <span v-else-if="projectPending(ws)" class="srow__n" aria-hidden="true">{{ projectPending(ws) }}</span>
               <Check v-if="ws.id === projectId" class="pswitch__check" aria-hidden="true" />
             </button>
           </template>
@@ -126,9 +128,11 @@ import { usePopover } from '../composables/usePopover'
 import { useProjectFilter } from '../composables/useProjectFilter'
 import { niceQuotes } from '../utils/format'
 import ProjectAva from './ui/ProjectAva.vue'
+import { projectMarkText } from '../composables/usePending'
 import {
   projectFolders,
   projectHint,
+  projectPending,
   projectTone,
   useWorkspaces,
 } from '../composables/useWorkspaces'
@@ -136,6 +140,7 @@ import {
 /**
  * Переключатель проекта в верхней строке: «Все проекты» и список проектов (в экспертном режиме — по папкам
  * клиентов), внизу настройки выбранного проекта и «Добавить сайт». Выбор открывает тот же раздел у другого проекта.
+ * У проекта — число ждущих решений и красная точка срочного сигнала; такие проекты идут первыми.
  * Клавиатура: ↓/↑ — по пунктам, Enter — выбрать, Esc — закрыть; набранный текст сразу уходит в поиск.
  * На телефоне панель выезжает снизу во всю ширину. row — кнопка строкой с пояснением, для шторки «Ещё».
  */

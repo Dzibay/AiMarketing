@@ -629,7 +629,7 @@ def _campaign(user_id: int, campaign_row_id: int) -> dict:
     with pool.connection() as conn:
         row = conn.execute(
             """
-            SELECT c.id, c.account_id, c.campaign_id, c.name, a.connection_id, a.client_login, a.enabled
+            SELECT c.id, c.account_id, c.campaign_id, c.name, c.campaign_type, a.connection_id, a.client_login, a.enabled
             FROM direct_campaigns c JOIN direct_accounts a ON a.id = c.account_id
             WHERE c.id = %s AND c.user_id = %s
             """,
@@ -665,8 +665,13 @@ def set_campaign_regions(
     if not groups:
         raise YandexError("empty", "В кампании нет групп — регионы задаются в группах")
     before: list[int] = []
+    # Прежние регионы — каждой группе свои (Id группы в Директе): у разных групп они могли быть разными,
+    # и откат вернёт каждой её список, а не общий на всю кампанию.
+    previous: dict[str, list[int]] = {}
     for group in groups:
-        for rid in parse_region_ids(group.get("RegionIds") or []):
+        own = parse_region_ids(group.get("RegionIds") or [])
+        previous[str(int(group["Id"]))] = own
+        for rid in own:
             if rid not in before:
                 before.append(rid)
     updated: list[int] = []
@@ -678,6 +683,7 @@ def set_campaign_regions(
             "adgroups",
             "update",
             {"AdGroups": [{"Id": int(g["Id"]), "RegionIds": region_ids} for g in chunk]},
+            version=_version(camp),
         )
         failed = dict(direct_api.item_errors(result, "UpdateResults"))
         for index, group in enumerate(chunk):
@@ -703,9 +709,96 @@ def set_campaign_regions(
         "ok" if not errors else ("partial" if updated else "error"),
         workspace_id=workspace_id,
         title=f"Регионы «{camp['name']}»: {region_label(before, regions)} → {region_label(region_ids, regions)}",
+        undo=_regions_undo(campaign_row_id, {gid: previous[str(gid)] for gid in updated}),
         targets=[f"campaign:{campaign_row_id}"],
     )
     return {"groups": len(groups), "updated": len(updated), "errors": errors[:20]}
+
+
+def _version(camp: dict) -> str:
+    """Группы ЕПК v5 не правит («используйте v501»); v501 принимает и обычные группы."""
+    return "v501" if camp.get("campaign_type") == "UNIFIED_CAMPAIGN" else "v5"
+
+
+def _regions_undo(campaign_row_id: int, previous: dict[int, list[int]]) -> dict | None:
+    """Откат смены регионов: группам, где они поменялись, — их прежние списки. Пустой список не вернуть:
+    без регионов Директ группу не примет."""
+    groups = {str(gid): ids for gid, ids in previous.items() if ids}
+    if not groups:
+        return None
+    return {
+        "label": "Вернуть прежние регионы",
+        "steps": [{"op": "campaign_group_regions", "args": {"campaign_row_id": campaign_row_id, "groups": groups}}],
+    }
+
+
+def restore_group_regions(user_id: int, campaign_row_id: int, groups: dict) -> dict:
+    """Откат set_campaign_regions: каждой группе (Id в Директе) — её прежние регионы.
+
+    Группы, которых уже нет, пропускаем; где регионы уже такие — не трогаем. Сбой части групп — ошибка с
+    текстом, что вернулось и что нет: запись остаётся доступной для повторного отката."""
+    from app.journal import _n
+
+    wanted = {int(k): parse_region_ids(v) for k, v in (groups or {}).items()}
+    wanted = {gid: ids for gid, ids in wanted.items() if ids}
+    if not wanted:
+        return {"applied": 0, "unchanged": 0, "missing": 0}
+    camp = _campaign(user_id, campaign_row_id)
+    token = get_connection_access_token(camp["connection_id"], user_id)
+    live: dict[int, list[int]] = {}
+    for part in direct_api.chunks(list(wanted), 1000):
+        got = direct_api.get_all(
+            token,
+            camp["client_login"],
+            "adgroups",
+            {"SelectionCriteria": {"Ids": part}, "FieldNames": ["Id", "RegionIds"]},
+            "AdGroups",
+        )
+        for group in got:
+            if group.get("Id") is not None:
+                live[int(group["Id"])] = parse_region_ids(group.get("RegionIds") or [])
+    todo = [(gid, ids) for gid, ids in wanted.items() if gid in live and set(live[gid]) != set(ids)]
+    unchanged = sum(1 for gid, ids in wanted.items() if gid in live and set(live[gid]) == set(ids))
+    restored: list[tuple[int, list[int]]] = []
+    errors: list[str] = []
+    for chunk in direct_api.chunks(todo, 1000):
+        try:
+            result = direct_api.call(
+                token,
+                camp["client_login"],
+                "adgroups",
+                "update",
+                {"AdGroups": [{"Id": gid, "RegionIds": ids} for gid, ids in chunk]},
+                version=_version(camp),
+            )
+        except YandexError as exc:
+            errors.extend(f"группа {gid}: {exc.message or exc.code}" for gid, _ids in chunk)
+            continue
+        failed = dict(direct_api.item_errors(result, "UpdateResults"))
+        for index, (gid, ids) in enumerate(chunk):
+            if index in failed:
+                errors.append(f"группа {gid}: {failed[index]}")
+            else:
+                restored.append((gid, ids))
+    if restored:
+        with pool.connection() as conn:
+            for gid, ids in restored:
+                conn.execute(
+                    """
+                    UPDATE direct_adgroups SET region_ids = %s, synced_at = NOW()
+                    WHERE user_id = %s AND account_id = %s AND adgroup_id = %s
+                    """,
+                    (json.dumps(ids), user_id, camp["account_id"], gid),
+                )
+    if errors:
+        done = len(restored) + unchanged
+        head = (
+            f"Прежние регионы вернулись у {_n(done, ('группы', 'групп', 'групп'))}, но не везде: "
+            if done
+            else "Прежние регионы не вернулись: "
+        )
+        raise YandexError("direct", (head + "; ".join(errors[:5]))[:500])
+    return {"applied": len(restored), "unchanged": unchanged, "missing": len(wanted) - len(live)}
 
 
 # --- Выбор регионов в кабинете ----------------------------------------------------------------------------

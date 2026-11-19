@@ -49,6 +49,7 @@ RECENT_DAYS = 3
 MONEY_DAYS = 2
 MODERATION_LOOKBACK_DAYS = 7
 FINAL_AD_STATUSES = ("ACCEPTED", "REJECTED")  # модерация объявления закончилась
+MODERATION_PASSED = "модерация пройдена"  # итог модерации — хорошая новость, не тревога
 
 
 # --- Чистые правила (покрыты юнит-тестами) -------------------------------------------------------------
@@ -350,7 +351,7 @@ def _moderation_events(user_id: int, now: datetime, visible_ws: set, ws_rows: di
         obj = f"mod:c{c['id']}:{send['id']}"
         if outcome["result"] == "accepted":
             tail = "объявления уже показываются" if outcome["running"] else "можно включать"
-            p["event"] = _event(obj, p, "модерация пройдена", f"Кампания «{name}» прошла модерацию — {tail}.", link)
+            p["event"] = _event(obj, p, MODERATION_PASSED, f"Кампания «{name}» прошла модерацию — {tail}.", link)
         elif outcome["count"]:
             n = outcome["count"]
             what = f"{n} {_plural(n, 'объявление', 'объявления', 'объявлений')}"
@@ -628,3 +629,229 @@ def covered(user_id: int) -> dict:
                 ).fetchall()
             }
     return {"accounts": accounts, "campaigns": campaigns}
+
+
+# --- Отметки проектов в меню и переключателе («Ждёт решения», I28) ------------------------------------
+
+# Срочное повторяется раз в сутки, пока событие есть: запись за последние сутки (с запасом на пару
+# пропущенных или запоздавших ежечасных проверок) — сигнал ещё горит. Меню не пересчитывает сводку: берёт
+# последнюю запись по объекту и дёшево сверяет её с тем, что уже лежит в базе (баланс, статус кампании).
+SIGNAL_WINDOW_HOURS = REPEAT_HOURS + 3
+# Объект срочного → типы проблемы сводки, которыми его скрывают («⋯» у сигнала).
+OBJECT_KINDS = {
+    "money": ("balance",),
+    "rejected": ("moderation",),
+    "stopped": ("stopped",),
+    "noconv": ("no_conversions",),
+    "cpa": ("cpa_spike",),
+    "mod": ("moderation", "ads_rejected"),
+}
+
+
+def headline_of(title: str) -> str:
+    """«Иванов · Окна: деньги на исходе» → «деньги на исходе»."""
+    return str(title or "").rsplit(": ", 1)[-1].strip()
+
+
+def snoozed_after(
+    obj: str, sent_at: datetime | None, ws_ids: list[int], snooze_rows: list[dict], ws_client: dict, now: datetime
+) -> bool:
+    """Сигнал скрыли («⋯» в «Где горит») уже после того, как о нём сообщили.
+
+    Скрытие старше записи не в счёт: проверка тогда уже сверилась с ним и всё равно сообщила — значит,
+    проблема стала хуже скрытого. Истёкшее «на 7 дней» тоже не прячет.
+    """
+    prefix, _, rest = obj.partition(":")
+    target = rest.split(":", 1)[0]
+    kinds = OBJECT_KINDS.get(prefix) or ()
+    if not kinds or not target:
+        return False
+    sent_at = _aware(sent_at)
+    scope = snoozes.type_scope({"workspace_ids": list(ws_ids)}, ws_client) if ws_ids else None
+    for s in snooze_rows:
+        created = _aware(s.get("created_at"))
+        if s.get("kind") not in kinds or created is None or (sent_at is not None and created <= sent_at):
+            continue
+        if s["mode"] == "type":
+            if scope and s.get("scope") == scope:
+                return True
+        elif s.get("problem_key") == f"{s['kind']}:{target}" and snoozes.active(s, now):
+            return True
+    return False
+
+
+def _money_account(obj: str) -> int | None:
+    prefix, _, rest = obj.partition(":")
+    if prefix == "money" and rest.startswith("a") and rest[1:].isdigit():
+        return int(rest[1:])
+    return None
+
+
+def _campaign_of(obj: str) -> int | None:
+    """rejected:c5, stopped:c5, mod:c5:77 … → 5."""
+    target = obj.partition(":")[2].split(":", 1)[0]
+    if target.startswith("c") and target[1:].isdigit():
+        return int(target[1:])
+    return None
+
+
+def signal_thread(obj: str) -> str:
+    """Записи об одном и том же: «кампания отклонена» и итоги модерации той же кампании — одна нить,
+    свежая запись сменяет старую («модерация пройдена» гасит «кампания отклонена»)."""
+    prefix = obj.partition(":")[0]
+    cid = _campaign_of(obj)
+    if prefix in ("rejected", "mod") and cid is not None:
+        return f"mod:c{cid}"
+    return obj
+
+
+def still_burning(obj: str, account: dict | None, campaign: dict | None) -> bool:
+    """Сверка записи с тем, что сейчас в базе. Не знаем (нет строки или баланса) — считаем, что горит.
+
+    account: {balance_kopecks, spend_per_day_kopecks, days_on_balance}; campaign: {state, status, rejected_ads}.
+    Расход без заявок и подорожавшие заявки — про вчерашний день, их держит само окно в сутки.
+    """
+    prefix = obj.partition(":")[0]
+    if prefix == "money":
+        if not account or account.get("balance_kopecks") is None:
+            return True
+        return money_critical(account)
+    if not campaign:
+        return True
+    if campaign.get("state") in ("ARCHIVED", "ENDED"):
+        return False
+    if prefix == "rejected":
+        return campaign.get("status") == "REJECTED"
+    if prefix == "mod":
+        return campaign.get("status") == "REJECTED" or bool(campaign.get("rejected_ads"))
+    if prefix == "stopped":
+        return campaign.get("state") == "OFF"
+    return True
+
+
+def _current_state(conn, user_id: int, accounts: set[int], campaigns: set[int], now: datetime):
+    """Баланс логинов с расходом за 7 дней (как в сводке) и состояние кампаний — двумя запросами."""
+    from app.overview import days_on_balance
+
+    acc_state: dict[int, dict] = {}
+    if accounts:
+        today = now.astimezone(MSK).date()
+        rows = conn.execute(
+            """
+            SELECT a.id, a.balance_kopecks,
+                   COALESCE((SELECT SUM(s.cost_kopecks) FROM stats_daily s
+                             WHERE s.user_id = a.user_id AND s.account_id = a.id AND s.source = 'direct'
+                               AND s.day >= %s AND s.day < %s), 0) AS cost_7d
+            FROM direct_accounts a WHERE a.user_id = %s AND a.id = ANY(%s)
+            """,
+            (today - timedelta(days=7), today, user_id, sorted(accounts)),
+        ).fetchall()
+        for r in rows:
+            cost_7d = int(r["cost_7d"] or 0)
+            acc_state[r["id"]] = {
+                "balance_kopecks": r["balance_kopecks"],
+                "spend_per_day_kopecks": round(cost_7d / 7),
+                "days_on_balance": days_on_balance(r["balance_kopecks"], cost_7d),
+            }
+    camp_state: dict[int, dict] = {}
+    if campaigns:
+        rows = conn.execute(
+            """
+            SELECT c.id, c.state, c.status,
+                   EXISTS (SELECT 1 FROM direct_ads ad JOIN direct_adgroups g ON g.id = ad.adgroup_row_id
+                           WHERE g.campaign_row_id = c.id AND ad.status = 'REJECTED'
+                             AND ad.state <> 'ARCHIVED') AS rejected_ads
+            FROM direct_campaigns c WHERE c.user_id = %s AND c.id = ANY(%s)
+            """,
+            (user_id, sorted(campaigns)),
+        ).fetchall()
+        camp_state = {r["id"]: r for r in rows}
+    return acc_state, camp_state
+
+
+def project_signals(user_id: int, now: datetime | None = None) -> dict[int, list[str]]:
+    """Срочные сигналы, которые горят у проектов: {workspace_id: ["деньги на исходе", …]} — новые первыми.
+
+    Источник — срочные уведомления за последние сутки (urgent.run повторяет их раз в сутки, пока событие
+    есть). По объекту берётся последняя запись и сверяется с базой: пополненный счёт, прошедшая модерация,
+    снова работающая кампания точку гасят сразу. Скрытое после уведомления («⋯» у сигнала) не считается,
+    «модерация пройдена» — не тревога. Деньги на логине нескольких проектов — у каждого из них.
+
+    Ограничение: если срочное выключено и в кабинете, и в Telegram, записей нет — нет и красных точек.
+    """
+    now = now or datetime.now(timezone.utc)
+    with pool.connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT workspace_id, title, dedup_key, created_at FROM notifications
+            WHERE user_id = %s AND kind = 'urgent' AND created_at > %s
+            ORDER BY created_at DESC, id DESC
+            """,
+            (user_id, now - timedelta(hours=SIGNAL_WINDOW_HOURS)),
+        ).fetchall()
+        if not rows:
+            return {}
+        ws_client = {
+            r["id"]: r["client_row_id"]
+            for r in conn.execute(
+                "SELECT id, client_row_id FROM workspaces WHERE user_id = %s AND archived_at IS NULL", (user_id,)
+            ).fetchall()
+        }
+        # По каждому объекту — только последняя запись: «деньги закончились» сменяет «деньги на исходе»,
+        # итог модерации — «кампания отклонена».
+        latest: list[dict] = []
+        threads: set[str] = set()
+        for r in rows:
+            thread = signal_thread(object_of(r["dedup_key"]))
+            if thread not in threads:
+                threads.add(thread)
+                latest.append(r)
+        rows = latest
+        money_ids = {a for r in rows if (a := _money_account(object_of(r["dedup_key"])))}
+        campaign_ids = {
+            c
+            for r in rows
+            if object_of(r["dedup_key"]).partition(":")[0] in ("rejected", "mod", "stopped")
+            and (c := _campaign_of(object_of(r["dedup_key"]))) is not None
+        }
+        acc_state, camp_state = _current_state(conn, user_id, money_ids, campaign_ids, now)
+        rows = [
+            r
+            for r in rows
+            if still_burning(
+                (obj := object_of(r["dedup_key"])),
+                acc_state.get(_money_account(obj) or 0),
+                camp_state.get(_campaign_of(obj) or 0),
+            )
+        ]
+        if not rows:
+            return {}
+        accounts = {
+            a for r in rows if r["workspace_id"] is None and (a := _money_account(object_of(r["dedup_key"])))
+        }
+        account_ws: dict[int, list[int]] = {}
+        if accounts:
+            for link in conn.execute(
+                "SELECT account_id, workspace_id FROM workspace_accounts WHERE user_id = %s AND account_id = ANY(%s)"
+                " ORDER BY workspace_id",
+                (user_id, sorted(accounts)),
+            ).fetchall():
+                account_ws.setdefault(link["account_id"], []).append(link["workspace_id"])
+    snooze_rows = snoozes.load(user_id)
+    out: dict[int, list[str]] = {}
+    for r in rows:
+        headline = headline_of(r["title"])
+        if not headline or headline == MODERATION_PASSED:
+            continue
+        obj = object_of(r["dedup_key"])
+        if r["workspace_id"] is not None:
+            ws_ids = [r["workspace_id"]]
+        else:
+            ws_ids = account_ws.get(_money_account(obj) or 0, [])
+        ws_ids = [w for w in ws_ids if w in ws_client]
+        if not ws_ids or snoozed_after(obj, r["created_at"], ws_ids, snooze_rows, ws_client, now):
+            continue
+        for w in ws_ids:
+            if headline not in out.setdefault(w, []):
+                out[w].append(headline)
+    return out

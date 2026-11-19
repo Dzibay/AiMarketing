@@ -29,6 +29,9 @@
             </span>
           </div>
           <div class="prow__acts">
+            <button v-if="forceable.length" class="btn btn--accent" type="button" :disabled="!!busy" @click="resolveNext">
+              Как обойти ключи
+            </button>
             <button v-if="forceable.length" class="btn btn--ghost" type="button" :disabled="!!busy" @click="applyForce">
               Всё равно добавить {{ forceable.length }}
             </button>
@@ -132,7 +135,7 @@
             <p v-if="openWhy[g.key] && !g.hasReasons" class="meta-note">ИИ не оставил пояснения.</p>
             <p v-if="g.conflicts" class="rcard__warn">
               {{ g.conflicts }} {{ plural(g.conflicts, 'запрос заденет', 'запроса заденут', 'запросов заденут') }} ваши
-              ключевые фразы — их пропустим и спросим отдельно.
+              ключевые фразы — их пропустим и предложим, как обойти.
             </p>
             <footer class="rcard__acts">
               <button class="btn btn--accent" type="button" :disabled="!!busy" @click="minusGroup(g)">
@@ -315,6 +318,7 @@
         «{{ p.query }}»: {{ p.message || STATUS_TEXT[p.status] }}
         <template v-if="p.conflicts?.length">
           — {{ p.conflicts.map((k) => `«${k.keyword}»`).join(', ') }}
+          <button class="link-btn" type="button" :disabled="!!busy" @click="openResolve(p)">Как обойти</button>
         </template>
       </li>
     </ul>
@@ -515,6 +519,9 @@
                   </p>
                   <p v-if="checkOf(q)?.total" class="decision__warn tone-warn">
                     Заденет ваши ключи: {{ conflictText(checkOf(q)) }}
+                    <button class="link-btn" type="button" :disabled="!!busy" @click="openResolveRow(q)">
+                      Как обойти
+                    </button>
                   </p>
                   <p v-if="checkOf(q)?.targetsTotal" class="decision__warn tone-warn">
                     Отсечёт и нужные запросы — целевые или с заявками: {{ keptText(checkOf(q)) }}
@@ -646,7 +653,7 @@
               </span>
             </td>
             <td data-label="Минус-фраза">
-              {{ m.verdict === 'negative' ? `${m.negative_phrase} · ${LEVELS[m.level] || m.level}` : '—' }}
+              {{ m.verdict === 'negative' && m.negative_phrase ? `${m.negative_phrase} · ${LEVELS[m.level] || m.level}` : '—' }}
             </td>
             <td data-label="Когда">
               {{ formatDateTime(m.updated_at) }}
@@ -771,6 +778,15 @@
     </template>
   </Modal>
 
+  <QueryConflictDialog
+    :row="conflict.row"
+    :workspace-id="ws.id"
+    :phrase="conflict.phrase"
+    :level="conflict.level"
+    @close="conflict.row = null"
+    @done="onResolved"
+  />
+
   <UndoDialog :log-id="undoId" @close="undoId = null" @done="onUndone" />
 </template>
 
@@ -781,6 +797,7 @@ import UiSkeleton from '../../components/ui/UiSkeleton.vue'
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import EmptyState from '../../components/ui/EmptyState.vue'
 import QueryHighlights from '../../components/QueryHighlights.vue'
+import QueryConflictDialog from '../../components/QueryConflictDialog.vue'
 import QueryMinusDialog from '../../components/QueryMinusDialog.vue'
 import QueryWords from '../../components/QueryWords.vue'
 import UiCheckbox from '../../components/ui/UiCheckbox.vue'
@@ -1643,6 +1660,7 @@ async function apply(list, { force = false, bid = null } = {}) {
       }
     }
     selected.value = new Set([...selected.value].filter((n) => !done.has(n)))
+    resolvedProblems.clear()
     result.value = {
       ...res,
       sent: list,
@@ -1673,6 +1691,49 @@ async function applyForce() {
     { title: 'Добавить с конфликтами', confirmText: 'Добавить', danger: true },
   )
   if (ok) await apply(list, { force: true })
+}
+
+// Минус-фраза задела ключи — готовые выходы (группы без ключа, уточнённая фраза, ключ в кавычки).
+const conflict = reactive({ row: null, phrase: '', level: '' })
+
+function openResolve(p) {
+  Object.assign(conflict, { row: { query_norm: p.query_norm, query: p.query }, phrase: p.phrase || '', level: p.level || '' })
+}
+
+function openResolveRow(q) {
+  const d = decisions[q.query_norm]
+  Object.assign(conflict, { row: q, phrase: d?.negative_phrase.trim() || q.query, level: d?.level || '' })
+}
+
+// Простой режим: пересечения по очереди — после одного сразу следующее.
+function resolveNext() {
+  if (forceable.value.length) openResolve(forceable.value[0])
+}
+
+// Решённые пересечения из итога пакета: если одно решение вернут, строка вернётся в итог.
+const resolvedProblems = new Map()
+
+function onResolved({ row, undone }) {
+  if (undone) {
+    // Вернули одно решение — итог пакета (остальные пересечения, его «Вернуть») не трогаем.
+    if (conflict.row?.query_norm === row.query_norm) conflict.row = null
+    const p = resolvedProblems.get(row.query_norm)
+    resolvedProblems.delete(row.query_norm)
+    if (p && result.value && !result.value.problems.some((x) => x.query_norm === p.query_norm)) {
+      result.value = { ...result.value, problems: [...result.value.problems, p] }
+    }
+    if (expert.value && tab.value === 'memory') loadMemory()
+    else load()
+    return
+  }
+  conflict.row = null
+  if (result.value) {
+    const p = result.value.problems.find((x) => x.query_norm === row.query_norm)
+    if (p) resolvedProblems.set(row.query_norm, p)
+    result.value = { ...result.value, problems: result.value.problems.filter((p) => p.query_norm !== row.query_norm) }
+    if (!expert.value) resolveNext()
+  }
+  load()
 }
 
 function onUndone() {

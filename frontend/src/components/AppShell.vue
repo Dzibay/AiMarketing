@@ -54,7 +54,7 @@
           <!-- Свёрнутое меню: проекты — кружки с первой буквой, без папок клиентов. -->
           <template v-if="sideCollapsed">
             <button
-              v-for="ws in workspaces"
+              v-for="ws in sideProjects"
               :key="ws.id"
               class="srow srow--ava"
               :class="{ 'is-current': ws.id === projectId }"
@@ -63,8 +63,9 @@
               v-tip.right="[niceQuotes(ws.name), projectHint(ws)].filter(Boolean).join(' — ')"
               @click="selectProject(ws.id)"
             >
-              <ProjectAva :project="ws" :size="30" :status="false" :class="`pava--${projectTone(ws)}`" />
+              <ProjectAva :project="ws" :size="30" :status="false" urgent :class="`pava--${projectTone(ws)}`" />
               <span class="srow__t">{{ niceQuotes(ws.name) }}</span>
+              <span v-if="!ws.locked && projectMarkText(ws.id)" class="srow__t">— {{ projectMarkText(ws.id) }}</span>
               <span v-if="projectTone(ws) === 'warn'" class="srow__t">— счётчик Метрики недоступен</span>
               <span v-else-if="ws.locked" class="srow__t">— не входит в тариф</span>
             </button>
@@ -91,9 +92,11 @@
                 v-tip.right="projectHint(ws)"
                 @click="selectProject(ws.id)"
               >
-                <ProjectAva :project="ws" />
+                <ProjectAva :project="ws" urgent />
                 <span class="srow__t">{{ niceQuotes(ws.name) }}</span>
+                <span v-if="!ws.locked && projectMarkText(ws.id)" class="mark-sr">— {{ projectMarkText(ws.id) }}</span>
                 <Lock v-if="ws.locked" class="srow__lock" aria-label="не входит в тариф" />
+                <span v-else-if="projectPending(ws)" class="srow__n" aria-hidden="true">{{ projectPending(ws) }}</span>
               </button>
               <RouterLink
                 v-if="ws.id === projectId"
@@ -191,14 +194,14 @@
         </div>
         <!-- На узком экране счётчик решений — в нижней панели, тема — в «Ещё» и в меню профиля. -->
         <RouterLink
-          v-if="!narrow && accessOk && pendingCount > 0"
+          v-if="!narrow && accessOk && pendingHere > 0"
           class="dchip dchip--btn dchip--lime"
           :class="{ active: route.meta.section === 'pending' }"
           to="/cabinet/pending"
-          v-tip="'Предложения ИИ, которые ждут вашего решения'"
+          v-tip="project ? 'Предложения ИИ по этому проекту, которые ждут вашего решения' : 'Предложения ИИ, которые ждут вашего решения'"
           v-coach="'pending'"
         >
-          Ждёт решения: {{ pendingCount }}
+          Ждёт решения: {{ pendingHere }}
         </RouterLink>
         <LoadsIndicator v-if="accessOk" :quiet="!expert" />
         <!-- ИИ рядом: панель справа на любой странице, кроме самого чата. На телефоне — кнопка «ИИ» внизу. -->
@@ -378,7 +381,7 @@ import { aiPanelOpen, closeAiPanel, toggleAiPanel } from '../composables/useAiPa
 import { useExpert } from '../composables/useExpert'
 import { pageTitleOverride } from '../composables/usePageTitle'
 import { resetLoads } from '../composables/useLoads'
-import { loadPending, resetPending, usePending } from '../composables/usePending'
+import { loadPending, pendingFor, projectMarkText, resetPending, usePending } from '../composables/usePending'
 import { resetPrompts } from '../composables/usePrompts'
 import { loadPlan, resetPlan, usePlan } from '../composables/usePlan'
 import { featureLocked, loadProfile, resetProfile, useProfile } from '../composables/useProfile'
@@ -392,8 +395,10 @@ import { useViewport } from '../composables/useViewport'
 import { revealInStrip, useScrollStrip } from '../composables/useScrollStrip'
 import {
   loadWorkspaces,
+  byAttention,
   projectFolders,
   projectHint,
+  projectPending,
   projectTone,
   resetWorkspaces,
   useWorkspaces,
@@ -416,6 +421,8 @@ const { plan } = usePlan()
 const { pendingCount } = usePending()
 const { projectId, project, selectProject } = useProjectFilter()
 const { workspaces, grouped } = useWorkspaces()
+// «Ждёт решения» в шапке — по выбранному проекту, как на самой странице; «Все проекты» — всего.
+const pendingHere = computed(() => pendingFor(projectId.value))
 const { expert, setExpert } = useExpert()
 const { narrow } = useViewport()
 
@@ -518,6 +525,8 @@ function toggleGroup(id) {
  * свернуть, выбранный проект виден и в свёрнутой. Клиент с одним проектом и проекты без клиента идут выше папок
  * без заголовка: заголовок «Мебель Вектор» над единственным «Мебель Вектор» ничего не добавляет.
  */
+// Свёрнутое меню: те же проекты, срочные и ждущие решения — первыми.
+const sideProjects = computed(() => byAttention(workspaces.value))
 const projectGroups = computed(() =>
   projectFolders(workspaces.value, grouped.value, expert.value).map((g) => {
     const shut = !!g.name && shutGroups.value.has(g.id)

@@ -46,6 +46,8 @@ _TAB_WHERE = {
     "all": "TRUE",
 }
 VERDICTS = ("negative", "target")
+# Пересечение с ключом решили кавычками у ключа: запрос решён, а минус-фразы нет.
+KEYWORD_QUOTED_REASON = "Ключ взят в кавычки — минус-фраза не нужна"
 LEVELS = ("adgroup", "campaign")
 AI_BATCH = 40
 CLASSIFY_MAX = 500
@@ -584,7 +586,14 @@ def _row_out(r: dict, ctx: dict) -> dict:
             "applied_at": _iso(r.get("applied_at")),
         }
         if r["verdict"] == "negative" and r["negative_phrase"]:
-            conflicts = find_conflicts(r["negative_phrase"], label["level"], r, ctx["keywords"])
+            place = r
+            if label["applied_at"] and label["level"] == "adgroup" and r.get("adgroup_row_ids"):
+                # Уже в Директе на уровне групп: пересечения — только там, где фраза стоит на самом деле
+                # (после «только в группы без ключа» группы с ключом её не получили).
+                placed = _groups_with(r["adgroup_row_ids"], r["negative_phrase"], ctx["negatives"])
+                place = {**r, "adgroup_row_ids": placed} if placed else None
+            if place is not None:
+                conflicts = find_conflicts(r["negative_phrase"], label["level"], place, ctx["keywords"])
     names = ctx["names"]
     return {
         "query_norm": r["norm"],
@@ -605,6 +614,12 @@ def _row_out(r: dict, ctx: dict) -> dict:
         "conflicts_total": len(conflicts),
         "blocked_by": blocked_by(r, ctx["negatives"], stems(r["norm"])),
     }
+
+
+def _groups_with(groups, phrase: str, negatives: dict) -> list[int]:
+    """Группы, в минус-фразах которых (локальная копия) эта фраза уже есть."""
+    key = phrase_key(clean_negative(phrase))
+    return [int(g) for g in groups or [] if any(phrase_key(p) == key for p, _ in negatives["adgroups"].get(int(g), []))]
 
 
 def _conflict_out(k: dict) -> dict:
@@ -811,7 +826,9 @@ def remember_decisions(user_id: int, workspace_id: int, decisions: list[dict]) -
                     source = CASE WHEN query_labels.verdict = EXCLUDED.verdict THEN query_labels.source ELSE 'user' END,
                     confirmed = TRUE,
                     applied_at = CASE WHEN %s THEN NOW()
-                                      WHEN query_labels.verdict = EXCLUDED.verdict THEN query_labels.applied_at END,
+                                      WHEN query_labels.verdict = EXCLUDED.verdict
+                                           AND (EXCLUDED.verdict <> 'negative' OR EXCLUDED.negative_phrase <> '')
+                                      THEN query_labels.applied_at END,
                     updated_at = NOW()
                 """,
                 (
@@ -892,9 +909,10 @@ def memory_examples(workspace_id: int, limit_each: int = EXAMPLES_EACH) -> dict[
                 """
                 SELECT query, negative_phrase, level FROM query_labels
                 WHERE workspace_id = %s AND confirmed = TRUE AND verdict = %s
+                  AND NOT (negative_phrase = '' AND reason = %s)
                 ORDER BY updated_at DESC LIMIT %s
                 """,
-                (workspace_id, verdict, limit_each),
+                (workspace_id, verdict, KEYWORD_QUOTED_REASON, limit_each),
             ).fetchall()
     return out
 
@@ -1838,6 +1856,359 @@ def log_query_action(
         undo={"label": "Вернуть как было", "steps": steps},
         targets=targets_of(negatives) + [f"keyword:{i}" for i in created_keyword_ids] + [f"campaign:{c}" for c in campaign_row_ids],
     )
+
+
+# --- Пересечение минус-фразы с ключами: готовые выходы --------------------------------------------
+
+# Сколько уточнённых фраз предлагать и сколько ключей за раз брать в кавычки.
+RESOLVE_NARROW_MAX = 3
+RESOLVE_KEYWORDS_MAX = 5
+_STALE = "Этот вариант уже не подходит — откройте выбор заново"
+
+
+def quoted_keyword(raw: str) -> str | None:
+    """«окна пвх -бесплатно» → «"окна пвх" -бесплатно». None — фраза уже в кавычках или скобках."""
+    parts = _MINUS_TAIL.split(str(raw or "").strip())
+    main = parts[0].strip()
+    if not main or main.startswith("---") or any(ch in main for ch in '"[]'):
+        return None
+    return f'"{main}"' + "".join(f" -{t.strip()}" for t in parts[1:] if t.strip())
+
+
+def has_extra_word(keyword_stems: list[str], query_stems: list[str]) -> bool:
+    """В запросе есть значимое слово, которого нет в ключе, — ключ в кавычках такой запрос не возьмёт."""
+    return any(not any(_same(q, k) for k in keyword_stems) for q in query_stems)
+
+
+def narrow_candidates(phrase: str, query: str) -> list[str]:
+    """Фраза + одно слово из запроса, которого в ней ещё нет (в порядке слов запроса, без стоп-слов)."""
+    neg = stems(phrase)
+    out, seen = [], set()
+    for word in _WORD.findall(str(query or "").lower().replace("ё", "е")):
+        if word in STOP_WORDS:
+            continue
+        s = stem(word)
+        if s in seen or any(_same(s, n) for n in neg):
+            continue
+        seen.add(s)
+        out.append(f"{phrase} {word}")
+    return out
+
+
+def _group_keywords(user_id: int, group_ids: list[int]) -> list[dict]:
+    """Ключи групп как есть в Директе (с операторами) — для правки кавычками."""
+    if not group_ids:
+        return []
+    with pool.connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT k.id, k.keyword, k.adgroup_row_id, g.name AS adgroup_name
+            FROM direct_keywords k JOIN direct_adgroups g ON g.id = k.adgroup_row_id
+            WHERE k.user_id = %s AND k.adgroup_row_id = ANY(%s) AND COALESCE(k.state, '') <> 'ARCHIVED'
+            ORDER BY k.id
+            """,
+            (user_id, list(group_ids)),
+        ).fetchall()
+    out = []
+    for r in rows:
+        raw = str(r["keyword"] or "")
+        text = keyword_text(raw)
+        if raw.startswith("---") or not text:
+            continue
+        out.append({**r, "text": text, "stems": stems(text)})
+    return out
+
+
+def _source_keywords(row: dict, keywords: list[dict]) -> list[dict]:
+    """Ключи, по которым пришёл запрос: из отчёта Директа, а если его нет — ключи групп, чьи слова все есть в запросе."""
+    matched = {phrase_key(keyword_text(m)) for m in row.get("matched") or [] if m}
+    found = [k for k in keywords if phrase_key(k["text"]) in matched]
+    if not found:
+        q_stems = stems(row["query"])
+        found = [k for k in keywords if blocks_stems(k["stems"], q_stems)]
+    return found
+
+
+def _lost_queries(user_id: int, workspace_id: int, keywords: list[dict], skip_norm: str) -> dict:
+    """Какие ещё запросы проекта перестанут приходить, если ключи взять в кавычки (запросы с лишними словами)."""
+    if not keywords:
+        return {"total": 0, "with_conversions": 0, "examples": []}
+    by_text = {(int(k["adgroup_row_id"]), phrase_key(k["text"])): k for k in keywords}
+    with pool.connection() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT {NORM_SQL} AS norm, MIN(q.query) AS query, q.adgroup_row_id, q.matched_keyword,
+                   SUM(q.conversions)::bigint AS conversions
+            FROM direct_search_queries q
+            JOIN workspace_campaigns wc ON wc.campaign_row_id = q.campaign_row_id
+            WHERE q.user_id = %s AND wc.workspace_id = %s AND q.adgroup_row_id = ANY(%s)
+            GROUP BY 1, 3, 4
+            """,
+            (user_id, workspace_id, sorted({int(k["adgroup_row_id"]) for k in keywords})),
+        ).fetchall()
+    lost: dict[str, dict] = {}
+    for r in rows:
+        k = by_text.get((int(r["adgroup_row_id"]), phrase_key(keyword_text(r["matched_keyword"] or ""))))
+        if k is None or r["norm"] == skip_norm or not has_extra_word(k["stems"], stems(r["norm"])):
+            continue
+        item = lost.setdefault(r["norm"], {"query": r["query"], "conversions": 0})
+        item["conversions"] += int(r["conversions"] or 0)
+    items = sorted(lost.values(), key=lambda i: (-i["conversions"], i["query"]))
+    return {
+        "total": len(items),
+        "with_conversions": sum(1 for i in items if i["conversions"]),
+        "examples": [i["query"] for i in items[:3]],
+    }
+
+
+def _label_of(workspace_id: int, norm: str) -> dict | None:
+    with pool.connection() as conn:
+        return conn.execute(
+            "SELECT verdict, negative_phrase, level FROM query_labels WHERE workspace_id = %s AND query_norm = %s",
+            (workspace_id, norm),
+        ).fetchone()
+
+
+def _hits_out(hits: list[dict]) -> dict:
+    return {"targets_hit": hits[:3], "targets_total": len(hits)}
+
+
+def conflict_options(
+    user_id: int, workspace_id: int, query_norm: str, *, negative_phrase: str | None = None, level: str | None = None
+) -> dict:
+    """
+    Минус-фраза задевает ключи — готовые выходы с тем, что получится:
+    groups — та же фраза только в группы запроса, где задетого ключа нет;
+    narrow — фраза плюс слово из запроса, которая ключи уже не задевает (та же проверка find_conflicts);
+    keyword — минус не ставить, а взять в кавычки ключи, по которым пришёл запрос (это правка ключей в Директе).
+    """
+    require_workspace(user_id, workspace_id)
+    norm = phrase_key(query_norm or "")
+    row = _rows_for(user_id, workspace_id, [norm]).get(norm)
+    if row is None:
+        raise YandexError("not-found", "Запроса нет в отчёте — обновите запросы")
+    label = _label_of(workspace_id, norm) or {}
+    from_label = label.get("negative_phrase") if label.get("verdict") == "negative" else ""
+    phrase = clean_negative(str(negative_phrase or "").strip() or from_label or row["query"])
+    level = effective_level(level or label.get("level"), row)
+    index = _keyword_index(user_id, [int(c) for c in row["campaign_row_ids"]])
+    conflicts = find_conflicts(phrase, level, row, index) if phrase else []
+    out = {
+        "query_norm": norm,
+        "query": row["query"],
+        "phrase": phrase,
+        "level": level,
+        "conflicts": [_conflict_out(k) for k in conflicts[:5]],
+        "conflicts_total": len(conflicts),
+        "options": [],
+    }
+    if not conflicts:
+        return out
+    kept = _kept_queries(user_id, workspace_id)
+    skip = {norm}
+    groups = [int(g) for g in row["adgroup_row_ids"] or []]
+    names: dict[int, str] = {}
+    if groups:
+        with pool.connection() as conn:
+            for r in conn.execute("SELECT id, name FROM direct_adgroups WHERE id = ANY(%s)", (groups,)).fetchall():
+                names[int(r["id"])] = r["name"] or ""
+
+    # 1. Только в группы, где задетого ключа нет (и фразы там ещё нет — иначе повтор ничего не добавит).
+    has = set(_groups_with(groups, phrase, _negatives_index(user_id, [], groups))) if groups else set()
+    safe, left_out = [], []
+    for g in groups:
+        hits = find_conflicts(phrase, "adgroup", {**row, "adgroup_row_ids": [g]}, index)
+        if hits:
+            left_out.append({"id": g, "name": names.get(g, ""), "keywords": [k["keyword"] for k in hits[:3]]})
+        elif g not in has:
+            safe.append(g)
+    if safe:
+        out["options"].append(
+            {
+                "key": "groups",
+                "kind": "groups",
+                "phrase": phrase,
+                "level": "adgroup",
+                "adgroup_row_ids": safe,
+                "groups": [{"id": g, "name": names.get(g, "")} for g in safe],
+                "left_out": left_out,
+                **_hits_out(_kept_hits(phrase, "adgroup", {**row, "adgroup_row_ids": safe}, kept, skip)),
+            }
+        )
+
+    # 2. Уточнить фразу словом из запроса.
+    narrowed = 0
+    for candidate in narrow_candidates(phrase, row["query"]):
+        if narrowed >= RESOLVE_NARROW_MAX:
+            break
+        if phrase_problems([candidate]) or find_conflicts(candidate, level, row, index):
+            continue
+        narrowed += 1
+        out["options"].append(
+            {
+                "key": f"narrow:{phrase_key(candidate)}",
+                "kind": "narrow",
+                "phrase": candidate,
+                "level": level,
+                **_hits_out(_kept_hits(candidate, level, row, kept, skip)),
+            }
+        )
+
+    # 3. Ключи, по которым пришёл запрос, — в кавычки (минус не нужен).
+    sources = _source_keywords(row, _group_keywords(user_id, groups))
+    q_stems = stems(row["query"])
+    if 0 < len(sources) <= RESOLVE_KEYWORDS_MAX and all(
+        quoted_keyword(k["keyword"]) and has_extra_word(k["stems"], q_stems) for k in sources
+    ):
+        out["options"].append(
+            {
+                "key": "keyword",
+                "kind": "keyword",
+                "keywords": [
+                    {
+                        "keyword_row_id": k["id"],
+                        "keyword": k["keyword"],
+                        "new_keyword": quoted_keyword(k["keyword"]),
+                        "adgroup_row_id": k["adgroup_row_id"],
+                        "adgroup_name": k["adgroup_name"] or "",
+                    }
+                    for k in sources
+                ],
+                "lost": _lost_queries(user_id, workspace_id, sources, norm),
+            }
+        )
+    return out
+
+
+def resolve_conflict(
+    user_id: int,
+    workspace_id: int,
+    query_norm: str,
+    option: str,
+    *,
+    negative_phrase: str | None = None,
+    level: str | None = None,
+) -> dict:
+    """Применить выбранный выход. Варианты пересчитываются заново — клиенту не верим на слово."""
+    found = conflict_options(user_id, workspace_id, query_norm, negative_phrase=negative_phrase, level=level)
+    opt = next((o for o in found["options"] if o["key"] == option), None)
+    if opt is None:
+        raise YandexError("stale", _STALE)
+    norm = found["query_norm"]
+    row = _rows_for(user_id, workspace_id, [norm])[norm]
+    campaign_ids = sorted(int(c) for c in row["campaign_row_ids"])
+    if opt["kind"] == "keyword":
+        return _resolve_by_keywords(user_id, workspace_id, found, opt, campaign_ids)
+
+    entry = {
+        "key": norm,
+        "phrase": opt["phrase"],
+        "level": opt["level"],
+        "campaign_row_ids": row["campaign_row_ids"],
+        "adgroup_row_ids": opt.get("adgroup_row_ids") or row["adgroup_row_ids"],
+    }
+    result, outcomes = apply_negative_entries(user_id, [entry])
+    res = outcomes[norm]
+    applied = res["status"] in ("ok", "partial")
+    previous = snapshot_labels(workspace_id, [norm]) if applied else []
+    if applied:
+        remember_decisions(
+            user_id,
+            workspace_id,
+            [
+                {
+                    "query_norm": norm,
+                    "query": row["query"],
+                    "verdict": "negative",
+                    "negative_phrase": res["phrase"],
+                    "level": res["level"],
+                    "applied": True,
+                }
+            ],
+        )
+    where = "в группы без задетых ключей" if opt["kind"] == "groups" else "без пересечения с ключами"
+    log_id = log_query_action(
+        user_id,
+        workspace_id,
+        title=f"Минус-фраза «{res['phrase']}» {where}",
+        payload={"query_norms": [norm], "resolve": opt["kind"]},
+        summary={"negative": 1 if applied else 0, "target": 0, "keywords": 0, "skipped": 0, "errors": 0 if applied else 1},
+        status=res["status"] if res["status"] in ("ok", "partial") else "error",
+        negatives=result,
+        created_keyword_ids=[],
+        previous_labels={workspace_id: previous},
+        campaign_row_ids=campaign_ids,
+    )
+    return {
+        "query_norm": norm,
+        "kind": opt["kind"],
+        "status": res["status"],
+        "message": res.get("message") or "",
+        "phrase": res["phrase"],
+        "level": res["level"],
+        "log_id": log_id,
+    }
+
+
+def _resolve_by_keywords(user_id: int, workspace_id: int, found: dict, opt: dict, campaign_ids: list[int]) -> dict:
+    """Ключи — в кавычки, каждый отдельной правкой в Директе; одна запись журнала с откатом всех правок."""
+    from app.keywords import update_keyword
+
+    norm = found["query_norm"]
+    done: list[dict] = []
+    message = ""
+    for k in opt["keywords"]:
+        try:
+            with journal_quiet():
+                update_keyword(user_id, int(k["keyword_row_id"]), keyword=k["new_keyword"])
+        except YandexError as exc:
+            message = exc.message or exc.code
+            break
+        done.append(k)
+    status = "ok" if len(done) == len(opt["keywords"]) else ("partial" if done else "error")
+    previous = snapshot_labels(workspace_id, [norm]) if done else []
+    if done:
+        # Запрос решён, но минус-фразы в Директе нет: фразу не запоминаем — иначе память подсказывала бы
+        # её другим запросам, ИИ брал бы в примеры, а «убрано за 30 дней» считало бы лишнюю фразу.
+        remember_decisions(
+            user_id,
+            workspace_id,
+            [
+                {
+                    "query_norm": norm,
+                    "query": found["query"],
+                    "verdict": "negative",
+                    "negative_phrase": "",
+                    "level": found["level"],
+                    "reason": KEYWORD_QUOTED_REASON,
+                    "applied": False,
+                }
+            ],
+        )
+    steps = [{"op": "keyword_update", "args": {"keyword_row_id": int(k["keyword_row_id"]), "keyword": k["keyword"]}} for k in done]
+    if previous:
+        steps.append({"op": "query_labels_restore", "args": {"workspace_id": workspace_id, "labels": previous}})
+    first = done[0] if done else opt["keywords"][0]
+    more = f" и ещё {len(opt['keywords']) - 1}" if len(opt["keywords"]) > 1 else ""
+    log_id = log_action(
+        user_id,
+        "queries",
+        {"query_norms": [norm], "resolve": "keyword", "campaign_row_ids": campaign_ids},
+        {"keywords_changed": len(done), "errors": 0 if status == "ok" else 1},
+        status,
+        workspace_id=workspace_id,
+        title=f"Ключ «{first['keyword']}»{more} в кавычки вместо минус-фразы «{found['phrase']}»",
+        undo={"label": "Вернуть как было", "steps": steps},
+        targets=[f"keyword:{int(k['keyword_row_id'])}" for k in opt["keywords"]] + [f"campaign:{c}" for c in campaign_ids],
+    )
+    return {
+        "query_norm": norm,
+        "kind": "keyword",
+        "status": status,
+        "message": message,
+        "keywords": [{"keyword_row_id": k["keyword_row_id"], "keyword": k["new_keyword"]} for k in done],
+        "log_id": log_id,
+    }
 
 
 def sync_workspace_queries(user_id: int, payload: dict, progress: Progress | None = None) -> dict:

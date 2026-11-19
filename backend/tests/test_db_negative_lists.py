@@ -238,3 +238,24 @@ def test_api(seeded, db):
     job = client.post(f"/api/web/negative-lists/{list_id}/apply", headers=auth, json={"campaign_row_ids": [c["goods"]]})
     assert job.json()["job"]["kind"] == "apply_negative_list"
     assert job.json()["job"]["payload"] == {"list_id": list_id, "campaign_row_ids": [c["goods"]]}
+
+
+def test_account_failure_counts_only_unhandled_campaigns(seeded, monkeypatch):
+    """Кабинет упал посреди применения: пропущенные до сбоя кампании не считаются второй раз в «из N»."""
+    from app import operation_notify as op
+
+    user, c, direct = seeded["user"], seeded["c"], seeded["direct"]
+    nlist = nl.create_negative_list(user, name="Стоп", phrases="скачать")
+
+    def flaky(token, login, method, params):
+        if method == "update" and login == "romashka":
+            raise YandexError("units", "")
+        return direct(token, login, method, params)
+
+    monkeypatch.setattr(nl, "_call_campaigns", flaky)
+    out = nl.apply_negative_list(user, nlist["id"], [c["search"], c["archived"], c["goods"]])
+    # Ромашка: «Архив» пропущен до сбоя, «Поиск» не дошёл. Вектор: «Товары» привязан.
+    assert out["status"] == "partial"
+    [account_error] = [e for e in out["errors"] if e.get("client_login") == "romashka"]
+    assert account_error["campaigns"] == 1
+    assert op.counts("apply_negative_list", out)[:2] == (1, 3)

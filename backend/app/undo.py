@@ -260,6 +260,19 @@ def _adgroup_regions(user_id: int, args: dict) -> dict:
     return {"applied": applied, "missing": len(wanted) - len(alive)}
 
 
+def _campaign_group_regions(user_id: int, args: dict) -> dict:
+    """Прежние регионы групп кампании по их Id в Директе — у копии локальных групп могло ещё не быть."""
+    from app.geo import restore_group_regions
+
+    return restore_group_regions(user_id, int(args["campaign_row_id"]), args.get("groups") or {})
+
+
+def _negative_list_links(user_id: int, args: dict) -> dict:
+    from app.negative_lists import restore_links
+
+    return restore_links(user_id, int(args["list_id"]), args.get("campaigns") or {})
+
+
 OPS: dict[str, Callable[[int, dict], dict]] = {
     "campaigns_action": _campaigns_action,
     "campaign_budgets": _campaign_budgets,
@@ -279,6 +292,8 @@ OPS: dict[str, Callable[[int, dict], dict]] = {
     "query_labels_restore": _query_labels_restore,
     "bid_modifiers": _bid_modifiers,
     "adgroup_regions": _adgroup_regions,
+    "campaign_group_regions": _campaign_group_regions,
+    "negative_list_links": _negative_list_links,
 }
 
 
@@ -393,6 +408,25 @@ def describe_step(user_id: int, step: dict) -> str:
         if len(lists) == 1:
             return f"Вернуть регионы {geo.region_label(list(lists.pop()), geo.load_regions(user_id))}: {names}"
         return f"Вернуть каждой группе прежние регионы: {names}"
+    if op == "campaign_group_regions":
+        from app import geo
+
+        lists = {tuple(v) for v in (a.get("groups") or {}).values()}
+        camp = _names(user_id, "direct_campaigns", "name", [a.get("campaign_row_id")])
+        if len(lists) == 1:
+            return f"Вернуть регионы {geo.region_label(list(lists.pop()), geo.load_regions(user_id))}: {camp}"
+        return f"Вернуть каждой группе прежние регионы: {camp}"
+    if op == "negative_list_links":
+        camps = a.get("campaigns") or {}
+        mine = str(a.get("list_id"))
+        back = [k for k, v in camps.items() if (v.get("links") or {}).get(mine) is not None]
+        off = [k for k in camps if k not in back]
+        parts = []
+        if off:
+            parts.append(f"снять с кампаний {_names(user_id, 'direct_campaigns', 'name', off)}")
+        if back:
+            parts.append(f"вернуть как было в кампаниях {_names(user_id, 'direct_campaigns', 'name', back)}")
+        return f"Список минус-фраз «{a.get('name') or ''}»: " + "; ".join(parts)
     if op == "query_labels_restore":
         return f"Вернуть разметку запросов: {len(a.get('labels') or [])}"
     return str(op)

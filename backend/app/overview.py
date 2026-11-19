@@ -14,6 +14,7 @@ from urllib.parse import quote
 
 from app.clock import MSK, today_msk
 from app.db import pool
+from app.plain_errors import plain_error
 
 SEVERITY_ORDER = {"critical": 0, "warning": 1, "info": 2}
 
@@ -24,6 +25,9 @@ BALANCE_WARNING_DAYS = 5
 PACE_OVER_PCT = 110
 PACE_UNDER_PCT = 85
 PACE_UNDER_MIN_DAY = 8  # недорасход в первую неделю месяца — норма
+# Прогноз с учётом дней недели: по последним 4–8 полным неделям; истории меньше — делим поровну.
+FORECAST_WEEKS = 8
+FORECAST_MIN_WEEKS = 4
 STATS_STALE_HOURS = 36
 TOKEN_WARN_DAYS = 7
 # «Проект не настроен» — только для новых проектов: старые уже работают, им хватает карточки в сводке проекта.
@@ -102,14 +106,71 @@ def kpi_state(
     }
 
 
-def budget_pace(budget_kopecks: int | None, spent_mtd: int, spent_before_today: int, today: date) -> dict | None:
-    """Темп месячного бюджета: прогноз на конец месяца по полным прошедшим дням."""
+def weekday_profile(daily: dict[date, int], today: date) -> list[float] | None:
+    """Средний расход по дням недели (пн = 0) за последние полные недели перед сегодня, не больше
+    FORECAST_WEEKS. Неделей считаем 7 дней от первого дня с расходом: истории меньше
+    FORECAST_MIN_WEEKS недель или расхода не было — None (прогноз делится поровну)."""
+    yesterday = today - timedelta(days=1)
+    spent_days = [d for d, cost in daily.items() if cost > 0 and d <= yesterday]
+    if not spent_days:
+        return None
+    weeks = min(FORECAST_WEEKS, ((yesterday - min(spent_days)).days + 1) // 7)
+    if weeks < FORECAST_MIN_WEEKS:
+        return None
+    sums = [0] * 7
+    start = today - timedelta(days=7 * weeks)
+    for d, cost in daily.items():
+        if start <= d <= yesterday:
+            sums[d.weekday()] += cost
+    if not any(sums):
+        return None
+    return [s / weeks for s in sums]
+
+
+def weekday_forecast(profile: list[float], spent_before_today: int, today: date) -> int | None:
+    """Расход к концу месяца с учётом дней недели.
+
+    Уровень берём из этого месяца: потраченное за прошедшие дни делим на «обычный» расход тех же
+    дней недели и тем же множителем досчитываем остаток месяца (включая сегодня). В первый день месяца
+    прошедших дней нет — остаток считаем по средним прошлых недель как есть.
+    """
+    days_in_month = calendar.monthrange(today.year, today.month)[1]
+    month_start = today.replace(day=1)
+    elapsed = [month_start + timedelta(days=i) for i in range(today.day - 1)]
+    rest = [today + timedelta(days=i) for i in range(days_in_month - today.day + 1)]
+    usual_elapsed = sum(profile[d.weekday()] for d in elapsed)
+    usual_rest = sum(profile[d.weekday()] for d in rest)
+    if not elapsed:
+        return round(usual_rest)
+    if usual_elapsed <= 0:
+        return None  # прошли только «пустые» дни недели — множитель не определён
+    return round(spent_before_today + spent_before_today / usual_elapsed * usual_rest)
+
+
+def budget_pace(
+    budget_kopecks: int | None,
+    spent_mtd: int,
+    spent_before_today: int,
+    today: date,
+    *,
+    profile: list[float] | None = None,
+) -> dict | None:
+    """Темп месячного бюджета: прогноз на конец месяца по полным прошедшим дням.
+
+    profile — средний расход по дням недели (weekday_profile): с ним прогноз учитывает выходные,
+    без него (истории мало) — делит поровну.
+    """
     if not budget_kopecks:
         return None
     days_in_month = calendar.monthrange(today.year, today.month)[1]
     elapsed = today.day - 1
     days_left = days_in_month - elapsed  # включая сегодня
-    forecast = round(spent_before_today / elapsed * days_in_month) if elapsed else None
+    forecast = weekday_forecast(profile, spent_before_today, today) if profile else None
+    method = "weekdays" if forecast is not None else "even"
+    if forecast is None:
+        forecast = round(spent_before_today / elapsed * days_in_month) if elapsed else None
+    elif forecast < spent_mtd:
+        forecast = spent_mtd  # сегодня уже потратили больше «обычного» — меньше уже не уйдёт
     pace_pct = round(forecast / budget_kopecks * 100) if forecast is not None else None
     remaining = budget_kopecks - spent_mtd
     if remaining <= 0:
@@ -129,6 +190,10 @@ def budget_pace(budget_kopecks: int | None, spent_mtd: int, spent_before_today: 
         # Сколько можно тратить в день до конца месяца, чтобы уложиться в бюджет.
         "daily_allowed_kopecks": max(0, round(remaining / days_left)),
         "status": status,
+        # Как считали прогноз и где «сегодня» на полосе месяца.
+        "forecast_method": method,
+        "day": today.day,
+        "days_in_month": days_in_month,
     }
 
 
@@ -296,7 +361,7 @@ def _aware(ts: datetime | None) -> datetime | None:
     return ts
 
 
-def _load(user_id: int, date_from: date, date_to: date) -> dict:
+def _load(user_id: int, date_from: date, date_to: date, forecast_from: date | None = None) -> dict:
     with pool.connection() as conn:
         clients = conn.execute(
             """
@@ -385,7 +450,29 @@ def _load(user_id: int, date_from: date, date_to: date) -> dict:
             """,
             (user_id,),
         ).fetchall()
+        # Расход по дням за последние недели для прогноза бюджета по дням недели — одним сгруппированным
+        # запросом и только для проектов, у которых (или у их клиента) задан бюджет месяца.
+        ws_daily = (
+            conn.execute(
+                """
+                SELECT wc.workspace_id, s.day, SUM(s.cost_kopecks) AS cost
+                FROM stats_daily s
+                JOIN direct_accounts a ON a.id = s.account_id AND a.enabled = TRUE
+                JOIN direct_campaigns c ON c.account_id = s.account_id AND c.campaign_id = s.campaign_id
+                JOIN workspace_campaigns wc ON wc.campaign_row_id = c.id
+                JOIN workspaces w ON w.id = wc.workspace_id AND w.user_id = s.user_id
+                LEFT JOIN clients cl ON cl.id = w.client_row_id
+                WHERE s.user_id = %s AND s.source = 'direct' AND s.day >= %s AND s.day <= %s
+                  AND (w.monthly_budget_kopecks > 0 OR cl.monthly_budget_kopecks > 0)
+                GROUP BY wc.workspace_id, s.day
+                """,
+                (user_id, forecast_from, date_to),
+            ).fetchall()
+            if forecast_from
+            else []
+        )
     return {
+        "ws_daily": ws_daily,
         "clients": clients,
         "workspaces": workspaces,
         "ws_accounts": ws_accounts,
@@ -668,13 +755,16 @@ def headline(f: dict) -> dict:
     return out("ok", _sentence(summary))
 
 
-def build_overview(user_id: int, today: date | None = None, now: datetime | None = None) -> dict:
+def build_overview(
+    user_id: int, today: date | None = None, now: datetime | None = None, *, review: bool = False
+) -> dict:
     """
     Строки по проектам (сайтам), папки-клиенты с общим бюджетом и список «где горит».
 
     Расход кампании идёт в проект, где она лежит; кампании вне проектов — в строку
     «Без проекта». Проекта архивных клиентов и их кабинеты в сводку не попадают.
-    today — московская дата.
+    today — московская дата. review — утренний разбор (снимок проблем за день и сравнение
+    с прошлым): только для экрана обзора, фоновые задачи снимок не трогают.
     """
     today = today or today_msk()
     now = now or datetime.now(timezone.utc)
@@ -682,7 +772,7 @@ def build_overview(user_id: int, today: date | None = None, now: datetime | None
     week_from = today - timedelta(days=7)
     month_start = today.replace(day=1)
     history_from = min(month_start, yesterday - timedelta(days=ANOMALY_BASE_DAYS))
-    data = _load(user_id, history_from, today)
+    data = _load(user_id, history_from, today, forecast_from=today - timedelta(days=7 * FORECAST_WEEKS))
     period = {"today": today, "yesterday": yesterday, "week_from": week_from, "month_start": month_start}
 
     clients_by_id = {c["id"]: c for c in data["clients"]}
@@ -777,6 +867,19 @@ def build_overview(user_id: int, today: date | None = None, now: datetime | None
             if day >= week_from:
                 campaign_week_cost[key] += cost
 
+    # Прогноз бюджета по дням недели: один и тот же для сигналов, строки «как дела», срочных
+    # оповещений и блока «Бюджет на месяц» на главной проекта.
+    ws_daily: dict[int, dict[date, int]] = defaultdict(lambda: defaultdict(int))
+    for r in data.get("ws_daily") or []:
+        ws_daily[r["workspace_id"]][r["day"]] += int(r["cost"] or 0)
+
+    def spend_profile(ws_ids: list[int]) -> list[float] | None:
+        daily: dict[date, int] = defaultdict(int)
+        for w in ws_ids:
+            for d, cost in ws_daily.get(w, {}).items():
+                daily[d] += cost
+        return weekday_profile(daily, today) if daily else None
+
     ws_campaign_count: dict[int, int] = defaultdict(int)
     for c in data["campaigns"]:
         ws_id = campaign_ws.get(c["id"])
@@ -799,7 +902,13 @@ def build_overview(user_id: int, today: date | None = None, now: datetime | None
         raw_target = ws.get("kpi_target") if ws.get("kpi_type") else client.get("kpi_target")
         target = float(raw_target) if raw_target is not None else None
         kpi = kpi_state(kpi_type, target, s["cost_7d"], s["conversions_7d"], s["revenue_7d"])
-        budget = budget_pace(ws.get("monthly_budget_kopecks"), s["mtd"], s["mtd_before_today"], today)
+        budget = budget_pace(
+            ws.get("monthly_budget_kopecks"),
+            s["mtd"],
+            s["mtd_before_today"],
+            today,
+            profile=spend_profile([ws_id]) if ws_id is not None and ws.get("monthly_budget_kopecks") else None,
+        )
         own_accounts = (
             [accounts_by_id[a] for a, ws_ids in account_ws.items() if ws_id in ws_ids and a in accounts_by_id]
             if ws_id is not None
@@ -866,17 +975,20 @@ def build_overview(user_id: int, today: date | None = None, now: datetime | None
             else:
                 title = f"Доля расходов на рекламу за 7 дней {kpi['value']:g}% при цели {target:g}% ({over})"
             # Плохой KPI — не пожар (деньги не стоят), но первое, что разбирать после пожаров.
-            problems.append(_problem("warning" if kpi["status"] == "bad" else "info", "kpi", title, **where))
+            problem = _problem("warning" if kpi["status"] == "bad" else "info", "kpi", title, **where)
+            # Для пачки одинаковых в «Где горит»: цена заявки и доля расходов — разные проблемы.
+            problem["subkind"] = f"kpi_{kpi_type}"
+            problems.append(problem)
         elif kpi_type == "drr" and s["cost_7d"] > 0 and not s["revenue_7d"]:
-            problems.append(
-                _problem(
-                    "info",
-                    "kpi",
-                    "Цель по доле расходов на рекламу задана, но дохода в отчётах Директа нет",
-                    "Проверьте ценность ключевых целей в кампаниях или передачу дохода из Метрики",
-                    **where,
-                )
+            problem = _problem(
+                "info",
+                "kpi",
+                "Цель по доле расходов на рекламу задана, но дохода в отчётах Директа нет",
+                "Проверьте ценность ключевых целей в кампаниях или передачу дохода из Метрики",
+                **where,
             )
+            problem["subkind"] = "kpi_no_revenue"
+            problems.append(problem)
 
     # Папки-клиенты: общий месячный бюджет на все сайты клиента.
     folders: dict[int | None, dict] = {}
@@ -899,7 +1011,14 @@ def build_overview(user_id: int, today: date | None = None, now: datetime | None
             folder["_sums"][key] += value
     for folder in folders.values():
         s = folder.pop("_sums")
-        budget = budget_pace(folder.pop("_budget"), s["mtd"], s["mtd_before_today"], today)
+        folder_budget = folder.pop("_budget")
+        budget = budget_pace(
+            folder_budget,
+            s["mtd"],
+            s["mtd_before_today"],
+            today,
+            profile=spend_profile(folder["workspace_ids"]) if folder_budget else None,
+        )
         folder.update(_spend_fields(s))
         folder["budget"] = budget
         if folder["id"] is not None and len(folder["workspace_ids"]) > 1:
@@ -963,7 +1082,9 @@ def build_overview(user_id: int, today: date | None = None, now: datetime | None
         if a["stats_error"]:
             severity = "critical" if a["stats_error"] in _TOKEN_ERRORS else "warning"
             problems.append(
-                _problem(severity, "stats_error", "Не загружается статистика кабинета", a["stats_error"], **where)
+                _problem(
+                    severity, "stats_error", "Не загружается статистика кабинета", plain_error(a["stats_error"]), **where
+                )
             )
         else:
             synced_at = _aware(a["stats_synced_at"])
@@ -979,7 +1100,9 @@ def build_overview(user_id: int, today: date | None = None, now: datetime | None
                 )
         if a["last_sync_status"] == "error":
             problems.append(
-                _problem("warning", "account_sync", "Не обновляются кампании кабинета", a["last_sync_error"], **where)
+                _problem(
+                    "warning", "account_sync", "Не обновляются кампании кабинета", plain_error(a["last_sync_error"]), **where
+                )
             )
 
     for c in data["connections"]:
@@ -1084,8 +1207,10 @@ def build_overview(user_id: int, today: date | None = None, now: datetime | None
         key=lambda p: (SEVERITY_ORDER[p["severity"]], p["workspace_name"].lower(), p["object_name"].lower())
     )
     # Скрытое пользователем («⋯» у сигнала) — вне списков и счётчиков; строки «Скрыто» — отдельно.
-    from app import snoozes
+    from app import problem_review, snoozes
 
+    # Для утреннего разбора: скрытое — не решённое; серьёзность в записи — ухудшение тоже «новое».
+    all_keys = {problem_review.entry(snoozes.problem_key(p), p["severity"]) for p in problems}
     problems, hidden_problems = snoozes.apply(
         user_id,
         problems,
@@ -1094,6 +1219,9 @@ def build_overview(user_id: int, today: date | None = None, now: datetime | None
         client_names={c["id"]: c["name"] for c in data["clients"]},
         now=now,
     )
+    morning = None
+    if review:
+        morning = problem_review.apply(user_id, problems, all_keys, today)
     for row in [*rows.values(), *folders.values()]:
         row["problems"] = {"critical": 0, "warning": 0, "info": 0}
     for p in problems:
@@ -1133,6 +1261,8 @@ def build_overview(user_id: int, today: date | None = None, now: datetime | None
         "by_day": by_day,
         "problems": problems,
         "hidden": hidden_problems,
+        # Утренний разбор: {since, new, resolved}; None — снимка за прошлые дни нет (или не просили).
+        "review": morning,
         # Деньги на счетах по логинам: кончились и меньше всего дней — сверху.
         "balances": sorted(balances, key=balance_order),
     }

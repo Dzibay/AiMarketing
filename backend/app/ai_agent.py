@@ -10437,6 +10437,22 @@ def pending_count(user_id: int) -> dict:
     return {"count": sum(1 for row, _ in _pending_rows(user_id) if not row["snoozed_at"])}
 
 
+def pending_by_project(user_id: int) -> dict:
+    """«Ждёт решения» одним проходом: всего и по проектам (те же правила, что у страницы с фильтром проекта).
+
+    → {"count": всего, "projects": {workspace_id: n}}; карточки общих чатов без проекта входят только во «всего».
+    """
+    total = 0
+    projects: dict[int, int] = {}
+    for row, ws in _pending_rows(user_id):
+        if row["snoozed_at"]:
+            continue
+        total += 1
+        if ws is not None:
+            projects[int(ws["id"])] = projects.get(int(ws["id"]), 0) + 1
+    return {"count": total, "projects": projects}
+
+
 _BOARD_PENDING_LABEL = "Кампания на доске"
 _BOARD_PENDING_SUMMARY = "ИИ собрал кампанию — проверьте её на доске в чате и согласуйте одной кнопкой."
 

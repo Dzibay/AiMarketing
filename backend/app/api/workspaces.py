@@ -29,12 +29,14 @@ from app.query_cleaning import (
     CLASSIFY_MAX,
     apply_decisions,
     check_phrases,
+    conflict_options,
     estimate_classify,
     forget_decisions,
     list_decisions,
     needs_direct,
     query_highlights,
     query_queue,
+    resolve_conflict,
 )
 from app.metrika_sync import canonical_counters
 from app.rules import list_rules, rule_campaigns
@@ -910,6 +912,13 @@ class QueriesCheckBody(BaseModel):
     items: list[dict] = Field(default_factory=list)
 
 
+class QueriesResolveBody(BaseModel):
+    query_norm: str
+    negative_phrase: str | None = None
+    level: str | None = None
+    option: str = ""
+
+
 class QueriesForgetBody(BaseModel):
     query_norms: list[str] = Field(default_factory=list)
 
@@ -1020,6 +1029,28 @@ def ws_queries_apply(workspace_id: int, body: QueriesApplyBody, user_id: int = D
 def ws_queries_check(workspace_id: int, body: QueriesCheckBody, user_id: int = Depends(require_web_user)) -> dict:
     try:
         return {"items": check_phrases(user_id, workspace_id, body.items)}
+    except YandexError as exc:
+        raise _http(exc) from exc
+
+
+@router.post("/{workspace_id}/queries/resolve/options")
+def ws_queries_resolve_options(
+    workspace_id: int, body: QueriesResolveBody, user_id: int = Depends(require_web_user)
+) -> dict:
+    """Минус-фраза задевает ключи: готовые выходы и что получится. Ничего не меняет."""
+    try:
+        return conflict_options(user_id, workspace_id, body.query_norm, negative_phrase=body.negative_phrase, level=body.level)
+    except YandexError as exc:
+        raise _http(exc) from exc
+
+
+@router.post("/{workspace_id}/queries/resolve")
+def ws_queries_resolve(workspace_id: int, body: QueriesResolveBody, user_id: int = Depends(require_web_user)) -> dict:
+    """Применить выбранный выход: минус-фраза в Директ или ключи в кавычки — с записью в историю и откатом."""
+    try:
+        return resolve_conflict(
+            user_id, workspace_id, body.query_norm, body.option, negative_phrase=body.negative_phrase, level=body.level
+        )
     except YandexError as exc:
         raise _http(exc) from exc
 

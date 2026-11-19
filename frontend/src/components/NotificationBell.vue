@@ -19,7 +19,7 @@
         <small>{{ summary }}</small>
       </div>
       <div class="nbell__list">
-        <NotificationItems :items="shown" :loading="loading" :error="error" @pick="pick" />
+        <NotificationItems :items="shown" :loading="loading" :error="error" @pick="pick" @retry="retry" />
       </div>
       <div class="nbell__footer">
         <RouterLink to="/cabinet/settings/notifications" @click="open = false">Что присылать и куда</RouterLink>
@@ -27,7 +27,7 @@
     </div>
 
     <UiSheet :open="open && sheet" title="Уведомления" @close="open = false">
-      <NotificationItems :items="shown" :loading="loading" :error="error" @pick="pick" />
+      <NotificationItems :items="shown" :loading="loading" :error="error" @pick="pick" @retry="retry" />
       <template #footer>
         <RouterLink class="nbell__sheet-link" to="/cabinet/settings/notifications" @click="open = false">
           Что присылать и куда
@@ -40,10 +40,23 @@
 <script setup>
 import { computed, defineComponent, h, onBeforeUnmount, onMounted, ref } from 'vue'
 import { RouterLink, useRouter } from 'vue-router'
-import { Bell, CloudOff, CreditCard, Gauge, LifeBuoy, MessageSquare, Siren, Sparkles, TrendingDown, Zap } from '@lucide/vue'
+import {
+  Bell,
+  CloudOff,
+  CreditCard,
+  Gauge,
+  LifeBuoy,
+  MessageSquare,
+  Siren,
+  Sparkles,
+  TrendingDown,
+  TriangleAlert,
+  Zap,
+} from '@lucide/vue'
 import { errorText, notifyApi } from '../api/web'
 import { useHelp } from '../composables/useHelp'
 import { setNotifCount, usePending } from '../composables/usePending'
+import { pushToast } from '../composables/useToasts'
 import { openSupport } from '../composables/useSupport'
 import { useViewport } from '../composables/useViewport'
 import { plural, timeAgo } from '../utils/format'
@@ -132,6 +145,22 @@ function pick(item) {
   else if (item.link) router.push(item.link)
 }
 
+// Сбой долгой операции: «Повторить для оставшихся» ставит ту же задачу снова; не выйдет — новая запись здесь же.
+const retrying = ref(null)
+async function retry(item) {
+  if (retrying.value) return
+  retrying.value = item.id
+  try {
+    await notifyApi.retry(item.id)
+    item.retry = null
+    pushToast('Запустили снова. Если опять не получится — напишем здесь.', 'ok')
+  } catch (err) {
+    pushToast(errorText(err), 'error')
+  } finally {
+    retrying.value = null
+  }
+}
+
 function onDocClick(event) {
   if (open.value && root.value && !root.value.contains(event.target) && !event.target.closest?.('.ui-sheet')) {
     open.value = false
@@ -148,6 +177,7 @@ const ICONS = {
   signal: TrendingDown,
   rule: Zap,
   load_error: CloudOff,
+  operation: TriangleAlert,
   limit: Gauge,
   plan: CreditCard,
   support: LifeBuoy,
@@ -157,7 +187,7 @@ const ICONS = {
 /** Список записей — общий для выпадающего окна и шторки. */
 const NotificationItems = defineComponent({
   props: { items: Array, loading: Boolean, error: String },
-  emits: ['pick'],
+  emits: ['pick', 'retry'],
   setup(p, { emit }) {
     return () => {
       if (p.error) return h('p', { class: 'nbell__empty is-error' }, p.error)
@@ -190,6 +220,20 @@ const NotificationItems = defineComponent({
                 !item.read ? h('span', { class: 'nbell__dot', 'aria-label': 'новое' }) : null,
               ],
             ),
+            item.retry
+              ? h('div', { class: 'nbell__retry' }, [
+                  h(
+                    'button',
+                    {
+                      type: 'button',
+                      class: 'btn btn--ghost btn--sm',
+                      disabled: retrying.value === item.id,
+                      onClick: () => emit('retry', item),
+                    },
+                    item.retry.label,
+                  ),
+                ])
+              : null,
           ]),
         ),
       )

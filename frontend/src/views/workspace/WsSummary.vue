@@ -33,6 +33,7 @@
       <span :class="money.tone">{{ money.text }}</span>
       <a :href="money.url" target="_blank" rel="noopener">Пополнить<ExternalLink aria-hidden="true" /></a>
     </p>
+    <BudgetForecast v-if="row.id" :ws-id="ws.id" :budget="row.budget || null" @saved="onSetupSaved" />
 
     <h2 class="section-h">
       <span class="hico" aria-hidden="true"><Megaphone /></span>Кампании проекта
@@ -61,7 +62,7 @@
       <RouterLink to="/cabinet/help/faq">почему цифры отличаются от Директа</RouterLink>
     </p>
     <DataFreshness :freshness="week.freshness" @reload="load" />
-    <ExpertHint>Расход за сегодня, бюджет месяца, график недели к неделе и журнал действий</ExpertHint>
+    <ExpertHint>Расход за сегодня, график недели к неделе и журнал действий</ExpertHint>
   </template>
 
   <template v-else>
@@ -279,6 +280,7 @@ import {
   Wallet,
 } from '@lucide/vue'
 import ActionWho from '../../components/ActionWho.vue'
+import BudgetForecast from '../../components/BudgetForecast.vue'
 import DataFreshness from '../../components/DataFreshness.vue'
 import ExpertHint from '../../components/ExpertHint.vue'
 import HomeAsk from '../../components/HomeAsk.vue'

@@ -1454,6 +1454,13 @@ input[type='radio'] {
   margin: -0.6rem 0 1rem;
 }
 
+/* Утренний разбор над «Где горит»: «Со вчера: 3 новых, 2 решились». */
+.overview-review {
+  margin: 0 0 0.6rem;
+  color: var(--ink);
+  font-weight: 600;
+}
+
 .problem > div {
   flex: 1;
   min-width: 0;

@@ -237,8 +237,8 @@
                     </p>
                     <p v-if="q.label.reason" class="decision__reason">{{ q.label.reason }}</p>
                     <p v-if="q.conflicts_total" class="decision__warn tone-warn">
-                      Заденет ключи: {{ q.conflicts.map((k) => `«${k.keyword}»`).join(', ') }} — решите в
-                      <RouterLink :to="`/w/${q.project.id}/queries`">проекте</RouterLink>
+                      Заденет ключи: {{ q.conflicts.map((k) => `«${k.keyword}»`).join(', ') }}
+                      <button class="link-btn" type="button" :disabled="busy" @click="conflictRow = q">Как обойти</button>
                     </p>
                   </template>
                   <small v-else class="cell-note">
@@ -269,6 +269,15 @@
         </button>
       </div>
     </section>
+
+    <QueryConflictDialog
+      :row="conflictRow"
+      :workspace-id="conflictRow?.project.id"
+      :phrase="conflictRow?.label?.negative_phrase || ''"
+      :level="conflictRow?.label?.level || ''"
+      @close="conflictRow = null"
+      @done="onResolved"
+    />
 
     <Modal :open="preview.open" title="Что уйдёт в минус-фразы" wide :locked="busy" @close="preview.open = false">
       <p class="hint">
@@ -402,6 +411,7 @@ import UiListTools from '../components/ui/UiListTools.vue'
 import UiSelect from '../components/ui/UiSelect.vue'
 import UiSwitch from '../components/ui/UiSwitch.vue'
 import ProjectAva from '../components/ui/ProjectAva.vue'
+import QueryConflictDialog from '../components/QueryConflictDialog.vue'
 import { CircleCheck, CloudOff, ListX, Search, TriangleAlert } from '@lucide/vue'
 import { useExpert } from '../composables/useExpert'
 
@@ -469,6 +479,13 @@ let seq = 0
 let timer = null
 
 const preview = reactive({ open: false, groups: [] })
+// Минус-фраза задевает ключи: готовые выходы прямо здесь, без перехода в проект.
+const conflictRow = ref(null)
+
+function onResolved() {
+  conflictRow.value = null
+  load()
+}
 
 const canApply = computed(() => tab.value === 'negative' || tab.value === 'target')
 // Телефон: сколько фильтров включено в шторке (поиск — не в ней) и их сброс.

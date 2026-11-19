@@ -1,5 +1,6 @@
 import { computed, ref } from 'vue'
 import { webApi, wsApi } from '../api/web'
+import { projectMark, projectMarkText } from './usePending'
 
 const LAST_KEY = 'aimarketing-last-workspace'
 
@@ -91,20 +92,43 @@ export function projectInitial(name) {
   return letter ? letter[0].toUpperCase() : '•'
 }
 
-/** Подсказка к проекту: что не так, а если всё в порядке — адрес сайта. */
+/** Подсказка к проекту: что ждёт и горит («2 решения, деньги на исходе»), что не так, а если всё в порядке — адрес сайта. */
 export function projectHint(ws) {
   if (ws.locked) return 'Проект не входит в тариф'
-  if (ws.counter_ok === false) return 'Счётчик Метрики недоступен или выключен'
-  return ws.site || ''
+  const mark = projectMarkText(ws.id)
+  if (ws.counter_ok === false) return [mark, 'Счётчик Метрики недоступен или выключен'].filter(Boolean).join('. ')
+  return mark || ws.site || ''
+}
+
+/** Горит срочный сигнал (деньги, отказ модерации, кампания встала…) — красная точка у проекта. */
+export function projectUrgent(ws) {
+  return !ws.locked && projectMark(ws.id).urgent.length > 0
+}
+
+/** Сколько решений ждут в проекте — число у проекта в меню и переключателе. */
+export function projectPending(ws) {
+  return ws.locked ? 0 : projectMark(ws.id).pending
+}
+
+/** Проекты, где горит срочное или ждут решения, — первыми; остальной порядок не меняется. */
+export function byAttention(list) {
+  const rank = (ws) => (projectUrgent(ws) ? 0 : projectPending(ws) ? 1 : 2)
+  return list
+    .map((ws, i) => [ws, i])
+    .sort((a, b) => rank(a[0]) - rank(b[0]) || a[1] - b[1])
+    .map(([ws]) => ws)
 }
 
 /**
  * Проекты для меню и переключателя. Обычный режим — один плоский список. Экспертный — папки клиентов, в которых два
- * проекта и больше; клиент с одним проектом и проекты без клиента идут выше папок без заголовка.
+ * проекта и больше; клиент с одним проектом и проекты без клиента идут выше папок без заголовка. Внутри списка
+ * проекты со срочным и ждущими решениями — первыми (byAttention).
  */
 export function projectFolders(list, groups, expert) {
-  const loose = (items) => ({ id: 'loose', name: '', items })
-  const folders = expert ? groups.filter((g) => g.id && g.items.length > 1) : []
+  const loose = (items) => ({ id: 'loose', name: '', items: byAttention(items) })
+  const folders = expert
+    ? groups.filter((g) => g.id && g.items.length > 1).map((g) => ({ ...g, items: byAttention(g.items) }))
+    : []
   if (!folders.length) return [loose(list)]
   const inFolder = new Set(folders.flatMap((g) => g.items.map((w) => w.id)))
   const rest = list.filter((w) => !inFolder.has(w.id))

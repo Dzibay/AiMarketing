@@ -7,6 +7,8 @@
       <RouterLink :to="{ path: '/cabinet/chat', query: { ask: 'problems_all' } }">Разобрать всё с ИИ</RouterLink>
     </small>
   </h2>
+  <!-- Утренний разбор на общей главной: «Со вчера: 3 новых, 2 решились». -->
+  <p v-if="review" class="sig-review">{{ review }}</p>
   <div v-if="visible.length" class="sigs">
     <article v-for="s in visible" :key="s.uid" class="sig">
       <div class="sig__top">
@@ -14,6 +16,7 @@
           <TriangleAlert :size="14" aria-hidden="true" />
           {{ s.severity === 'critical' ? 'Срочно' : 'Стоит посмотреть' }}
         </span>
+        <b v-if="s.is_new" class="sig__new">новое</b>
         <span v-if="showProject" class="sig__ws">{{ niceQuotes(s.workspace_name) || 'Все проекты' }}</span>
         <span class="sig__hide"><SnoozeMenu :problem="s" @snoozed="onSnoozed" /></span>
       </div>
@@ -86,6 +89,8 @@ const props = defineProps({
   /** @refresh-balance — у карточки о деньгах «Уже пополнили? Обновить баланс»; без обработчика ссылки нет. */
   onRefreshBalance: { type: Function, default: null },
   balanceRefreshing: Boolean,
+  /** Строка утреннего разбора («Со вчера: …»); метки «новое» — по is_new проблем. */
+  review: { type: String, default: '' },
 })
 
 const emit = defineEmits(['changed'])
@@ -161,6 +166,20 @@ function ask(s) {
   gap: 10px;
   color: var(--faint);
   font-size: 12px;
+}
+.sig-review {
+  margin: -4px 0 10px;
+  color: var(--ink);
+  font-weight: 600;
+}
+.sig__new {
+  flex: none;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--lime);
+  color: #141413;
+  font-size: 11px;
+  font-weight: 700;
 }
 .sig__ws {
   flex: 1;

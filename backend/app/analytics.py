@@ -13,7 +13,14 @@ from datetime import date, datetime, timedelta, timezone
 from app.journal import list_action_logs
 from app.clock import today_msk
 from app.db import pool
-from app.overview import BALANCE_OUT_TITLE, SEVERITY_ORDER, build_overview, direct_account_url, headline, kpi_state
+from app.overview import (
+    BALANCE_OUT_TITLE,
+    SEVERITY_ORDER,
+    build_overview,
+    direct_account_url,
+    headline,
+    kpi_state,
+)
 from app.stats import structure_tops
 from app.strategy_info import budget_brief
 from app.workspaces import list_workspaces, require_workspace

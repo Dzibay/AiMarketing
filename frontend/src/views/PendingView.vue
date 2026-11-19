@@ -15,11 +15,23 @@
       :text="
         snoozed.length
           ? 'Сейчас решений ничего не ждёт — остались только отложенные, они ниже.'
-          : 'Решений ничего не ждёт. Новые предложения ИИ появятся здесь, на главной и в чатах.'
+          : elsewhere
+            ? 'В этом проекте решений ничего не ждёт.'
+            : 'Решений ничего не ждёт. Новые предложения ИИ появятся здесь, на главной и в чатах.'
       "
     >
-      <template #action><RouterLink class="btn btn--accent" :to="chatHome">Спросить ИИ</RouterLink></template>
+      <template #action>
+        <button v-if="elsewhere" class="btn btn--accent" type="button" @click="selectProject(null)">
+          Показать все проекты
+        </button>
+        <RouterLink v-else class="btn btn--accent" :to="chatHome">Спросить ИИ</RouterLink>
+      </template>
     </EmptyState>
+    <!-- Счётчик в шапке — по выбранному проекту; что ждёт в остальных, видно здесь одной строкой. -->
+    <p v-if="elsewhere" class="meta-note pend-else">
+      Ещё {{ elsewhere }} {{ elsewhereWord }} в других проектах —
+      <button class="link-btn" type="button" @click="selectProject(null)">показать</button>
+    </p>
     <section v-for="g in groups" :key="g.key">
       <h2 class="section-h pend-h">
         <template v-if="g.snoozed">
@@ -119,7 +131,7 @@ import UiMenu from '../components/ui/UiMenu.vue'
 import UiMenuItem from '../components/ui/UiMenuItem.vue'
 import ProjectAva from '../components/ui/ProjectAva.vue'
 import { aiApi, errorText } from '../api/web'
-import { refreshPending, usePending } from '../composables/usePending'
+import { pendingFor, refreshPending, usePending } from '../composables/usePending'
 import { useProjectFilter } from '../composables/useProjectFilter'
 import { pushToast } from '../composables/useToasts'
 import { useViewport } from '../composables/useViewport'
@@ -137,7 +149,7 @@ const ASK_TEXT = {
   propose_items: 'ИИ предложил таблицу — отметьте нужные строки в чате.',
 }
 
-const { projectId, project } = useProjectFilter()
+const { projectId, project, selectProject } = useProjectFilter()
 const { phone } = useViewport()
 
 const items = ref([])
@@ -277,6 +289,13 @@ watch(projectId, load, { immediate: true })
 const { pendingCount } = usePending()
 watch(pendingCount, () => {
   if (!loading.value) load()
+})
+
+// Выбран проект, а решения ждут и в других (или в общих чатах): «Ещё N ждут в других проектах — показать».
+const elsewhere = computed(() => (projectId.value ? Math.max(0, pendingCount.value - pendingFor(projectId.value)) : 0))
+const elsewhereWord = computed(() => {
+  const n = elsewhere.value % 100
+  return n % 10 === 1 && n !== 11 ? 'ждёт' : 'ждут'
 })
 
 // Панель ИИ знает, что открыт список предложений, ждущих решения.

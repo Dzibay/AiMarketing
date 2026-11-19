@@ -23,7 +23,7 @@ class DigestBody(BaseModel):
 
 @router.get("/overview")
 def web_overview(user_id: int = Depends(require_web_user)) -> dict:
-    return build_overview(user_id)
+    return build_overview(user_id, review=True)
 
 
 class SnoozeBody(BaseModel):

@@ -383,7 +383,7 @@ def _links(user_id: int, campaign_row_ids: list[int]) -> dict[int, list[dict]]:
     with pool.connection() as conn:
         rows = conn.execute(
             """
-            SELECT lc.list_id, lc.campaign_row_id, lc.added_phrases, l.phrases
+            SELECT lc.list_id, lc.campaign_row_id, lc.added_phrases, lc.applied_at, l.phrases
             FROM negative_list_campaigns lc
             JOIN negative_lists l ON l.id = lc.list_id
             WHERE lc.user_id = %s AND lc.campaign_row_id = ANY(%s)
@@ -564,7 +564,30 @@ def _update_errors(result: dict) -> list[str]:
     return messages
 
 
-def _apply_account(user_id: int, nlist: dict, selected: set[int], group: list[dict], out: dict) -> None:
+def _undo_entry(list_id: int, entry: dict, links: list[dict]) -> dict:
+    """Как вернуть кампанию: убрать добавленные фразы, вернуть убранные и прежнюю привязку списков.
+
+    links — привязка до применения: {id списка: {added, applied_at}} или None (списка в кампании не было). Чужие
+    списки — только если им передали фразы (handover): их added_phrases тоже поменялись."""
+    plan = entry["_plan"]
+    mine = next((link for link in links if link["list_id"] == list_id), None)
+    prev: dict = {
+        str(list_id): (
+            {"added": list(mine["added_phrases"] or []), "applied_at": _iso(mine.get("applied_at"))} if mine else None
+        )
+    }
+    if plan["handover"]:
+        for link in links:
+            if link["list_id"] != list_id:
+                prev[str(link["list_id"])] = {"added": list(link["added_phrases"] or [])}
+    return {"add": list(entry["remove"]), "remove": list(entry["add"]), "links": prev}
+
+
+def _apply_account(
+    user_id: int, nlist: dict, selected: set[int], group: list[dict], out: dict, undo: dict | None = None
+) -> None:
+    """undo — сюда кладём, как вернуть каждую изменённую кампанию: {id кампании: _undo_entry}."""
+    undo = {} if undo is None else undo
     first = group[0]
     if not first.get("enabled"):
         out["skipped"].extend({"campaign_row_id": r["id"], "reason": "disabled"} for r in group)
@@ -583,6 +606,11 @@ def _apply_account(user_id: int, nlist: dict, selected: set[int], group: list[di
         if entry["blocked"]:
             out["skipped"].append({"campaign_row_id": row["id"], "reason": entry["blocked"]})
         elif not entry["changed"]:
+            back = _undo_entry(nlist["id"], entry, links.get(row["id"], []))
+            mine = back["links"][str(nlist["id"])]
+            # Повторное применение без перемен — откатывать нечего.
+            if entry["action"] != "update" or len(back["links"]) > 1 or mine["added"] != entry["_plan"]["owned"]:
+                undo[str(row["id"])] = back
             _commit(user_id, nlist["id"], entry)  # привязка без записи в Директ
             out["linked" if entry["action"] != "detach" else "detached"] += 1
         else:
@@ -607,6 +635,7 @@ def _apply_account(user_id: int, nlist: dict, selected: set[int], group: list[di
                     {"campaign_row_id": entry["campaign_row_id"], "client_login": first["client_login"], "error": "direct", "message": message}
                 )
                 continue
+            undo[str(entry["campaign_row_id"])] = _undo_entry(nlist["id"], entry, links.get(entry["campaign_row_id"], []))
             _commit(user_id, nlist["id"], entry)
             out["updated"] += 1
             out["added"] += len(entry["add"])
@@ -615,6 +644,11 @@ def _apply_account(user_id: int, nlist: dict, selected: set[int], group: list[di
                 out["detached"] += 1
             else:
                 out["linked"] += 1
+
+
+def _handled(out: dict) -> int:
+    """Сколько кампаний применение уже разобрало: привязаны, сняты, пропущены, упали поштучно."""
+    return out["linked"] + out["detached"] + len(out["skipped"]) + len(out["errors"])
 
 
 def apply_negative_list(
@@ -634,18 +668,33 @@ def apply_negative_list(
             by_account[row["account_id"]].append(row)
 
         out = {"updated": 0, "added": 0, "removed": 0, "linked": 0, "detached": 0, "skipped": [], "errors": []}
+        undo: dict = {}
         for n, group in enumerate(by_account.values()):
             if progress:
                 progress(n, len(by_account), group[0]["client_name"] or group[0]["client_login"])
+            before = _handled(out)
             try:
-                _apply_account(user_id, nlist, selected, group, out)
+                _apply_account(user_id, nlist, selected, group, out, undo)
             except YandexError as exc:
                 out["errors"].append(
-                    {"client_login": group[0]["client_login"], "error": exc.code, "message": exc.message or ""}
+                    {
+                        "client_login": group[0]["client_login"],
+                        "error": exc.code,
+                        "message": exc.message or "",
+                        # Сколько кампаний не дошло — для «8 из 10» в колокольчике. Уже привязанные и пропущенные
+                        # до сбоя кампании этого кабинета посчитаны в linked / skipped — второй раз не считаем.
+                        "campaigns": max(0, len(group) - (_handled(out) - before)),
+                    }
                 )
             except Exception:
                 log.exception("apply negative list %s to %s", list_id, group[0]["client_login"])
-                out["errors"].append({"client_login": group[0]["client_login"], "error": "direct"})
+                out["errors"].append(
+                    {
+                        "client_login": group[0]["client_login"],
+                        "error": "direct",
+                        "campaigns": max(0, len(group) - (_handled(out) - before)),
+                    }
+                )
 
     done = out["linked"] + out["detached"]
     out["status"] = "ok" if not out["errors"] else ("partial" if done else "error")
@@ -658,6 +707,14 @@ def apply_negative_list(
         out,
         out["status"],
         title=f"Список минус-фраз «{nlist['name']}»" + (" — " + ", ".join(p for p in parts if p) if done else ""),
+        undo={
+            "label": "Вернуть как было",
+            "steps": [
+                {"op": "negative_list_links", "args": {"list_id": list_id, "name": nlist["name"], "campaigns": undo}}
+            ],
+        }
+        if undo
+        else None,
         # Снятый список тоже меняет кампанию: в журнале она должна быть видна.
         targets=[f"campaign:{r['id']}" for r in rows],
     )
@@ -665,3 +722,83 @@ def apply_negative_list(
         first_error = out["errors"][0]
         raise YandexError(first_error["error"], first_error.get("message") or None)
     return out
+
+
+# ---------------------------------------------------------------- откат
+
+
+def _restore_link_rows(user_id: int, list_id: int, wanted: dict, done: list[int]) -> None:
+    """Вернуть прежнюю привязку списков у кампаний done. Замок negatives_lock держит вызывающий."""
+    with pool.connection() as conn:
+        for cid in done:
+            for key, link in (wanted[cid].get("links") or {}).items():
+                other = int(key)
+                if link is None:
+                    conn.execute(
+                        "DELETE FROM negative_list_campaigns WHERE list_id = %s AND campaign_row_id = %s AND user_id = %s",
+                        (other, cid, user_id),
+                    )
+                elif other == list_id:
+                    conn.execute(
+                        """
+                        INSERT INTO negative_list_campaigns (list_id, campaign_row_id, user_id, added_phrases, applied_at)
+                        VALUES (%s, %s, %s, %s, COALESCE(%s::timestamptz, NOW()))
+                        ON CONFLICT (list_id, campaign_row_id) DO UPDATE SET
+                            added_phrases = EXCLUDED.added_phrases,
+                            applied_at = EXCLUDED.applied_at
+                        """,
+                        (list_id, cid, user_id, Jsonb(list(link.get("added") or [])), link.get("applied_at")),
+                    )
+                else:
+                    conn.execute(
+                        "UPDATE negative_list_campaigns SET added_phrases = %s "
+                        "WHERE list_id = %s AND campaign_row_id = %s AND user_id = %s",
+                        (Jsonb(list(link.get("added") or [])), other, cid, user_id),
+                    )
+
+
+def restore_links(user_id: int, list_id: int, campaigns: dict) -> dict:
+    """Откат применения или отвязки списка: в Директе убрать добавленные им фразы и вернуть убранные, у нас —
+    прежнюю привязку списков к кампании.
+
+    Привязку возвращаем только кампаниям, где фразы вернулись (или возвращать было нечего): иначе фразы
+    остались бы в Директе без хозяина. Чужие списки правим, только если они всё ещё привязаны."""
+    from app.journal import _n
+    from app.negatives import REASONS, negatives_lock, patch_negatives_locked
+
+    wanted = {int(k): v or {} for k, v in (campaigns or {}).items()}
+    if not wanted:
+        return {"restored": 0, "missing": 0}
+    with pool.connection() as conn:
+        alive = conn.execute(
+            "SELECT id FROM negative_lists WHERE id = %s AND user_id = %s", (list_id, user_id)
+        ).fetchone()
+    if alive is None and any((v.get("links") or {}).get(str(list_id)) is not None for v in wanted.values()):
+        raise YandexError("not-found", "Этот список минус-фраз уже удалён — вернуть его в кампании нельзя")
+    found = {int(r["id"]) for r in _campaigns(user_id, list(wanted))}
+    phrases = {
+        str(cid): {"add": v.get("add") or [], "remove": v.get("remove") or []}
+        for cid, v in wanted.items()
+        if cid in found and (v.get("add") or v.get("remove"))
+    }
+    problems: dict[int, str] = {}
+    # Фразы в Директе и привязку у нас меняем под одним замком: иначе задача применения списка, ждущая
+    # замка, вклинилась бы между шагами и увидела бы фразы уже откаченными, а привязку — ещё нет.
+    with negatives_lock(user_id):
+        result = patch_negatives_locked(user_id, campaigns=phrases) if phrases else {"errors": [], "skipped": []}
+        for item in result["skipped"]:
+            problems[int(item["id"])] = REASONS.get(item.get("reason"), "не получилось")
+        for item in result["errors"]:
+            problems[int(item["id"])] = item.get("message") or "Директ не принял изменение"
+        done = [cid for cid in wanted if cid in found and cid not in problems]
+        _restore_link_rows(user_id, list_id, wanted, done)
+    if problems:
+        names = {int(r["id"]): r["name"] for r in _campaigns(user_id, list(problems))}
+        errors = [f"«{names.get(cid, cid)}»: {text}" for cid, text in problems.items()]
+        head = (
+            f"Список вернулся как было в {_n(len(done), ('кампании', 'кампаниях', 'кампаниях'))}, но не везде: "
+            if done
+            else "Список не вернулся как было: "
+        )
+        raise YandexError("direct", (head + "; ".join(errors[:5]))[:500])
+    return {"restored": len(done), "missing": len(wanted) - len(found)}

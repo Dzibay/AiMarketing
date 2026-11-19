@@ -98,6 +98,20 @@ def note_undoable(log_id: int) -> None:
         ids.append(log_id)
 
 
+# Все записи, сделанные одной фоновой задачей: уведомление о её сбое ведёт на строку «Истории».
+_logged: contextvars.ContextVar[list[int] | None] = contextvars.ContextVar("journal_logged", default=None)
+
+
+@contextmanager
+def collect_logged():
+    ids: list[int] = []
+    token = _logged.set(ids)
+    try:
+        yield ids
+    finally:
+        _logged.reset(token)
+
+
 def single_undoable(ids: list[int]) -> int | None:
     """Отменить одной кнопкой можно, только если действие оставило ровно одну запись с откатом."""
     return ids[0] if len(ids) == 1 else None
@@ -422,6 +436,9 @@ def log_action(
             ),
         ).fetchone()
     log_id = int(row["id"])
+    logged = _logged.get()
+    if logged is not None:
+        logged.append(log_id)
     if undo is not None:
         note_undoable(log_id)
     if _source.get() == "user" and status != "error":

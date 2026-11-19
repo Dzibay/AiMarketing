@@ -32,11 +32,13 @@
         :problems="data.problems"
         :hidden="data.hidden || []"
         show-project
+        :review="reviewLine"
         :balance-refreshing="refreshing"
         @refresh-balance="refresh"
         @changed="reloadAll"
       />
       <MoneyBlock :balances="data.balances" :refreshing="refreshing" @refresh="refresh" />
+      <BudgetProtectAll />
 
       <h2 class="section-h"><span class="hico" aria-hidden="true"><Layers /></span>Проекты <span class="cgroup__n">{{ projectCards.length }}</span></h2>
       <div class="pstrip">
@@ -109,6 +111,7 @@
       </UiRibbon>
 
       <MoneyBlock :balances="data.balances" :refreshing="refreshing" @refresh="refresh" />
+      <BudgetProtectAll />
 
       <section class="panel overview-spaces">
         <div class="panel__head">
@@ -286,6 +289,7 @@
             />
           </div>
         </div>
+        <p v-if="reviewLine" class="sync-status overview-review">{{ reviewLine }}</p>
         <p v-if="!filteredProblems.length" class="empty">
           {{
             data.problems.length
@@ -294,8 +298,8 @@
           }}
         </p>
         <ProblemList v-else :problems="visibleProblems" show-project @changed="reloadAll" />
-        <div v-if="filteredProblems.length > visibleProblems.length" class="pager">
-          <span class="sync-status">Показано {{ visibleProblems.length }} из {{ filteredProblems.length }}</span>
+        <div v-if="problemRows.length > visibleProblems.length" class="pager">
+          <span class="sync-status">Показано {{ problemCount(visibleProblems) }} из {{ filteredProblems.length }}</span>
           <button class="btn btn--ghost" type="button" @click="showAllProblems = true">Показать все</button>
         </div>
         <SnoozedList :items="data.hidden || []" @changed="reloadAll" />
@@ -313,6 +317,7 @@ import HomeAsk from '../components/HomeAsk.vue'
 import HomeHeadline from '../components/HomeHeadline.vue'
 import KpiTile from '../components/KpiTile.vue'
 import MoneyBlock from '../components/MoneyBlock.vue'
+import BudgetProtectAll from '../components/BudgetProtectAll.vue'
 import OnboardingChecklist from '../components/OnboardingChecklist.vue'
 import PendingDecisions from '../components/PendingDecisions.vue'
 import ProblemList from '../components/ProblemList.vue'
@@ -332,6 +337,7 @@ import { pushToast } from '../composables/useToasts'
 import { useWorkspaces } from '../composables/useWorkspaces'
 import { useHead } from '../utils/useHead'
 import { leadWord } from '../utils/campaignHealth'
+import { groupProblems, problemCount, reviewText } from '../utils/problemGroups'
 import {
   asOfNote,
   balanceTone,
@@ -613,9 +619,13 @@ const filteredProblems = computed(() =>
     return true
   }),
 )
+// Одинаковые проблемы разных клиентов — одной строкой; лимит считает строки (группа — одна строка).
+const problemRows = computed(() => groupProblems(filteredProblems.value))
 const visibleProblems = computed(() =>
-  showAllProblems.value ? filteredProblems.value : filteredProblems.value.slice(0, PROBLEMS_LIMIT),
+  showAllProblems.value ? problemRows.value : problemRows.value.slice(0, PROBLEMS_LIMIT),
 )
+// Утренний разбор: «Со вчера: 3 новых, 2 решились»; в первый день (снимка нет) строки нет.
+const reviewLine = computed(() => reviewText(data.value.review, data.value.yesterday))
 
 function openWs(id) {
   router.push(`/w/${id}/summary`)

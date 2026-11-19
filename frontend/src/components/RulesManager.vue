@@ -277,7 +277,13 @@ function days(n) {
 }
 
 function ruleText(r) {
-  const th = unitOf(r.rule_type) === '%' ? `${num(r.threshold_value)} %` : rubles(r.threshold_value)
+  // «Защита бюджета» может задать порог в ценах заявки проекта — рубли считаются при каждой проверке.
+  const th =
+    r.threshold_kind === 'cpa_x'
+      ? `${num(r.threshold_value)} × цена заявки`
+      : unitOf(r.rule_type) === '%'
+        ? `${num(r.threshold_value)} %`
+        : rubles(r.threshold_value)
   let text = `Если у ${WHO[r.target] || WHO.campaign} ${COND[r.rule_type] || r.rule_type} ${th}`
   if ((r.target || 'campaign') === 'campaign') text += ` за ${days(r.lookback_days)}`
   text += ` — ${DO[r.action] || r.action}`

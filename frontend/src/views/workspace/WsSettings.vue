@@ -16,7 +16,7 @@
 
     <div class="set__body">
       <template v-if="tab === 'main'">
-        <section class="panel">
+        <section id="goal" class="panel">
           <div class="panel__head">
             <div>
               <h2>Цель и бюджет</h2>
@@ -54,6 +54,7 @@
               <label>Целевое значение</label>
               <UiNumber
                 v-model="general.kpi_target"
+                class="kpi-target"
                 :digits="2"
                 :suffix="general.kpi_type === 'drr' ? '%' : general.kpi_type === 'cpa' ? '₽' : ''"
                 :disabled="!general.kpi_type"
@@ -84,6 +85,8 @@
             </div>
           </form>
         </section>
+
+        <BudgetProtectionPanel @set-target="focusTarget" />
 
         <section class="panel">
           <div class="panel__head">
@@ -641,6 +644,7 @@ import { pushToast } from '../../composables/useToasts'
 import { loadWorkspaces, useWorkspaces } from '../../composables/useWorkspaces'
 import { CAMPAIGN_STATES, CAMPAIGN_TYPES, formatDateTime, niceQuotes, plural, rub } from '../../utils/format'
 import BriefPanel from './BriefPanel.vue'
+import BudgetProtectionPanel from './BudgetProtectionPanel.vue'
 import ContextFilesPanel from './ContextFilesPanel.vue'
 import LinkTemplatePanel from './LinkTemplatePanel.vue'
 import { useWs } from './context'
@@ -764,6 +768,27 @@ const generalPayload = computed(() => {
   return out
 })
 const generalChanged = computed(() => Object.keys(generalPayload.value).length > 0)
+
+// «Задать цену заявки» из «Защиты бюджета»: показатель — цена заявки, курсор — в поле значения.
+async function focusTarget() {
+  if (general.kpi_type && general.kpi_type !== 'cpa') {
+    // Главный показатель другой (например, ДРР): цена заявки его заменит — спрашиваем, а значение обнуляем,
+    // чтобы старая цель в % не сохранилась как цена заявки в ₽.
+    const ok = await askConfirm(
+      'Сейчас главный показатель проекта — другой. Заменить его на «Цена заявки»? Изменение вступит в силу после «Сохранить».',
+      { confirmText: 'Заменить', danger: false },
+    )
+    if (!ok) {
+      document.getElementById('goal')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+      return
+    }
+    general.kpi_type = 'cpa'
+    general.kpi_target = null
+  } else if (!general.kpi_type) general.kpi_type = 'cpa'
+  document.getElementById('goal')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  await nextTick()
+  document.querySelector('#goal .kpi-target input')?.focus({ preventScroll: true })
+}
 
 async function saveGeneral() {
   generalError.value = ''

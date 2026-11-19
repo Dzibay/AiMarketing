@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime
 
 from psycopg.types.json import Jsonb
@@ -94,6 +95,11 @@ def public_job(row: dict) -> dict:
         error = ai.human_error(code, error or "", chat=row["kind"] in CHAT_KINDS)[0]
     elif code == "internal":
         error = INTERNAL_ERROR
+    elif code == "stale" or (code and not re.search(r"[А-Яа-яЁё]", error or "")):
+        # Служебный текст («Воркер перестал отвечать», «HTTP 502») или пусто — код словами (plain_errors).
+        from app.plain_errors import plain_error
+
+        error = plain_error(code, "") + "."
     return {
         "id": row["id"],
         "kind": row["kind"],
@@ -268,11 +274,23 @@ def requeue_stale(stale_after_seconds: int = STALE_AFTER_SECONDS) -> int:
                 error = 'Воркер перестал отвечать'
             WHERE status = 'running'
               AND heartbeat_at < NOW() - make_interval(secs => %s)
-            RETURNING id
+            RETURNING id, user_id, kind, payload, priority, status
             """,
             (stale_after_seconds,),
         ).fetchall()
+    _notify_stale([r for r in rows if r["status"] == "error"])
     return len(rows)
+
+
+def _notify_stale(rows: list[dict]) -> None:
+    """Задача человека встала навсегда — колокольчик: часть изменений могла примениться, итога нет."""
+    if not rows:
+        return
+    from app.operation_notify import is_operation, notify_stale
+
+    for row in rows:
+        if is_operation(row):
+            notify_stale(dict(row))
 
 
 def purge_finished(older_than_days: int = 14) -> int:

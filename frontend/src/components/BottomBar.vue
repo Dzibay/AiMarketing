@@ -26,12 +26,12 @@
       class="bbar__item"
       :class="{ active: section === 'pending' }"
       to="/cabinet/pending"
-      :aria-label="pendingCount ? `Решения, ждут: ${pendingCount}` : 'Решения'"
+      :aria-label="pendingHere ? `Решения, ждут: ${pendingHere}` : 'Решения'"
       v-coach="'pending'"
     >
       <span class="bbar__ico" aria-hidden="true">
         <ListChecks />
-        <b v-if="pendingCount" class="bbar__n">{{ pendingCount > 99 ? '99+' : pendingCount }}</b>
+        <b v-if="pendingHere" class="bbar__n">{{ pendingHere > 99 ? '99+' : pendingHere }}</b>
       </span>
       <span aria-hidden="true">Решения</span>
     </RouterLink>
@@ -120,7 +120,7 @@ import UiSheet from './ui/UiSheet.vue'
 import { SECTIONS, SERVICE, pageMatches, sectionTo } from './shellNav'
 import { aiPanelOpen, openAiPanel } from '../composables/useAiPanel'
 import { useExpert } from '../composables/useExpert'
-import { usePending } from '../composables/usePending'
+import { pendingFor } from '../composables/usePending'
 import { useProfile } from '../composables/useProfile'
 import { useProjectFilter } from '../composables/useProjectFilter'
 import { openSupport, useSupport } from '../composables/useSupport'
@@ -145,8 +145,9 @@ const emit = defineEmits(['logout'])
 
 const route = useRoute()
 const { user } = useProfile()
-const { pendingCount } = usePending()
 const { projectId } = useProjectFilter()
+// Счётчик решений — по выбранному проекту, как на странице «Решения»; «Все проекты» — всего.
+const pendingHere = computed(() => pendingFor(projectId.value))
 const { expert } = useExpert()
 const { isDark, toggleTheme } = useTheme()
 const { typing } = useViewport()

@@ -365,9 +365,11 @@ def create(user_id: int, key: str, mode: str, now: datetime | None = None) -> di
             ).fetchone()
             conn.execute(
                 """
-                INSERT INTO problem_snoozes (user_id, mode, kind, scope, title, place, workspace_ids, snapshot)
-                VALUES (%s, 'type', %s, %s, %s, %s, %s, %s)
-                ON CONFLICT (user_id, kind, scope) WHERE mode = 'type' DO UPDATE SET snapshot = EXCLUDED.snapshot
+                INSERT INTO problem_snoozes (user_id, mode, kind, scope, title, place, workspace_ids, snapshot,
+                                             created_at)
+                VALUES (%s, 'type', %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (user_id, kind, scope) WHERE mode = 'type'
+                DO UPDATE SET snapshot = EXCLUDED.snapshot, created_at = EXCLUDED.created_at
                 """,
                 (
                     user_id,
@@ -377,6 +379,7 @@ def create(user_id: int, key: str, mode: str, now: datetime | None = None) -> di
                     _scope_place(p["type_scope"]),
                     ws_ids,
                     Jsonb(type_snapshot(p, old["snapshot"] if old else None)),
+                    now,  # повторное скрытие — новое время: красная точка срочного (I28) сверяется с ним
                 ),
             )
         else:

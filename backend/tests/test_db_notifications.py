@@ -26,7 +26,7 @@ def test_notify_writes_feed_and_badges_count_unread(db, sent):
     feed = n.list_notifications(user)
     assert feed["unread"] == 1 and feed["items"][0]["title"] == "ИИ ответил: План"
     assert feed["items"][0]["link"] == "/cabinet/chat/1" and not feed["items"][0]["read"]
-    assert n.badges(user) == {"pending": 0, "notifications": 1, "support": 0}
+    assert n.badges(user) == {"pending": 0, "notifications": 1, "support": 0, "projects": []}
     # Telegram не привязан — в него ничего не уходит.
     assert sent == []
 

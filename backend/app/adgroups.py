@@ -698,6 +698,7 @@ def set_regions(
         workspace_id=workspace_id,
         title=f"Регионы {what}: {out['before']} → {out['after']}",
         undo={"label": "Вернуть прежние регионы", "steps": [{"op": "adgroup_regions", "args": {"regions": previous}}]},
-        targets=[f"campaign:{campaign_row_id}"] if campaign_row_id is not None else [f"adgroup:{r['id']}" for r in rows],
+        # И кампании, и группы: окно отката предупредит о любой более поздней правке той же кампании или группы.
+        targets=[f"campaign:{i}" for i in campaign_ids] + [f"adgroup:{i}" for i in updated],
     )
     return out
