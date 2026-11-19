@@ -395,7 +395,8 @@ def ai_rewrite_ads(user_id: int, payload: dict, progress: Progress | None = None
             except YandexError as exc:
                 if not suggestions:
                     raise
-                error = exc.message or exc.code
+                # Для кабинета: сбой провайдера словами пользователя, подробности — в ai_errors.
+                error = ai.user_error(exc)
                 break
             wanted = {int(i["ad_row_id"]) for i in batch}
             for got in data.get("ads") or []:

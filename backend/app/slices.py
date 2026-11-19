@@ -896,7 +896,8 @@ def ai_placements(user_id: int, payload: dict, progress: Progress | None = None)
             except YandexError as exc:
                 if not verdicts:
                     raise
-                error = exc.message or exc.code
+                # Для кабинета: сбой провайдера словами пользователя, подробности — в ai_errors.
+                error = ai.user_error(exc)
                 break
             known = {str(i.get("label") or i.get("key")).lower(): str(i.get("key") or i.get("label")) for i in batch}
             for got in data.get("items") or []:

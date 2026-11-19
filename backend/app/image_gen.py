@@ -206,18 +206,26 @@ def _download(url: str) -> bytes:
     """Картинка по адресу из ответа (dall-e отдаёт ссылку): только публичный https и не больше лимита Директа."""
     url = ai._check_url_syntax(url)
     ai._check_url_resolves_public(url)
-    with httpx.stream("GET", url, timeout=60, follow_redirects=False) as response:
-        if response.status_code >= 400:
-            raise YandexError("image-error", f"Не удалось скачать картинку ({response.status_code})")
-        data = b""
-        for chunk in response.iter_bytes():
-            data += chunk
-            if len(data) > IMAGE_MAX_BYTES:
-                raise YandexError("image-error", "Картинка больше 5 МБ — Директ её не примет")
+    try:
+        with httpx.stream("GET", url, timeout=60, follow_redirects=False) as response:
+            if response.status_code >= 400:
+                raise YandexError("image-api", f"Не удалось скачать картинку генератора ({response.status_code})")
+            data = b""
+            for chunk in response.iter_bytes():
+                data += chunk
+                if len(data) > IMAGE_MAX_BYTES:
+                    raise YandexError("image-error", "Картинка больше 5 МБ — Директ её не примет")
+    except httpx.TimeoutException as exc:
+        raise YandexError("image-timeout", "Генератор не отдал картинку за отведённое время") from exc
+    except httpx.HTTPError as exc:
+        raise YandexError("image-network", f"Не удалось скачать картинку генератора: {exc.__class__.__name__}") from exc
     return data
 
 
 def _request(cfg: dict, prompt: str) -> bytes:
+    """Одна картинка. Коды отказов: image-limit / image-network / image-timeout — временные, image-auth /
+    image-balance / image-api — сбой генератора (в кабинете — понятным текстом, ai.human_error); image-error —
+    картинка не та (битая, больше 5 МБ, не JPG/PNG/GIF), текст уже для пользователя."""
     body: dict = {"model": cfg["model"], "prompt": prompt, "n": 1, "size": SIZE}
     if cfg["provider"] == "openai" and str(cfg["model_name"]).startswith("gpt-image"):
         # PNG 1024×1024 у gpt-image бывает больше 5 МБ — лимита Директа; JPEG заметно меньше.
@@ -230,16 +238,21 @@ def _request(cfg: dict, prompt: str) -> bytes:
         raise YandexError("image-timeout", "Генератор картинок не ответил за отведённое время") from exc
     except httpx.HTTPError as exc:
         raise YandexError("image-network", f"Не удалось связаться с генератором: {exc.__class__.__name__}") from exc
-    if response.status_code in (401, 403):
-        raise YandexError("image-auth", f"Генератор картинок отклонил ключ: {ai._error_text(response)}")
-    if response.status_code == 429:
-        raise YandexError("image-limit", f"Лимит запросов к генератору: {ai._error_text(response)}")
-    if response.status_code >= 400:
-        raise YandexError("image-error", f"Ошибка генератора ({response.status_code}): {ai._error_text(response)}")
+    status = response.status_code
+    text = ai._error_text(response) if status >= 400 else ""
+    # Кончились деньги или квота — 429 у OpenAI тоже: сам не пройдёт, в отличие от лимита запросов.
+    if ai._NO_BALANCE.search(text) or (status == 429 and any(w in text.lower() for w in ("quota", "billing", "balance"))):
+        raise YandexError("image-balance", f"У генератора картинок кончились деньги или квота ({status}): {text}")
+    if status in (401, 403):
+        raise YandexError("image-auth", f"Генератор картинок отклонил ключ: {text}")
+    if status == 429:
+        raise YandexError("image-limit", f"Лимит запросов к генератору: {text}")
+    if status >= 400:
+        raise YandexError("image-api", f"Ошибка генератора ({status}): {text}")
     try:
         item = response.json()["data"][0]
     except (ValueError, KeyError, IndexError, TypeError) as exc:
-        raise YandexError("image-error", "Непонятный ответ генератора картинок") from exc
+        raise YandexError("image-api", "Непонятный ответ генератора картинок") from exc
     if item.get("b64_json"):
         try:
             data = base64.b64decode(item["b64_json"])
@@ -284,7 +297,9 @@ def clean_prompt(prompt: str, provider: str = "openai") -> str:
 def generate(user_id: int | None, prompt: str, *, count: int = 1, workspace_id: int | None = None) -> dict:
     """count картинок по одному описанию (вызовы параллельно, n=1 — так умеют все модели).
 
-    → {"images": [bytes…], "errors": [текст…], "model"}. Ошибка, если не вышло ни одной.
+    → {"images": [bytes…], "errors": [текст…], "model"}. Ошибка, если не вышло ни одной. errors — для
+    пользователя (ai.user_error: без провайдера и его ответа); технический текст — в лог: в ai_errors картинки
+    не пишутся. model — для проверки подключения в админке; кабинетный API (api/ai.py) его отрезает.
     """
     plans.require_feature(user_id, "images")
     cfg = load_config(user_id, workspace_id)
@@ -302,13 +317,14 @@ def generate(user_id: int | None, prompt: str, *, count: int = 1, workspace_id: 
         try:
             images.append(future.result())
         except YandexError as exc:
+            log.warning("Картинка не получилась (%s, модель %s): %s", exc.code, cfg["model_name"], exc.message)
             errors.append(exc)
     # Учёт в основном потоке: meter() чата живёт в его контексте.
     for _ in images:
         _record(cfg, prompt)
     if not images:
         raise errors[0]
-    return {"images": images, "errors": [e.message or e.code for e in errors], "model": cfg["model_name"]}
+    return {"images": images, "errors": [ai.user_error(e) for e in errors], "model": cfg["model_name"]}
 
 
 def to_data_url(data: bytes) -> str:

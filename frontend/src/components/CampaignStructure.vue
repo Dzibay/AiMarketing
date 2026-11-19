@@ -634,7 +634,12 @@ function bulkQueryAction(action) {
   if (action === 'add_keyword' && selectedGroup.value) payload.adgroup_row_id = Number(selectedGroup.value)
   return run(async () => {
     const res = await webApi.searchQueryActions(payload)
-    pushToast(`Готово: ${res.applied || 0}${res.skipped ? `, пропущено: ${res.skipped}` : ''}`, 'info', undoAction(res, reloadWithQueries))
+    // Почему пропущено — первой причиной: «окна пвх» — заденет ключ «окна пвх».
+    const why = res.skipped_items?.[0]
+    const skipped = res.skipped
+      ? `, пропущено: ${res.skipped}${why?.message ? ` («${why.query}» — ${why.message.charAt(0).toLowerCase()}${why.message.slice(1)})` : ''}`
+      : ''
+    pushToast(`Готово: ${res.applied || 0}${skipped}`, 'info', undoAction(res, reloadWithQueries))
     await reloadWithQueries()
   })
 }
@@ -658,7 +663,18 @@ function addQueryNegative(q, scope) {
     return
   }
   return run(async () => {
-    const res = await webApi.searchQueryAddNegative(q.id, { scope })
+    let res = await webApi.searchQueryAddNegative(q.id, { scope })
+    if (res.status === 'needs_confirm') {
+      // Запрос отмечен целевым и/или фраза отключит ваш ключ — добавляем только после явного «да».
+      // Обе причины сервер пишет в message одной фразой: повтор с force ключи уже не проверяет.
+      const ok = await askConfirm(`${res.message}. Всё равно добавить «${res.phrase}» в минус-фразы?`, {
+        title: res.conflicts?.length ? 'Минус-фраза заденет ваши ключи' : 'Запрос отмечен целевым',
+        confirmText: 'Всё равно добавить',
+        danger: true,
+      })
+      if (!ok) return
+      res = await webApi.searchQueryAddNegative(q.id, { scope, force: true })
+    }
     pushToast(
       scope === 'campaign' ? 'Добавлено в минус-фразы кампании' : 'Добавлено в минус-фразы группы',
       'info',

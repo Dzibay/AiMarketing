@@ -450,7 +450,10 @@ def test_campaign_number_only_for_same_names(monkeypatch):
 
 
 def test_negatives_card_counts_only_new(monkeypatch):
+    from app import query_cleaning
+
     monkeypatch.setattr(ai_agent, "_campaign_negatives", lambda ctx, cid: ["бесплатно", "Своими руками"])
+    monkeypatch.setattr(query_cleaning, "campaign_conflicts", lambda user_id, cid, phrases: {})
     ctx = FakeContext()
     args = {"campaign_row_id": 7, "phrases": ["своими  руками", "бу", "Бесплатно", "отзывы", "БУ"]}
     assert ai_agent._p_add_negatives(ctx, args).summary == (
@@ -644,12 +647,13 @@ def test_campaign_build_extras_and_checks():
 def test_campaign_build_checks_ready():
     rows = _done_campaign() + [
         _table(4, "analysis", [{"cells": ["Окна"]}]),
-        _table(5, "settings", [{"cells": ["Бюджет", "500 ₽"]}]),
+        _table(5, "settings", [{"cells": ["Регион", "Москва"]}, {"cells": ["Бюджет", "500 ₽"]}]),
     ]
     build = ai_agent.campaign_build(rows, link_template=True)
     checks = {c["key"]: c["state"] for c in build["checks"]}
     assert checks == {
         "stages": "ok", "keywords": "ok", "ads": "ok", "unique": "ok", "link": "ok", "negatives": "warn", "extras": "warn",
+        "settings": "warn",
     }
     assert build["ready"] is True
     # Одинаковые объявления у групп — Директ так не пропустит.
@@ -994,3 +998,20 @@ def test_prompt_says_other_projects_are_read_only(no_memory):
     prompt = ai_agent._system_prompt(FakeContext())
     assert "Менять можно только кампании и кабинеты этого проекта" in prompt
     assert "Упомянуты проекты" in prompt and "project_id" in prompt
+
+
+def test_campaign_build_draft_shows_what_was_not_created():
+    spec = {"name": "Окна", "groups": [{"name": "Окна", "keywords": ["купить окна"]}, {"name": "Двери", "keywords": ["двери"]}]}
+    result = {
+        "campaign": {"id": 9},
+        "groups": [{"adgroup": {"id": 1}, "keywords": 1, "ad": {"id": 3}}],
+        "warnings": ["Группа «Двери» не создана: Неверный регион", ""],
+    }
+    done = {"id": 5, "tool": "create_campaign", "status": "done", "args": {"spec": spec}, "summary": "Создать", "result": result}
+    draft = ai_agent.campaign_build(_done_campaign() + [done])["draft"]
+    assert draft["warnings"] == ["Группа «Двери» не создана: Неверный регион"]
+    assert draft["made"] == {"groups": 1, "keywords": 1, "ads": 1}
+    assert draft["campaign_row_id"] == 9
+    # Ждущему черновику итога ещё нет.
+    pending = ai_agent.campaign_build(_done_campaign() + [{**done, "status": "pending", "result": None}])["draft"]
+    assert "warnings" not in pending and "made" not in pending

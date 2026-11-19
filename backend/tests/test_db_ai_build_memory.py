@@ -41,8 +41,8 @@ def _cards(user, chat, tool="propose_items"):
 
 
 def _spec(s, name="Окна"):
-    return {"account_id": s["acc"], "spec": {"name": name, "negative_keywords": ["бесплатно"], "groups": [
-        {"name": "Окна ПВХ", "keywords": ["купить окна пвх", "окна в рассрочку"],
+    return {"account_id": s["acc"], "spec": {"name": name, "daily_budget_rub": 500, "negative_keywords": ["бесплатно"], "groups": [
+        {"name": "Окна ПВХ", "region_ids": [213], "keywords": ["купить окна пвх", "окна в рассрочку"],
          "ad": {"titles": ["Окна от завода"], "texts": ["Замер в день заказа"], "href": "https://shop.ru"}},
     ]}}
 

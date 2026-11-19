@@ -629,6 +629,11 @@ def _t_campaign(ctx: Context, args: dict) -> dict:
     for ad in ads:
         brief = _ad_brief(ad)
         head = {k: brief.pop(k) for k in ("id", "adgroup_row_id", "state", "status")}
+        # Причина отказа словами Директа и отклонённые дополнения — чтобы исправить именно то, за что отказали.
+        if ad.get("status") == "REJECTED" and ad.get("status_clarification"):
+            head["rejected_reason"] = ad["status_clarification"]
+        if ad.get("moderation"):
+            head["rejected_extras"] = ad["moderation"]
         same = json.dumps(brief, ensure_ascii=False, sort_keys=True)
         if same in first:
             rows["ads"].append(head | {"same_as": first[same]})
@@ -1070,7 +1075,8 @@ def _wants_generation(ctx: Context) -> bool:
 
 
 def _generate_into(user_id: int, workspace_id: int, account_id: int, prompt, count, *, name: str) -> dict:
-    """Картинки по описанию → библиотека кабинета: {images: [{hash, preview_url, account_id}], errors, model}."""
+    """Картинки по описанию → библиотека кабинета: {images: [{hash, preview_url, account_id}], errors}. Результат
+    идёт в кабинет (доска, чат): модели генератора в нём нет, errors — словами для пользователя (image_gen)."""
     try:
         count = int(count) if count not in (None, "") else 1
     except (TypeError, ValueError):
@@ -1078,11 +1084,12 @@ def _generate_into(user_id: int, workspace_id: int, account_id: int, prompt, cou
     # Доступ к кабинету — до генерации: картинки платные, загрузить их должно быть куда.
     token, login = audiences.account_access(user_id, account_id)
     result = image_gen.generate(user_id, str(prompt or ""), count=count, workspace_id=workspace_id)
-    uploaded, errors = image_gen.upload(token, login, result["images"], name=name)
-    errors = result["errors"] + errors
+    uploaded, rejected = image_gen.upload(token, login, result["images"], name=name)
     if not uploaded:
-        raise YandexError("direct", "Директ не принял сгенерированные картинки: " + (errors[0] if errors else "без ответа"))
-    return {"images": [{**i, "account_id": account_id} for i in uploaded], "errors": errors, "model": result["model"]}
+        raise YandexError("direct", "Директ не принял сгенерированные картинки: " + (rejected[0] if rejected else "без ответа"))
+    # Одинаковый сбой генератора у нескольких картинок — одной строкой.
+    errors = list(dict.fromkeys(result["errors"] + rejected))
+    return {"images": [{**i, "account_id": account_id} for i in uploaded], "errors": errors}
 
 
 def _t_generate_images(ctx: Context, args: dict) -> dict:
@@ -1298,6 +1305,84 @@ def _t_projects(ctx: Context, args: dict) -> dict:
     return {"projects": items}
 
 
+# Сколько проблем всех проектов отдаём модели за раз: самые важные; остальное — сводкой проекта.
+OVERVIEW_PROBLEMS = 40
+
+
+def _t_overview(ctx: Context, args: dict) -> dict:
+    """Все проекты разом — то же, что на главной: что горит (по важности), деньги на счетах и на сколько дней их
+    хватит, KPI и расход. Один вызов вместо get_workspace_summary по каждому проекту."""
+    from app.overview import SEVERITY_ORDER, build_overview
+
+    overview = build_overview(ctx.user_id)
+    profiles = {w["id"]: w for w in list_workspaces(ctx.user_id)}
+    projects = []
+    for r in overview["workspaces"]:
+        ws = profiles.get(r["id"]) or {}
+        item: dict = {"project_id": r["id"], "name": r["name"]}
+        if r["id"] is None:
+            item["note"] = "кабинеты и расход вне проектов: действия только после того, как их добавят в проект"
+        if r.get("client_name"):
+            item["client"] = r["client_name"]
+        if ws.get("locked"):
+            item["locked"] = True
+        item.update(
+            campaigns=r["campaigns"],
+            spend_yesterday_kopecks=r["spend_yesterday"],
+            spend_7d_kopecks=r["spend_7d"],
+            conversions_7d=r["conversions_7d"],
+            cpa_7d_kopecks=r["cpa_7d"],
+            drr_7d=r["drr_7d"],
+            balance_kopecks=r["balance_kopecks"],
+            days_on_balance=r["days_on_balance"],
+        )
+        if ws:
+            item["kpi"] = _kpi_text(ws)
+        if (r.get("kpi") or {}).get("status") not in (None, "none"):
+            item["kpi_status"] = r["kpi"]["status"]  # ok — в цели, warn — чуть хуже, bad — сильно хуже
+        budget = r.get("budget") or {}
+        if budget.get("budget_kopecks"):
+            item["month_budget"] = {
+                k: budget[k] for k in ("budget_kopecks", "spent_kopecks", "forecast_kopecks", "pace_pct", "status")
+            }
+        projects.append(item)
+    problems = sorted(
+        overview["problems"],
+        key=lambda p: (SEVERITY_ORDER.get(p["severity"], 9), p.get("workspace_name") or "", p.get("object_name") or ""),
+    )
+    shown = []
+    for p in problems[:OVERVIEW_PROBLEMS]:
+        row = {"severity": p["severity"], "title": p["title"]}
+        if p.get("detail"):
+            row["detail"] = p["detail"]
+        row["project_id"] = p.get("workspace_id")
+        row["project"] = p.get("workspace_name") or ""
+        if p.get("object_name"):
+            row["object"] = p["object_name"]
+        if p.get("campaign_row_id"):
+            row["campaign_row_id"] = p["campaign_row_id"]
+        shown.append(row)
+    out: dict = {"today": overview["today"], "projects": projects, "problems": shown, "problems_total": len(problems)}
+    if len(problems) > len(shown):
+        out["not_all_shown"] = (
+            f"показаны {len(shown)} самых важных проблем из {len(problems)}; остальные — get_workspace_summary "
+            "с project_id"
+        )
+    # Деньги по логинам: кончились и меньше всего дней — сверху.
+    out["balances"] = [
+        {
+            "account": b["name"] or b["login"],
+            "project": b["workspace_name"] or "",
+            "balance_kopecks": b["balance_kopecks"],
+            "spend_per_day_kopecks": b["spend_per_day_kopecks"],
+            "days_on_balance": b["days_on_balance"],
+            "runs_out_on": b["runs_out_on"],
+        }
+        for b in overview["balances"][:20]
+    ]
+    return out
+
+
 def _t_project(ctx: Context, args: dict) -> dict:
     """Профиль проекта: цель, KPI, бриф и то, что маркетолог о нём ответил. Статистика — инструменты с project_id."""
     # В чате проекта без project_id — текущий проект.
@@ -1414,6 +1499,7 @@ def _read(ctx: Context, name: str, args: dict) -> dict:
 
 READ_TOOLS = {
     "list_projects": _t_projects,
+    "get_overview": _t_overview,
     "get_project": _t_project,
     "get_workspace_summary": _t_summary,
     "get_analytics": _t_analytics,
@@ -1559,20 +1645,36 @@ def _campaign_negatives(ctx: Context, campaign_row_id: int) -> list[str]:
 
 
 def _p_add_negatives(ctx: Context, args: dict) -> Plan:
+    from app.query_cleaning import campaign_conflicts, conflict_note
+
     row = ctx.campaign(_int(args, "campaign_row_id"))
     new, already = _split_new(_phrases(args), _campaign_negatives(ctx, int(row["id"])))
     if _made_here(ctx, int(row["id"])):
         _require_approved(ctx, {"negative": new}, stages=[])
-    return Plan(f"Минус-фразы кампании {_cname(row)}: {_added(new, already, 6)}", ["negatives"])
+    # Минус-фраза, которая отключит ключ этой же кампании, не добавляется — карточка называет ключи.
+    blocked = campaign_conflicts(ctx.user_id, int(row["id"]), new)
+    new = [p for p in new if p not in blocked]
+    summary = f"Минус-фразы кампании {_cname(row)}: {_added(new, already, 6)}"
+    if blocked:
+        notes = [f"«{p}» — {conflict_note(keys)}" for p, keys in list(blocked.items())[:3]]
+        more = f" и ещё {len(blocked) - 3}" if len(blocked) > 3 else ""
+        summary += " · не добавим: " + "; ".join(notes) + more
+    return Plan(summary, ["negatives"])
 
 
 def _x_add_negatives(ctx: Context, args: dict) -> dict:
     """Добавляет только новые фразы; откат из журнала уберёт ровно их."""
     from app.negatives import add_negatives_logged
 
+    from app.query_cleaning import campaign_conflicts, conflict_note
+
     cid = _int(args, "campaign_row_id")
     row = ctx.campaign(cid)
-    phrases = _phrases(args)
+    blocked = campaign_conflicts(ctx.user_id, cid, _phrases(args))
+    phrases = [p for p in _phrases(args) if p not in blocked]
+    not_added = [f"«{p}» — {conflict_note(keys)}" for p, keys in blocked.items()][:10]
+    if not phrases:
+        return {"added": [], "not_added": not_added, "note": "все фразы задели бы ключи кампании"}
     result = add_negatives_logged(
         ctx.user_id,
         campaigns={cid: {"add": phrases}},
@@ -1580,9 +1682,10 @@ def _x_add_negatives(ctx: Context, args: dict) -> dict:
         payload={"phrases": phrases[:50]},
     )
     added = (result["campaigns"].get(cid) or {}).get("added") or []
+    extra = {"not_added": not_added} if not_added else {}
     if not added:
-        return {"added": [], "note": "все фразы уже есть"}
-    return {"added": added, "skipped": [s["reason"] for s in result["skipped"]][:10]}
+        return {"added": [], "note": "все фразы уже есть", **extra}
+    return {"added": added, "skipped": [s["reason"] for s in result["skipped"]][:10], **extra}
 
 
 # --- Новая кампания по этапам ------------------------------------------------------------------
@@ -2026,6 +2129,7 @@ def _p_create_campaign(ctx: Context, args: dict) -> Plan:
     group_audiences: list[tuple[str, dict]] = []
     group_images: list[tuple[str, str]] = []
     bare: list[str] = []
+    no_region: list[str] = []
     # Группы глазами требований ТЗ: что в каждой посчитать.
     views: list[dict] = []
     href_default = bool(actions._ws_link_template(ctx.ws))
@@ -2034,6 +2138,8 @@ def _p_create_campaign(ctx: Context, args: dict) -> Plan:
         if name in names:
             raise YandexError("args", f"Две группы называются «{name}» — назови их по-разному")
         names.append(name)
+        if not actions.group_regions(group):
+            no_region.append(name)
         phrases = []
         if group.get("keywords") not in (None, "", []):
             phrases = actions._phrases(group.get("keywords"))
@@ -2081,7 +2187,15 @@ def _p_create_campaign(ctx: Context, args: dict) -> Plan:
         _require_approved(ctx, {k: v for k, v in content.items() if v}, stages=stages)
         _require_audiences(ctx, group_audiences)
         _require_images(ctx, group_images)
+        if no_region:
+            quoted = [f"«{n}»" for n in no_region]
+            who = f"Группа {quoted[0]}" if len(quoted) == 1 else f"Группы {_preview(quoted, 4)}"
+            raise YandexError(
+                "args", f"{who}: укажи region_ids — регионы из согласованных настроек (id — find_regions). Россию по умолчанию не ставим: "
+                "если регион не обсуждали, спроси маркетолога",
+            )
         _require_brief(ctx, views)
+        _require_settings(ctx, spec, groups)
 
     details = []
     strategy = spec.get("strategy") or {}
@@ -2692,6 +2806,15 @@ def _p_queries_action(ctx: Context, args: dict) -> Plan:
     if action == "add_keyword" and args.get("adgroup_row_id") not in (None, ""):
         ctx.adgroup(_int(args, "adgroup_row_id"))
     summary = f"{_QUERY_ACTIONS[action]}: {_names(rows, 5)}"
+    if action != "add_keyword":
+        from app.search_queries import negative_blockers
+
+        # Целевые запросы и фразы, которые отключат ключи, не уйдут в минус — карточка говорит об этом заранее.
+        blocked = negative_blockers(ctx.user_id, [int(r["id"]) for r in rows], action.removeprefix("negative_"))
+        if blocked:
+            notes = [f"«{q}» — {why}" for q, why in blocked[:3]]
+            more = f" и ещё {len(blocked) - 3}" if len(blocked) > 3 else ""
+            summary += " · не тронем: " + "; ".join(notes) + more
     return Plan(summary, ["keywords"] if action == "add_keyword" else ["negatives"])
 
 
@@ -2709,6 +2832,7 @@ def _x_queries_action(ctx: Context, args: dict) -> dict:
         action=str(args["action"]),
         adgroup_row_id=int(group) if group not in (None, "") else None,
         bid_rub=_float(args, "bid_rub"),
+        park=True,
     )
 
 
@@ -3559,20 +3683,29 @@ def _d_update_settings(ctx: Context, args: dict) -> list[dict]:
 
 def _d_add_negatives(ctx: Context, args: dict) -> list[dict]:
     """Добавляются только новые фразы (как в add_negatives_logged); «было» — по последнему синку."""
+    from app.query_cleaning import campaign_conflicts, conflict_note
+
     cid = _int(args, "campaign_row_id")
     ctx.campaign(cid)
     old = _campaign_negatives(ctx, cid)
     new, already = _split_new(_phrases(args), old)
+    # Как в _x_add_negatives: фраза, что отключит ключ кампании, не добавляется.
+    blocked = campaign_conflicts(ctx.user_id, cid, new) if new else {}
+    new = [p for p in new if p not in blocked]
+    skipped = [
+        _ch("Не добавим", f"«{p}»", conflict_note(keys)) for p, keys in list(blocked.items())[:5]
+    ]
     what = "Минус-фразы кампании"
     if not new:
-        return [_ch(what, _count(len(old), *_PHRASE_WORDS), "без изменений — все фразы уже есть")]
+        note = "без изменений — фразы задели бы ключи" if blocked else "без изменений — все фразы уже есть"
+        return [_ch(what, _count(len(old), *_PHRASE_WORDS), note), *skipped]
     out = [
         _ch(what, _count(len(old), *_PHRASE_WORDS), _count(len(old) + len(new), *_PHRASE_WORDS)),
         _ch("Добавятся", "—", _preview(new)),
     ]
     if already:
         out.append(_ch("Уже есть", _preview(already), "без изменений"))
-    return out
+    return out + skipped
 
 
 def _d_create_campaign(ctx: Context, args: dict) -> list[dict]:
@@ -3613,13 +3746,13 @@ def _d_create_campaign(ctx: Context, args: dict) -> list[dict]:
     for index, group in enumerate(groups):
         name = str(group.get("name") or f"Группа {index + 1}").strip()[:255] or f"Группа {index + 1}"
         phrases = actions._phrases(group.get("keywords"))[:200]
-        regions = [int(r) for r in group.get("region_ids") or [] if str(r).lstrip("-").isdigit()] or [225]
+        regions = actions.group_regions(group)
         try:
             mine = _spec_audiences(group, name)
         except YandexError:
             mine = []
         reach = "без фраз — показ в сетях по аудитории" if mine and not phrases else _count(len(phrases), *_PHRASE_WORDS)
-        parts = [reach, geo.region_label(regions, regions_all)]
+        parts = [reach, geo.region_label(regions, regions_all) if regions else "регион не указан — группу не создадим"]
         ad = group.get("ad") if isinstance(group.get("ad"), dict) else {}
         titles = _variants(ad, "titles") or ([ad["title"]] if ad.get("title") else [])
         texts = _variants(ad, "texts") or ([ad["text"]] if ad.get("text") else [])
@@ -4773,6 +4906,7 @@ def _kind(tool: str) -> str:
 TOOL_LABELS = {
     "board_edit": "Правки на доске",
     "list_projects": "Проекты пользователя",
+    "get_overview": "Сводка по всем проектам",
     "get_project": "Профиль проекта",
     "get_workspace_summary": "Сводка проекта",
     "get_analytics": "Аналитика за период",
@@ -4915,6 +5049,12 @@ TOOLS = [
         "Цифры и кампании проекта — инструменты чтения с project_id.",
         {"project_id": {**_ID, "description": "проект из list_projects или из пометки «Упомянуты проекты»"}},
         ["project_id"],
+    ),
+    _fn(
+        "get_overview",
+        "Сводка по всем проектам сразу, как на главной: что горит (проблемы по важности с проектом и кампанией), "
+        "деньги на счетах и на сколько дней хватит, KPI, месячный бюджет и расход за вчера и 7 дней по каждому "
+        "проекту. Один вызов — общая картина; подробности проекта — инструменты с project_id.",
     ),
     _fn("get_workspace_summary", "Сводка: расход сегодня, проблемы («где горит»), неделя к неделе, топ кампаний."),
     _fn(
@@ -5283,7 +5423,9 @@ TOOLS = [
     ),
     _fn(
         "add_campaign_negatives",
-        "Добавить минус-фразы кампании к уже существующим.",
+        "Добавить минус-фразы кампании к уже существующим. Для мусорных запросов бери короткую фразу из 1–2 "
+        "мусорных слов («бесплатно», «вакансии»), а не весь запрос. Фразу, которая отключит ключ кампании, "
+        "сервис не добавит и назовёт задетый ключ.",
         {"campaign_row_id": _ID, "phrases": _PHRASES, **_REASON},
         ["campaign_row_id", "phrases"],
     ),
@@ -5295,7 +5437,7 @@ TOOLS = [
         "PAY_FOR_CONVERSION_MULTIPLE_GOALS), network: NETWORK_DEFAULT|SERVING_OFF, "
         "daily_budget_rub (только ручные ставки), negative_keywords [], excluded_sites [], schedule, "
         "attribution_model, priority_goals [{goal_id, value_rub — ценность цели в ₽, от 0,3}], tracking_params, "
-        "groups [{name, region_ids, keywords [] (до 200), "
+        "groups [{name, region_ids (обязательно, id из find_regions), keywords [] (до 200), "
         "bid_rub, ad {titles (до 7), texts (до 3), href, extras {sitelinks, callouts, image_hashes — согласованные "
         "картинки группы, до 5} или extras_from_ad_row_id}, audiences [] — "
         "согласованные аудитории группы объектами audience из таблицы stage=audiences}] (до 20 групп; группа без "
@@ -5303,7 +5445,7 @@ TOOLS = [
         "объявление комбинаторное, второго заголовка в нём нет; href можно не давать, если в проекте есть "
         "шаблон ссылки. Кампания с группами создаётся только после согласованных таблиц propose_items по этапам "
         "(цели, анализ, ключи и группы, аудитории, если они есть, заголовки и тексты, настройки) и только из "
-        "согласованных строк. "
+        "согласованных строк; регион, тип, стратегия и бюджет — как в согласованных настройках, сервис сверит. "
         "Счётчик проекта подставится сам.",
         {"account_id": _ID, "spec": {"type": "object"}, **_REASON},
         ["account_id", "spec"],
@@ -5594,7 +5736,9 @@ TOOLS = [
     ),
     _fn(
         "search_queries_action",
-        "Поисковые запросы → ключевые фразы или минус-фразы группы/кампании.",
+        "Поисковые запросы → ключевые фразы или минус-фразы группы/кампании (весь запрос целиком). Запросы, "
+        "отмеченные маркетологом целевыми, и те, что отключат ключ, сервис в минус не отправит, а положит в «нужно "
+        "решить» на экране чистки.",
         {
             "query_row_ids": _IDS,
             "action": {"type": "string", "enum": list(_QUERY_ACTIONS)},
@@ -5758,6 +5902,7 @@ GENERAL_TOOL_NAMES = frozenset(
         "help_search",
         "list_projects",
         "get_project",
+        "get_overview",
         *CROSS_PROJECT_TOOLS,
         *GENERAL_WRITE_TOOLS,
         *GENERAL_ASK_TOOLS,
@@ -5887,8 +6032,11 @@ def _general_prompt(ctx: Context) -> str:
         "проекте речь, — спроси через ask_questions.",
         "- Сравнивая проекты, читай каждый отдельно и называй, из какого проекта каждая цифра; цифры разных "
         "проектов не смешивай. Данные со многими строками показывай markdown-таблицей, а не списком.",
-        "- Общую картину собирай get_workspace_summary по нужным проектам; разбор одного проекта начинай с "
-        "get_signals. id кампаний, групп и объявлений работают только вместе с project_id их проекта.",
+        "- Общую картину («с чего начать», «что горит», «где сливается бюджет», «как дела», разбор всего) "
+        "начинай с одного вызова get_overview: там все проекты, проблемы по важности, деньги на счетах и на сколько "
+        "дней хватит. Потом открывай только нужные проекты (get_workspace_summary, get_signals с project_id), а не "
+        "каждый подряд. Разбор одного проекта начинай с get_signals."
+        " id кампаний, групп и объявлений работают только вместе с project_id их проекта.",
         "- Если ответ инструмента обрезан или в нём есть not_all_shown, ты видел не всё: дозапроси остальное или "
         "прямо скажи, что смотрел часть.",
         "- Суммы в инструментах — в рублях. Кампании называй по имени (у одинаковых названий — с campaign_id), "
@@ -6064,10 +6212,12 @@ def _project_prompt(ctx: Context) -> str:
         "propose_items stage=extras: ссылка или шаблон проекта; быстрые ссылки — строка на ссылку с "
         "section «Быстрые ссылки» (текст до 30 знаков, ссылка, описание до 60); уточнения — строка на уточнение "
         "с section «Уточнения» (до 25 знаков); или у какого объявления взять расширения. В create_campaign "
-        "согласованные быстрые ссылки и уточнения — в ad.extras каждой группы. 8) Настройки — propose_items stage=settings: тип, стратегия, бюджет, "
-        "регионы, расписание, цель; допустимые стратегии и цели — get_campaign_options, id регионов — "
-        "find_regions. 9) create_campaign — одним вызовом черновик со всеми группами (spec.groups), "
-        "только из согласованных строк: снятое галочкой не бери, новое не добавляй без новой таблицы. "
+        "согласованные быстрые ссылки и уточнения — в ad.extras каждой группы. 8) Настройки — propose_items stage=settings: строки «Регион», «Тип кампании», "
+        "«Стратегия», «Бюджет» (сумма и «в день» или «в неделю»), «Даты», «Цель»; регион — тот, что в брифе, "
+        "а если его не называли — спроси, Россию сам не ставь; допустимые стратегии и цели — "
+        "get_campaign_options, id регионов — find_regions. 9) create_campaign — одним вызовом черновик со всеми "
+        "группами (spec.groups), только из согласованных строк: снятое галочкой не бери, новое не добавляй без "
+        "новой таблицы; регион, тип, стратегию и бюджет — как в согласованных настройках, сервис сверит. "
         "10) На модерацию — только после отдельного согласия (moderate_campaign). Если Вордстат не подключён или "
         "упёрся в квоту, скажи об этом, строй направления и фразы из брифа, сайта и запросов других кампаний, а "
         "частоты не выдумывай — в таблице так и пиши «нет данных».",
@@ -6084,6 +6234,10 @@ def _project_prompt(ctx: Context) -> str:
         "new_campaign=true; согласованное раньше бери без новых таблиц.",
         "- Затухшую кампанию, если причина не в балансе, модерации или настройке, которую проще поправить, "
         "предлагай перезапустить копией — restart_campaign_copy.",
+        "- Отказ модерации: причина — в get_campaign (у кампании status_clarification, у объявления rejected_reason, "
+        "у быстрых ссылок, картинки и визитки — rejected_extras). Перескажи её маркетологу простыми словами и "
+        "предложи исправление именно того, за что отказали, карточкой «было → станет». Изменённое объявление "
+        "Директ сам отправит на повторную модерацию. Причины нет или она неясна — так и скажи и не выдумывай.",
         "- Копию кампании на другой регион делай через copy_campaign_geo; id регионов бери из find_regions, "
         "не по памяти.",
         "- Масштабировать успешную кампанию или проверить несколько гипотез разом — create_campaign_variants: 1–5 "
@@ -6238,11 +6392,78 @@ def _project_prompt(ctx: Context) -> str:
 
 # --- Чаты и сообщения ---------------------------------------------------------------------------
 
+# Ошибки хода, записанные до ai.human_error: в ленте — технический текст провайдера с размером запроса, в
+# ai_chats.error — он же без размера; кода и meta.error_kind у таких строк нет. Отдаём их кабинету понятными.
+_LEGACY_SIZE = re.compile(r"\s*\(запрос ≈ \d+ токенов, сообщений: \d+\)\s*$")
+# Признаки технического текста: провайдер, мост, модель, ключ, квота, токены, HTTP-статус, имя исключения,
+# адрес, ответ провайдера по-английски (два латинских слова подряд).
+_TECHNICAL = re.compile(
+    r"cloudflare|\bмост|провайдер|модел|квот|токен|\bключ\w{0,2}\b|баланс|balance|billing|quota|token|openai|"
+    r"anthropic|claude|gpt|worker|gateway|\bapi\b|https?://|\(\d{3}\)|[a-z]+(error|exception)\b|[a-z]{2,}\s+[a-z]{2,}",
+    re.I,
+)
+
+
+def _shown_error(text: str) -> tuple[str, str]:
+    """Ошибка хода без вида (старая строка ленты или ai_chats.error) → (текст для кабинета, вид или '').
+    Понятное — как есть (без размера запроса); технический текст — общим (ai.ERROR_DOWN), «разговор слишком
+    длинный» и отказ провайдера в истории разговора — с видом «long» (кнопка «Новый чат»). Новые строки уже
+    понятные — не меняются."""
+    text = _LEGACY_SIZE.sub("", text or "")
+    if not _TECHNICAL.search(text) or text in (ai.NOT_CONFIGURED, ai.NO_VISION):
+        return text, ""
+    # Код старой строки неизвестен; ai-error — чтобы узнать по тексту и длину, и отказ в истории (4xx).
+    human, kind = ai.human_error("ai-error", text)
+    return (human, kind) if kind == "long" else (ai.ERROR_DOWN, "down")
+
+
+# Сбой провайдера ИИ или генератора картинок в старых результатах инструментов и ai_actions.error (до
+# ai.user_error в _tool_error): там же ошибки Директа и аргументов — их не трогаем, поэтому узнаём только
+# тексты, которые писали ai.py, ai_bridge.py и image_gen.py.
+_PROVIDER_TEXT = re.compile(
+    r"ошибка ии\b|провайдер\w* ии\b|лимит запросов к (ии|генератор)|связаться с (ии|генератор|worker|api cloudflare)|"
+    r"генератор\w* картинок (отклонил|кончились)|у генератора картинок|ошибка генератора|непонятный ответ генератора|"
+    r"скачать картинку генератора|cloudflare|запасная модель",
+    re.I,
+)
+
+
+def _shown_tool_error(text):
+    """Ошибка инструмента из старой строки: текст провайдера → понятный (как ai.user_error), остальное — как есть."""
+    if not isinstance(text, str) or not _PROVIDER_TEXT.search(text):
+        return text
+    code = "image-api" if "генератор" in text.lower() else "ai-provider"
+    return ai.human_error(code, _LEGACY_SIZE.sub("", text), chat=False)[0]
+
+
+def _shown_tool_result(content: str, name: str) -> str:
+    """Результат инструмента из старой строки ленты (экспертный режим): error / errors от провайдера — понятными
+    словами, без модели генератора картинок. Новые строки уже такие — возвращаются как были."""
+    if not _PROVIDER_TEXT.search(content) and not (name == "generate_images" and '"model"' in content):
+        return content
+    try:
+        data = json.loads(content)
+    except ValueError:
+        return content
+    if not isinstance(data, dict):
+        return content
+    out = dict(data)
+    if name == "generate_images":
+        out.pop("model", None)
+    if "error" in out:
+        out["error"] = _shown_tool_error(out["error"])
+    errors = out.get("errors")
+    if isinstance(errors, list) and all(isinstance(e, str) for e in errors):
+        shown = [_shown_tool_error(e) for e in errors]
+        # Одинаковый сбой у нескольких картинок — одной строкой, как в новых строках (_generate_into).
+        out["errors"] = list(dict.fromkeys(shown)) if shown != errors else errors
+    return content if out == data else json.dumps(out, ensure_ascii=False, default=str)
+
 
 def _chat_out(row: dict) -> dict:
     status = row["status"]
     updated = row.get("updated_at")
-    error = row.get("error") or ""
+    error = _shown_error(row.get("error") or "")[0]
     if status == "running" and updated and datetime.now(timezone.utc) - updated > STALE_RUNNING:
         status, error = "error", "Ответ прервался — повторите запрос"
     return {
@@ -6273,8 +6494,15 @@ def _message_out(row: dict) -> dict:
     content = row.get("content") or ""
     # Выжимки показываем целиком: пользователь видит ровно то, на чём ИИ строит выводы.
     limit = TOOL_RESULT_LIMIT if row.get("tool_name") in ("get_signals", "get_experiments") else 1500
-    if row["role"] == "tool" and len(content) > limit:
-        content = content[:limit] + "…"
+    if row["role"] == "tool":
+        # Старая строка: сбой провайдера в тексте, модель генератора — до обрезки, пока JSON целый.
+        content = _shown_tool_result(content, row.get("tool_name") or "")
+        if len(content) > limit:
+            content = content[:limit] + "…"
+    error_kind = (row.get("meta") or {}).get("error_kind") or ""
+    if row["role"] == "error" and not error_kind:
+        # Строка до ai.human_error: технический текст провайдера в кабинет не отдаём (в админке он как есть).
+        content, error_kind = _shown_error(content)
     return {
         "id": row["id"],
         "role": row["role"],
@@ -6294,6 +6522,7 @@ def _message_out(row: dict) -> dict:
         "tool_name": row.get("tool_name") or "",
         "refs": row.get("refs") or [],
         "followups": (row.get("meta") or {}).get("followups") or [],
+        **({"error_kind": error_kind} if row["role"] == "error" else {}),
         "blocks": (row.get("meta") or {}).get("blocks") or [] if row["role"] == "assistant" else [],
         "context": (row.get("meta") or {}).get("context") if row["role"] == "user" else None,
         "attachments": [
@@ -6340,7 +6569,8 @@ def _action_out(row: dict) -> dict:
         "snoozed": bool(row.get("snoozed_at")),
         "auto": row["auto"],
         "result": row.get("result"),
-        "error": row.get("error") or "",
+        # Старая строка могла сохранить технический текст провайдера (до ai.user_error в _tool_error).
+        "error": _shown_tool_error(row.get("error") or ""),
         "created_at": _iso(row.get("created_at")),
         "decided_at": _iso(row.get("decided_at")),
     }
@@ -6860,6 +7090,281 @@ def _checked(items: list[dict]) -> list[dict]:
     return [i for i in items if i.get("checked", True)]
 
 
+# --- Настройки черновика: сверка с согласованным ------------------------------------------------
+#
+# Этап «Настройки» согласуется таблицей «Настройка | Значение | Почему» — свободным текстом. Пункты узнаём по
+# названию строки; регион, тип, стратегию и бюджет черновика сервис сверяет с ними, а «Готовность» доски — ещё
+# и с брифом (таблицей целей).
+
+_SETTING_KINDS = {
+    "region": ("регион", r"регион|\bгео|город|где показ"),
+    "type": ("тип кампании", r"\bтип\b"),
+    "strategy": ("стратегия", r"стратег"),
+    "budget": ("бюджет", r"бюджет|лимит расход"),
+    "dates": ("даты", r"\bдат[аы]?\b|старт|начал|срок|период|окончан"),
+    "goal": ("цель", r"\bцел[ьи]\b|метрик"),
+}
+# Строки про регион, но не регион показа: корректировки и ставки по регионам.
+_REGION_BIDS_RE = re.compile(r"корректир|ставк|коэфф|повыш|пониж")
+# Строки-исключения: «Исключить города», «Минус-регионы» — их значение вычитается из региона, а не заменяет его.
+_REGION_MINUS_RE = re.compile(r"исключ(?!ительн)|минус|\bкроме\b|\bбез\b")
+# Строка «Исключения: Москва и МО» — название только из слова исключения; про регион ли она, решает значение.
+_MINUS_ONLY_RE = re.compile(r"\W*(?:исключ(?!ительн)\w*|минус\w*|кроме)\W*")
+# Регион «Россия, без исключений» — прежние строки исключений к нему не относятся.
+_NO_MINUS_RE = re.compile(r"без\s+(?:исключ|минус|ограничен)|исключений\s+нет|не\s+исключа")
+_RUB_RE = re.compile(r"(\d[\d  ]*(?:[.,]\d+)?)\s*(тыс\w*\.?)?\s*(?:₽|руб|р\.|р\b)")
+_NUM_RE = re.compile(r"(\d[\d  ]*(?:[.,]\d+)?)\s*(тыс\w*\.?)?")
+
+
+def _setting_rows(items: list[dict]) -> dict[str, dict]:
+    """Строки «Настроек» или брифа → {пункт: {"name", "value"}}; значение — «Значение» строки, без него — её текст.
+    Строки идут от новых к старым: побеждает первая подходящая. Исключения из региона («Исключить регионы: Москва»,
+    «Исключения: Москва и МО», «Регион (кроме Москвы)») собираются в "region_minus" — его value через «; ».
+
+    Правка доски меняет строку на месте, поэтому порядок строк — по таблице (action_id), если он известен у всех.
+    Исключения старше строки региона уходят в "region_minus_old": регион поменяли — прежнее «Исключить: Москва»
+    уже не обязательно; регион «без исключений» так же ослабляет и исключения из той же таблицы."""
+    from app import geo
+
+    if items and all(isinstance(i.get("action_id"), int) for i in items):
+        items = sorted(items, key=lambda i: -i["action_id"])
+    out: dict[str, dict] = {}
+    minus: list[tuple[str, int | None]] = []
+    since: int | None = None
+    for item in items:
+        name = str(item.get("text") or "").strip()
+        value = str(item.get("value") or "").strip() or name
+        low = name.lower().replace("ё", "е")
+        aid = item.get("action_id") if isinstance(item.get("action_id"), int) else None
+        # Без «Значения» строка — «Название: значение»; признак исключения ищем только в названии.
+        title = low.split(":", 1)[0] if value == name else low
+        if _MINUS_ONLY_RE.fullmatch(title) and geo.names_place(value):
+            minus.append((name if value == name else f"{name}: {value}", aid))
+            continue
+        for kind, (_label, pattern) in _SETTING_KINDS.items():
+            if not re.search(pattern, low):
+                continue
+            if kind == "region":
+                if _REGION_BIDS_RE.search(low):
+                    continue
+                cut = _REGION_MINUS_RE.search(title)
+                head = title[: cut.start()].strip(" -:(") if cut else ""
+                tail = name[cut.start() : len(title)].strip(" )]") if cut else ""
+                if head and tail and geo.names_place(tail):
+                    # «Регион (кроме Москвы)» — регион показа, а исключение — в названии строки.
+                    if kind not in out and value != name:
+                        minus.append((tail, aid))
+                elif cut and (cut.group(0) in ("исключ", "минус") or not head):
+                    minus.append((name if value == name else f"{name}: {value}", aid))
+                    continue
+            if kind not in out:
+                out[kind] = {"name": name, "value": value}
+                since = aid if kind == "region" else since
+    old: list[str] = []
+    if "region" in out:
+        none = bool(_NO_MINUS_RE.search(out["region"]["value"].lower().replace("ё", "е")))
+        fresh = [
+            aid > since or (aid == since and not none) if aid is not None and since is not None else not none
+            for _text, aid in minus
+        ]
+        old = [text for (text, _aid), keep in zip(minus, fresh) if not keep]
+        minus = [row for row, keep in zip(minus, fresh) if keep]
+    if minus:
+        out["region_minus"] = {"name": "исключить", "value": "; ".join(text for text, _aid in minus)}
+    if old:
+        # Устаревшие исключения: исключить их места черновику можно, но уже не нужно.
+        out["region_minus_old"] = {"name": "исключить раньше", "value": "; ".join(old)}
+    return out
+
+
+def _geo_overlap(a: str, b: str, regions: dict | None = None) -> bool:
+    """Есть ли у двух описаний гео общий регион: «Казань» ~ «по Казани», «Мск и МО» ~ «Москва и область»,
+    «Казань» внутри «Россия». Не понять одно из описаний — считаем, что совпадают: не предупреждаем зря."""
+    from app import geo
+
+    return geo.geo_overlap(a, b, regions) is not False
+
+
+def _rub_amount(text: str) -> float | None:
+    """Первая сумма в тексте: «3 000 ₽», «15 тыс.», «2,5 тыс ₽» → рубли; None — суммы нет."""
+    low = str(text or "").lower()
+    m = _RUB_RE.search(low) or _NUM_RE.search(low)
+    if not m:
+        return None
+    try:
+        num = float(re.sub(r"[  ]", "", m.group(1)).replace(",", "."))
+    except ValueError:
+        return None
+    return num * 1000 if m.group(2) else num
+
+
+def _budget_of(row: dict) -> tuple[float, str] | None:
+    """Строка бюджета → (сумма, "week" | "day"); None — суммы или периода не понять (месяца Директ не знает)."""
+    amount = _rub_amount(row["value"])
+    text = f"{row['name']} {row['value']}".lower()
+    if amount is None:
+        return None
+    if "нед" in text:
+        return amount, "week"
+    if re.search(r"\bдень|\bдн|сут|дневн", text):
+        return amount, "day"
+    return None
+
+
+def _budget_text(amount: float, period: str) -> str:
+    return f"{_money(amount)} {'в неделю' if period == 'week' else 'в день'}"
+
+
+def _strategy_kind(text: str) -> str | None:
+    """Стратегия словами → manual | clicks | conv | pay_conv; None — не понять."""
+    low = str(text or "").lower().replace("ё", "е")
+    if "ручн" in low:
+        return "manual"
+    if "конверс" in low:
+        return "pay_conv" if re.search(r"оплат\w* за конверс|за конверси", low) else "conv"
+    if "клик" in low:
+        return "clicks"
+    return None
+
+
+def _spec_strategy_kind(search) -> str:
+    search = str(search or "HIGHEST_POSITION").upper()
+    if search in ("HIGHEST_POSITION", "MAXIMUM_COVERAGE"):
+        return "manual"
+    if search.startswith("PAY_FOR_CONVERSION"):
+        return "pay_conv"
+    if "CPC" in search or "CLICKS" in search:
+        return "clicks"
+    return "conv"
+
+
+def _type_kind(text: str) -> str | None:
+    low = str(text or "").lower().replace("ё", "е")
+    if re.search(r"епк|единая|перфоманс|performance|unified", low):
+        return "UNIFIED_CAMPAIGN"
+    if re.search(r"текстово|\bтго\b|text_campaign", low):
+        return "TEXT_CAMPAIGN"
+    return None
+
+
+def _chat_settings(ctx: Context) -> list[dict]:
+    """Согласованные строки «Настроек» сборки, что идёт в этом чате, — от новых к старым; [] — сборки нет."""
+    if ctx.chat_id is None or ctx.ws_id is None:
+        return []
+    build, _created = _chat_build(ctx)
+    if not _build_open(build):
+        return []
+    return list(reversed(_approved_items(build.get("settings"))))
+
+
+def _require_settings(ctx: Context, spec: dict, groups: list[dict]) -> None:
+    """Регион, тип, стратегия и бюджет черновика — как в согласованных «Настройках»: расхождение не пропускаем
+    и называем обе стороны («в настройках Казань, в черновике Россия»)."""
+    from app import actions, geo
+
+    agreed = _setting_rows(_chat_settings(ctx))
+    if not agreed:
+        return
+    problems: list[str] = []
+    region = agreed.get("region")
+    if region and groups:
+        regions_all = geo.load_regions(ctx.user_id)
+        minus, old = agreed.get("region_minus"), agreed.get("region_minus_old")
+        wanted = geo.parse_geo(
+            region["value"], regions_all, [minus["value"]] if minus else (), [old["value"]] if old else ()
+        )
+        # Группы без региона не сверяем: «регион не выбран» ловит своя проверка.
+        picked = [(n, group, actions.group_regions(group)) for n, group in enumerate(groups, 1)]
+        picked = [(n, group, ids) for n, group, ids in picked if any(r > 0 for r in ids)]
+        # Регион словами не разобран уверенно (wanted None) или id групп неизвестны (fit None) — не сверяем:
+        # остановить зря хуже, чем пропустить. Группа может взять часть региона («Москва и СПб» — по группе на город),
+        # а все названные места должны оказаться хоть в одной группе.
+        fit = geo.groups_fit(wanted, [ids for _n, _group, ids in picked], regions_all) if wanted and picked else None
+        shown = region["value"] + (f"; {minus['value']}" if minus else "")
+        off: dict[str, list[str]] = {}
+        for k in fit[0] if fit else []:
+            n, group, ids = picked[k]
+            off.setdefault(geo.region_label(ids, regions_all), []).append(str(group.get("name") or f"Группа {n}").strip())
+        for label, names in off.items():
+            where = "" if len(names) == len(groups) else f" (группы {_preview([f'«{x}»' for x in names], 3)})"
+            problems.append(f"регион: в настройках «{shown}», в черновике «{label}»{where}")
+        if fit and not fit[1] and len(picked) == len(groups):
+            union = list(dict.fromkeys(r for _n, _group, ids in picked for r in ids if r > 0))
+            problem = f"регион: в настройках «{shown}», в черновике «{geo.region_label(union, regions_all)}»"
+            if not any(p.startswith(problem) for p in problems):
+                problems.append(problem)
+    strategy = spec.get("strategy") if isinstance(spec.get("strategy"), dict) else {}
+    ctype = str(spec.get("type") or "TEXT_CAMPAIGN").upper()
+    if agreed.get("type"):
+        want = _type_kind(agreed["type"]["value"])
+        if want and want != ctype:
+            have = actions.CAMPAIGN_TYPES.get(ctype, ctype)
+            problems.append(f"тип: в настройках «{agreed['type']['value']}», в черновике «{have}»")
+    if agreed.get("strategy"):
+        want = _strategy_kind(agreed["strategy"]["value"])
+        have = _spec_strategy_kind(strategy.get("search"))
+        # «Конверсии» без «оплаты за конверсии» — любая стратегия на конверсии.
+        if want is not None and want != have and not (want == "conv" and have == "pay_conv"):
+            search = strategy.get("search") or "HIGHEST_POSITION"
+            problems.append(f"стратегия: в настройках «{agreed['strategy']['value']}», в черновике {search}")
+    budget = _budget_of(agreed["budget"]) if agreed.get("budget") else None
+    if budget:
+        amount, period = budget
+        weekly = _rub_amount(str(strategy.get("weekly_budget_rub"))) if strategy.get("weekly_budget_rub") else None
+        daily = _rub_amount(str(spec.get("daily_budget_rub"))) if spec.get("daily_budget_rub") else None
+        have = weekly if period == "week" else daily
+        tolerance = 1.0
+        if have is None and period == "week" and daily:
+            have, tolerance = daily * 7, 7.0
+        elif have is None and period == "day" and weekly:
+            have, tolerance = weekly / 7, 1.0
+        if have is None:
+            problems.append(f"бюджет: в настройках {_budget_text(amount, period)}, в черновике бюджета нет")
+        elif abs(have - amount) > tolerance:
+            problems.append(f"бюджет: в настройках {_budget_text(amount, period)}, в черновике {_budget_text(have, period)}")
+    if problems:
+        raise YandexError(
+            "args",
+            "Черновик расходится с согласованными настройками — " + "; ".join(problems[:4]) + ". Исправь spec по "
+            "согласованному (id регионов — find_regions) или, если маркетолог передумал, покажи новые настройки "
+            "таблицей propose_items stage=settings и дождись согласования",
+        )
+
+
+def _settings_check(build: dict) -> dict | None:
+    """Пункт «Настройки» в «Готовности»: регион, тип, стратегия, бюджет, даты и цель названы и не спорят с брифом."""
+    from app import geo
+
+    agreed = _setting_rows(list(reversed(_checked(build.get("settings") or []))))
+    if not agreed:
+        return None
+    check = {"key": "settings", "label": "Настройки"}
+    if "region" not in agreed:
+        note = "не указан регион — напишите в чате, где показывать рекламу: без региона черновик не создаётся"
+        return {**check, "state": "bad", "note": note}
+    brief = _setting_rows(list(reversed(_checked(build.get("goals") or []))))
+    clash: list[str] = []
+    # Кабинета здесь нет — справочник только тот, что уже в памяти; нет его — основные регионы.
+    regions = geo.cached_regions()
+    if brief.get("region") and not _geo_overlap(brief["region"]["value"], agreed["region"]["value"], regions):
+        clash.append(f"в брифе «{brief['region']['value']}», в настройках «{agreed['region']['value']}»")
+    mine = _budget_of(agreed["budget"]) if agreed.get("budget") else None
+    theirs = _budget_of(brief["budget"]) if brief.get("budget") else None
+    if mine and theirs and mine[1] == theirs[1] and abs(mine[0] - theirs[0]) > 1:
+        clash.append(f"бюджет в брифе {_budget_text(*theirs)}, в настройках {_budget_text(*mine)}")
+    if clash:
+        return {**check, "state": "warn", "note": "; ".join(clash)}
+    wanted = ["type", "strategy", "budget", "dates"]
+    # Цель нужна стратегии на конверсии; ручным ставкам и кликам — нет.
+    if _strategy_kind((agreed.get("strategy") or {}).get("value", "")) in ("conv", "pay_conv", None):
+        wanted.append("goal")
+    missing = [_SETTING_KINDS[k][0] for k in wanted if k not in agreed]
+    if missing:
+        return {**check, "state": "warn", "note": "не указаны: " + ", ".join(missing)}
+    note = " · ".join(agreed[k]["value"] for k in ("region", "strategy", "budget") if k in agreed)
+    return {**check, "state": "ok", "note": note[:140] + ("…" if len(note) > 140 else "")}
+
+
 def _build_checks(build: dict, *, link_template: bool) -> list[dict]:
     """«Проверка готовности» перед созданием черновика: ok — всё в порядке, warn — можно, но стоит
     посмотреть, bad — Директ или проверка черновика не пропустят."""
@@ -6933,6 +7438,9 @@ def _build_checks(build: dict, *, link_template: bool) -> list[dict]:
         add("link", "Ссылка на сайт", "ok", _LINK_RE.search(facts).group(0))
     else:
         add("link", "Ссылка на сайт", "warn", "посадочную ссылку ещё не указали")
+    settings = _settings_check(build)
+    if settings:
+        checks.append(settings)
 
     chosen = [a for g in groups for a in _checked(g.get("audiences") or [])]
     if chosen:
@@ -7100,6 +7608,15 @@ def campaign_build(actions: list[dict], *, link_template: bool = False) -> dict 
             "error": action.get("error") or "",
             "campaign_row_id": campaign.get("id"),
         }
+        if action["status"] == "done":
+            # Что Директ не принял — на доске сразу после создания, а не после модерации.
+            made = [g for g in result.get("groups") or [] if isinstance(g, dict)]
+            draft["warnings"] = [str(w) for w in result.get("warnings") or [] if str(w or "").strip()][:20]
+            draft["made"] = {
+                "groups": len(made),
+                "keywords": sum(int(g.get("keywords") or 0) for g in made),
+                "ads": sum(1 for g in made if g.get("ad")),
+            }
 
     # Минус-фразы часто приходят строками таблицы ключей — тогда этап закрыт вместе с ней.
     shared_negatives = "negatives" not in status and bool(negatives) and "keywords" in status
@@ -10156,13 +10673,18 @@ def _set_status(chat_id: int, status: str, error: str = "") -> None:
         )
 
 
-def _end_with_error(chat_id: int, error: str, request: tuple[int, int] | None = None) -> dict:
+def _end_with_error(
+    chat_id: int, error: str, request: tuple[int, int] | None = None, *, code: str = "", transient: bool = False
+) -> dict:
     """Ход оборвался. Плашку чата следующая отправка сбросит, а строка в ленте (role «error») остаётся —
-    по ней видно, что и когда не получилось. request — (токенов в запросе, сообщений в нём)."""
-    _set_status(chat_id, "error", error)
-    note = f"{error} (запрос ≈ {request[0]} токенов, сообщений: {request[1]})" if request else error
+    по ней видно, что и когда не получилось. Пользователю — понятный текст (ai.human_error), в лог — технический
+    с размером запроса. request — (токенов в запросе, сообщений в нём)."""
+    text, kind = ai.human_error(code, error, request, transient)
+    size = f" (запрос ≈ {request[0]} токенов, сообщений: {request[1]})" if request else ""
+    log.warning("ИИ-чат %s: ход оборвался [%s] %s%s", chat_id, code or "-", error, size)
+    _set_status(chat_id, "error", text)
     with pool.connection() as conn:
-        _insert_message(conn, chat_id, "error", note)
+        _insert_message(conn, chat_id, "error", text, meta={"error_kind": kind})
     return {"status": "error"}
 
 
@@ -10234,7 +10756,7 @@ def _run_action(ctx: Context, action: dict) -> None:
             payload["removed_by_user"] = [f"{r['section']}: {r['text']}" if r.get("section") else r["text"] for r in removed]
             payload["note"] = "Маркетолог снял галочки с этих строк — они не выполнены; не предлагай их снова без новой причины"
     except YandexError as exc:
-        status, error = "error", exc.message or exc.code
+        status, error = "error", _tool_error(exc, action["tool"])
         payload = {"ok": False, "error": error}
     except Exception:
         log.exception("ИИ-действие %s", action["id"])
@@ -10633,6 +11155,17 @@ def _save_link_choices(user_id: int, saved: dict[int, dict]) -> None:
             log.warning("Выбор ref не сохранён: кампании %s уже нет", cid)
 
 
+def _tool_error(exc: YandexError, name: str = "") -> str:
+    """Ошибка инструмента → текст в его результат. Результат видят модель (пересказывает его маркетологу),
+    экспертный режим и остановка «не проходит несколько раз» (_LoopGuard, она же — в колокольчик). Поэтому
+    сбой провайдера ИИ или генератора картинок — понятными словами (ai.user_error), технический текст — в лог.
+    Остальные (Директ, проверка аргументов) — как есть: по ним модель исправляет вызов."""
+    if not ai.is_provider_error(exc.code):
+        return exc.message or exc.code
+    log.warning("ИИ-инструмент %s: сбой провайдера [%s] %s", name or "-", exc.code, exc.message)
+    return ai.user_error(exc)
+
+
 def _handle_call(ctx: Context, chat_id: int, message_id: int, call: dict) -> int:
     """Выполняет вызов инструмента; возвращает 1, если действие ждёт согласования."""
     name = call["name"]
@@ -10654,7 +11187,7 @@ def _handle_call(ctx: Context, chat_id: int, message_id: int, call: dict) -> int
         try:
             return reply(_show(ctx, message_id, args))
         except YandexError as exc:
-            return reply({"ok": False, "error": exc.message or exc.code})
+            return reply({"ok": False, "error": _tool_error(exc, name)})
         except Exception:
             log.exception("ИИ-блок %s", args.get("type"))
             return reply({"ok": False, "error": "Внутренняя ошибка инструмента"})
@@ -10678,7 +11211,7 @@ def _handle_call(ctx: Context, chat_id: int, message_id: int, call: dict) -> int
                     project_id = _int(args, "project_id")
                     target = ctx.project(project_id)
                 except YandexError as exc:
-                    return reply({"ok": False, "error": exc.message or exc.code})
+                    return reply({"ok": False, "error": _tool_error(exc, name)})
                 args = {k: v for k, v in args.items() if k != "project_id"}
 
     # Другие проекты из чата проекта — только для чтения: изменить в них нельзя, даже сославшись на project_id.
@@ -10695,7 +11228,7 @@ def _handle_call(ctx: Context, chat_id: int, message_id: int, call: dict) -> int
         try:
             return reply(_read(ctx, name, args))
         except YandexError as exc:
-            return reply({"ok": False, "error": exc.message or exc.code})
+            return reply({"ok": False, "error": _tool_error(exc, name)})
         except Exception:
             log.exception("ИИ-инструмент %s", name)
             return reply({"ok": False, "error": "Внутренняя ошибка инструмента"})
@@ -10706,7 +11239,7 @@ def _handle_call(ctx: Context, chat_id: int, message_id: int, call: dict) -> int
             # Таблица, которая повторяет согласованное, до маркетолога не доходит.
             repeated = _table_guard(ctx, args, payload) if name == "propose_items" else None
         except YandexError as exc:
-            return reply({"ok": False, "error": exc.message or exc.code})
+            return reply({"ok": False, "error": _tool_error(exc, name)})
         if repeated is not None:
             return reply(repeated)
         if name == "ask_questions" and not payload["questions"]:
@@ -10745,7 +11278,7 @@ def _handle_call(ctx: Context, chat_id: int, message_id: int, call: dict) -> int
         args, link_card = _link_guard(target, name, args)
         plan = prepare(target, args)
     except YandexError as exc:
-        return reply({"ok": False, "error": exc.message or exc.code})
+        return reply({"ok": False, "error": _tool_error(exc, name)})
     if link_card is not None:
         # Вопрос занимает место действия: ответ маркетолога уйдёт модели результатом этого же вызова.
         with pool.connection() as conn:
@@ -10933,7 +11466,8 @@ def run_chat(user_id: int, chat_id: int, progress=None) -> dict:
         ctx = Context(user_id, chat["workspace_id"])
         ctx.chat_id = chat_id
     except YandexError as exc:
-        return _end_with_error(chat_id, exc.message or exc.code)
+        # Только текст: голый код («not-found») пользователю не показываем — без текста human_error даст общий.
+        return _end_with_error(chat_id, exc.message or "", code=exc.code)
 
     with acting_as("ai"):
         with pool.connection() as conn:
@@ -10974,10 +11508,12 @@ def run_chat(user_id: int, chat_id: int, progress=None) -> dict:
             try:
                 reply = ai.complete({**cfg, "volatile_tail": 1 if memory else 0}, messages, tools)
             except YandexError as exc:
-                return _end_with_error(chat_id, exc.message or exc.code, request)
+                return _end_with_error(
+                    chat_id, exc.message or "", request, code=exc.code, transient=getattr(exc, "transient", False)
+                )
             except Exception:
                 log.exception("ИИ-чат %s", chat_id)
-                return _end_with_error(chat_id, "Сбой при обращении к ИИ", request)
+                return _end_with_error(chat_id, "Сбой при обращении к ИИ", request, code="crash")
             if reply.get("fallback"):
                 # Выбранная модель недоступна у провайдера — ход доводит запасная.
                 cfg = reply["fallback"]

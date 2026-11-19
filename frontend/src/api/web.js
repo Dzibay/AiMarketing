@@ -133,11 +133,15 @@ export const wsApi = {
   removeAccount: (id, accountId) => del(`${WS(id)}/accounts/${accountId}`),
   campaignCandidates: (id) => request(`${WS(id)}/campaigns/candidates`),
   setCampaigns: (id, add = [], remove = []) => post(`${WS(id)}/campaigns/set`, { add, remove }),
+  /**
+   * «Обновить из Директа»: ждём синк списка кампаний; stats — по кабинету, будет ли перечитана статистика
+   * (её грузит обычная загрузка кабинета в фоне — не ждём, цифры обновятся по её окончании).
+   */
   syncCampaigns: async (id, onProgress) => {
-    const { jobs } = await post(`${WS(id)}/campaigns/sync`)
+    const { jobs, stats } = await post(`${WS(id)}/campaigns/sync`)
     const results = []
     for (const job of jobs || []) results.push(await waitJob(job, onProgress))
-    return results
+    return { results, stats: stats || [] }
   },
   campaigns: (id, params = {}) => request(`${WS(id)}/campaigns${query(params)}`),
   campaignOptions: (id) => request(`${WS(id)}/campaign-options`),
@@ -628,11 +632,13 @@ export const ERRORS = {
   'ai-url': 'Адрес API ИИ должен быть публичным https-адресом.',
   'ai-provider': 'Неизвестный провайдер ИИ.',
   'ai-folder': 'Для YandexGPT укажите каталог Yandex Cloud.',
-  'ai-auth': 'Провайдер ИИ отклонил ключ.',
-  'ai-limit': 'Превышен лимит запросов к ИИ.',
-  'ai-timeout': 'ИИ не ответил вовремя.',
-  'ai-network': 'Не удалось связаться с ИИ.',
-  'ai-error': 'Ошибка ИИ.',
+  // Сервер в кабинете присылает понятный текст сам; эти — на случай ответа без него.
+  'ai-auth': 'ИИ временно недоступен — сбой на нашей стороне. Повторите через несколько минут.',
+  'ai-balance': 'ИИ временно недоступен — сбой на нашей стороне. Повторите через несколько минут.',
+  'ai-limit': 'ИИ сейчас перегружен — повторите через минуту.',
+  'ai-timeout': 'ИИ долго не отвечал — повторите через минуту.',
+  'ai-network': 'ИИ сейчас перегружен — повторите через минуту.',
+  'ai-error': 'ИИ сейчас перегружен — повторите через минуту.',
   'ai-busy': 'ИИ ещё отвечает на прошлое сообщение.',
   'ai-json': 'ИИ ответил не по формату. Попробуйте ещё раз.',
   site: 'Не удалось прочитать сайт.',

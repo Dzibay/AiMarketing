@@ -508,3 +508,79 @@ def test_portfolio_queue_merges_projects(env):
     assert [i["query"] for i in only["items"]] == ["двери межкомнатные"] and len(only["projects"]) == 1
     other = {"Authorization": f"Bearer {make_session(make_user(db, 'x@example.com'))}"}
     assert client.get("/api/web/queries", headers=other).json()["items"] == []
+
+
+# --- Запросы в минус-фразы: целевые и ключи не трогаем ----------------------------------------
+
+
+def _qid(db, text):
+    with db.connection() as c:
+        return c.execute("SELECT id FROM direct_search_queries WHERE query = %s", (text,)).fetchone()["id"]
+
+
+def test_query_negatives_skip_targets_and_park_conflicts(env, direct):
+    from app import search_queries as sq
+
+    u, ws, db = env["user"], env["ws"], env["db"]
+    qc.remember_decisions(u, ws, [{"query_norm": "кухни икеа", "verdict": "target"}])
+    ids = [_qid(db, t) for t in ("кухни своими руками", "кухни  бесплатно", "кухни икеа")]
+    # Как правило автопилота и ИИ: park — пропущенное из-за ключей ложится в «нужно решить».
+    res = sq.bulk_search_query_action(u, query_ids=ids, action="negative_campaign", park=True)
+    assert (res["applied"], res["skipped"]) == (1, 2)
+    assert direct.patches == [{"campaigns": {env["camp"]: {"add": ["кухни своими руками"]}}, "adgroups": {}}]
+    why = {i["query"]: i for i in res["skipped_items"]}
+    assert why["кухни икеа"]["message"] == "Вы отметили запрос целевым"
+    assert why["кухни  бесплатно"]["message"] == "Заденет ключ «кухни с бесплатной доставкой»"
+    assert why["кухни  бесплатно"]["conflicts"] == ["кухни с бесплатной доставкой"]
+
+    labels = _labels(db, ws)
+    parked = labels["кухни бесплатно"]
+    assert parked["verdict"] == "negative" and not parked["confirmed"] and parked["source"] == "rule"
+    assert parked["reason"] == "Не добавлено автоматически: заденет ключ «кухни с бесплатной доставкой»"
+    assert labels["кухни икеа"]["verdict"] == "target" and labels["кухни икеа"]["confirmed"]
+    assert qc.query_queue(u, ws, tab="negative")["counts"]["negative"] == 1
+
+
+def test_query_negative_needs_confirm_then_force(env, direct):
+    from app import search_queries as sq
+
+    qid = _qid(env["db"], "кухни  бесплатно")
+    res = sq.add_query_as_negative(env["user"], qid, scope="campaign")
+    assert res == {
+        "status": "needs_confirm",
+        "message": "Заденет ключ «кухни с бесплатной доставкой»",
+        "phrase": "кухни бесплатно",
+        "conflicts": ["кухни с бесплатной доставкой"],
+    }
+    assert all(not p["campaigns"] and not p["adgroups"] for p in direct.patches)
+    assert "кухни бесплатно" not in _labels(env["db"], env["ws"])
+    res = sq.add_query_as_negative(env["user"], qid, scope="campaign", force=True)
+    assert res["status"] == "ok" and res["phrase"] == "кухни бесплатно"
+    assert direct.patches[-1] == {"campaigns": {env["camp"]: {"add": ["кухни бесплатно"]}}, "adgroups": {}}
+
+
+def test_ai_negatives_name_what_they_will_not_add(env, monkeypatch):
+    from app import ai_agent
+    from app import negatives as negatives_module
+
+    ctx = ai_agent.Context(env["user"], env["ws"])
+    args = {"campaign_row_id": env["camp"], "phrases": ["бесплатно", "икеа"]}
+    plan = ai_agent._p_add_negatives(ctx, args)
+    assert "икеа" in plan.summary
+    assert "не добавим: «бесплатно» — заденет ключ «кухни с бесплатной доставкой»" in plan.summary
+    assert ai_agent._p_queries_action(
+        ctx, {"action": "negative_campaign", "query_row_ids": [_qid(env["db"], "кухни  бесплатно")]}
+    ).summary.endswith("не тронем: «кухни  бесплатно» — заденет ключ «кухни с бесплатной доставкой»")
+
+    sent = []
+
+    def fake_add(user_id, *, campaigns, title, payload):
+        sent.append(campaigns)
+        return {"campaigns": {cid: {"added": ch["add"]} for cid, ch in campaigns.items()}, "skipped": []}
+
+    monkeypatch.setattr(negatives_module, "add_negatives_logged", fake_add)
+    out = ai_agent._x_add_negatives(ctx, args)
+    assert sent == [{env["camp"]: {"add": ["икеа"]}}]
+    assert out["added"] == ["икеа"] and out["not_added"] == ["«бесплатно» — заденет ключ «кухни с бесплатной доставкой»"]
+    out = ai_agent._x_add_negatives(ctx, {"campaign_row_id": env["camp"], "phrases": ["бесплатно"]})
+    assert out["added"] == [] and out["note"] == "все фразы задели бы ключи кампании" and len(sent) == 1

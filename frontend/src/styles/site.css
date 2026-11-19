@@ -5107,6 +5107,13 @@ button.board-chips__text:disabled {
   background: var(--ok-soft);
 }
 
+.board-draft__missed {
+  margin: 0;
+  padding-left: 1.1rem;
+  display: grid;
+  gap: 0.2rem;
+}
+
 .board-draft.is-error {
   background: var(--danger-soft);
 }

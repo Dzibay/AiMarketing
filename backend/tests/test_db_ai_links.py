@@ -207,8 +207,8 @@ def test_new_campaign_gets_the_chosen_ref(db, monkeypatch):
     s = _links_seed(db)
     user, chat = s["user"], s["chat"]
     _build(db, s, monkeypatch, upto="settings")
-    spec = {"account_id": s["acc"], "spec": {"name": "Окна", "negative_keywords": ["бесплатно"], "link_params": {"own": {"ref": "Hack"}}, "groups": [
-        {"name": "Окна ПВХ", "keywords": ["купить окна пвх", "окна в рассрочку"],
+    spec = {"account_id": s["acc"], "spec": {"name": "Окна", "daily_budget_rub": 500, "negative_keywords": ["бесплатно"], "link_params": {"own": {"ref": "Hack"}}, "groups": [
+        {"name": "Окна ПВХ", "region_ids": [213], "keywords": ["купить окна пвх", "окна в рассрочку"],
          "ad": {"titles": ["Окна от завода"], "texts": ["Замер в день заказа"], "href": "https://shop.ru/okna?ref=Telegram"}},
     ]}}
     _turn(user, chat, monkeypatch, _call("create_campaign", spec, "create"))

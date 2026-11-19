@@ -226,9 +226,32 @@
         </template>
         <template v-else-if="build.draft.status === 'done'">
           <strong>Черновик создан в Директе</strong>
-          <RouterLink v-if="build.draft.campaign_row_id" class="btn" :to="`/w/${wsId}/campaigns/${build.draft.campaign_row_id}`">
-            Открыть кампанию
-          </RouterLink>
+          <template v-if="draftMissed.length">
+            <p class="tone-warn">Что не попало в Директ:</p>
+            <ul class="board-draft__missed">
+              <li v-for="w in draftMissed" :key="w">{{ w }}</li>
+            </ul>
+            <p class="hint">ИИ подготовит недостающее и пришлёт карточку на согласование — сам ничего не меняет.</p>
+          </template>
+          <p v-else-if="madeText" class="hint">Всё создано: {{ madeText }}.</p>
+          <div class="board-decision__buttons">
+            <button v-if="draftMissed.length" class="btn btn--accent" type="button" :disabled="disabled" @click="finishDraft">
+              Доделать с ИИ
+            </button>
+            <CampaignNextStep
+              v-if="build.draft.campaign_row_id"
+              :ws-id="Number(wsId)"
+              :campaign="{ campaign_row_id: build.draft.campaign_row_id, name: build.draft.name }"
+              :next="{ kind: 'moderate', label: 'Отправить на проверку' }"
+              :quiet="draftMissed.length > 0"
+            />
+            <RouterLink v-if="build.draft.campaign_row_id" class="btn btn--ghost" :to="`/w/${wsId}/campaigns/${build.draft.campaign_row_id}`">
+              Открыть кампанию
+            </RouterLink>
+          </div>
+          <p class="hint">
+            Показы начнутся, когда вы отправите черновик на проверку и Директ его примет — обычно в течение дня.
+          </p>
         </template>
         <template v-else-if="build.draft.status === 'error'">
           <strong class="tone-bad">Черновик не создан</strong>
@@ -262,6 +285,7 @@ import { RouterLink } from 'vue-router'
 import { aiApi } from '../../api/web'
 import { askConfirm } from '../../composables/useConfirm'
 import { plural } from '../../utils/format'
+import CampaignNextStep from '../../components/CampaignNextStep.vue'
 import BoardFacts from './BoardFacts.vue'
 import BoardGroup from './BoardGroup.vue'
 import BoardSection from './BoardSection.vue'
@@ -279,8 +303,33 @@ const props = defineProps({
   imageGen: { type: Boolean, default: false },
 })
 // decide — решение по одной таблице (id, payload); board — одно решение на всю доску ({ approve, rows, comment });
-// draft — карточка создания черновика (approve).
-const emit = defineEmits(['decide', 'board', 'draft'])
+// draft — карточка создания черновика (approve); ask — готовый вопрос ИИ в чат (text).
+const emit = defineEmits(['decide', 'board', 'draft', 'ask'])
+
+// --- Что не попало в черновик -------------------------------------------------------------------
+
+const draftMissed = computed(() => props.build.draft?.warnings || [])
+const madeText = computed(() => {
+  const made = props.build.draft?.made
+  if (!made) return ''
+  return [
+    `${made.groups} ${plural(made.groups, 'группа', 'группы', 'групп')}`,
+    `${made.keywords} ${plural(made.keywords, 'фраза', 'фразы', 'фраз')}`,
+    `${made.ads} ${plural(made.ads, 'объявление', 'объявления', 'объявлений')}`,
+  ].join(', ')
+})
+
+function finishDraft() {
+  const draft = props.build.draft
+  const name = draft.name ? ` «${draft.name}»` : ''
+  const id = draft.campaign_row_id ? ` (campaign_row_id ${draft.campaign_row_id})` : ''
+  const missed = draftMissed.value.map((w) => `— ${w}`).join('\n')
+  emit(
+    'ask',
+    `Доделай черновик${name}${id}: при создании в Директ не попало:\n${missed}\n` +
+      'Разберись, почему, и подготовь недостающее по согласованному на доске — пришли карточкой на согласование.',
+  )
+}
 
 const SECTION_OF = {
   goals: 'goals',

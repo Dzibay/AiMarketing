@@ -327,7 +327,9 @@ export function campaignStatus(c) {
   const state = c?.state || ''
   const status = c?.status || ''
   if (status === 'REJECTED') {
-    return { tone: 'bad', label: 'Отклонена', hint: 'Модерация Директа не пропустила объявления — их нужно исправить' }
+    // Причина словами Директа, если загрузилась.
+    const hint = c?.status_clarification || 'Модерация Директа не пропустила объявления — их нужно исправить'
+    return { tone: 'bad', label: 'Отклонена', hint }
   }
   if (state === 'ARCHIVED') return { tone: 'off', label: 'В архиве', hint: '' }
   if (state === 'ENDED') return { tone: 'off', label: 'Завершена', hint: 'Прошла дата окончания кампании' }
@@ -380,11 +382,27 @@ export function priorityGoalsForApi(goals) {
     .map((g) => ({ goal_id: g.goal_id, value_rub: g.value_rub === '' || g.value_rub == null ? null : Number(g.value_rub) }))
 }
 
-const CONNECTION_PROBLEMS = new Set(['token', 'connection_sync', 'account_sync', 'stats_error', 'stats_stale', 'balance'])
+const CONNECTION_PROBLEMS = new Set(['token', 'connection_sync', 'account_sync', 'stats_error', 'stats_stale'])
 
-/** Куда вести из строки «Где горит»: кампания, подключения, настройки проекта или его сводка. */
+/** Чат проекта с готовым вопросом «исправь отказ модерации» по кампании. */
+export function moderationFixLink(ws, cid, name) {
+  return { path: `/w/${ws}/chat`, query: { ask: 'moderation', cid: String(cid), name: name || undefined } }
+}
+
+/** Пополняют счёт в самом Директе — кабинет нужного логина (direct_url приходит с сигналом). */
+export const DIRECT_URL = 'https://direct.yandex.ru/'
+
+/**
+ * Куда вести из строки «Где горит»: кампания, подключения, настройки проекта или его сводка.
+ * external — ссылка наружу (кабинет Директа), открывается в новой вкладке.
+ */
 export function problemLink(p) {
   const ws = p.workspace_id
+  if (p.kind === 'balance') return { to: p.direct_url || DIRECT_URL, label: 'Пополнить в Директе', external: true }
+  // Отказ модерации: ИИ читает причину и присылает исправление на согласование.
+  const rejected = p.kind === 'ads_rejected' || (p.kind === 'moderation' && p.severity === 'critical')
+  if (rejected && p.campaign_row_id && ws)
+    return { to: moderationFixLink(ws, p.campaign_row_id, p.object_name), label: 'Исправить с ИИ' }
   if (p.campaign_row_id && ws) return { to: `/w/${ws}/campaigns/${p.campaign_row_id}`, label: 'К кампании' }
   if (CONNECTION_PROBLEMS.has(p.kind)) return { to: '/cabinet/connections', label: 'К подключениям' }
   if ((p.kind === 'budget' || p.kind === 'kpi') && ws) return { to: `/w/${ws}/settings`, label: 'Настройки' }

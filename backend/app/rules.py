@@ -14,6 +14,7 @@ from app.clock import today_msk, yesterday_msk
 from app.db import pool
 from app.journal import acting_as
 from app.keywords import bulk_keyword_action
+from app.query_cleaning import NORM_SQL
 from app.search_queries import bulk_search_query_action
 from app.strategy_info import budget_brief
 from app.notifications import notify
@@ -776,7 +777,7 @@ def _matching_queries(user_id: int, rule: dict) -> list[dict]:
     campaign_row_id = rule.get("scope_campaign_row_id")
     with pool.connection() as conn:
         rows = conn.execute(
-            """
+            f"""
             SELECT q.id AS row_id, q.query, q.account_id, q.adgroup_row_id,
                    q.clicks, q.cost_kopecks, q.conversions,
                    g.name AS adgroup_name, c.name AS campaign_name
@@ -789,6 +790,12 @@ def _matching_queries(user_id: int, rule: dict) -> list[dict]:
                     SELECT campaign_row_id FROM workspace_campaigns WHERE workspace_id = %s))
               AND (%s::bigint IS NULL OR q.campaign_row_id = %s)
               AND COALESCE(q.clicks, 0) + COALESCE(q.cost_kopecks, 0) > 0
+              -- Запросы, которые маркетолог отметил целевыми, правило не трогает.
+              AND NOT EXISTS (
+                    SELECT 1 FROM query_labels l
+                    JOIN workspace_campaigns wc ON wc.workspace_id = l.workspace_id
+                    WHERE wc.campaign_row_id = q.campaign_row_id AND l.query_norm = {NORM_SQL}
+                      AND l.verdict = 'target' AND l.confirmed)
             ORDER BY q.cost_kopecks DESC NULLS LAST
             LIMIT 500
             """,
@@ -880,7 +887,10 @@ def _apply(user_id: int, rule: dict, target: str, action: str, matched: list[dic
     if target == "query" and action in ("negative_adgroup", "negative_campaign"):
         if action == "negative_adgroup":
             ids = [m["row_id"] for m in matched if m.get("adgroup_row_id")]
-        return _in_chunks(ids, 100, lambda chunk: bulk_search_query_action(user_id, query_ids=chunk, action=action))
+        # Фраза, которая отключила бы ключ кампании, не добавляется, а ложится в «нужно решить».
+        return _in_chunks(
+            ids, 100, lambda chunk: bulk_search_query_action(user_id, query_ids=chunk, action=action, park=True)
+        )
     if target == "keyword" and action in ("pause", "resume", "set_bid"):
         kw_action = "suspend" if action == "pause" else action
         bid = None

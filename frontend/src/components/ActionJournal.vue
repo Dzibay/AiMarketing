@@ -60,16 +60,52 @@
           </i>
           <div class="hrow__main">
             <b>{{ keepNumbers(a.title || a.action) }}</b>
+            <!-- Что поменялось — словами, «было → стало»; строки собирает сервер. -->
+            <ul v-if="a.changes?.length" class="hrow__changes">
+              <li v-for="(line, i) in a.changes" :key="i">{{ keepNumbers(line) }}</li>
+            </ul>
+            <p
+              v-if="result(a).problem && !open.has(a.id) && problemsOf(a).length"
+              class="hrow__problem"
+              :class="`hrow__problem--${result(a).tone}`"
+            >
+              {{ keepNumbers(firstProblem(a)) }}
+              <button
+                v-if="problemsOf(a).length > 1"
+                class="hrow__morebtn"
+                type="button"
+                :aria-expanded="false"
+                :aria-controls="`hmore-${a.id}`"
+                @click="toggleOpen(a.id)"
+              >
+                Подробнее
+              </button>
+            </p>
             <small class="hrow__meta">
               <span>{{ timeOf(a.created_at) }}</span>
               <ActionWho :source="a.source" />
               <RouterLink v-if="!workspaceId && a.workspace_id" :to="`/w/${a.workspace_id}/history`">
                 {{ niceQuotes(a.workspace_name) || `Проект ${a.workspace_id}` }}
               </RouterLink>
+              <template v-for="c in campaignsOf(a)" :key="c.id">
+                <RouterLink
+                  v-if="c.workspace_id"
+                  class="hrow__camp"
+                  :to="`/w/${c.workspace_id}/campaigns/${c.id}`"
+                  v-tip="directTip(c)"
+                >
+                  {{ campaignName(c) }}
+                </RouterLink>
+                <span v-else class="hrow__camp" v-tip="directTip(c)">{{ campaignName(c) }}</span>
+              </template>
+              <span v-if="moreCampaigns(a)">и ещё {{ moreCampaigns(a) }}</span>
               <span v-if="expert && summaryLine(a)">{{ summaryLine(a) }}</span>
             </small>
 
             <div v-if="open.has(a.id)" :id="`hmore-${a.id}`" class="hrow__more">
+              <p v-if="expert && a.cut" class="hrow__cut">
+                Старая запись: ответ Директа обрезался при сохранении — показано то, что уцелело.
+              </p>
               <template v-if="problemsOf(a).length">
                 <p class="hrow__errh">{{ isFailed(a) ? 'Директ не принял изменение' : 'Применилось не всё' }}</p>
                 <ul class="hrow__errs">
@@ -334,9 +370,11 @@ function result(a) {
   return RESULTS[a.status] || RESULTS.ok
 }
 
-/** Тексты ошибок из ответа: общая причина и ошибки по кампаниям — по клику на ✕. */
+/** Что не применилось и почему — словами с сервера («2 из 10 не применились: …»), полностью — по клику на значок. */
 function problemsOf(a) {
-  const r = a.result || {}
+  if (Array.isArray(a.problems)) return a.problems
+  // Запасной путь для ответа без готовых строк.
+  const r = a.result && typeof a.result === 'object' ? a.result : {}
   const out = []
   if (r.message || r.error) out.push(String(r.message || r.error))
   if (Array.isArray(r.errors)) {
@@ -357,10 +395,21 @@ function pretty(value) {
   return JSON.stringify(value, null, 2)
 }
 
+/** Первая строка причины — прямо в строке истории; «14 из 60 не применились:» без висящего двоеточия. */
+const firstProblem = (a) => String(problemsOf(a)[0] || '').replace(/:$/, '')
+
+/** Кампании записи — ссылками на кампанию в сервисе; две первые, остальные числом. */
+const campaignsOf = (a) => (a.campaigns || []).slice(0, 2)
+const moreCampaigns = (a) => Math.max((a.campaigns_total || 0) - campaignsOf(a).length, 0)
+const campaignName = (c) => niceQuotes(c.name) || `Кампания ${c.id}`
+const directTip = (c) => (expert.value && c.direct_id ? `№ в Директе: ${c.direct_id}` : '')
+
 function summaryLine(a) {
-  const r = a.result || {}
+  const r = a.result && typeof a.result === 'object' ? a.result : {}
   const parts = []
   if (a.undo_of) parts.push(`откат записи № ${a.undo_of}`)
+  // Есть строки «было → стало» — счётчики из ответа их только повторят.
+  if (a.changes?.length) return parts.join(', ')
   if (r.applied != null) parts.push(`применено ${r.applied}`)
   if (r.negative != null && r.target != null) parts.push(`минус ${r.negative}, целевых ${r.target}`)
   else if (r.added != null && r.removed != null) parts.push(`+${r.added} / −${r.removed}`)
@@ -475,6 +524,54 @@ onMounted(() => fetchPage())
 }
 .hrow__meta a {
   color: var(--muted);
+}
+/* Кампания в строке — ссылкой; длинное название не раздвигает строку. */
+.hrow__camp {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.hrow__changes {
+  margin: 3px 0 0;
+  padding: 0;
+  list-style: none;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.45;
+}
+.hrow__changes li {
+  overflow-wrap: anywhere;
+}
+.hrow__problem {
+  margin: 3px 0 0;
+  font-size: 13px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+.hrow__problem--warn {
+  color: var(--warn);
+}
+.hrow__problem--bad {
+  color: var(--danger);
+}
+.hrow__morebtn {
+  margin-left: 6px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}
+.hrow__cut {
+  margin: 0 0 8px;
+  color: var(--faint);
+  font-size: 12px;
+}
+.hrow.is-undone .hrow__changes {
+  color: var(--faint);
 }
 .hrow__acts {
   display: flex;

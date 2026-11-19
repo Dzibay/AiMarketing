@@ -78,7 +78,9 @@ def _campaigns_get(access_token: str, client_login: str, *, unified: bool, goals
     fields = ["BiddingStrategy", "CounterIds", *(_GOAL_FIELDS if goals else [])]
     params = {
         "SelectionCriteria": {},
-        "FieldNames": ["Id", "Name", "Type", "State", "Status", "DailyBudget", "NegativeKeywords", "StartDate"],
+        "FieldNames": [
+            "Id", "Name", "Type", "State", "Status", "StatusClarification", "DailyBudget", "NegativeKeywords", "StartDate",
+        ],
         "TextCampaignFieldNames": [*fields, "TrackingParams"],
         "DynamicTextCampaignFieldNames": fields,
         "SmartCampaignFieldNames": ["BiddingStrategy", "CounterId"],
@@ -146,6 +148,8 @@ def fetch_campaigns(access_token: str, client_login: str) -> list[dict]:
                 "type_exact": unified,
                 "state": str(item.get("State") or ""),
                 "status": str(item.get("Status") or ""),
+                # Состояние словами Директа: «Идут показы», «Средства на счёте закончились», причина отказа.
+                "status_clarification": str(item.get("StatusClarification") or "").strip(),
                 "strategy": strategy,
                 "bidding_strategy": bidding,
                 "priority_goals": priority_goals_from_api(block.get("PriorityGoals")) if goals_known else None,
@@ -187,14 +191,16 @@ _UPSERT_SQL = """
     INSERT INTO direct_campaigns (
         user_id, account_id, campaign_id, name, campaign_type,
         state, status, strategy, bidding_strategy, priority_goals, attribution_model,
-        daily_budget_kopecks, negative_keywords, counter_ids, start_date, source_row_id, tracking_params, synced_at
+        daily_budget_kopecks, negative_keywords, counter_ids, start_date, source_row_id, tracking_params,
+        status_clarification, synced_at
     )
     VALUES (
         %(user)s, %(account)s, %(campaign_id)s, %(name)s, %(type)s,
         %(state)s, %(status)s, %(strategy)s,
         COALESCE(%(bidding)s::jsonb, '{}'::jsonb), COALESCE(%(goals)s::jsonb, '[]'::jsonb),
         COALESCE(%(attribution)s::text, ''),
-        %(daily)s, %(negatives)s, %(counters)s, %(start_date)s, %(source)s::bigint, %(tracking)s::text, NOW()
+        %(daily)s, %(negatives)s, %(counters)s, %(start_date)s, %(source)s::bigint, %(tracking)s::text,
+        COALESCE(%(clarification)s::text, ''), NOW()
     )
     ON CONFLICT (account_id, campaign_id) DO UPDATE SET
         name = EXCLUDED.name,
@@ -214,6 +220,7 @@ _UPSERT_SQL = """
         start_date = EXCLUDED.start_date,
         source_row_id = COALESCE(%(source)s::bigint, direct_campaigns.source_row_id),
         tracking_params = COALESCE(%(tracking)s::text, direct_campaigns.tracking_params),
+        status_clarification = COALESCE(%(clarification)s::text, direct_campaigns.status_clarification),
         synced_at = NOW()
 """
 
@@ -241,6 +248,7 @@ def _upsert_params(user_id: int, account_id: int, item: dict) -> dict:
         "start_date": item.get("start_date"),
         "source": item.get("source_row_id"),
         "tracking": item.get("tracking_params"),
+        "clarification": item.get("status_clarification"),
     }
 
 
@@ -391,7 +399,7 @@ def get_campaign(user_id: int, campaign_row_id: int) -> dict | None:
             """
             SELECT c.id, c.account_id, c.campaign_id, c.name, c.campaign_type,
                    c.state, c.status, c.strategy, c.bidding_strategy, c.daily_budget_kopecks,
-                   c.negative_keywords, c.synced_at,
+                   c.negative_keywords, c.synced_at, c.status_clarification,
                    a.client_login, a.name AS account_name
             FROM direct_campaigns c
             JOIN direct_accounts a ON a.id = c.account_id
@@ -409,6 +417,7 @@ def get_campaign(user_id: int, campaign_row_id: int) -> dict | None:
         "campaign_type": row["campaign_type"],
         "state": row["state"],
         "status": row["status"],
+        "status_clarification": row["status_clarification"] or "",
         "strategy": row["strategy"],
         # При выключенном поиске ставками распоряжается стратегия в сетях.
         "network_strategy": str(((row.get("bidding_strategy") or {}).get("Network") or {}).get("BiddingStrategyType") or ""),

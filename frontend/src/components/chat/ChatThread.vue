@@ -43,6 +43,11 @@
               <RotateCcw aria-hidden="true" />
               Повторить
             </button>
+            <!-- Разговор слишком длинный или ИИ отклонил его историю — повтор не поможет, нужен новый чат. -->
+            <button v-if="item.kind === 'long'" class="btn btn--accent btn--sm" type="button" @click="newChat">
+              <MessageSquarePlus aria-hidden="true" />
+              Новый чат
+            </button>
           </template>
         </UiNotice>
 
@@ -311,7 +316,7 @@
 </template>
 
 <script setup>
-import { BookmarkPlus, Check, Clock, CornerDownRight, LifeBuoy, Maximize2, PencilLine, RotateCcw, Sparkles } from '@lucide/vue'
+import { BookmarkPlus, Check, Clock, CornerDownRight, LifeBuoy, Maximize2, MessageSquarePlus, PencilLine, RotateCcw, Sparkles } from '@lucide/vue'
 import { nextTick, onBeforeUnmount, reactive, ref, watch } from 'vue'
 import { RouterLink, useRouter } from 'vue-router'
 import { openSupport } from '../../composables/useSupport'
@@ -372,6 +377,7 @@ const {
   send,
   canRetry,
   retryTurn,
+  newChat,
   caps,
   remember,
   excluded,

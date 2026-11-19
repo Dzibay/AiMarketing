@@ -30,8 +30,12 @@ def _call(access_token: str, client_login: str, method: str, params: dict) -> di
     return direct_api.call(access_token, client_login, "ads", method, params, version="v501" if responsive else "v5")
 
 
-AD_FIELDS = ["Id", "AdGroupId", "Type", "State", "Status"]
-TEXT_AD_FIELDS = ["Title", "Title2", "Text", "Href", "AdImageHash", "SitelinkSetId"]
+AD_FIELDS = ["Id", "AdGroupId", "Type", "State", "Status", "StatusClarification"]
+# *Moderation — итог модерации дополнений объявления: быстрые ссылки, картинка, визитка (Status + StatusClarification).
+TEXT_AD_FIELDS = [
+    "Title", "Title2", "Text", "Href", "AdImageHash", "SitelinkSetId",
+    "SitelinksModeration", "AdImageModeration", "VCardModeration",
+]
 RESPONSIVE_AD_FIELDS = ["Titles", "Texts", "Href", "AdImages", "SitelinkSetId"]
 TEXT_IMAGE_AD_FIELDS = ["Href", "AdImageHash"]
 # Поля ads.get для списков: без ResponsiveAdFieldNames комбинаторные теряют варианты.
@@ -155,6 +159,9 @@ def parse_ads(raw: list[dict]) -> list[dict]:
                 "type": ad_type,
                 "state": str(item.get("State") or ""),
                 "status": str(item.get("Status") or ""),
+                # Причина отказа или пояснение статуса словами Директа.
+                "status_clarification": str(item.get("StatusClarification") or "").strip(),
+                "moderation": rejected_extensions(text_ad),
                 "title": titles[0] if titles else "",
                 "title2": title2,
                 "text": texts[0] if texts else "",
@@ -166,6 +173,24 @@ def parse_ads(raw: list[dict]) -> list[dict]:
             }
         )
     return items
+
+
+# Дополнения объявления, у которых своя модерация, — названия для причины отказа.
+EXTENSION_MODERATION = {
+    "SitelinksModeration": "Быстрые ссылки",
+    "AdImageModeration": "Картинка",
+    "VCardModeration": "Визитка",
+}
+
+
+def rejected_extensions(block: dict) -> list[dict]:
+    """Отклонённые дополнения объявления: [{"what": "Быстрые ссылки", "reason": "…"}]."""
+    out = []
+    for key, what in EXTENSION_MODERATION.items():
+        mod = block.get(key) or {}
+        if str(mod.get("Status") or "") == "REJECTED":
+            out.append({"what": what, "reason": str(mod.get("StatusClarification") or "").strip()})
+    return out
 
 
 def upsert_ads(user_id: int, account_id: int, adgroup_row_by_direct_id: dict[int, int], items: list[dict]) -> int:
@@ -180,14 +205,17 @@ def upsert_ads(user_id: int, account_id: int, adgroup_row_by_direct_id: dict[int
                 INSERT INTO direct_ads (
                     user_id, account_id, adgroup_row_id, ad_id,
                     type, state, status, title, title2, text, href,
-                    titles, texts, image_hashes, sitelink_set_id, sitelink_hrefs, synced_at
+                    titles, texts, image_hashes, sitelink_set_id, sitelink_hrefs,
+                    status_clarification, moderation, synced_at
                 )
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
                 ON CONFLICT (account_id, ad_id) DO UPDATE SET
                     adgroup_row_id = EXCLUDED.adgroup_row_id,
                     type = EXCLUDED.type,
                     state = EXCLUDED.state,
                     status = EXCLUDED.status,
+                    status_clarification = EXCLUDED.status_clarification,
+                    moderation = EXCLUDED.moderation,
                     title = EXCLUDED.title,
                     title2 = EXCLUDED.title2,
                     text = EXCLUDED.text,
@@ -221,6 +249,8 @@ def upsert_ads(user_id: int, account_id: int, adgroup_row_by_direct_id: dict[int
                     Jsonb(list(item.get("image_hashes") or [])),
                     item.get("sitelink_set_id"),
                     Jsonb(item["sitelink_hrefs"]) if item.get("sitelink_hrefs") is not None else None,
+                    str(item.get("status_clarification") or ""),
+                    Jsonb(list(item.get("moderation") or [])),
                 ),
             )
             count += 1
@@ -1080,6 +1110,9 @@ def _public(row: dict) -> dict:
         "type": row.get("type") or "",
         "state": row.get("state") or "",
         "status": row.get("status") or "",
+        # Причина отказа модерации словами Директа и отклонённые дополнения (быстрые ссылки, картинка…).
+        "status_clarification": row.get("status_clarification") or "",
+        "moderation": list(row.get("moderation") or []),
         "title": title,
         "title2": row.get("title2") or "",
         "text": text,

@@ -18,13 +18,18 @@ from app.db import pool
 from app.negative_lists import phrase_key
 from app.query_cleaning import (
     NORM_SQL,
+    _keyword_index,
     add_target_keywords,
     apply_negative_entries,
     clean_negative,
+    conflict_note,
+    effective_level,
+    find_conflicts,
     keyword_text,
     log_query_action,
     remember_decisions,
     snapshot_labels,
+    suggest_labels,
 )
 from app.stats import _count, _rub_to_kopecks
 from app.sync_runs import finish_run, start_run
@@ -328,7 +333,10 @@ def _query_rows(user_id: int, query_row_ids: list[int]) -> list[dict]:
         rows = conn.execute(
             f"""
             SELECT q.*, {NORM_SQL} AS query_norm, c.campaign_id, a.connection_id, a.client_login, a.enabled,
-                   wc.workspace_id
+                   wc.workspace_id,
+                   EXISTS (SELECT 1 FROM query_labels l
+                           WHERE l.workspace_id = wc.workspace_id AND l.query_norm = {NORM_SQL}
+                             AND l.verdict = 'target' AND l.confirmed) AS marked_target
             FROM direct_search_queries q
             JOIN direct_campaigns c ON c.id = q.campaign_row_id
             JOIN direct_accounts a ON a.id = q.account_id
@@ -431,8 +439,60 @@ def _keywords_from_rows(user_id: int, rows: list[dict], adgroup_row_id: int | No
     return summary, outcomes
 
 
-def _negatives_from_rows(user_id: int, rows: list[dict], level: str) -> tuple[dict, dict]:
-    """Запросы в минус-фразы — общий путь с экраном чистки: журнал с откатом и память проекта."""
+TARGET_NOTE = "вы отметили запрос целевым"
+
+
+def _upper_first(text: str) -> str:
+    return text[:1].upper() + text[1:]
+
+
+def _park_conflicts(user_id: int, rows: list[dict], outcomes: dict[str, dict]) -> None:
+    """Минус-фраза задела бы ключ — не добавляем, а кладём в «нужно решить» на экране чистки."""
+    by_ws: dict[int, list[dict]] = defaultdict(list)
+    for row in rows:
+        o = outcomes.get(str(row["id"])) or {}
+        if o.get("conflicts") and row.get("workspace_id"):
+            message = o.get("message") or ""
+            by_ws[int(row["workspace_id"])].append(
+                {
+                    "query_norm": row["query_norm"],
+                    "query": row["query"],
+                    "verdict": "negative",
+                    "reason": f"Не добавлено автоматически: {message[:1].lower()}{message[1:]}",
+                    "negative_phrase": o.get("phrase") or "",
+                    "level": o.get("level") or "adgroup",
+                    "source": "rule",
+                }
+            )
+    for ws_id, items in by_ws.items():
+        suggest_labels(user_id, ws_id, items)
+
+
+def _skipped_items(rows: list[dict], outcomes: dict[str, dict]) -> list[dict]:
+    """Что пропущено и почему — для тоста, карточки чата и журнала."""
+    out = []
+    for row in rows:
+        o = outcomes.get(str(row["id"])) or {}
+        if o.get("status") == "skipped":
+            out.append(
+                {
+                    "query_row_id": int(row["id"]),
+                    "query": row.get("query") or "",
+                    "message": o.get("message") or "",
+                    "conflicts": [c["keyword"] for c in o.get("conflicts") or []],
+                }
+            )
+    return out[:20]
+
+
+def _negatives_from_rows(
+    user_id: int, rows: list[dict], level: str, *, force: bool = False, park: bool = False
+) -> tuple[dict, dict]:
+    """
+    Запросы в минус-фразы — общий путь с экраном чистки: журнал с откатом и память проекта.
+    Без force запросы, отмеченные целевыми, и минус-фразы, которые отключат ключи кампании, пропускаются;
+    park — пропущенное из-за ключей ложится в «нужно решить» (правило автопилота, ИИ).
+    """
     entries = []
     outcomes: dict[str, dict] = {}
     for row in rows:
@@ -442,6 +502,8 @@ def _negatives_from_rows(user_id: int, rows: list[dict], level: str) -> tuple[di
             outcomes[key] = {"status": "skipped", "message": "Пустой запрос"}
         elif level == "adgroup" and not row.get("adgroup_row_id"):
             outcomes[key] = {"status": "skipped", "message": "Запрос без группы"}
+        elif not force and row.get("marked_target"):
+            outcomes[key] = {"status": "skipped", "message": _upper_first(TARGET_NOTE), "phrase": phrase, "level": level}
         else:
             entries.append(
                 {
@@ -454,8 +516,10 @@ def _negatives_from_rows(user_id: int, rows: list[dict], level: str) -> tuple[di
             )
     result = {"campaigns": {}, "adgroups": {}, "skipped": [], "errors": []}
     if entries:
-        result, made = apply_negative_entries(user_id, entries, force=True)
+        result, made = apply_negative_entries(user_id, entries, force=force)
         outcomes.update(made)
+    if park:
+        _park_conflicts(user_id, rows, outcomes)
     applied = sum(1 for o in outcomes.values() if o["status"] in ("ok", "partial"))
     errors = sum(1 for o in outcomes.values() if o["status"] == "error")
     action = f"negative_{level}"
@@ -466,6 +530,7 @@ def _negatives_from_rows(user_id: int, rows: list[dict], level: str) -> tuple[di
         "skipped": sum(1 for o in outcomes.values() if o["status"] == "skipped"),
         "errors": errors,
         "log_id": None,
+        "skipped_items": _skipped_items(rows, outcomes),
     }
     done = {
         int(k): {"verdict": "negative", "negative_phrase": o["phrase"], "level": o["level"], "applied": True}
@@ -506,17 +571,47 @@ def add_query_as_keyword(
     return {"status": "ok", "query_id": query_row_id, "created": summary["applied"], "log_id": summary["log_id"]}
 
 
+def _row_conflicts(user_id: int, row: dict, phrase: str, level: str) -> list[dict]:
+    """Ключи кампании, которые отключит минус-фраза запроса там, куда она ляжет."""
+    target = {
+        "campaign_row_ids": [int(row["campaign_row_id"])],
+        "adgroup_row_ids": [int(row["adgroup_row_id"])] if row.get("adgroup_row_id") else [],
+    }
+    index = _keyword_index(user_id, target["campaign_row_ids"])
+    return find_conflicts(phrase, effective_level(level, target), target, index)
+
+
 def add_query_as_negative(
     user_id: int,
     query_row_id: int,
     *,
     scope: str = "adgroup",
+    force: bool = False,
 ) -> dict:
+    """
+    Без force запрос, отмеченный целевым, или фраза, которая заденет ключ, → status=needs_confirm с причиной.
+    Повтор с force ключи уже не проверяет, поэтому у целевого запроса ключи проверяем сразу — обе причины
+    в одном вопросе.
+    """
     if scope not in ("adgroup", "campaign"):
         raise YandexError("action")
     row = _query_row(user_id, query_row_id)
-    summary, outcomes = _negatives_from_rows(user_id, [row], scope)
+    summary, outcomes = _negatives_from_rows(user_id, [row], scope, force=force)
     outcome = outcomes.get(str(row["id"])) or {"status": "error", "message": ""}
+    if outcome["status"] == "skipped" and outcome.get("phrase"):
+        message = outcome.get("message") or ""
+        conflicts = [c["keyword"] for c in outcome.get("conflicts") or []]
+        if row.get("marked_target"):
+            hits = _row_conflicts(user_id, row, outcome["phrase"], outcome.get("level") or scope)
+            if hits:
+                message = f"{message}, и минус-фраза {conflict_note(hits)}"
+                conflicts = [k["keyword"] for k in hits[:5]]
+        return {
+            "status": "needs_confirm",
+            "message": message,
+            "phrase": outcome["phrase"],
+            "conflicts": conflicts,
+        }
     if outcome["status"] == "skipped":
         raise YandexError("empty", outcome.get("message") or None)
     if outcome["status"] == "error":
@@ -531,8 +626,13 @@ def bulk_search_query_action(
     action: str,
     adgroup_row_id: int | None = None,
     bid_rub: float | None = None,
+    force: bool = False,
+    park: bool = False,
 ) -> dict:
-    """action: add_keyword | negative_adgroup | negative_campaign. → {status, action, applied, skipped, errors, log_id}"""
+    """
+    action: add_keyword | negative_adgroup | negative_campaign. → {status, action, applied, skipped, errors, log_id,
+    skipped_items}. Минус-фразы без force не трогают целевые запросы и ключи кампании (см. _negatives_from_rows).
+    """
     if action not in ("add_keyword", "negative_adgroup", "negative_campaign"):
         raise YandexError("action")
     if not query_ids:
@@ -543,8 +643,32 @@ def bulk_search_query_action(
     if action == "add_keyword":
         summary, _outcomes = _keywords_from_rows(user_id, rows, adgroup_row_id, bid_rub)
     else:
-        summary, _outcomes = _negatives_from_rows(user_id, rows, action.removeprefix("negative_"))
+        summary, _outcomes = _negatives_from_rows(
+            user_id, rows, action.removeprefix("negative_"), force=force, park=park
+        )
     return summary
+
+
+def negative_blockers(user_id: int, query_ids: list[int], level: str) -> list[tuple[str, str]]:
+    """Какие запросы не уйдут в минус и почему — для карточки до выполнения: [(запрос, причина)]."""
+    rows = _query_rows(user_id, query_ids)
+    index = _keyword_index(user_id, sorted({int(r["campaign_row_id"]) for r in rows}))
+    out = []
+    for row in rows:
+        phrase = clean_negative(row.get("query") or "")
+        if not phrase:
+            continue
+        if row.get("marked_target"):
+            out.append((row["query"], TARGET_NOTE))
+            continue
+        target = {
+            "campaign_row_ids": [int(row["campaign_row_id"])],
+            "adgroup_row_ids": [int(row["adgroup_row_id"])] if row.get("adgroup_row_id") else [],
+        }
+        conflicts = find_conflicts(phrase, effective_level(level, target), target, index)
+        if conflicts:
+            out.append((row["query"], conflict_note(conflicts)))
+    return out
 
 
 def _public(row: dict) -> dict:

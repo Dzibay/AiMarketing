@@ -453,7 +453,14 @@ def load_config(
         headers["OpenAI-Project"] = folder
     else:
         base = row.get("base_url") or OPENAI_BASE
-    bridge = ai_bridge.target("chat", model) if provider == "openai" else None
+    try:
+        bridge = ai_bridge.target("chat", model) if provider == "openai" else None
+    except YandexError as exc:
+        # Мост не настроен или не знает модель: до провайдера вызов не дошёл, но пользователь без ответа — в журнал.
+        # Запасную модель внутри complete() запишет цепочка; проверки из админки (user_id None) не пишем.
+        if user_id and _attempts.get() is None:
+            _note_failure({"model_name": model_name, "model_class": cls["id"], "user_id": user_id, "task": task}, exc)
+        raise
     temperature = float(row["temperature"]) if row.get("temperature") is not None else 0.3
     if bridge:
         # Через мост Cloudflare: свой адрес API не используется, модель — в виде, понятном мосту.
@@ -694,20 +701,36 @@ _attempts: ContextVar[list | None] = ContextVar("ai_attempts", default=None)
 ERRORS_KEEP_DAYS = 90
 
 
+def _attempt_row(cfg: dict, exc: YandexError, *, retried: bool) -> dict:
+    return {
+        "model": cfg.get("model_name") or cfg.get("model") or "",
+        "model_class": cfg.get("model_class") or "",
+        "code": exc.code or "",
+        "message": (exc.message or "")[:500],
+        "retried": retried,
+        "fallback": False,
+    }
+
+
 def _note_attempt(cfg: dict, exc: YandexError, *, retried: bool) -> None:
     attempts = _attempts.get()
     if attempts is None:
         return
-    attempts.append(
-        {
-            "model": cfg.get("model_name") or cfg.get("model") or "",
-            "model_class": cfg.get("model_class") or "",
-            "code": exc.code or "",
-            "message": (exc.message or "")[:500],
-            "retried": retried,
-            "fallback": False,
-        }
-    )
+    exc.noted = True
+    attempts.append(_attempt_row(cfg, exc, retried=retried))
+
+
+def _note_failure(cfg: dict, exc: YandexError) -> None:
+    """Сбой провайдера мимо _send_retrying (адрес API, непонятный ответ, мост, JSON не по схеме) — тоже в ai_errors.
+    Внутри complete() — в его список попыток (запишется с итогом вызова), вне — сразу, без ответа.
+    Уже записанный (exc.noted) и не провайдерский (тариф, «ИИ не подключён») не пишем."""
+    if getattr(exc, "noted", False) or not is_provider_error(exc.code):
+        return
+    if _attempts.get() is not None:
+        _note_attempt(cfg, exc, retried=False)
+        return
+    exc.noted = True
+    _save_attempts(cfg, [_attempt_row(cfg, exc, retried=False)], "")
 
 
 def _save_attempts(cfg: dict, attempts: list[dict], answered_by: str) -> None:
@@ -1064,6 +1087,111 @@ def _post_anthropic(url: str, body: dict, headers: dict, timeout: float, stream:
     return response, _from_anthropic(ordered, usage or None, model, stop_reason)
 
 
+# --- Сбой ИИ словами для пользователя -----------------------------------------------------------------
+# Пользователю — коротко и что делать. Технические подробности (код, модель, ответ провайдера) — в журнале
+# ошибок ИИ в админке (ai_errors) и в оповещении «ИИ не отвечает» владельцу.
+ERROR_BUSY = "ИИ сейчас перегружен — повторите через минуту."
+ERROR_LONG = (
+    "Разговор стал слишком длинным для ИИ. Начните новый чат — данные проекта и запомненные факты ИИ увидит и там."
+)
+# Провайдер отклонил историю разговора (_BROKEN_HISTORY): повтор не поможет, новый чат — да. Вид «long».
+ERROR_RESTART = (
+    "ИИ не может продолжить этот разговор. Начните новый чат — данные проекта и запомненные факты ИИ увидит и там."
+)
+ERROR_DOWN = "ИИ временно недоступен — сбой на нашей стороне, кампании и данные в порядке. Повторите через несколько минут."
+# «Слишком длинно» вне чата (разметка запросов, площадки, объявления, задачи): новый чат там не поможет.
+ERROR_TOO_MUCH = "Слишком много данных для ИИ за один раз. Сократите объём и повторите."
+# Модель ответила, но не JSON по схеме и после просьбы исправиться — обычно проходит со второго раза.
+ERROR_FORMAT = "ИИ ответил не по формату — повторите ещё раз."
+# Ошибки тарифа — вид «plan» (тексты уже написаны для пользователя, как и все не провайдерские).
+PLAN_ERRORS = {"units-exhausted", "subscription-expired", "feature-locked", "project-locked"}
+# Генератор картинок (image_gen): временные сбои и отказы провайдера. image-error (картинка не та: битая,
+# больше 5 МБ, не JPG/PNG/GIF), image-prompt, image-not-configured — уже словами для пользователя, не здесь.
+IMAGE_BUSY_ERRORS = {"image-limit", "image-network", "image-timeout"}
+IMAGE_ERRORS = IMAGE_BUSY_ERRORS | {"image-auth", "image-balance", "image-api"}
+# Временные сбои: перегрузка, лимит запросов, сеть, таймаут. bridge-gateway — неверное имя шлюза в настройках
+# моста, само не пройдёт: «недоступен», как и прочие bridge-* кроме сети.
+BUSY_ERRORS = {"ai-limit", "ai-error", "ai-network", "ai-timeout", "bridge-network"} | IMAGE_BUSY_ERRORS
+# Ошибки провайдера, моста и настроек модели — в кабинете их текст заменяется понятным (human_error).
+PROVIDER_ERRORS = BUSY_ERRORS | IMAGE_ERRORS | {
+    "ai-balance", "ai-auth", "ai-model", "ai-url", "ai-provider", "ai-folder", "ai-class", "ai-price", "ai-temperature",
+    "ai-region", "ai-json",
+}
+# Запрос такого размера, не дождавшийся ответа, — скорее всего, дело в длине разговора.
+LONG_REQUEST_TOKENS = 120_000
+_TOO_LONG = re.compile(
+    r"context.{0,20}(length|window|limit)|maximum context|prompt is too long|too many (input )?tokens"
+    r"|input.{0,30}tokens.{0,40}(exceed|no more than|limit)|token limit|request too large|(payload|entity) too large"
+    # Gemini: «The input token count (…) exceeds the maximum number of tokens allowed», «payload size exceeds».
+    r"|input token count.{0,40}exceed|exceeds the maximum number of tokens|payload size exceeds"
+    r"|\(413\)|превыш.{0,40}(токен|контекст)",
+    re.I,
+)
+# Лимит запросов или токенов в минуту (429 «Rate limit … tokens per min (TPM)») — это перегрузка, а не длина,
+# хотя слова те же. Исключение — «Request too large … must be reduced»: один запрос больше минутного лимита.
+_RATE_LIMIT = re.compile(r"per min|в минуту|\bTPM\b|\bRPM\b|rate.?limit|лимит запросов", re.I)
+_MUST_REDUCE = re.compile(r"must be reduced", re.I)
+# HTTP-статус в тексте ai-error: «Ошибка ИИ (400): …», «Ошибка ИИ через мост Cloudflare (404): …» (_raise_for_status).
+_AI_STATUS = re.compile(r"Ошибка ИИ[^:(]{0,40}\((\d{3})\)")
+# Провайдер отклонил историю разговора: вызовы инструментов без ответов, роли не по очереди. Повтор упрётся
+# в то же, а новый чат начнётся с чистой истории.
+_BROKEN_HISTORY = re.compile(
+    r"tool_calls?\b|tool_call_id|tool_use|tool_result|role.{0,3}tool\b|function (call|response) turn|roles must alternate",
+    re.I,
+)
+
+
+def is_provider_error(code: str) -> bool:
+    return code in PROVIDER_ERRORS or (code or "").startswith("bridge-")
+
+
+def _too_long(code: str, message: str) -> bool:
+    if code in IMAGE_ERRORS or not _TOO_LONG.search(message):
+        return False
+    return not _RATE_LIMIT.search(message) or bool(_MUST_REDUCE.search(message))
+
+
+def _rejected(message: str) -> bool:
+    """ai-error — отказ в самом запросе (4xx, кроме таймаута и лимита в минуту): сам не пройдёт, в отличие
+    от 5xx, таймаута шлюза (524) и перегрузки. Статус берётся из текста: в задачах флага transient нет."""
+    found = _AI_STATUS.search(message)
+    status = int(found.group(1)) if found else 0
+    return 400 <= status < 500 and status not in (408, 429) and not _RATE_LIMIT.search(message)
+
+
+def human_error(
+    code: str, message: str, request: tuple[int, int] | None = None, transient: bool = False, *, chat: bool = True
+) -> tuple[str, str]:
+    """Сбой вызова ИИ → (текст для пользователя, вид: busy / long / down / plan). request — (токенов, сообщений)
+    запроса; вид «long» — в чате рядом с «Повторить» кнопка «Новый чат» (разговор слишком длинный или провайдер
+    отклонил его историю). chat=False — вызов не из чата: «long» другим текстом (ERROR_TOO_MUCH), отказ истории —
+    «down». Ошибки не провайдера (тариф, проект закрыт, «ИИ не подключён») уже написаны для пользователя — как
+    есть; сбой кода (crash) — общим текстом."""
+    if not is_provider_error(code):
+        if message and code != "crash":
+            return message, "plan" if code in PLAN_ERRORS else "down"
+        return ERROR_DOWN, "down"
+    message = message or ""
+    if _too_long(code, message) or (code == "ai-timeout" and request and request[0] >= LONG_REQUEST_TOKENS):
+        return (ERROR_LONG if chat else ERROR_TOO_MUCH), "long"
+    if code == "ai-json":
+        return ERROR_FORMAT, "busy"
+    # Отказ в самом запросе (400/404/422…): повтор через минуту упрётся в то же.
+    if code == "ai-error" and not transient and _rejected(message):
+        if chat and _BROKEN_HISTORY.search(message):
+            return ERROR_RESTART, "long"
+        return ERROR_DOWN, "down"
+    # Лимит без повтора — это квота или деньги провайдера, а не перегрузка: сам не пройдёт.
+    if code in BUSY_ERRORS and (transient or code != "ai-limit"):
+        return ERROR_BUSY, "busy"
+    return ERROR_DOWN, "down"
+
+
+def user_error(exc: YandexError, *, chat: bool = False) -> str:
+    """Текст сбоя ИИ для кабинета: ошибка провайдера — понятными словами, остальные — как есть (human_error)."""
+    return human_error(exc.code, exc.message or "", transient=getattr(exc, "transient", False), chat=chat)[0]
+
+
 def _transient(code: str, message: str, retry_after: float | None = None) -> YandexError:
     """Ошибка, которая обычно проходит сама: complete() повторит запрос, прежде чем её показать."""
     exc = YandexError(code, message)
@@ -1290,6 +1418,7 @@ def _complete_chain(cfg: dict, messages: list[dict], tools: list[dict] | None, a
     order = [i for i in range(len(chain)) if not _is_down(names[i])] + [i for i in range(len(chain)) if _is_down(names[i])]
     first: YandexError | None = None
     for n, i in enumerate(order):
+        current = None
         try:
             if chain[i] is None:
                 current = cfg
@@ -1299,6 +1428,8 @@ def _complete_chain(cfg: dict, messages: list[dict], tools: list[dict] | None, a
                 current = _fallback_cfg(cfg, chain[i], reason=f"{names[0]}: {why.message or why.code}", rest=rest)
             reply = _complete_once(current, messages, tools)
         except YandexError as exc:
+            # Отказ мимо _send_retrying (адрес API, непонятный ответ, мост запасной) — тоже в журнал попыток.
+            _note_failure(current or {**cfg, "model_name": names[i]}, exc)
             final = exc.code not in FALLBACK_CODES or (exc.code == "ai-limit" and getattr(exc, "transient", False))
             if exc.code in ("ai-model", "ai-balance") or (exc.code == "ai-limit" and not final):
                 _down[names[i]] = time.monotonic() + MODEL_DOWN_SECONDS
@@ -1408,7 +1539,10 @@ def complete_json(cfg: dict, messages: list[dict], *, retries: int = 1) -> dict:
                 {"role": "assistant", "content": reply["content"][:4000]},
                 {"role": "user", "content": "Ответ не разобрался. Верни только JSON-объект по заданной схеме, без текста вокруг."},
             ]
-    raise YandexError("ai-json", "ИИ вернул ответ не в том формате — попробуйте ещё раз или смените модель")
+    # Модель ответила (расход записан), но не по схеме: в ai_errors — без ответа; в кабинете — ERROR_FORMAT.
+    exc = YandexError("ai-json", "ИИ вернул ответ не в том формате — попробуйте ещё раз или смените модель")
+    _note_failure(cfg, exc)
+    raise exc
 
 
 def provider_models(cfg: dict) -> list[str]:

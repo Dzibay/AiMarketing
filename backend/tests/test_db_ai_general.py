@@ -159,3 +159,31 @@ def test_pending_queue_skips_archived_projects_and_api(db, monkeypatch):
 
     workspaces.update_workspace(user, s["ws"], archived=True)
     assert client.get("/api/web/ai/pending/count", headers=auth).json() == {"count": 0}
+
+
+def test_overview_tool_sees_every_project_at_once(db, monkeypatch):
+    """«С чего начать» в общем чате — один вызов get_overview: все проекты, проблемы по важности и деньги."""
+    s = _seed(db)
+    user, blog = s["user"], _blog(s["user"])
+    with db.connection() as conn:
+        conn.execute("UPDATE direct_campaigns SET status = 'REJECTED' WHERE id = %s", (s["foreign"],))
+        conn.execute("UPDATE direct_accounts SET balance_kopecks = 0 WHERE id = %s", (s["acc"],))
+
+    chat = ai_agent.create_chat(user, None)
+    fake = ToolsModel(_call("get_overview", {}, "o1"), _text("Сначала пополните счёт «Магазина»."))
+    monkeypatch.setattr(ai, "complete", fake)
+    ai_agent.post_message(user, chat["id"], "С чего начать?")
+    ai_agent.run_chat(user, chat["id"])
+
+    assert "get_overview" in {t["function"]["name"] for t in fake.tools[0]}
+    assert "начинай с одного вызова get_overview" in fake.calls[0][0]["content"]
+    got = json.loads(fake.calls[1][-1]["content"])
+    projects = {p["name"]: p for p in got["projects"]}
+    assert {"Магазин", "Блог"} <= set(projects)
+    assert projects["Магазин"]["project_id"] == s["ws"] and projects["Магазин"]["balance_rub"] == 0
+    assert "spend_7d_rub" in projects["Блог"]  # копейки модель видит рублями
+    rejected = next(p for p in got["problems"] if p["title"] == "Кампания отклонена модерацией")
+    assert (rejected["project_id"], rejected["project"], rejected["campaign_row_id"]) == (blog, "Блог", s["foreign"])
+    assert got["problems_total"] == len(got["problems"]) and "not_all_shown" not in got
+    # Самые срочные — сверху.
+    assert got["problems"][0]["severity"] == "critical"

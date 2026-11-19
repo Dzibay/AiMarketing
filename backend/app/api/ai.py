@@ -184,9 +184,11 @@ def workspace_ad_images(workspace_id: int, account_id: int | None = None, user_i
 
 @router.post("/workspaces/{workspace_id}/ad-images/generate")
 def workspace_generate_images(workspace_id: int, body: ImageGenerateBody, user_id: int = Depends(require_web_user)) -> dict:
-    """Генерация общим ключом сервиса (списывает единицы) → библиотека кабинета: [{hash, preview_url, account_id}]."""
-    return _call(ai_agent.generate_images, user_id, workspace_id, account_id=body.account_id, prompt=body.prompt,
-                 count=body.count)
+    """Генерация общим ключом сервиса (списывает единицы) → библиотека кабинета: [{hash, preview_url, account_id}].
+    Название модели генератора в кабинет не отдаём."""
+    out = _call(ai_agent.generate_images, user_id, workspace_id, account_id=body.account_id, prompt=body.prompt,
+                count=body.count)
+    return {k: v for k, v in out.items() if k != "model"}
 
 
 @router.get("/ai/usage")

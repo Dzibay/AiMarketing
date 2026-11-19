@@ -10,6 +10,7 @@ import calendar
 from collections import defaultdict
 from datetime import date, datetime, timedelta, timezone
 from statistics import median
+from urllib.parse import quote
 
 from app.clock import MSK, today_msk
 from app.db import pool
@@ -44,6 +45,9 @@ HEADLINE_SHIFT_PCT = 30
 HEADLINE_MIN_CONVERSIONS = 5
 HEADLINE_MIN_COST = 100_000  # 1 000 ₽
 DIRECT_URL = "https://direct.yandex.ru/"
+# Кабинет конкретного логина (агентский доступ открывает клиента по ulogin). Адрес на живом
+# кабинете с оплатой не проверен — если Директ его сменит, ведём на общую главную.
+DIRECT_ACCOUNT_URL = "https://direct.yandex.ru/dna/grid/campaigns?ulogin={login}"
 
 
 def rub(kopecks: float | None) -> str:
@@ -132,6 +136,34 @@ def days_on_balance(balance_kopecks: int | None, cost_7d: int) -> float | None:
     return round(max(0, balance_kopecks) / (cost_7d / 7), 1)
 
 
+def direct_account_url(login: str | None) -> str:
+    """Директ сразу на кабинете логина — пополнять счёт там. Логина нет — общая главная Директа."""
+    return DIRECT_ACCOUNT_URL.format(login=quote(login, safe="")) if login else DIRECT_URL
+
+
+def runs_out_on(balance_kopecks: int | None, days: float | None, today: date) -> date | None:
+    """Дата, когда деньги кончатся при расходе как за 7 дней: 6,4 дня — в течение седьмого дня от сегодня."""
+    if balance_kopecks is not None and balance_kopecks <= 0:
+        return today
+    if days is None:
+        return None
+    return today + timedelta(days=int(days))
+
+
+def balance_order(entry: dict) -> tuple:
+    """Порядок блока «Деньги»: кончились → меньше всего дней → без расхода → баланса не знаем."""
+    balance, days = entry["balance_kopecks"], entry["days_on_balance"]
+    if balance is not None and balance <= 0:
+        group, value = 0, 0.0
+    elif days is not None:
+        group, value = 1, days
+    elif balance is not None:
+        group, value = 2, 0.0
+    else:
+        group, value = 3, 0.0
+    return group, value, (entry["name"] or "").lower(), entry["account_id"]
+
+
 def campaign_anomalies(
     history: dict[date, tuple[int, int]],
     day: date,
@@ -209,6 +241,24 @@ NO_WORKSPACE = "Без проекта"
 NO_CLIENT = "Без клиента"
 
 
+def rejected_detail(rows: list[dict], limit: int = 3) -> str:
+    """Что отклонила модерация и почему — коротко: «„Окна от 990 ₽“ — нарушены требования…; Быстрые ссылки — …»."""
+    parts: list[str] = []
+    for r in rows:
+        title = str(r.get("title") or "").strip()
+        name = f"«{title[:40]}{'…' if len(title) > 40 else ''}»" if title else "Объявление"
+        if r.get("status") == "REJECTED":
+            reason = str(r.get("reason") or "").strip()
+            parts.append(f"{name} — {reason}" if reason else name)
+        for extra in r.get("extras") or []:
+            reason = str(extra.get("reason") or "").strip()
+            what = f"{extra.get('what') or 'Дополнение'} {f'в {name}' if title else 'объявления'}"
+            parts.append(f"{what} — {reason}" if reason else what)
+    shown = parts[:limit]
+    more = len(parts) - len(shown)
+    return "; ".join(shown) + (f" и ещё {more}" if more > 0 else "")
+
+
 def _problem(severity: str, kind: str, title: str, detail: str = "", **where) -> dict:
     workspace_ids = where.get("workspace_ids") or [where.get("workspace_id")]
     return {
@@ -266,7 +316,7 @@ def _load(user_id: int, date_from: date, date_to: date) -> dict:
         ).fetchall()
         accounts = conn.execute(
             """
-            SELECT id, connection_id,
+            SELECT id, connection_id, client_login,
                    COALESCE(NULLIF(name, ''), client_login) AS name,
                    last_sync_status, last_sync_error,
                    balance_kopecks, balance_currency, balance_synced_at, balance_error,
@@ -288,13 +338,25 @@ def _load(user_id: int, date_from: date, date_to: date) -> dict:
         ).fetchall()
         campaigns = conn.execute(
             """
-            SELECT c.id, c.account_id, c.campaign_id, c.name, c.state, c.status,
+            SELECT c.id, c.account_id, c.campaign_id, c.name, c.state, c.status, c.status_clarification,
                    (
                      SELECT COUNT(*) FROM direct_ads ad
                      JOIN direct_adgroups g ON g.id = ad.adgroup_row_id
                      WHERE g.campaign_row_id = c.id AND ad.status = 'REJECTED'
                        AND ad.state <> 'ARCHIVED'
-                   ) AS rejected_ads
+                   ) AS rejected_ads,
+                   -- Что отклонено и почему — первые несколько, для пояснения в «Где горит».
+                   (
+                     SELECT COALESCE(jsonb_agg(r), '[]'::jsonb) FROM (
+                       SELECT ad.title, ad.status, ad.status_clarification AS reason, ad.moderation AS extras
+                       FROM direct_ads ad
+                       JOIN direct_adgroups g ON g.id = ad.adgroup_row_id
+                       WHERE g.campaign_row_id = c.id AND ad.state <> 'ARCHIVED'
+                         AND (ad.status = 'REJECTED' OR ad.moderation <> '[]'::jsonb)
+                       ORDER BY ad.id
+                       LIMIT 5
+                     ) r
+                   ) AS rejected_list
             FROM direct_campaigns c
             WHERE c.user_id = %s
             ORDER BY c.id
@@ -447,7 +509,8 @@ def headline(f: dict) -> dict:
     Одна строка о том, как идут дела, — человеческим языком, без терминов. Считает код, не ИИ.
 
     f — факты за период: days (7 или 30); accounts — подключено кабинетов; stats_loaded; token_lost;
-    money_out; money_days — на сколько дней хватит денег (money_project — чьих, на главной); rejected / stopped — [{name, to}] кампаний;
+    money_out; money_days — на сколько дней хватит денег (money_project — чьих, на главной); money_url — кабинет
+    Директа, который пополнять; rejected / stopped — [{name, to}] кампаний;
     kpi — kpi_state за период или None; project — проект с плохим KPI (на главной); cost, conversions,
     prev_cost, prev_conversions; worst — {name, to} самая дорогая кампания; all_in_goal — на главной
     все проекты с целью укладываются в неё; goal_link — где задать цель; chat — путь чата;
@@ -467,7 +530,7 @@ def headline(f: dict) -> dict:
         return {"label": "Что с этим делать", "to": f["chat"], "ask": question}
 
     connections = {"label": "Открыть подключения", "to": "/cabinet/connections"}
-    top_up = {"label": "Пополнить в Директе", "to": DIRECT_URL, "external": True}
+    top_up = {"label": "Пополнить в Директе", "to": f.get("money_url") or DIRECT_URL, "external": True}
 
     # 1. Данные.
     if not f["accounts"]:
@@ -701,8 +764,14 @@ def build_overview(user_id: int, today: date | None = None, now: datetime | None
         balances = [a["balance_kopecks"] for a in own_accounts if a["balance_kopecks"] is not None]
         balance = sum(balances) if balances else None
         currencies = {a["balance_currency"] for a in own_accounts if a["balance_kopecks"] is not None}
-        # Баланс кабинета общий для всех его кампаний — дни считаем по расходу всего кабинета.
-        balance_days = days_on_balance(balance, sum(account_cost_7d[a["id"]] for a in own_accounts))
+        # Баланс кабинета общий для всех его кампаний — дни считаем по расходу всего кабинета. У каждого
+        # логина свой счёт: реклама встанет, когда кончится первый, — поэтому запас проекта по самому короткому.
+        runways = [
+            d
+            for a in own_accounts
+            if (d := days_on_balance(a["balance_kopecks"], account_cost_7d[a["id"]])) is not None
+        ]
+        balance_days = min(runways) if runways else None
         synced = [_aware(a["stats_synced_at"]) for a in own_accounts]
         rows[ws_id] = {
             "id": ws_id,
@@ -797,26 +866,51 @@ def build_overview(user_id: int, today: date | None = None, now: datetime | None
             # Один сайт у клиента — общий бюджет и есть бюджет сайта.
             problems.extend(_budget_problems(budget, where_ws(folder["workspace_ids"][0]), label="Бюджет клиента"))
 
+    balances: list[dict] = []
     for a in accounts:
         ws_ids: list[int | None] = list(account_ws.get(a["id"]) or [None])
         where = where_many(ws_ids, account_id=a["id"], object_name=a["name"])
         balance = a["balance_kopecks"]
         cost_7d = account_cost_7d[a["id"]]
+        balance_days = days_on_balance(balance, cost_7d)
+        direct_url = direct_account_url(a["client_login"])
+        ends = runs_out_on(balance, balance_days, today)
+        # Блок «Деньги» на главной: каждый логин со своим счётом, даже если сигнала нет.
+        balances.append(
+            {
+                "account_id": a["id"],
+                "name": a["name"],
+                "login": a["client_login"],
+                "workspace_ids": [w for w in ws_ids if w is not None],
+                "workspace_name": where["workspace_name"],
+                "balance_kopecks": balance,
+                "balance_currency": a["balance_currency"] or "",
+                "balance_synced_at": _aware(a["balance_synced_at"]).isoformat() if a["balance_synced_at"] else None,
+                "balance_error": a["balance_error"] or "",
+                "spend_per_day_kopecks": round(cost_7d / 7),
+                "days_on_balance": balance_days,
+                "runs_out_on": ends.isoformat() if ends else None,
+                "direct_url": direct_url,
+            }
+        )
         if balance is not None and cost_7d > 0:
-            balance_days = days_on_balance(balance, cost_7d)
+            balance_problem = None
             if balance <= 0:
-                problems.append(_problem("critical", "balance", BALANCE_OUT_TITLE, rub(balance), **where))
+                balance_problem = _problem("critical", "balance", BALANCE_OUT_TITLE, rub(balance), **where)
             elif balance_days is not None and balance_days < BALANCE_WARNING_DAYS:
                 severity = "critical" if balance_days < BALANCE_CRITICAL_DAYS else "warning"
-                problems.append(
-                    _problem(
-                        severity,
-                        "balance",
-                        "Баланса хватит на " + f"{balance_days:g}".replace(".", ",") + " дн.",
-                        f"{rub(balance)} при расходе ≈{rub(cost_7d / 7)} в день",
-                        **where,
-                    )
+                balance_problem = _problem(
+                    severity,
+                    "balance",
+                    "Баланса хватит на " + f"{balance_days:g}".replace(".", ",") + " дн.",
+                    f"{rub(balance)} при расходе ≈{rub(cost_7d / 7)} в день",
+                    **where,
                 )
+            if balance_problem:
+                # Кнопка сигнала «Пополнить в Директе» открывает кабинет именно этого логина.
+                balance_problem["direct_url"] = direct_url
+                balance_problem["days_on_balance"] = balance_days
+                problems.append(balance_problem)
         if a["stats_error"]:
             severity = "critical" if a["stats_error"] in _TOKEN_ERRORS else "warning"
             problems.append(
@@ -884,7 +978,11 @@ def build_overview(user_id: int, today: date | None = None, now: datetime | None
             object_name=c["name"] or str(c["campaign_id"]),
         )
         if c["status"] == "REJECTED":
-            problems.append(_problem("critical", "moderation", "Кампания отклонена модерацией", **where))
+            problems.append(
+                _problem(
+                    "critical", "moderation", "Кампания отклонена модерацией", c.get("status_clarification") or "", **where
+                )
+            )
         elif c["status"] == "MODERATION":
             problems.append(_problem("info", "moderation", "Кампания на модерации", **where))
         if c["state"] == "OFF" and campaign_week_cost.get(key, 0) > 0:
@@ -897,9 +995,23 @@ def build_overview(user_id: int, today: date | None = None, now: datetime | None
                     **where,
                 )
             )
+        rejected_list = list(c.get("rejected_list") or [])
         if c["rejected_ads"] and c["state"] == "ON":
+            # В пояснении могут быть и быстрые ссылки или картинки принятых объявлений — заголовок о них тоже говорит.
+            extras = " и дополнения" if any(r.get("extras") for r in rejected_list) else ""
             problems.append(
-                _problem("warning", "ads_rejected", f"Отклонено объявлений: {c['rejected_ads']}", **where)
+                _problem(
+                    "warning",
+                    "ads_rejected",
+                    f"Отклонено объявлений: {c['rejected_ads']}{extras}",
+                    rejected_detail(rejected_list),
+                    **where,
+                )
+            )
+        elif c["state"] == "ON" and any(r.get("extras") for r in rejected_list):
+            # Объявление показывается, а быстрые ссылки или картинка — нет.
+            problems.append(
+                _problem("info", "ads_rejected", "Отклонены дополнения объявлений", rejected_detail(rejected_list), **where)
             )
         if c["state"] == "ON" and key in campaign_history:
             row = rows.get(ws_id) or {}
@@ -953,4 +1065,6 @@ def build_overview(user_id: int, today: date | None = None, now: datetime | None
         "totals": dict(totals),
         "by_day": by_day,
         "problems": problems,
+        # Деньги на счетах по логинам: кончились и меньше всего дней — сверху.
+        "balances": sorted(balances, key=balance_order),
     }

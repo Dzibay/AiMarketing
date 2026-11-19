@@ -17,6 +17,7 @@
       :chat-link="{ path: '/cabinet/chat', query: { ask: 'analytics' } }"
       hint="Сравнение с прошлым периодом, все метрики, проекты и кампании таблицами"
       @period="setPreset"
+      @reload="load"
     />
   </template>
 
@@ -26,6 +27,8 @@
       <TermHint title="Период" :text="PERIOD_HINT" />
     </UiDateRange>
   </div>
+  <!-- Время Директа — по самому старому кабинету всех проектов; отставший кабинет — жёлтым. -->
+  <div v-if="data?.projects.length" class="report-fresh"><DataFreshness :freshness="data.freshness" @reload="load" /></div>
 
   <div v-if="loading && !data" class="panel"><p class="empty">Считаем…</p></div>
   <div v-else-if="loadError" class="panel"><p class="empty">{{ loadError }}</p></div>
@@ -184,6 +187,7 @@
 import { usePageContext } from '../composables/usePageContext'
 import { computed, onMounted, reactive, ref } from 'vue'
 import { RouterLink } from 'vue-router'
+import DataFreshness from '../components/DataFreshness.vue'
 import MetricGrid from '../components/MetricGrid.vue'
 import Sparkline from '../components/Sparkline.vue'
 import TermHint from '../components/TermHint.vue'
@@ -272,6 +276,10 @@ usePageContext(() => ({ view: 'analytics', period: { from: range.date_from, to: 
 </script>
 
 <style scoped>
+
+.report-fresh {
+  margin: 0 0 1rem;
+}
 
 .spark-col {
   width: 130px;

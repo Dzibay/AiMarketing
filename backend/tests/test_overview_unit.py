@@ -5,7 +5,18 @@ from datetime import date, timedelta
 import pytest
 
 from app.digest import format_digest
-from app.overview import budget_pace, budget_texts, campaign_anomalies, days_on_balance, kpi_state, rub
+from app.overview import (
+    DIRECT_URL,
+    balance_order,
+    budget_pace,
+    budget_texts,
+    campaign_anomalies,
+    days_on_balance,
+    direct_account_url,
+    kpi_state,
+    rub,
+    runs_out_on,
+)
 
 DAY = date(2026, 10, 25)
 
@@ -176,3 +187,36 @@ def test_format_digest():
 
     calm = format_digest({**overview, "problems": [], "workspaces": []})
     assert "Ничего не горит" in calm
+
+
+def test_direct_account_url_opens_the_login():
+    assert direct_account_url("romashka-shop") == "https://direct.yandex.ru/dna/grid/campaigns?ulogin=romashka-shop"
+    # Логин с точкой или чем-то лишним не ломает адрес.
+    assert direct_account_url("ivan.petrov&x") == "https://direct.yandex.ru/dna/grid/campaigns?ulogin=ivan.petrov%26x"
+    assert direct_account_url("") == DIRECT_URL
+    assert direct_account_url(None) == DIRECT_URL
+
+
+def test_runs_out_on():
+    today = date(2026, 11, 19)
+    assert runs_out_on(840_000, 6.4, today) == date(2026, 11, 25)
+    assert runs_out_on(100_000, 0.3, today) == today
+    assert runs_out_on(0, None, today) == today
+    assert runs_out_on(-5_000, 0.0, today) == today
+    assert runs_out_on(500_000, None, today) is None
+    assert runs_out_on(None, None, today) is None
+
+
+def test_balance_order_puts_empty_and_shortest_first():
+    def entry(account_id, name, balance, days):
+        return {"account_id": account_id, "name": name, "balance_kopecks": balance, "days_on_balance": days}
+
+    rows = [
+        entry(1, "Без счёта", None, None),
+        entry(2, "Простаивает", 900_000, None),
+        entry(3, "Запас 12", 1_200_000, 12.0),
+        entry(4, "Пусто", 0, 0.0),
+        entry(5, "Запас 1,5", 150_000, 1.5),
+        entry(6, "Альфа запас 12", 1_200_000, 12.0),
+    ]
+    assert [r["account_id"] for r in sorted(rows, key=balance_order)] == [4, 5, 6, 3, 2, 1]

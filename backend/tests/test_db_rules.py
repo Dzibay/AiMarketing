@@ -136,3 +136,31 @@ def test_rule_goes_away_with_its_campaign(db, cabinet):
     with db.connection() as conn:
         conn.execute("DELETE FROM direct_campaigns WHERE id = %s", (c["copy"],))
     assert rule["id"] not in {r["id"] for r in rules.list_rules(c["user"])}
+
+
+def test_query_rule_skips_queries_marked_target(db, cabinet):
+    from app import query_cleaning as qc
+
+    c = cabinet
+    g1, g2 = _group(db, c, c["first"], 1), _group(db, c, c["copy"], 2)
+    with db.connection() as conn:
+        for camp, group, text in ((c["first"], g1, "Купить  слона"), (c["copy"], g2, "купить слона")):
+            conn.execute(
+                """
+                INSERT INTO direct_search_queries (
+                    user_id, account_id, campaign_row_id, adgroup_row_id, query, matched_keyword,
+                    impressions, clicks, cost_kopecks, conversions, date_from, date_to
+                )
+                VALUES (%s, %s, %s, %s, %s, '', 50, 5, 50000, 0, '2026-10-12', '2026-10-25')
+                """,
+                (c["user"], c["acc"], camp, group, text),
+            )
+    rule = rules.create_rule(
+        c["user"], name="Запросы", target="query", rule_type="spend_no_conv", threshold_value=100,
+        action="negative_adgroup",
+    )
+    assert len(rules.run_rule(c["user"], rule["id"], force_dry_run=True)["items"]) == 2
+    # Целевой в проекте — правило его не минусует; та же фраза вне проекта по-прежнему попадает.
+    qc.remember_decisions(c["user"], c["ws"], [{"query_norm": "купить слона", "verdict": "target"}])
+    items = rules.run_rule(c["user"], rule["id"], force_dry_run=True)["items"]
+    assert [m["name"] for m in items] == ["купить слона"]

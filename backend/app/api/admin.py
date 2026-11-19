@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from pydantic import BaseModel
 
 from app import ai, ai_bridge, ai_feedback, auth, billing, events, image_gen, mailer, payments, plans, promos, referrals, site_check, site_extras, support, wordstat
-from app.api.web import _http
+from app.api.web import _http as _web_http
 from app import admin_ai_costs as admin_ai_costs_mod
 from app import admin_alerts as admin_alerts_mod
 from app import admin_dashboard as admin_dashboard_mod
@@ -23,6 +23,12 @@ from app import admin_system as admin_system_mod
 from app import admin_users as admin_users_mod
 from app.users import UsersError, count_users, mark_email_verified, set_user_blocked
 from app.yandex import YandexError, yandex_configured
+
+
+def _http(exc, technical: bool = True):
+    """Админке — технический текст ошибки ИИ целиком."""
+    return _web_http(exc, technical)
+
 
 admin_public = APIRouter(tags=["admin"])
 router = APIRouter(tags=["admin"], dependencies=[Depends(auth.require_admin)])

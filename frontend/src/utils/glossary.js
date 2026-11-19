@@ -34,7 +34,11 @@ export const TERMS = {
   },
   leads: {
     title: 'Заявки (конверсии)',
-    text: 'Сколько раз посетители из рекламы выполнили цель проекта в Метрике: оставили заявку, позвонили или купили. Цель выбирается в настройках проекта.',
+    text: 'Сколько раз посетители из рекламы оставили заявку, позвонили или купили. Если в настройках проекта выбрана цель — считаем её достижения в Метрике и относим к рекламе по последнему значимому переходу. Цели нет — берём конверсии, которые показывает сам Директ.',
+  },
+  spent: {
+    title: 'Потрачено',
+    text: 'Расход на рекламу с НДС — столько Директ списал со счёта. Интерфейс Директа по умолчанию показывает суммы без НДС, поэтому наша цифра больше примерно на 20–22% — это и есть НДС.',
   },
   rsya: {
     title: 'РСЯ',
@@ -85,4 +89,28 @@ export const TERMS = {
     title: 'Модерация',
     text: 'Проверка объявлений Яндексом перед показом — обычно до нескольких часов. Пока она идёт, кампания не показывается.',
   },
+}
+
+/**
+ * Подпись под плитками отчёта: как посчитаны цифры. data — отчёт проекта (conversions_source, goal_name)
+ * или «Все проекты» (projects — у каждого свой источник заявок).
+ */
+export function countedHow(data) {
+  const vat = 'Расход с НДС'
+  const lastClick = 'последний значимый переход'
+  const projects = data && !data.conversions_source && Array.isArray(data.projects) ? data.projects : null
+  if (projects) {
+    const goals = projects.filter((p) => p.conversions_source === 'goal')
+    if (!goals.length) return `${vat} · заявки — конверсии Директа`
+    if (goals.length === projects.length) {
+      if (goals.length === 1 && goals[0].goal_name) return `${vat} · заявки — цель «${goals[0].goal_name}» в Метрике, ${lastClick}`
+      return `${vat} · заявки — цели проектов в Метрике, ${lastClick}`
+    }
+    return `${vat} · заявки — цели проектов в Метрике (${lastClick}), где цели нет — конверсии Директа`
+  }
+  if (data?.conversions_source === 'goal') {
+    const goal = data.goal_name ? `цель «${data.goal_name}»` : 'цель проекта'
+    return `${vat} · заявки — ${goal} в Метрике, ${lastClick}`
+  }
+  return `${vat} · заявки — конверсии Директа`
 }

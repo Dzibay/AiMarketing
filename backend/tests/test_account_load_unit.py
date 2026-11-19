@@ -15,6 +15,7 @@ from app.account_load import (
     account_load_out,
     is_due,
     parse_changed_campaigns,
+    plan_stages,
     stats_days,
 )
 from app.metrika_sync import parse_daily_rows, parse_goal_rows
@@ -62,6 +63,25 @@ def test_is_due_finished_stage_waits_for_its_interval():
     assert is_due({"status": "ok", "at": _ago(hours=25)}, STRUCTURE_EVERY, initial=False)
     assert is_due({"status": "ok"}, STRUCTURE_EVERY, initial=False)
     assert is_due({"status": "ok", "at": "мусор"}, STRUCTURE_EVERY, initial=False)
+
+
+def test_plan_stages_reads_stats_on_request_before_six_hours():
+    fresh = {
+        "campaigns": {"status": "ok", "at": _ago(hours=1)},
+        "structure": {"status": "ok", "at": _ago(hours=1)},
+        "stats": {"status": "ok", "at": _ago(hours=1)},
+        "queries": {"status": "ok", "at": _ago(hours=1)},
+    }
+    # Актуализация: структура — всегда (Changes API), статистика свежая — не читаем.
+    assert plan_stages(fresh, initial=False) == ["campaigns", "structure"]
+    # «Обновить из Директа» отметил кабинет — статистика в плане, хоть ей и час.
+    asked = {**fresh, "stats": {**fresh["stats"], "requested": True}}
+    assert plan_stages(asked, initial=False) == ["campaigns", "structure", "stats"]
+    # Через 6 часов статистика в плане и без просьбы.
+    old = {**fresh, "stats": {"status": "ok", "at": _ago(hours=7)}}
+    assert plan_stages(old, initial=False) == ["campaigns", "structure", "stats"]
+    # Первая загрузка: всё, что не готово.
+    assert plan_stages({}, initial=True) == ["campaigns", "structure", "stats", "queries"]
 
 
 def test_stats_days_full_history_on_first_load_and_after_gap():

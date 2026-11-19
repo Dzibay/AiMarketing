@@ -13,7 +13,16 @@
         <span class="plist__title" v-tip.truncate="p.title">{{ p.title }}</span>
         <small v-if="whereOf(p)" class="plist__where" v-tip.truncate="whereOf(p)">{{ whereOf(p) }}</small>
       </div>
-      <RouterLink v-if="problemLink(p)" class="btn btn--ghost btn--sm plist__act" :to="problemLink(p).to">
+      <a
+        v-if="problemLink(p)?.external"
+        class="btn btn--ghost btn--sm plist__act"
+        :href="problemLink(p).to"
+        target="_blank"
+        rel="noopener"
+      >
+        {{ problemLink(p).label }}
+      </a>
+      <RouterLink v-else-if="problemLink(p)" class="btn btn--ghost btn--sm plist__act" :to="problemLink(p).to">
         {{ problemLink(p).label }}
       </RouterLink>
     </li>

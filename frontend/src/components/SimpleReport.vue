@@ -14,16 +14,16 @@
 
   <p v-if="loading && !data" class="empty">Считаем…</p>
   <p v-else-if="error" class="empty">{{ error }}</p>
-  <EmptyState
-    v-else-if="empty"
-    art="report"
-    :text="`С ${formatDate(data.date_from)} по ${formatDate(data.date_to)} реклама не тратила денег и заявок не было: кампании стояли или данные ещё загружаются.`"
-  >
-    <template #action>
-      <button v-if="period !== 30" class="btn btn--accent" type="button" @click="emit('period', 30)">Показать 30 дней</button>
-      <RouterLink class="btn btn--ghost" :to="chatLink">Спросить ИИ, почему</RouterLink>
-    </template>
-  </EmptyState>
+  <template v-else-if="empty">
+    <EmptyState art="report" :text="emptyText">
+      <template v-if="!stillLoading" #action>
+        <button v-if="period !== 30" class="btn btn--accent" type="button" @click="emit('period', 30)">Показать 30 дней</button>
+        <RouterLink class="btn btn--ghost" :to="chatLink">Спросить ИИ, почему</RouterLink>
+      </template>
+    </EmptyState>
+    <!-- Пока идёт первая загрузка, строка не нужна (о ней сказано выше), но следит, когда цифры появятся. -->
+    <DataFreshness :freshness="data.freshness" :only-lagging="stillLoading" @reload="emit('reload')" />
+  </template>
   <template v-else-if="data">
     <p class="meta-note simple-report__dates">{{ formatDate(data.date_from) }} — {{ formatDate(data.date_to) }}</p>
     <div class="bigstats" :class="{ 'is-loading': loading }">
@@ -33,6 +33,11 @@
         <small :class="t.tone">{{ t.note }}</small>
       </div>
     </div>
+    <p class="meta-note simple-report__how">
+      {{ countedHow }} ·
+      <RouterLink to="/cabinet/help/faq">почему цифры отличаются от Директа</RouterLink>
+    </p>
+    <DataFreshness :freshness="data.freshness" @reload="emit('reload')" />
 
     <div class="ccard simple-report__chart">
       <div class="simple-report__head">
@@ -88,12 +93,14 @@
 import { computed, ref } from 'vue'
 import { RouterLink } from 'vue-router'
 import { Sparkles } from '@lucide/vue'
+import DataFreshness from './DataFreshness.vue'
 import TrendChart from './TrendChart.vue'
 import ExpertHint from './ExpertHint.vue'
 import TermHint from './TermHint.vue'
 import CountUp from './ui/CountUp.vue'
 import EmptyState from './ui/EmptyState.vue'
-import { formatDate, kpiGoal, num, pct, rub } from '../utils/format'
+import { formatDate, kpiGoal, num, pct, plural, rub } from '../utils/format'
+import { countedHow as countedHowText } from '../utils/glossary'
 import { leadWord } from '../utils/campaignHealth'
 
 const PERIODS = [
@@ -113,7 +120,8 @@ const props = defineProps({
   chatLink: { type: [String, Object], required: true },
   hint: { type: String, default: 'Все метрики, сравнение с прошлым периодом и подробные таблицы' },
 })
-const emit = defineEmits(['period'])
+// reload — догрузилась статистика кабинета (строка свежести): перечитать отчёт.
+const emit = defineEmits(['period', 'reload'])
 
 // График: переключатель показателя, пунктир — прошлый период той же длины.
 const CHARTS = [
@@ -129,6 +137,28 @@ const empty = computed(() => {
   const t = props.data?.totals
   return !!t && !t.cost_kopecks && !t.conversions && !(props.data.by_day || []).some((d) => d.cost_kopecks)
 })
+
+/** Пусто, потому что первая загрузка кабинета ещё идёт, — тогда ни «показать 30 дней», ни «спросить ИИ». */
+const stillLoading = computed(() => !!props.data?.freshness?.loading && !props.data.freshness.direct_at)
+
+/** Почему пусто — точно: идёт загрузка (и сколько ждать), не было показов или показы были, а кликов нет. */
+const emptyText = computed(() => {
+  const d = props.data
+  const f = d.freshness || {}
+  if (f.loading) {
+    const eta = f.eta_minutes ? `, осталось ~${f.eta_minutes} мин` : ''
+    if (stillLoading.value) return `Загружаем статистику из Директа${eta}. Цифры появятся здесь сами, страницу можно не обновлять.`
+  }
+  const when = `С ${formatDate(d.date_from)} по ${formatDate(d.date_to)}`
+  const shows = Number(d.totals?.impressions || 0)
+  const tail = f.loading ? ' Один из кабинетов ещё загружается — цифры могут дополниться.' : ''
+  if (!shows) return `${when} не было показов: кампании не работали — расхода и заявок нет.${tail}`
+  const times = `${num(shows)} ${plural(shows, 'показ', 'показа', 'показов')}`
+  return `${when} объявления показывались (${times}), но кликов, расхода и заявок не было.${tail}`
+})
+
+/** Подпись под плитками: расход с НДС и откуда берутся заявки. */
+const countedHow = computed(() => countedHowText(props.data))
 
 /** «на 12% больше, чем в прошлом периоде»; рост расхода и цены — жёлтым, падение заявок — тоже. */
 function change(value, more, less, inverse = false) {
@@ -157,7 +187,7 @@ const tiles = computed(() => {
     third.tone = kpi.status === 'ok' ? 'is-ok' : kpi.status === 'none' ? '' : 'is-warn'
   }
   return [
-    { label: 'Потрачено', value: rub(t.cost_kopecks), ...change(c.cost_kopecks, 'больше', 'меньше', true) },
+    { label: 'Потрачено', term: 'spent', value: rub(t.cost_kopecks), ...change(c.cost_kopecks, 'больше', 'меньше', true) },
     { label: 'Заявки', term: 'leads', value: num(t.conversions), ...change(c.conversions, 'больше', 'меньше') },
     third,
   ]
@@ -217,5 +247,13 @@ const bars = computed(() => {
 }
 .row-actions {
   margin-top: 18px;
+}
+.simple-report__how {
+  margin: 10px 2px 0;
+}
+.simple-report__how a {
+  color: inherit;
+  text-decoration: underline;
+  text-underline-offset: 3px;
 }
 </style>

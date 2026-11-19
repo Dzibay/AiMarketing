@@ -758,8 +758,8 @@ const TABS = [
 ]
 // Очередь — сегменты в строке фильтров; «Память решений» — отдельная вкладка рядом с разбором.
 const QUEUE_TABS = TABS.filter((t) => t.key !== 'memory')
-const SOURCES = { ai: 'ИИ', memory: 'по памяти', brief: 'по брифу', direct: 'уже в Директе', user: 'вы' }
-const SOURCE_CHIPS = { ai: 'chip--src-ai', memory: 'chip--src-rule', brief: 'chip--src-rule', direct: 'chip--src-rule' }
+const SOURCES = { ai: 'ИИ', memory: 'по памяти', brief: 'по брифу', direct: 'уже в Директе', rule: 'автоматика', user: 'вы' }
+const SOURCE_CHIPS = { ai: 'chip--src-ai', memory: 'chip--src-rule', brief: 'chip--src-rule', direct: 'chip--src-rule', rule: 'chip--src-rule' }
 const LEVELS = { adgroup: 'на группу', campaign: 'на кампанию' }
 const STATUS_TEXT = { ok: 'Готово', partial: 'Частично', skipped: 'Пропущено', error: 'Ошибка' }
 const PAGE = 100

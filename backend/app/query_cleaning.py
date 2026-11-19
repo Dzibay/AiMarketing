@@ -454,6 +454,29 @@ def find_conflicts(phrase: str, level: str, row: dict, index) -> list[dict]:
     return out
 
 
+def conflict_note(conflicts: list[dict]) -> str:
+    """«заденет ключ «окна пвх»» — для карточек, журнала и подсказок чистки."""
+    words = ", ".join(f"«{k['keyword']}»" for k in conflicts[:3])
+    more = f" и ещё {len(conflicts) - 3}" if len(conflicts) > 3 else ""
+    return ("заденет ключ " if len(conflicts) == 1 else "заденет ключи ") + words + more
+
+
+def _upper_first(text: str) -> str:
+    return text[:1].upper() + text[1:]
+
+
+def campaign_conflicts(user_id: int, campaign_row_id: int, phrases: list[str]) -> dict[str, list[dict]]:
+    """Минус-фразы кампании, которые отключат её же ключи → {фраза: [ключи]}."""
+    index = _keyword_index(user_id, [int(campaign_row_id)])
+    row = {"campaign_row_ids": [int(campaign_row_id)], "adgroup_row_ids": []}
+    out: dict[str, list[dict]] = {}
+    for phrase in phrases:
+        hits = find_conflicts(clean_negative(phrase), "campaign", row, index)
+        if hits:
+            out[phrase] = hits
+    return out
+
+
 def _negatives_index(user_id: int, campaign_ids: list[int], adgroup_ids: list[int]) -> dict:
     """Текущие минус-фразы (локальная копия) кампаний и групп, с основами."""
     out: dict = {"campaigns": {}, "adgroups": {}, "group_campaign": {}}
@@ -1060,7 +1083,7 @@ def classify_queries(user_id: int, payload: dict, progress: Progress | None = No
         except YandexError as exc:
             cfg = None
             ai_used = False
-            ai_error = exc.message or exc.code
+            ai_error = ai.user_error(exc)
         if cfg is not None:
             ai_used = True
             system = _classify_system(user_id, plan)
@@ -1075,8 +1098,9 @@ def classify_queries(user_id: int, payload: dict, progress: Progress | None = No
                         ai.check_budget(cfg, ai.units_for(cfg, *_batch_tokens(system, batch, ratio, out_per)))
                         got = ai_labels(cfg, system, batch)
                     except YandexError as exc:
-                        # Что успели — сохранено; ошибку показываем, если не вышло ничего.
-                        ai_error = exc.message or exc.code
+                        # Что успели — сохранено; ошибку показываем, если не вышло ничего. Текст — для кабинета:
+                        # сбой провайдера словами пользователя (ai.user_error), подробности — в ai_errors.
+                        ai_error = ai.user_error(exc)
                         if not labels:
                             raise
                         break
@@ -1126,7 +1150,7 @@ def estimate_classify(user_id: int, payload: dict) -> dict:
     try:
         cfg = ai.load_config(user_id, "classify", plan["workspace_id"])
     except YandexError as exc:
-        out["ai_error"] = exc.message or exc.code
+        out["ai_error"] = ai.user_error(exc)
         return out
     system = _classify_system(user_id, plan)
     ratio = ai.chars_per_token(cfg)
@@ -1179,7 +1203,7 @@ def apply_negative_entries(user_id: int, entries: list[dict], *, force: bool = F
             if conflicts:
                 outcomes[e["key"]] = {
                     "status": "skipped",
-                    "message": "Пересекается с вашими ключевыми фразами",
+                    "message": _upper_first(conflict_note(conflicts)),
                     "conflicts": [_conflict_out(k) for k in conflicts[:5]],
                     "phrase": phrase,
                     "level": level,

@@ -6,13 +6,14 @@
 
 from __future__ import annotations
 
+import math
 from collections import defaultdict
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 
 from app.journal import list_action_logs
 from app.clock import today_msk
 from app.db import pool
-from app.overview import BALANCE_OUT_TITLE, SEVERITY_ORDER, build_overview, headline, kpi_state
+from app.overview import BALANCE_OUT_TITLE, SEVERITY_ORDER, build_overview, direct_account_url, headline, kpi_state
 from app.stats import structure_tops
 from app.strategy_info import budget_brief
 from app.workspaces import list_workspaces, require_workspace
@@ -21,6 +22,12 @@ from app.yandex import YandexError
 MAX_RANGE_DAYS = 366
 
 _DIRECT_KEYS = ("cost_kopecks", "impressions", "clicks", "conversions", "revenue_kopecks")
+
+# Статистику кабинета загрузчик перечитывает раз в 6 часов; отстал больше чем на 8 — что-то мешает
+# (кончились баллы, ошибка доступа), и об этом нужно сказать, а не прятать за временем соседнего кабинета.
+STATS_LAG = timedelta(hours=8)
+# Окно, которое загрузчик перечитывает при плановом обновлении: неделя по вчера.
+FRESH_WINDOW_DAYS = 7
 
 
 def parse_range(date_from: str, date_to: str, *, default_days: int = 7) -> tuple[date, date]:
@@ -68,12 +75,157 @@ def _delta(cur, prev) -> float | None:
     return round((cur - prev) / prev * 100, 1)
 
 
+def _ts(value) -> datetime | None:
+    """Время из базы или из load_state (ISO-строка); без пояса — UTC."""
+    if not value:
+        return None
+    if isinstance(value, datetime):
+        ts = value
+    else:
+        try:
+            ts = datetime.fromisoformat(str(value))
+        except ValueError:
+            return None
+    return ts if ts.tzinfo else ts.replace(tzinfo=timezone.utc)
+
+
+def load_eta_minutes(job: dict | None, now: datetime) -> int | None:
+    """Сколько примерно ждать загрузку: прошедшее время × оставшаяся доля. В очереди или без прогресса — не знаем."""
+    if not job or job.get("status") != "running":
+        return None
+    done, total = int(job.get("done") or 0), int(job.get("total") or 0)
+    started = _ts(job.get("started_at"))
+    if started is None or done <= 0 or total <= 0 or done >= total:
+        return None
+    elapsed = max(0.0, (now - started).total_seconds() / 60)
+    return max(1, math.ceil(elapsed * (total - done) / done))
+
+
+def data_freshness(accounts: list[dict], metrika_at, now: datetime) -> dict:
+    """
+    Насколько свежи цифры отчёта — честно, по каждому кабинету.
+
+    accounts — включённые кабинеты проекта: id, name, login, loaded_at, stage_at (когда загрузчик последний раз
+    перечитал статистику), rows_at (когда последний раз записаны прошедшие дни — в том числе ручной загрузкой),
+    job ({status, done, total, started_at} — идущая загрузка или None).
+
+    Время Директа — по самому старому кабинету: пока один отстал, суммы за период неполные. Расход за сегодня
+    (обновляется каждый час) сюда не входит: отчёты заканчиваются вчерашним днём.
+    loading — первая загрузка ещё не принесла статистику; lagging — кабинет отстал больше чем на STATS_LAG.
+    """
+    items = []
+    for a in accounts:
+        times = [t for t in (_ts(a.get("stage_at")), _ts(a.get("rows_at"))) if t]
+        stats_at = max(times) if times else None
+        job = a.get("job")
+        loading = a.get("loaded_at") is None and stats_at is None
+        items.append(
+            {
+                "id": a["id"],
+                "name": a.get("name") or a.get("login") or "",
+                "login": a.get("login") or "",
+                "stats_at": stats_at.isoformat() if stats_at else None,
+                "loading": loading,
+                "updating": job is not None,
+                "lagging": not loading and (stats_at is None or now - stats_at > STATS_LAG),
+                "eta_minutes": load_eta_minutes(job, now) if loading else None,
+            }
+        )
+    times = [_ts(i["stats_at"]) for i in items if i["stats_at"]]
+    loading = [i for i in items if i["loading"]]
+    etas = [i["eta_minutes"] for i in loading]
+    metrika = _ts(metrika_at)
+    return {
+        "direct_at": min(times).isoformat() if times else None,
+        "metrika_at": metrika.isoformat() if metrika else None,
+        "loading": bool(loading),
+        # Ждать столько, сколько самому долгому; хоть один в очереди — срок неизвестен.
+        "eta_minutes": max(etas) if etas and None not in etas else None,
+        "accounts": items,
+    }
+
+
+def _freshness_accounts(user_id: int, account_ids: list[int], workspace_id: int | None) -> list[dict]:
+    """Кабинеты для строки свежести: указанные и (если задан проект) привязанные к проекту, только включённые."""
+    today = today_msk()
+    with pool.connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT a.id, COALESCE(NULLIF(a.name, ''), a.client_login) AS name, a.client_login AS login,
+                   a.loaded_at, a.load_state->'stats'->>'at' AS stage_at,
+                   (SELECT MAX(s.updated_at) FROM stats_daily s
+                     WHERE s.source = 'direct' AND s.account_id = a.id
+                       AND s.day >= %(week)s AND s.day < %(today)s) AS rows_at,
+                   j.status AS job_status, j.progress_done AS job_done, j.progress_total AS job_total,
+                   j.started_at AS job_started_at
+            FROM direct_accounts a
+            LEFT JOIN LATERAL (
+                SELECT status, progress_done, progress_total, started_at FROM jobs
+                WHERE user_id = a.user_id AND kind = 'load_account' AND status IN ('queued', 'running')
+                  AND payload->>'account_id' = a.id::text
+                ORDER BY id LIMIT 1
+            ) j ON TRUE
+            WHERE a.user_id = %(user)s AND a.enabled
+              AND (a.id = ANY(%(ids)s) OR a.id IN (
+                    SELECT account_id FROM workspace_accounts WHERE workspace_id = %(ws)s AND user_id = %(user)s))
+            ORDER BY lower(COALESCE(NULLIF(a.name, ''), a.client_login)), a.id
+            """,
+            {
+                "user": user_id,
+                "ids": account_ids,
+                "ws": workspace_id or 0,
+                "today": today,
+                "week": today - timedelta(days=FRESH_WINDOW_DAYS),
+            },
+        ).fetchall()
+    return [
+        {
+            **{k: r[k] for k in ("id", "name", "login", "loaded_at", "stage_at", "rows_at")},
+            "job": {
+                "status": r["job_status"],
+                "done": r["job_done"],
+                "total": r["job_total"],
+                "started_at": r["job_started_at"],
+            }
+            if r["job_status"]
+            else None,
+        }
+        for r in rows
+    ]
+
+
+def merge_freshness(items: list[dict]) -> dict:
+    """Свежесть нескольких проектов разом (отчёт «Все проекты»): кабинет — один раз, время — по самому старому."""
+    accounts: dict[int, dict] = {}
+    for f in items:
+        for a in f["accounts"]:
+            accounts.setdefault(a["id"], a)
+    direct = [f["direct_at"] for f in items if f["direct_at"]]
+    metrika = [f["metrika_at"] for f in items if f["metrika_at"]]
+    loading = [a for a in accounts.values() if a["loading"]]
+    etas = [a["eta_minutes"] for a in loading]
+    return {
+        "direct_at": min(direct, key=_ts) if direct else None,
+        "metrika_at": min(metrika, key=_ts) if metrika else None,
+        "loading": bool(loading),
+        "eta_minutes": max(etas) if etas and None not in etas else None,
+        "accounts": sorted(accounts.values(), key=lambda a: (a["name"].lower(), a["id"])),
+    }
+
+
 def _workspace_campaigns(user_id: int, workspace_id: int) -> list[dict]:
     with pool.connection() as conn:
         return conn.execute(
             """
             SELECT c.id, c.account_id, c.campaign_id, c.name, c.state, c.status, c.campaign_type,
-                   c.daily_budget_kopecks, c.bidding_strategy, a.client_login, a.name AS account_name
+                   c.daily_budget_kopecks, c.bidding_strategy, c.start_date, c.status_clarification,
+                   a.client_login, a.name AS account_name, a.balance_kopecks,
+                   (
+                     SELECT COUNT(*) FROM direct_ads ad
+                     JOIN direct_adgroups g ON g.id = ad.adgroup_row_id
+                     WHERE g.campaign_row_id = c.id AND ad.state <> 'ARCHIVED'
+                       AND (ad.status = 'REJECTED' OR ad.moderation <> '[]'::jsonb)
+                   ) AS ads_rejected
             FROM workspace_campaigns wc
             JOIN direct_campaigns c ON c.id = wc.campaign_row_id
             JOIN direct_accounts a ON a.id = c.account_id
@@ -120,17 +272,13 @@ def _load_stats(user_id: int, ws: dict, date_from: date, date_to: date) -> dict:
                     """,
                     (user_id, ws["counter_row_id"], ws["goal_id"], date_from, date_to),
                 ).fetchall()
+        # Свежесть Директа считается по кабинетам (data_freshness), здесь — только Метрика.
         fresh = conn.execute(
             """
-            SELECT MAX(s.updated_at) AS direct_at,
-                   (SELECT MAX(updated_at) FROM stats_daily
-                     WHERE user_id = %s AND source = 'metrika' AND counter_row_id = %s) AS metrika_at
-            FROM stats_daily s
-            JOIN direct_campaigns c ON c.account_id = s.account_id AND c.campaign_id = s.campaign_id
-            JOIN workspace_campaigns wc ON wc.campaign_row_id = c.id
-            WHERE s.user_id = %s AND s.source = 'direct' AND wc.workspace_id = %s
+            SELECT MAX(updated_at) AS metrika_at FROM stats_daily
+            WHERE user_id = %s AND source = 'metrika' AND counter_row_id = %s
             """,
-            (user_id, ws["counter_row_id"], user_id, ws["id"]),
+            (user_id, ws["counter_row_id"]),
         ).fetchone()
     return {"direct": direct, "metrika": metrika, "goal": goal, "fresh": fresh or {}}
 
@@ -272,6 +420,13 @@ def workspace_analytics(
                 "account_id": c["account_id"],
                 "account_login": c["client_login"],
                 "daily_budget_rub": round(budget / 100, 2) if budget else None,
+                # Почему кампания не показывается — словами (campaignHealth): дата старта, отказ модерации,
+                # деньги кабинета и пояснение Директа.
+                "start_date": str(c["start_date"]) if c.get("start_date") else None,
+                "status_clarification": c.get("status_clarification") or "",
+                "ads_rejected": int(c.get("ads_rejected") or 0),
+                "balance_kopecks": c.get("balance_kopecks"),
+                "money_url": direct_account_url(c["client_login"]),
                 **budget_brief(c.get("bidding_strategy")),
                 **m,
             }
@@ -304,6 +459,12 @@ def workspace_analytics(
         )
 
     fresh = data["fresh"]
+    linked = None if campaign_row_id else workspace_id
+    freshness = data_freshness(
+        _freshness_accounts(user_id, sorted({int(c["account_id"]) for c in campaigns}), linked),
+        fresh.get("metrika_at") if not campaign_row_id else None,
+        datetime.now(timezone.utc),
+    )
     out = {
         "workspace_id": workspace_id,
         "date_from": date_from.isoformat(),
@@ -322,8 +483,10 @@ def workspace_analytics(
         "prev_by_day": prev_by_day,
         "by_campaign": by_campaign,
         "by_account": by_account,
-        "direct_updated_at": fresh["direct_at"].isoformat() if fresh.get("direct_at") else None,
+        # Директ — по самому старому кабинету проекта (подробности и отстающие — в freshness).
+        "direct_updated_at": freshness["direct_at"],
         "metrika_updated_at": fresh["metrika_at"].isoformat() if fresh.get("metrika_at") else None,
+        "freshness": freshness,
     }
     if with_tops:
         ids = [int(c["id"]) for c in campaigns]
@@ -367,6 +530,7 @@ def portfolio_analytics(user_id: int, *, date_from: date, date_to: date) -> dict
     campaigns: list[dict] = []
     cur_days: dict[str, list[dict]] = defaultdict(list)
     prev_days: dict[str, list[dict]] = defaultdict(list)
+    freshness: list[dict] = []
     for ws in list_workspaces(user_id):
         if ws["locked"]:
             continue
@@ -388,6 +552,7 @@ def portfolio_analytics(user_id: int, *, date_from: date, date_to: date) -> dict
                 "metrika_updated_at": data["metrika_updated_at"],
             }
         )
+        freshness.append(data["freshness"])
         campaigns.extend({**c, "project": project} for c in data["by_campaign"])
         for d in data["by_day"]:
             cur_days[d["day"]].append(d)
@@ -424,6 +589,7 @@ def portfolio_analytics(user_id: int, *, date_from: date, date_to: date) -> dict
         # Метрика есть хотя бы у одного проекта — иначе визиты в сумме всегда 0 и плитку не показываем.
         "counter_ok": any(p["counter_ok"] for p in projects),
         "metrika_updated_at": max(metrika_at) if metrika_at else None,
+        "freshness": merge_freshness(freshness),
         "projects": projects,
         "campaigns": campaigns,
     }
@@ -462,7 +628,11 @@ def workspace_summary(user_id: int, workspace_id: int) -> dict:
             "goal_name": week["goal_name"],
             "counter_ok": week["counter_ok"],
             "metrika_updated_at": week["metrika_updated_at"],
+            "direct_updated_at": week["direct_updated_at"],
+            "freshness": week["freshness"],
         },
+        # Деньги на счетах логинов проекта — строка «На счёте … хватит примерно на …».
+        "balances": [b for b in overview["balances"] if workspace_id in b["workspace_ids"]],
         "top_campaigns": week["by_campaign"][:5],
         "recent_actions": list_action_logs(user_id, 10, workspace_id=workspace_id),
     }
@@ -500,11 +670,24 @@ def _worst_campaign(campaigns: list[dict], workspace_id: int) -> dict | None:
     return {"name": worst["name"], "to": f"/w/{workspace_id}/campaigns/{worst['campaign_row_id']}"}
 
 
+def _money_url(problems: list[dict]) -> str:
+    """Кабинет, который пополнять первым: где деньги уже кончились, иначе — где их меньше всего дней."""
+    money = [p for p in problems if p["kind"] == "balance" and p.get("direct_url")]
+    if not money:
+        return ""
+    first = min(
+        money,
+        key=lambda p: (p["title"] != BALANCE_OUT_TITLE, p["days_on_balance"] if p.get("days_on_balance") is not None else 0),
+    )
+    return first["direct_url"]
+
+
 def _base_facts(days: int, problems: list[dict]) -> dict:
     return {
         "days": days,
         "token_lost": any(p["kind"] == "token" and p["severity"] == "critical" for p in problems),
         "money_out": any(p["kind"] == "balance" and p["title"] == BALANCE_OUT_TITLE for p in problems),
+        "money_url": _money_url(problems),
         "rejected": _campaign_problems(problems, "moderation", "critical"),
         "stopped": _campaign_problems(problems, "stopped"),
     }

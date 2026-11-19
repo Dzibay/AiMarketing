@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from app import ai_agent, geo
+from app import ai, ai_agent, geo
 from app.workspaces import normalize_ai_access
 from app.yandex import YandexError
 
@@ -211,9 +211,9 @@ def _spec(**over):
         "daily_budget_rub": 500,
         "negative_keywords": ["бесплатно"],
         "groups": [
-            {"name": "Окна ПВХ", "keywords": ["купить окна пвх"],
+            {"name": "Окна ПВХ", "region_ids": [225], "keywords": ["купить окна пвх"],
              "ad": {"titles": ["Окна ПВХ от завода", "Окна за 1 день"], "texts": ["Замер бесплатно"], "href": "https://okna.ru"}},
-            {"name": "Двери", "keywords": ["двери межкомнатные"],
+            {"name": "Двери", "region_ids": [225], "keywords": ["двери межкомнатные"],
              "ad": {"titles": ["Двери от завода"], "texts": ["Установка за день"], "href": "https://okna.ru/doors"}},
         ],
     }
@@ -276,7 +276,7 @@ def test_create_campaign_href_from_template(approvals):
     approvals.stages = {"goals", "analysis", "ads", "settings"}
     approvals.rows = ["З", "Т"]
     ws = {"url_template": "https://okna.ru/?ref=direct"}
-    spec = _spec(negative_keywords=[], groups=[{"name": "А", "ad": {"titles": ["З"], "texts": ["Т"]}}])
+    spec = _spec(negative_keywords=[], groups=[{"name": "А", "region_ids": [225], "ad": {"titles": ["З"], "texts": ["Т"]}}])
     ai_agent._p_create_campaign(FakeContext(ws), {"account_id": 3, "spec": spec})
 
 
@@ -540,19 +540,107 @@ def test_shorten_result_keeps_json_whole():
     assert ai_agent._shorten_result('{"ok": true}') == '{"ok": true}'
 
 
-def test_end_with_error_keeps_it_in_the_feed(monkeypatch):
+def test_end_with_error_keeps_it_in_the_feed(monkeypatch, caplog):
     seen = []
     monkeypatch.setattr(ai_agent, "_set_status", lambda chat_id, status, error="": seen.append(("status", status, error)))
     monkeypatch.setattr(ai_agent, "pool", FakePool([]))
-    monkeypatch.setattr(ai_agent, "_insert_message", lambda conn, chat_id, role, content="", **kw: seen.append((role, content)))
-    assert ai_agent._end_with_error(5, "ИИ не ответил за отведённое время", (95000, 40)) == {"status": "error"}
-    assert ai_agent._end_with_error(5, "ИИ не подключён") == {"status": "error"}
+    monkeypatch.setattr(
+        ai_agent, "_insert_message",
+        lambda conn, chat_id, role, content="", meta=None, **kw: seen.append((role, content, meta)),
+    )
+    with caplog.at_level("WARNING", logger=ai_agent.log.name):
+        out = ai_agent._end_with_error(5, "ИИ не ответил за отведённое время", (95000, 40), code="ai-timeout")
+        assert out == {"status": "error"}
+        assert ai_agent._end_with_error(5, "Провайдер ИИ отклонил ключ: 401", code="ai-auth") == {"status": "error"}
+    # Пользователю — понятный текст без токенов; технический текст и размер запроса — в лог.
     assert seen == [
-        ("status", "error", "ИИ не ответил за отведённое время"),
-        ("error", "ИИ не ответил за отведённое время (запрос ≈ 95000 токенов, сообщений: 40)"),
-        ("status", "error", "ИИ не подключён"),
-        ("error", "ИИ не подключён"),
+        ("status", "error", ai.ERROR_BUSY),
+        ("error", ai.ERROR_BUSY, {"error_kind": "busy"}),
+        ("status", "error", ai.ERROR_DOWN),
+        ("error", ai.ERROR_DOWN, {"error_kind": "down"}),
     ]
+    assert "токен" not in ai.ERROR_BUSY + ai.ERROR_DOWN + ai.ERROR_LONG
+    assert "ИИ не ответил за отведённое время (запрос ≈ 95000 токенов, сообщений: 40)" in caplog.text
+
+
+@pytest.mark.parametrize("code, message, request_size, transient, kind", [
+    ("ai-limit", "Лимит запросов к ИИ: rate limit", None, True, "busy"),
+    ("ai-error", "Ошибка ИИ (503): overloaded", None, True, "busy"),
+    ("ai-network", "Не удалось связаться с ИИ: ConnectError", None, True, "busy"),
+    ("ai-timeout", "ИИ не ответил за отведённое время", (20000, 10), False, "busy"),
+    # Долгий запрос без ответа и прямой отказ по длине — новый чат.
+    ("ai-timeout", "ИИ не ответил за отведённое время", (150000, 90), False, "long"),
+    ("ai-error", "Ошибка ИИ (400): prompt is too long: 210000 tokens > 200000 maximum", None, False, "long"),
+    ("ai-error", "Ошибка ИИ (400): This model's maximum context length is 128000 tokens", None, False, "long"),
+    ("ai-error", "Ошибка ИИ (400): number of input tokens must be no more than 32768", None, False, "long"),
+    # Деньги, ключ, модель, мост, настройки и лимит-квота — «временно недоступен».
+    ("ai-balance", "У провайдера ИИ кончились деньги или квота (модель x): ...", None, False, "down"),
+    ("ai-auth", "Провайдер ИИ или мост Cloudflare (ключ провайдера или токен моста) отклонил ключ: 401", None, False, "down"),
+    ("ai-model", "Провайдер ИИ не отдаёт модель x", None, False, "down"),
+    ("ai-limit", "Лимит запросов к ИИ: insufficient_quota billing", None, False, "down"),
+    ("bridge-cf", "Cloudflare: ...", None, False, "down"),
+    ("ai-region", "Провайдер отклонил запрос по региону: Cloudflare выполнил Worker моста не в США", None, True, "down"),
+    ("crash", "Сбой при обращении к ИИ", (1000, 2), False, "down"),
+    ("internal", "", None, False, "down"),
+])
+def test_human_error(code, message, request_size, transient, kind):
+    text, got = ai.human_error(code, message, request_size, transient)
+    assert got == kind
+    assert text == {"busy": ai.ERROR_BUSY, "long": ai.ERROR_LONG, "down": ai.ERROR_DOWN}[kind]
+    # Никаких моделей, ключей и Cloudflare в тексте для пользователя.
+    assert not any(word in text for word in ("Cloudflare", "ключ", "модель", "квот"))
+
+
+def test_human_error_keeps_plan_messages():
+    text = "Единицы ИИ на этот месяц закончились — обновятся 1 декабря"
+    assert ai.human_error("units-exhausted", text) == (text, "plan")
+    assert ai.human_error("feature-locked", "«ИИ-чат» — на тарифе выше") == ("«ИИ-чат» — на тарифе выше", "plan")
+    # «ИИ не подключён» уже понятен и зовёт в поддержку.
+    assert ai.human_error("ai-not-configured", ai.NOT_CONFIGURED) == (ai.NOT_CONFIGURED, "down")
+    # Проект закрыт тарифом или удалён — это не сбой ИИ: текст как есть, а не «сбой на нашей стороне».
+    locked = "Проект не входит в ваш тариф"
+    assert ai.human_error("project-locked", locked) == (locked, "plan")
+    assert ai.human_error("not-found", "Проект не найден") == ("Проект не найден", "down")
+
+
+def test_job_hides_provider_details():
+    from app.jobs import public_job
+
+    row = {
+        "id": 1, "kind": "classify_queries", "status": "error", "attempts": 1, "max_attempts": 1,
+        "progress_done": 0, "progress_total": 0, "progress_text": "",
+        "error_code": "ai-balance", "error": "У провайдера ИИ кончились деньги или квота (модель gpt): insufficient_quota",
+    }
+    assert public_job(row)["error"] == ai.ERROR_DOWN
+    region = {**row, "error_code": "ai-region", "error": "Cloudflare выполнил Worker моста не в США"}
+    assert public_job(region)["error"] == ai.ERROR_DOWN
+    # Ошибки Директа и тарифа — как были.
+    assert public_job({**row, "error_code": "token-expired", "error": "Токен истёк"})["error"] == "Токен истёк"
+    assert public_job({**row, "error_code": None, "error": None})["error"] is None
+
+
+def test_cabinet_api_hides_provider_details_admin_keeps_them():
+    from app.api import admin as admin_api
+    from app.api.web import _http
+
+    exc = YandexError("ai-balance", "У провайдера ИИ кончились деньги или квота (модель gpt): insufficient_quota")
+    assert _http(exc).detail == {"code": "ai-balance", "message": ai.ERROR_DOWN}
+    assert admin_api._http(exc).detail["message"] == exc.message
+    busy = YandexError("ai-error", "Ошибка ИИ через мост Cloudflare (503): overloaded")
+    busy.transient = True
+    assert _http(busy).detail["message"] == ai.ERROR_BUSY
+    assert _http(YandexError("bridge-cf", "Cloudflare 1020")).detail["message"] == ai.ERROR_DOWN
+    assert _http(YandexError("ai-region", "Cloudflare выполнил Worker моста не в США")).detail["message"] == ai.ERROR_DOWN
+    # Остальные ошибки — как были.
+    assert _http(YandexError("units-exhausted", "Лимит исчерпан")).detail["message"] == "Лимит исчерпан"
+    assert _http(YandexError("not-found", "Кампания не найдена")).status_code == 404
+
+
+def test_error_kind_in_message_out():
+    row = {"id": 1, "role": "error", "content": "x", "meta": {"error_kind": "long"}}
+    assert ai_agent._message_out(row)["error_kind"] == "long"
+    assert ai_agent._message_out({**row, "meta": None})["error_kind"] == ""
+    assert "error_kind" not in ai_agent._message_out({**row, "role": "user"})
 
 
 def test_model_call_timeout_comes_from_config(monkeypatch):

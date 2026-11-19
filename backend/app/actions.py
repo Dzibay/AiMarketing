@@ -643,6 +643,11 @@ def create_campaign(user_id: int, *, account_id: int, spec: dict, workspace_id: 
     body[_TYPE_BLOCK[ctype]] = block
 
     groups = spec_groups(spec)
+    # Без региона группа показывалась бы по всей России — такого молча не делаем.
+    for n, group in enumerate(groups, 1):
+        if not group_regions(group):
+            name = str(group.get("name") or f"Группа {n}").strip()
+            raise YandexError("args", f"Группа «{name}»: укажите регионы показа — без них группу не создаём")
     flat = strategy_from_api(bidding)
     token = get_connection_access_token(account["connection_id"], user_id)
     # Аудитории проверяем до создания: неверная цель или условие не должны оставить полкампании.
@@ -700,7 +705,10 @@ def create_campaign(user_id: int, *, account_id: int, spec: dict, workspace_id: 
                     token=token,
                     client_login=account["client_login"],
                 )
-            warnings.extend(group_out.pop("warnings", []))
+            # Чья беда — видно сразу: «Окна ПВХ: не добавлено фраз: 2».
+            label = str(group.get("name") or "").strip()
+            for text in group_out.pop("warnings", []):
+                warnings.append(text if not label or text.startswith("Группа") else f"«{label}»: {text}")
             groups_out.append(group_out)
         except YandexError as exc:
             name = str(group.get("name") or "").strip()
@@ -753,6 +761,11 @@ def spec_groups(spec: dict) -> list[dict]:
     return raw
 
 
+def group_regions(group: dict) -> list[int]:
+    """Регионы группы из spec; пустой список — регион не выбран (Россию молча не ставим)."""
+    return [int(r) for r in group.get("region_ids") or [] if str(r).lstrip("-").isdigit()]
+
+
 def _create_group(
     user_id: int,
     campaign_row_id: int,
@@ -770,7 +783,7 @@ def _create_group(
     from app.keywords import create_keywords
 
     warnings: list[str] = []
-    regions = [int(r) for r in group.get("region_ids") or [] if str(r).lstrip("-").isdigit()] or [225]
+    regions = group_regions(group)
     adgroup = create_adgroup(
         user_id,
         campaign_row_id=campaign_row_id,

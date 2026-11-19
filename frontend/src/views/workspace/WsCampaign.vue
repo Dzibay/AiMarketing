@@ -39,6 +39,26 @@
             {{ HEALTH_LABELS[health.id] }}
           </span>
           <span>{{ health.text }}</span>
+          <!-- Включить — переключателем в шапке; остальное — одной кнопкой рядом с причиной. -->
+          <CampaignNextStep
+            v-if="reason?.next && reason.text === health.text && reason.next.kind !== 'resume'"
+            :ws-id="ws.id"
+            :campaign="{ ...row, name }"
+            :next="reason.next"
+            small
+            @done="reloadCampaign"
+          />
+        </p>
+        <p v-if="reason && reason.text !== health.text" class="camp-lead camp-lead--extra">
+          <span>{{ reason.text }}</span>
+          <CampaignNextStep
+            v-if="reason.next && reason.next.kind !== 'resume'"
+            :ws-id="ws.id"
+            :campaign="{ ...row, name }"
+            :next="reason.next"
+            small
+            @done="reloadCampaign"
+          />
         </p>
 
         <div class="bigstats">
@@ -170,7 +190,10 @@
       <div class="panel__head">
         <div>
           <p class="ws-meta ws-meta--inline">
-            <UiStatus v-if="state || status" v-bind="campaignStatus({ state, status })" />
+            <UiStatus
+              v-if="state || status"
+              v-bind="campaignStatus({ state, status, status_clarification: row?.status_clarification })"
+            />
             <span v-if="login">кабинет {{ login }}</span>
             <span v-if="directId">№ {{ directId }}</span>
             <span v-if="dailyBudget != null">бюджет {{ rubles(dailyBudget) }}/день</span>
@@ -302,7 +325,8 @@ import UiStatus from '../../components/ui/UiStatus.vue'
 import UiSwitch from '../../components/ui/UiSwitch.vue'
 import { confirmCampaignArchive, confirmCampaignToggle } from '../../utils/campaignConfirm'
 import { useExpert } from '../../composables/useExpert'
-import { campaignHealth } from '../../utils/campaignHealth'
+import { campaignHealth, campaignReason } from '../../utils/campaignHealth'
+import CampaignNextStep from '../../components/CampaignNextStep.vue'
 import { errorText, wsApi } from '../../api/web'
 import { pushToast } from '../../composables/useToasts'
 import { undoAction } from '../../composables/useUndo'
@@ -368,6 +392,8 @@ const aiLink = computed(() => ({
 }))
 const canToggle = computed(() => state.value !== 'ARCHIVED' && (state.value === 'ON' || status.value !== 'DRAFT'))
 const health = computed(() => campaignHealth(row.value || {}, kpi.value))
+// Почему не показывается и что сделать — у работающей кампании тоже: деньги кончились, отклонены объявления.
+const reason = computed(() => (row.value ? campaignReason(row.value) : null))
 
 // Недельный бюджет — семь дневных: столько Директ может потратить за период статистики.
 const weekBudget = computed(() => (dailyBudget.value ? dailyBudget.value * 7 : null))
@@ -619,6 +645,10 @@ usePageContext(() => {
 }
 .camp-lead .st {
   font-size: 14px;
+}
+.camp-lead--extra {
+  margin-top: -8px;
+  color: var(--muted);
 }
 .camp-back {
   margin: 0 0 12px;

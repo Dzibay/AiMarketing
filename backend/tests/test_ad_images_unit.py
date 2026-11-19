@@ -90,7 +90,10 @@ def test_request_bodies_and_answers(monkeypatch):
     [
         (_reply(401), "image-auth"),
         (_reply(429), "image-limit"),
-        (_reply(500), "image-error"),
+        # Сбой генератора и непонятный ответ — image-api (в кабинете — понятным текстом, ai.human_error).
+        (_reply(500), "image-api"),
+        (httpx.Response(200, content=b"not json"), "image-api"),
+        (httpx.Response(200, json={"data": []}), "image-api"),
         (_reply(data={"b64_json": base64.b64encode(b"<html>").decode()}), "image-error"),
         (_reply(data={"b64_json": base64.b64encode(b"\xff\xd8\xff" + b"0" * (5 * 1024 * 1024)).decode()}), "image-error"),
         (_reply(data={}), "image-error"),
@@ -330,7 +333,7 @@ def test_create_campaign_counts_and_checks_images(monkeypatch):
         "",
     ))
     monkeypatch.setattr(ai_agent, "_image_approvals", lambda ctx: [{"hash": "h1", "account_id": 3, "group": "Окна"}])
-    group = {"name": "Окна", "keywords": ["купить окна"], "ad": {
+    group = {"name": "Окна", "region_ids": [225], "keywords": ["купить окна"], "ad": {
         "titles": ["Окна от завода"], "texts": ["Замер бесплатно"], "href": "https://okna.ru", "extras": {"image_hashes": ["h1"]}}}
     spec = {"name": "Окна", "strategy": {"search": "HIGHEST_POSITION"}, "groups": [group]}
     plan = ai_agent._p_create_campaign(FakeContext(), {"account_id": 3, "spec": spec})

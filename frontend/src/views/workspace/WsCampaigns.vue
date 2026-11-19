@@ -18,13 +18,13 @@
         class="btn btn--ghost"
         type="button"
         :disabled="syncing"
-        v-tip="syncedAgo ? `Данные из Директа обновлены ${syncedAgo}` : 'Обновить кампании из Директа'"
+        v-tip="'Перечитать из Директа список кампаний и их расход и заявки'"
         @click="syncCampaigns"
       >
         <RefreshCw :class="{ spin: syncing }" aria-hidden="true" />
         <span class="sync-btn">
           {{ syncing ? 'Обновляем…' : 'Обновить из Директа' }}
-          <small v-if="syncedAgo && !syncing">обновлено {{ syncedAgo }}</small>
+          <small v-if="freshNote && !syncing">{{ freshNote }}</small>
         </span>
       </button>
     </template>
@@ -61,6 +61,7 @@
       @toggle="quickToggle"
       @pick="toggle"
     />
+    <DataFreshness v-if="data && simpleRows.length" :freshness="data.freshness" @reload="load" />
     <ExpertHint v-if="data && simpleRows.length">
       Фильтры, архив, бюджеты, копии и массовые действия
     </ExpertHint>
@@ -139,6 +140,7 @@
         </UiMenu>
       </template>
     </CampaignTable>
+    <DataFreshness v-if="data?.items.length" :freshness="data.freshness" @reload="load" />
   </section>
 
   <CampaignWizard :open="wizardOpen" :workspace="ws" @close="wizardOpen = false" @created="onCreated" />
@@ -214,7 +216,9 @@ import { askConfirm } from '../../composables/useConfirm'
 import { pushToast } from '../../composables/useToasts'
 import { undoAction } from '../../composables/useUndo'
 import { confirmCampaignArchive, confirmCampaignsBulk, confirmCampaignToggle } from '../../utils/campaignConfirm'
-import { campaignTypeShort, formatDate, lastDays, plural, timeAgo } from '../../utils/format'
+import { asOfNote, campaignTypeShort, formatDate, lastDays, plural, timeAgo } from '../../utils/format'
+import DataFreshness from '../../components/DataFreshness.vue'
+import { refreshLoads } from '../../composables/useLoads'
 import CampaignWizard from './CampaignWizard.vue'
 import DuplicateDialog from './DuplicateDialog.vue'
 import { useWs } from './context'
@@ -303,6 +307,22 @@ const syncedAgo = computed(() => {
   const times = accounts.value.map((a) => a.last_sync_at).filter(Boolean).sort()
   return times.length ? timeAgo(times[0], now.value) : ''
 })
+// Кабинеты, чью статистику «Обновить из Директа» поставила перечитать: пока их загрузка идёт — «обновляются».
+const statsPending = ref(new Set())
+/**
+ * Подпись кнопки в две части: список кампаний и цифры обновляются по-разному. Список — синком по кнопке,
+ * расход и заявки — загрузкой статистики (по расписанию или по той же кнопке), время — по самому старому кабинету.
+ */
+const freshNote = computed(() => {
+  const f = data.value?.freshness
+  let stats = ''
+  if (statsPending.value.size) stats = 'обновляются'
+  else if (f?.direct_at) stats = asOfNote(f.direct_at)
+  else if (f?.loading) stats = 'загружаются'
+  else if (f) stats = 'ещё не загружали'
+  const parts = [syncedAgo.value ? `кампании — ${syncedAgo.value}` : '', stats ? `расход и заявки — ${stats}` : '']
+  return parts.filter(Boolean).join(', ')
+})
 // Простой режим: фильтры скрыты — всё, кроме архива.
 const simpleRows = computed(() =>
   (data.value?.items || [])
@@ -353,6 +373,9 @@ async function load() {
     data.value = await wsApi.campaigns(ws.value.id, lastDays(days.value))
     const ids = new Set(data.value.items.map((c) => c.campaign_row_id))
     selected.value = new Set([...selected.value].filter((id) => ids.has(id)))
+    // Загрузка кабинета закончилась — его статистика уже перечитана.
+    const updating = new Set((data.value.freshness?.accounts || []).filter((a) => a.updating).map((a) => a.id))
+    statsPending.value = new Set([...statsPending.value].filter((id) => updating.has(id)))
   } catch (err) {
     loadError.value = errorText(err)
   } finally {
@@ -369,17 +392,34 @@ async function syncCampaigns() {
   syncing.value = true
   syncText.value = 'Запрашиваем кампании из Директа…'
   try {
-    const results = await wsApi.syncCampaigns(ws.value.id, (job) => {
+    const { results, stats } = await wsApi.syncCampaigns(ws.value.id, (job) => {
       syncText.value = `Синхронизация: ${jobProgressText(job)}`
     })
+    // Статистику грузит обычная загрузка кабинета в фоне: её не ждём, цифры перечитаем, когда она закончится.
+    const queued = stats.filter((s) => s.job)
+    statsPending.value = new Set(queued.map((s) => s.account_id))
+    if (queued.length) refreshLoads()
     const failed = results.filter((r) => r?.status === 'error').length
-    pushToast(failed ? `Обновлено с ошибками: ${failed}` : 'Кампании обновлены', failed ? 'error' : 'ok')
+    if (failed) pushToast(`Обновлено с ошибками: ${failed}`, 'error')
+    else pushToast(syncDoneText(stats), 'ok')
     await Promise.all([load(), reloadWs()])
   } catch (err) {
     pushToast(errorText(err), 'error')
   } finally {
     syncing.value = false
   }
+}
+
+/** Итог «Обновить из Директа»: что с расходом и заявками — честно, без «всё свежее». */
+function syncDoneText(stats) {
+  if (stats.some((s) => s.status === 'initial')) {
+    return 'Кампании обновлены. Статистика ещё загружается в первый раз — цифры появятся сами'
+  }
+  if (stats.some((s) => s.job)) {
+    return 'Кампании обновлены. Расход и заявки перечитываем из Директа — цифры обновятся сами через несколько минут'
+  }
+  if (stats.length) return 'Кампании обновлены. Расход и заявки читали из Директа меньше 15 минут назад'
+  return 'Кампании обновлены'
 }
 
 async function runBulk(action, extra = {}, ids = [...selected.value]) {

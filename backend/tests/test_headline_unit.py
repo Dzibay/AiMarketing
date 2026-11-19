@@ -118,6 +118,17 @@ def test_ads_not_running():
     assert h["link"]["to"] == "/w/5/campaigns"
 
 
+def test_top_up_opens_the_login_that_runs_out():
+    url = "https://direct.yandex.ru/dna/grid/campaigns?ulogin=okna"
+    h = _check(headline(_facts(money_out=True, money_url=url)))
+    assert h["link"] == {"label": "Пополнить в Директе", "to": url, "external": True}
+    h = _check(headline(_facts(money_days=1.5, money_url=url)))
+    assert h["link"]["to"] == url
+    # Логин неизвестен — общая главная Директа.
+    h = _check(headline(_facts(money_out=True)))
+    assert h["link"] == {"label": "Пополнить в Директе", "to": "https://direct.yandex.ru/", "external": True}
+
+
 def test_lead_price_above_goal():
     worst = {"name": "Окна — поиск", "to": "/w/5/campaigns/9"}
     kpi = kpi_state("cpa", 900, 10 * 124000, 10, 0)

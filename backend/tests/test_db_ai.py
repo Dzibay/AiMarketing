@@ -501,10 +501,11 @@ def test_model_error_marks_chat(db, monkeypatch):
     ai_agent.post_message(s["user"], s["chat"], "Привет")
     assert ai_agent.run_chat(s["user"], s["chat"])["status"] == "error"
     chat = ai_agent.get_chat(s["user"], s["chat"])["chat"]
-    assert chat["status"] == "error" and "ключ" in chat["error"]
-    # След ошибки остаётся в ленте (с размером запроса) и после следующей отправки; в запрос к модели он не идёт.
+    # Пользователю — понятный текст без ключей и токенов; подробности — в журнале ошибок ИИ в админке.
+    assert chat["status"] == "error" and chat["error"] == ai.ERROR_DOWN
+    # След ошибки остаётся в ленте и после следующей отправки; в запрос к модели он не идёт.
     last = ai_agent.get_chat(s["user"], s["chat"])["messages"][-1]
-    assert last["role"] == "error" and last["content"].startswith("Провайдер ИИ отклонил ключ (запрос ≈ ")
+    assert (last["role"], last["content"], last["error_kind"]) == ("error", ai.ERROR_DOWN, "down")
     ai_agent.post_message(s["user"], s["chat"], "Ещё раз")
     messages = ai_agent.get_chat(s["user"], s["chat"])["messages"]
     assert [m["role"] for m in messages] == ["user", "error", "user"]
@@ -615,8 +616,8 @@ def test_new_campaign_goes_by_stages(db, monkeypatch):
     )
 
     def spec(keywords, titles):
-        return {"account_id": s["acc"], "spec": {"name": "Окна", "negative_keywords": ["бесплатно"], "groups": [
-            {"name": "Окна ПВХ", "keywords": keywords,
+        return {"account_id": s["acc"], "spec": {"name": "Окна", "daily_budget_rub": 500, "negative_keywords": ["бесплатно"], "groups": [
+            {"name": "Окна ПВХ", "region_ids": [213], "keywords": keywords,
              "ad": {"titles": titles, "texts": ["Замер в день заказа"], "href": "https://shop.ru"}},
         ]}}
 
@@ -830,8 +831,8 @@ def test_board_edits(db, monkeypatch):
     ai_agent.decide_items(user, _pending(user, chat, "propose_items")["id"], rows=[1])
 
     # Вписанное на доске согласовано маркетологом — ИИ может его взять.
-    spec = {"account_id": s["acc"], "spec": {"name": "Окна", "negative_keywords": ["бесплатно"], "groups": [
-        {"name": "Окна", "keywords": ["купить окна пвх", "окна недорого москва", "окна в рассрочку"],
+    spec = {"account_id": s["acc"], "spec": {"name": "Окна", "daily_budget_rub": 500, "negative_keywords": ["бесплатно"], "groups": [
+        {"name": "Окна", "region_ids": [213], "keywords": ["купить окна пвх", "окна недорого москва", "окна в рассрочку"],
          "ad": {"titles": ["Окна от завода"], "texts": ["Замер в день заказа"], "href": "https://shop.ru"}},
     ]}}
     _, out = _turn(user, chat, monkeypatch, _call("create_campaign", spec, "c6"))
@@ -963,6 +964,7 @@ def test_first_campaign_in_empty_workspace(db, monkeypatch):
         "negative_keywords": ["бесплатно", "б у"],
         "groups": [{
             "name": "Прямые",
+            "region_ids": [213],
             "keywords": ["купить диван", "диван прямой цена"],
             "ad": {"titles": ["Диваны от производителя", "Прямые диваны со скидкой", "Доставка по городу"],
                    "texts": ["Гарантия 2 года, примерка в салоне"], "href": "https://sofa.ru"},

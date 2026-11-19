@@ -73,7 +73,23 @@ def _iso(value: datetime | None) -> str | None:
     return value.isoformat() if value else None
 
 
+# Сбой кода задачи (job_handlers.run_job: error_code internal, в error — str(исключения)): в кабинет — этим текстом.
+INTERNAL_ERROR = "Не получилось из-за сбоя на нашей стороне. Попробуйте позже — если повторится, напишите в поддержку."
+CHAT_KINDS = ("ai_chat",)
+
+
 def public_job(row: dict) -> dict:
+    """Задача для кабинета. Сбой провайдера ИИ — понятным текстом (ai.human_error; «слишком длинно» вне чата —
+    без совета начать новый чат), сбой кода — INTERNAL_ERROR. Технический текст остаётся в базе — его видят
+    админка и журнал ошибок ИИ."""
+    from app import ai
+
+    error = row["error"]
+    code = row["error_code"] or ""
+    if ai.is_provider_error(code):
+        error = ai.human_error(code, error or "", chat=row["kind"] in CHAT_KINDS)[0]
+    elif code == "internal":
+        error = INTERNAL_ERROR
     return {
         "id": row["id"],
         "kind": row["kind"],
@@ -89,7 +105,7 @@ def public_job(row: dict) -> dict:
         },
         "result": row.get("result"),
         "error_code": row["error_code"],
-        "error": row["error"],
+        "error": error,
         "run_after": _iso(row.get("run_after")),
         "created_at": _iso(row.get("created_at")),
         "started_at": _iso(row.get("started_at")),

@@ -10,6 +10,7 @@ log = logging.getLogger("app.api.web")
 
 from app import (
     ad_extras,
+    ai,
     billing,
     email_verify,
     events,
@@ -288,6 +289,7 @@ class SearchQueryKeywordBody(BaseModel):
 
 class SearchQueryNegativeBody(BaseModel):
     scope: str = "adgroup"
+    force: bool = False
 
 
 class SearchQueryBulkBody(BaseModel):
@@ -295,6 +297,7 @@ class SearchQueryBulkBody(BaseModel):
     action: str = ""
     adgroup_row_id: int | None = None
     bid_rub: float | None = None
+    force: bool = False
 
 
 class RuleBody(BaseModel):
@@ -364,7 +367,8 @@ class ChangePasswordBody(BaseModel):
     new_password: str = ""
 
 
-def _http(exc: UsersError | YandexError) -> HTTPException:
+def _http(exc: UsersError | YandexError, technical: bool = False) -> HTTPException:
+    """Ошибка → HTTP. Сбой провайдера ИИ в кабинете — понятным текстом; подробности видит админка (technical)."""
     code = exc.code
     status = 400
     if code in ("unauthorized", "credentials", "state", "code", "token-expired"):
@@ -380,6 +384,9 @@ def _http(exc: UsersError | YandexError) -> HTTPException:
     elif code == "too-soon":
         status = 429
     message = getattr(exc, "message", None)
+    if not technical and ai.is_provider_error(code):
+        # Ход чата идёт задачей (ошибку пишет сам чат), сюда — синхронные вызовы: без совета «начните новый чат».
+        message = ai.human_error(code, message or "", transient=getattr(exc, "transient", False), chat=False)[0]
     detail: str | dict = {"code": code, "message": message} if message else code
     return HTTPException(status_code=status, detail=detail)
 
@@ -1324,7 +1331,7 @@ def web_search_query_add_negative(
 ) -> dict:
     body = body or SearchQueryNegativeBody()
     try:
-        return add_query_as_negative(user_id, query_row_id, scope=body.scope or "adgroup")
+        return add_query_as_negative(user_id, query_row_id, scope=body.scope or "adgroup", force=body.force)
     except YandexError as exc:
         raise _http(exc) from exc
 
@@ -1341,6 +1348,7 @@ def web_search_query_bulk(
             action=body.action,
             adgroup_row_id=body.adgroup_row_id,
             bid_rub=body.bid_rub,
+            force=body.force,
         )
     except YandexError as exc:
         raise _http(exc) from exc

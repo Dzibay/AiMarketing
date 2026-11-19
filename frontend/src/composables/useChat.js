@@ -142,7 +142,7 @@ export function provideChat({ general, ws, basePath, reloadWs, panel = false, pa
   }
   const chat = computed(() => (data.value && data.value.chat.id === chatId.value ? data.value.chat : null))
   const status = computed(() => chat.value?.status || 'idle')
-  // Ошибка хода уже стоит в ленте последней строкой (с размером запроса) — плашку с тем же текстом не дублируем.
+  // Ошибка хода уже стоит в ленте последней строкой — плашку с тем же текстом не дублируем.
   const errorInFeed = computed(() => {
     const last = chat.value ? data.value.messages[data.value.messages.length - 1] : null
     return last?.role === 'error' && !!chat.value.error && last.content.startsWith(chat.value.error)
@@ -295,7 +295,7 @@ export function provideChat({ general, ws, basePath, reloadWs, panel = false, pa
         turn = { question: m.content || '', item: null, help: 0, found: false }
         out.push({ key: `m${m.id}`, id: m.id, role: 'user', content: m.content, refs: m.refs || [], context: m.context || null, attachments: m.attachments || [], created: m.created_at || '' })
       }
-      if (m.role === 'error') out.push({ key: `m${m.id}`, role: 'error', content: m.content })
+      if (m.role === 'error') out.push({ key: `m${m.id}`, role: 'error', content: m.content, kind: m.error_kind || '' })
       if (m.role === 'assistant') {
         for (const call of m.tool_calls || []) {
           if (call.name !== 'help_search') continue

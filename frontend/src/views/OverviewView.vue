@@ -28,7 +28,8 @@
     </EmptyState>
     <template v-else>
       <PendingDecisions />
-      <SignalCards :problems="data.problems" show-project />
+      <SignalCards :problems="data.problems" show-project :balance-refreshing="refreshing" @refresh-balance="refresh" />
+      <MoneyBlock :balances="data.balances" :refreshing="refreshing" @refresh="refresh" />
 
       <h2 class="section-h"><span class="hico" aria-hidden="true"><Layers /></span>Проекты <span class="cgroup__n">{{ projectCards.length }}</span></h2>
       <div class="pstrip">
@@ -41,7 +42,7 @@
           <p>{{ w.verdict }}</p>
         </RouterLink>
       </div>
-      <ExpertHint>Расход за сегодня, темп бюджета, балансы и таблица всех проектов</ExpertHint>
+      <ExpertHint>Расход за сегодня, темп бюджета и таблица всех проектов</ExpertHint>
     </template>
   </template>
 
@@ -99,6 +100,8 @@
           value-key="cpa_kopecks"
         />
       </UiRibbon>
+
+      <MoneyBlock :balances="data.balances" :refreshing="refreshing" @refresh="refresh" />
 
       <section class="panel overview-spaces">
         <div class="panel__head">
@@ -249,6 +252,14 @@
       <section ref="problemsPanel" class="panel overview-problems">
         <div class="panel__head">
           <h2><span class="hico" aria-hidden="true"><Flame /></span>Где горит <span class="cgroup__n">{{ fireCount }}</span></h2>
+          <RouterLink
+            v-if="fireCount"
+            class="btn btn--ghost btn--sm"
+            :to="{ path: '/cabinet/chat', query: { ask: 'problems_all' } }"
+          >
+            <Sparkles aria-hidden="true" />
+            Разобрать всё с ИИ
+          </RouterLink>
           <div class="filters filters--inline">
             <UiSelect
               v-model="severityFilter"
@@ -288,11 +299,12 @@
 <script setup>
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { RouterLink, useRouter } from 'vue-router'
-import { CircleCheck, Flame, Layers, Lock, RefreshCw, Search, TriangleAlert } from '@lucide/vue'
+import { CircleCheck, Flame, Layers, Lock, RefreshCw, Search, Sparkles, TriangleAlert } from '@lucide/vue'
 import ExpertHint from '../components/ExpertHint.vue'
 import HomeAsk from '../components/HomeAsk.vue'
 import HomeHeadline from '../components/HomeHeadline.vue'
 import KpiTile from '../components/KpiTile.vue'
+import MoneyBlock from '../components/MoneyBlock.vue'
 import OnboardingChecklist from '../components/OnboardingChecklist.vue'
 import PendingDecisions from '../components/PendingDecisions.vue'
 import ProblemList from '../components/ProblemList.vue'
@@ -353,7 +365,7 @@ const lockedIds = computed(() => new Set(workspaces.value.filter((w) => w.locked
 const loading = ref(true)
 const refreshing = ref(false)
 const refreshText = ref('')
-const data = ref({ workspaces: [], folders: [], problems: [], totals: {} })
+const data = ref({ workspaces: [], folders: [], problems: [], totals: {}, balances: [] })
 const search = ref('')
 const onlyProblems = ref(false)
 const severityFilter = ref('all')
@@ -616,7 +628,7 @@ async function refresh() {
     })
     await Promise.all([load(), headline.value?.load()])
     const errors = (result.direct?.errors || 0) + (result.balances?.errors || 0)
-    pushToast(errors ? `Обновлено, но с ошибками: ${errors} — см. «Где горит»` : 'Расход за сегодня обновлён')
+    pushToast(errors ? `Обновлено, но с ошибками: ${errors} — см. «Где горит»` : 'Расход за сегодня и баланс обновлены')
   } catch (err) {
     pushToast(errorText(err), 'error')
   } finally {

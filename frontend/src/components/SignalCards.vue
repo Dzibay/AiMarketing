@@ -2,6 +2,10 @@
   <h2 v-if="!bare" class="section-h">
     <span class="hico" aria-hidden="true"><Radar /></span>Сервис заметил <span class="cgroup__n">{{ visible.length }}</span>
     <small class="section-h__note">по цифрам, без ИИ — лимит не тратится</small>
+    <!-- На общей главной — разбор всех проектов разом в общем чате. -->
+    <small v-if="showProject && !wsId && visible.length > 1" class="home-link">
+      <RouterLink :to="{ path: '/cabinet/chat', query: { ask: 'problems_all' } }">Разобрать всё с ИИ</RouterLink>
+    </small>
   </h2>
   <div v-if="visible.length" class="sigs">
     <article v-for="s in visible" :key="s.key" class="sig">
@@ -17,8 +21,17 @@
       </div>
       <h3>{{ s.title }}</h3>
       <p v-if="s.note">{{ s.note }}</p>
+      <p v-if="s.kind === 'balance' && onRefreshBalance" class="sig__more">
+        Уже пополнили?
+        <button class="link-btn" type="button" :disabled="balanceRefreshing" @click="onRefreshBalance()">
+          {{ balanceRefreshing ? 'Обновляем баланс…' : 'Обновить баланс' }}
+        </button>
+      </p>
       <div class="sig__acts">
-        <RouterLink v-if="s.link" class="btn btn--accent" :to="s.link.to"><span class="sig__label">{{ s.link.label }}</span></RouterLink>
+        <a v-if="s.link?.external" class="btn btn--accent" :href="s.link.to" target="_blank" rel="noopener">
+          <span class="sig__label">{{ s.link.label }}</span>
+        </a>
+        <RouterLink v-else-if="s.link" class="btn btn--accent" :to="s.link.to"><span class="sig__label">{{ s.link.label }}</span></RouterLink>
         <button class="sig__ask" type="button" v-tip="'Спросить ИИ об этом'" aria-label="Спросить ИИ об этом" @click="ask(s)">
           <Sparkles :size="16" aria-hidden="true" />
         </button>
@@ -65,6 +78,9 @@ const props = defineProps({
   limit: { type: Number, default: 8 },
   /** Без своей шапки «Сервис заметил» — когда заголовок уже есть на странице (мастер первого входа). */
   bare: Boolean,
+  /** @refresh-balance — у карточки о деньгах «Уже пополнили? Обновить баланс»; без обработчика ссылки нет. */
+  onRefreshBalance: { type: Function, default: null },
+  balanceRefreshing: Boolean,
 })
 
 const STORE = 'aimarketing-hidden-signals'
@@ -170,6 +186,9 @@ function ask(s) {
   margin: 4px 0 0;
   color: var(--muted);
   font-size: 13px;
+}
+.sig p.sig__more {
+  color: var(--faint);
 }
 .sig__acts {
   display: flex;

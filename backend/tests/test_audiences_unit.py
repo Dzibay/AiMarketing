@@ -431,9 +431,9 @@ def _spec(strategy, groups):
     return {"name": "Окна", "strategy": strategy, "groups": groups}
 
 
-GROUP = {"name": "Окна ПВХ", "keywords": ["купить окна пвх"], "audiences": [RETARGET],
+GROUP = {"name": "Окна ПВХ", "region_ids": [225], "keywords": ["купить окна пвх"], "audiences": [RETARGET],
          "ad": {"titles": ["Окна ПВХ от завода"], "texts": ["Замер бесплатно"], "href": "https://okna.ru"}}
-SEA = {"name": "Море", "audiences": [INTERESTS],
+SEA = {"name": "Море", "region_ids": [225], "audiences": [INTERESTS],
        "ad": {"titles": ["Отдых у моря"], "texts": ["Окна на дачу"], "href": "https://okna.ru/sea"}}
 NETWORK = {"search": "WB_MAXIMUM_CLICKS", "weekly_budget_rub": 3000}
 

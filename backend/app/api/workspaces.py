@@ -11,7 +11,7 @@ from app.actions import (
     moderate_campaign,
     update_campaign_settings,
 )
-from app.account_load import load_overview
+from app.account_load import load_overview, request_stats_refresh
 from app.adgroups import list_adgroups
 from app.ads import list_ads
 from app.analytics import parse_range, workspace_analytics, workspace_headline, workspace_summary
@@ -401,14 +401,35 @@ def ws_set_campaigns(workspace_id: int, body: SetCampaignsBody, user_id: int = D
 
 @router.post("/{workspace_id}/campaigns/sync")
 def ws_sync_campaigns(workspace_id: int, user_id: int = Depends(require_web_user)) -> dict:
-    """Перечитать кампании всех кабинетов проекта из Директа."""
+    """
+    Перечитать из Директа кампании всех кабинетов проекта и их статистику.
+
+    jobs — быстрый синк списка кампаний (его ждёт кнопка). stats — по кабинету: статистику перечитает обычная
+    загрузка load_account (баллы и дубли она проверяет сама); status — queued | running | initial | fresh.
+    Запроса к Директу в самом обработчике нет.
+    """
     _ws(user_id, workspace_id)
-    jobs = [
-        _start_job("sync_account_campaigns", user_id, {"account_id": a["id"]})["job"]
-        for a in list_workspace_accounts(user_id, workspace_id)
-        if a["enabled"]
-    ]
-    return {"jobs": jobs}
+    accounts = [a for a in list_workspace_accounts(user_id, workspace_id) if a["enabled"]]
+    jobs = [_start_job("sync_account_campaigns", user_id, {"account_id": a["id"]})["job"] for a in accounts]
+    stats = []
+    for a in accounts:
+        try:
+            status = request_stats_refresh(user_id, int(a["id"]))
+        except YandexError:
+            continue
+        if status == "disabled":
+            continue
+        # Тот же payload, что у расписания: одинаковая задача в очереди не задвоится.
+        job = _start_job("load_account", user_id, {"account_id": a["id"]})["job"] if status != "fresh" else None
+        stats.append(
+            {
+                "account_id": a["id"],
+                "name": a["name"] or a["client_login"],
+                "status": status,
+                "job": job,
+            }
+        )
+    return {"jobs": jobs, "stats": stats}
 
 
 @router.get("/{workspace_id}/campaigns")
@@ -432,6 +453,8 @@ def ws_campaigns(
         "kpi": data["kpi"],
         "items": data["by_campaign"],
         "accounts": list_workspace_accounts(user_id, workspace_id),
+        # Когда перечитаны расход и заявки (по самому старому кабинету) — не путать со списком кампаний.
+        "freshness": data["freshness"],
     }
 
 

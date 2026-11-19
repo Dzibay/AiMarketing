@@ -63,6 +63,8 @@ STRUCTURE_EVERY = timedelta(hours=24)
 STATS_EVERY = timedelta(hours=6)
 QUERIES_EVERY = timedelta(hours=24)
 GOALS_EVERY = timedelta(hours=24)
+# «Обновить из Директа»: статистику, прочитанную меньше 15 минут назад, второй раз не перечитываем.
+STATS_ON_REQUEST_EVERY = timedelta(minutes=15)
 # Меньше баллов — структуру при актуализации не читаем: пусть останутся на правки пользователя.
 UNITS_RESERVE = 1000
 # Такие ошибки повтор по одной кампании не исправит — этап останавливается.
@@ -100,6 +102,21 @@ def is_due(stage: dict | None, every: timedelta, *, initial: bool) -> bool:
         return False
     age = _age(stage)
     return age is None or age >= every
+
+
+def plan_stages(state: dict, *, initial: bool) -> list[str]:
+    """Этапы загрузки по состоянию: кампании — всегда, остальное — когда пора. При актуализации структура
+    проверяется каждый раз (что менялось, скажет Changes API), статистика — ещё и по запросу пользователя."""
+    plan = ["campaigns"]
+    for name, every in (("structure", STRUCTURE_EVERY), ("stats", STATS_EVERY), ("queries", QUERIES_EVERY)):
+        stage = state.get(name) or {}
+        if (
+            (name == "structure" and not initial)
+            or is_due(stage, every, initial=initial)
+            or (name == "stats" and stage.get("requested"))
+        ):
+            plan.append(name)
+    return plan
 
 
 def stats_days(stage: dict | None, *, initial: bool) -> int:
@@ -365,6 +382,8 @@ class _AccountLoad:
     def stats(self, days: int) -> None:
         date_to = today_msk()
         date_from = yesterday_msk() - timedelta(days=days - 1)
+        # Просьбу «перечитать» выполняем сейчас — даже если отчёт упадёт, повтор пойдёт по обычному графику.
+        self.stage("stats").pop("requested", None)
         self.begin("stats")
         self.report("stats", 0, 0, f"Статистика за {days} дн.")
         try:
@@ -539,11 +558,7 @@ class _AccountLoad:
 
     def run(self) -> dict:
         initial = self.initial
-        plan = ["campaigns"]
-        for name, every in (("structure", STRUCTURE_EVERY), ("stats", STATS_EVERY), ("queries", QUERIES_EVERY)):
-            # При актуализации структура проверяется каждый раз: что менялось, скажет Changes API.
-            if (name == "structure" and not initial) or is_due(self.stage(name), every, initial=initial):
-                plan.append(name)
+        plan = plan_stages(self.state, initial=initial)
         self.plan = plan
 
         fresh = self.campaigns()
@@ -630,6 +645,53 @@ def run_account(user_id: int, account_id: int, progress: Progress) -> dict:
     except Exception:
         load.fail("internal")
         raise
+
+
+def request_stats_refresh(user_id: int, account_id: int) -> str:
+    """
+    «Обновить из Директа»: статистику кабинета перечитать при ближайшей загрузке, не дожидаясь шести часов.
+    Сама загрузка — обычная задача load_account (с её проверкой баллов и без дублей); здесь только отметка
+    в load_state. Возвращает, что будет дальше:
+    queued — отметили, загрузку нужно поставить; running — загрузка уже идёт; initial — первая загрузка
+    ещё не закончилась, статистика придёт с ней; fresh — статистику читали меньше STATS_ON_REQUEST_EVERY
+    назад; disabled — кабинет выключен.
+    """
+    with pool.connection() as conn:
+        row = conn.execute(
+            """
+            SELECT a.enabled, a.loaded_at, a.load_state->'stats' AS stats,
+                   EXISTS (
+                     SELECT 1 FROM jobs j
+                     WHERE j.user_id = a.user_id AND j.kind = 'load_account' AND j.status = 'running'
+                       AND j.payload->>'account_id' = a.id::text
+                   ) AS running
+            FROM direct_accounts a WHERE a.id = %s AND a.user_id = %s
+            """,
+            (account_id, user_id),
+        ).fetchone()
+        if row is None:
+            raise YandexError("not-found")
+        if not row["enabled"]:
+            return "disabled"
+        if row["loaded_at"] is None:
+            return "initial"
+        if row["running"]:
+            # Идущая загрузка сохраняет load_state целиком — отметку она бы затёрла.
+            return "running"
+        stage = row["stats"] or {}
+        age = _age(stage)
+        if stage.get("status") == "ok" and age is not None and age < STATS_ON_REQUEST_EVERY:
+            return "fresh"
+        # Этапа ещё нет — статистика и так в плане (is_due), отмечать нечего.
+        conn.execute(
+            """
+            UPDATE direct_accounts
+            SET load_state = jsonb_set(load_state, '{stats,requested}', 'true'::jsonb)
+            WHERE id = %s AND user_id = %s AND load_state ? 'stats'
+            """,
+            (account_id, user_id),
+        )
+    return "queued"
 
 
 def reset_account_load(user_id: int, account_id: int) -> bool:

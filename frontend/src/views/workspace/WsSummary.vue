@@ -12,7 +12,17 @@
   <!-- Простой режим: решения, сигналы проекта, неделя в цифрах и главные кампании. -->
   <template v-else-if="!expert">
     <PendingDecisions :ws-id="ws.id" />
-    <SignalCards :problems="data.problems" :ws-id="ws.id" />
+    <SignalCards
+      :problems="data.problems"
+      :ws-id="ws.id"
+      :balance-refreshing="refreshing"
+      @refresh-balance="refresh"
+    />
+    <p v-if="money" class="ccard ccard--note money-line">
+      <Wallet aria-hidden="true" />
+      <span :class="money.tone">{{ money.text }}</span>
+      <a :href="money.url" target="_blank" rel="noopener">Пополнить<ExternalLink aria-hidden="true" /></a>
+    </p>
 
     <h2 class="section-h">
       <span class="hico" aria-hidden="true"><Megaphone /></span>Кампании проекта
@@ -36,6 +46,11 @@
       </div>
     </div>
     <div v-else class="ccard ccard--note">За неделю в проекте не было расхода.</div>
+    <p class="meta-note how-counted">
+      {{ countedHow(week) }} ·
+      <RouterLink to="/cabinet/help/faq">почему цифры отличаются от Директа</RouterLink>
+    </p>
+    <DataFreshness :freshness="week.freshness" @reload="load" />
     <ExpertHint>Расход за сегодня, бюджет месяца, график недели к неделе и журнал действий</ExpertHint>
   </template>
 
@@ -106,6 +121,13 @@
         :note-tone="balanceTone(row.days_on_balance)"
       />
     </UiRibbon>
+    <div class="summary-how">
+      <p class="meta-note how-counted">
+        {{ countedHow(week) }} ·
+        <RouterLink to="/cabinet/help/faq">почему цифры отличаются от Директа</RouterLink>
+      </p>
+      <DataFreshness :freshness="week.freshness" @reload="load" />
+    </div>
 
     <section class="panel">
       <div class="panel__head">
@@ -231,6 +253,7 @@ import {
   CircleCheck,
   CirclePause,
   CircleDashed,
+  ExternalLink,
   History,
   Megaphone,
   OctagonAlert,
@@ -238,8 +261,10 @@ import {
   Sparkles,
   TriangleAlert,
   Undo2,
+  Wallet,
 } from '@lucide/vue'
 import ActionWho from '../../components/ActionWho.vue'
+import DataFreshness from '../../components/DataFreshness.vue'
 import ExpertHint from '../../components/ExpertHint.vue'
 import HomeAsk from '../../components/HomeAsk.vue'
 import HomeHeadline from '../../components/HomeHeadline.vue'
@@ -263,6 +288,7 @@ import {
   KPI_TONES,
   asOfNote,
   balanceTone,
+  daysLong,
   daysShort,
   formatDate,
   formatDateTime,
@@ -272,6 +298,7 @@ import {
   num,
   rub,
 } from '../../utils/format'
+import { countedHow } from '../../utils/glossary'
 import { CHART_METRICS, METRIC_BY_KEY } from './metrics'
 import { useWs } from './context'
 
@@ -299,6 +326,33 @@ const conversionsSource = computed(() =>
   week.value.conversions_source === 'goal' ? `цель «${week.value.goal_name}»` : 'конверсии Директа',
 )
 const isDrr = computed(() => week.value.kpi?.type === 'drr')
+
+/**
+ * Строка простого режима «На счёте 8 400 ₽, хватит примерно на 6 дней»: сумма по всем логинам проекта, запас —
+ * по логину, у которого деньги кончатся раньше (сервер ставит его первым). Логинов несколько — называем его.
+ */
+const money = computed(() => {
+  const known = (data.value?.balances || []).filter((b) => b.balance_kopecks != null)
+  if (!known.length) return null
+  const first = known[0]
+  const total = known.reduce((sum, b) => sum + b.balance_kopecks, 0)
+  const several = known.length > 1
+  const head = `${several ? 'На счетах' : 'На счёте'} ${rub(total)}`
+  const who = several ? `, у кабинета «${first.name || first.login}»` : ''
+  let text
+  let tone = balanceTone(first.days_on_balance)
+  if (first.balance_kopecks <= 0) {
+    text = several ? `${head}${who} деньги закончились — его реклама стоит` : `${head} — деньги закончились, реклама стоит`
+    tone = 'tone-bad'
+  } else if (first.days_on_balance == null) {
+    text = `${head}, за неделю расхода не было`
+  } else {
+    const days = first.days_on_balance
+    const runway = days < 1 ? 'меньше чем на день' : `примерно на ${daysLong(Math.floor(days))}`
+    text = `${head}${who || ','} хватит ${runway}`
+  }
+  return { text, tone, url: first.direct_url }
+})
 
 /** Прогноз округляем: точность до рубля у прогноза ложная. */
 function approxRub(kopecks) {
@@ -365,6 +419,46 @@ onMounted(load)
 </script>
 
 <style scoped>
+/* Строка денег простого режима: остаток, запас и ссылка в кабинет Директа. */
+.money-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+  margin: 16px 0 0;
+  color: var(--ink);
+  font-weight: 600;
+}
+.money-line > svg {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  color: var(--muted);
+}
+.money-line a {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 13px;
+}
+.money-line a svg {
+  width: 13px;
+  height: 13px;
+}
+.how-counted {
+  margin: 10px 2px 0;
+}
+.how-counted a {
+  color: inherit;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.summary-how {
+  margin: -6px 0 18px;
+}
+
 /* Топ кампаний: строка — сетка «название · расход · конверсии и CPA · стрелка», цифры по правому краю. */
 .tops {
   display: grid;

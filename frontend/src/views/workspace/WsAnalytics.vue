@@ -9,6 +9,7 @@
     :chat-link="{ path: `/w/${ws.id}/chat`, query: { ask: 'analytics', from: range.date_from, to: range.date_to } }"
     hint="Сравнение с прошлым периодом, все метрики, ключевые фразы, запросы и загрузка статистики"
     @period="setPreset"
+    @reload="load"
   />
 
   <template v-else>
@@ -21,13 +22,9 @@
       {{ syncing ? 'Загружаем…' : `Загрузить статистику за ${syncDays} дн.` }}
     </button>
   </div>
-  <p class="sync-status report-sync">
-    <template v-if="syncing">{{ syncText }}</template>
-    <template v-else-if="data">
-      Директ обновлён {{ data.direct_updated_at ? formatDateTime(data.direct_updated_at) : 'ещё не загружался' }},
-      Метрика — {{ data.metrika_updated_at ? formatDateTime(data.metrika_updated_at) : 'ещё не загружалась' }}.
-    </template>
-  </p>
+  <p v-if="syncing" class="sync-status report-sync">{{ syncText }}</p>
+  <!-- Время Директа — по самому старому кабинету проекта; отставший кабинет — жёлтым, со ссылкой «обновить». -->
+  <div v-else-if="data" class="report-sync"><DataFreshness :freshness="data.freshness" @reload="load" /></div>
 
   <div v-if="loading && !data" class="panel"><p class="empty">Считаем…</p></div>
   <div v-else-if="loadError" class="panel"><p class="empty">{{ loadError }}</p></div>
@@ -207,6 +204,7 @@ import { RefreshCw } from '@lucide/vue'
 import MetricGrid from '../../components/MetricGrid.vue'
 import TrendChart from '../../components/TrendChart.vue'
 import TermHint from '../../components/TermHint.vue'
+import DataFreshness from '../../components/DataFreshness.vue'
 import SimpleReport from '../../components/SimpleReport.vue'
 import UiDateRange from '../../components/ui/UiDateRange.vue'
 import { useExpert } from '../../composables/useExpert'
@@ -216,7 +214,6 @@ import {
   CAMPAIGN_STATES,
   KPI_TONES,
   formatDate,
-  formatDateTime,
   kpiTarget,
   kpiValue,
   lastDays,
