@@ -14,6 +14,14 @@ ANALYSIS = [{"cells": ["Окна ПВХ", "12 000"]}]
 BRIEF = "Собери кампанию на окна: Москва, поиск, 500 ₽ в день"
 
 
+
+@pytest.fixture(autouse=True)
+def _old_brief(monkeypatch):
+    """Сборки здесь — без campaign в брифе (как до черновика с первого шага): черновик создаёт create_campaign.
+    Запись в Директ по шагам — tests/test_db_ai_build_sync.py."""
+    monkeypatch.setattr(ai_agent, "_need_campaign", lambda args, payload: None)
+
+
 def _stages(*more):
     return (
         _table("goals", GOALS), _table("analysis", ANALYSIS), _table("keywords", KEYWORDS), _table("ads", ADS),

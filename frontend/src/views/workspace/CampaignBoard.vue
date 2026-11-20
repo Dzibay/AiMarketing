@@ -2,16 +2,39 @@
   <div ref="scroller" class="board panel" aria-label="Доска кампании">
     <header class="board__head">
       <div class="board__title">
-        <h3>{{ build.draft?.name || 'Новая кампания' }}</h3>
+        <h3>{{ build.campaign?.name || build.draft?.name || 'Новая кампания' }}</h3>
         <p class="hint">
           Шаг {{ currentIndex + 1 }} из {{ steps.length }} · {{ current.label }}
-          <template v-if="locked"> · черновик {{ build.draft.status === 'done' ? 'создан' : 'создаётся' }}, правки закрыты</template>
+          <template v-if="direct?.moderated"> · отправлена на модерацию</template>
+          <template v-else-if="locked"> · черновик {{ build.draft.status === 'done' ? 'создан' : 'создаётся' }}, правки закрыты</template>
         </p>
       </div>
       <div class="board__progress" aria-hidden="true">
         <span v-for="s in steps" :key="s.key" :class="`is-${s.status}`" />
       </div>
     </header>
+
+    <!-- Черновик в Директе: что записано, что не прошло, «Повторить». -->
+    <div v-if="direct" class="board-direct" :class="{ 'is-error': direct.error || direct.status === 'error' }">
+      <p>
+        <strong>{{ direct.moderated ? 'Кампания в Директе' : 'Черновик в Директе' }}</strong>
+        <template v-if="writtenText"> · {{ writtenText }}</template>
+        <RouterLink v-if="direct.campaign_row_id" class="ai-check__link" :to="`/w/${wsId}/campaigns/${direct.campaign_row_id}`">
+          открыть
+        </RouterLink>
+      </p>
+      <p class="hint">✓ у строки — она уже есть в Директе; черновик сам не запускается.</p>
+      <p v-if="direct.error" class="tone-bad">Последняя запись не прошла: {{ direct.error }}</p>
+      <template v-if="direct.warnings.length">
+        <p class="tone-warn">Что не попало в Директ:</p>
+        <ul>
+          <li v-for="w in direct.warnings" :key="w">{{ w }}</li>
+        </ul>
+      </template>
+      <div v-if="(direct.error || direct.warnings.length) && !direct.moderated" class="board-decision__buttons">
+        <button class="btn btn--xs" type="button" :disabled="disabled" @click="emit('write')">Повторить запись</button>
+      </div>
+    </div>
 
     <!-- Мастер: открыт один шаг (текущий или прошлый, который открыли поправить), прошлые свёрнуты с ✓, будущие серые. -->
     <section
@@ -92,8 +115,9 @@
             <li
               v-for="n in build.negatives"
               :key="n.text"
-              :class="{ 'is-pending': n.pending, 'is-off': !isOn(n), 'is-own': n.own }"
+              :class="{ 'is-pending': n.pending, 'is-off': !isOn(n), 'is-own': n.own, 'is-direct-only': n.direct_only }"
             >
+              <span v-if="n.in_direct && !n.pending" class="board-chips__direct" v-tip="n.direct_only ? 'Только в Директе — добавили там' : 'Есть в Директе'" aria-label="в Директе">✓</span>
               <UiCheckbox
                 v-if="n.pending"
                 :checked="isOn(n)"
@@ -167,7 +191,31 @@
             </li>
           </ul>
 
-          <div v-if="build.draft" class="board-draft" :class="`is-${build.draft.status}`" :data-action="build.draft.action_id">
+          <div v-if="build.campaign && direct?.moderated" class="board-draft is-done">
+            <strong>Отправлено на модерацию</strong>
+            <p class="hint">Показы начнутся, когда Директ примет кампанию — обычно в течение дня.</p>
+            <RouterLink v-if="direct.campaign_row_id" class="btn btn--ghost" :to="`/w/${wsId}/campaigns/${direct.campaign_row_id}`">
+              Открыть кампанию
+            </RouterLink>
+          </div>
+          <div v-else-if="build.campaign && direct?.campaign_row_id && s.key === current.key" class="board-draft is-pending">
+            <strong>Черновик «{{ build.campaign.name }}» заполнен</strong>
+            <p v-if="!build.ready" class="hint tone-bad">
+              В проверке есть красные пункты — поправьте их, прежде чем отправлять.
+            </p>
+            <div class="board-decision__buttons">
+              <button
+                class="btn btn--accent"
+                type="button"
+                :disabled="disabled || !build.ready || !!direct.error"
+                @click="emit('moderate')"
+              >
+                Отправить на модерацию
+              </button>
+            </div>
+            <p class="hint">Черновик сам не запустится: на модерацию его отправляете вы.</p>
+          </div>
+          <div v-else-if="build.draft" class="board-draft" :class="`is-${build.draft.status}`" :data-action="build.draft.action_id">
             <template v-if="build.draft.status === 'pending'">
               <strong>Черновик готов к созданию</strong>
               <p v-if="build.draft.summary" class="hint">{{ build.draft.summary }}</p>
@@ -218,7 +266,7 @@
             <strong v-else><span class="spinner" /> Черновик создаётся…</strong>
           </div>
           <p v-else-if="running" class="hint"><span class="spinner" /> ИИ готовит черновик…</p>
-          <template v-else-if="s.key === current.key && !locked">
+          <template v-else-if="s.key === current.key && !locked && !build.campaign">
             <p class="hint">Все шаги пройдены. ИИ соберёт черновик — создать его в Директе можно будет здесь.</p>
             <div class="board-decision__buttons">
               <button class="btn btn--accent" type="button" :disabled="disabled" @click="emit('ask', DRAFT_ASK)">
@@ -342,7 +390,21 @@ const props = defineProps({
 })
 // decide — решение по одной таблице (id, { approve, rows, comment, skip? }); board — решение по таблицам старой
 // доски ({ approve, rows, comment, only }); draft — карточка создания черновика (approve); ask — вопрос ИИ в чат (text).
-const emit = defineEmits(['decide', 'board', 'draft', 'ask'])
+// write — ещё раз записать согласованное в черновик Директа; moderate — отправить черновик на модерацию.
+const emit = defineEmits(['decide', 'board', 'draft', 'ask', 'write', 'moderate'])
+
+// --- Черновик в Директе (сборка по шагам) -------------------------------------------------------
+
+const direct = computed(() => props.build.direct || null)
+const writtenText = computed(() => {
+  const w = direct.value?.written
+  if (!w) return ''
+  return [
+    count(w.groups, 'группа', 'группы', 'групп'),
+    count(w.keywords, 'фраза', 'фразы', 'фраз'),
+    count(w.ads, 'объявление', 'объявления', 'объявлений'),
+  ].join(' · ')
+})
 
 // --- Что не попало в черновик -------------------------------------------------------------------
 
@@ -434,7 +496,7 @@ const off = reactive({})
 watch(preview, (mode) => localStorage.setItem(PREVIEW_KEY, mode))
 
 // Черновик создаётся или создан — сервер правки не примет.
-const locked = computed(() => ['approved', 'done'].includes(props.build.draft?.status))
+const locked = computed(() => ['approved', 'done'].includes(props.build.draft?.status) || !!props.build.direct?.moderated)
 const disabled = computed(() => props.disabled || busy.value || locked.value)
 
 const pendingTables = computed(() => {
@@ -448,6 +510,7 @@ const heldIds = computed(() => new Set(props.build.held || []))
 
 function stepStatus(step, stages) {
   if (step.key === 'ready') {
+    if (props.build.direct?.moderated) return 'done'
     const draft = props.build.draft
     if (!draft) return 'todo'
     return draft.status === 'done' ? 'done' : draft.status === 'error' ? 'rejected' : 'pending'
@@ -583,6 +646,7 @@ function summary(key) {
 }
 
 function rowNote(step, i) {
+  if (step.key === 'ready' && props.build.direct?.moderated) return 'отправлено на модерацию'
   if (step.key === 'ready') return props.build.draft ? DRAFT_TEXT[props.build.draft.status] || '' : 'впереди'
   if (step.status === 'done') return summary(step.key) || STATUS.done
   if (i === currentIndex.value && step.status === 'todo') return props.running ? 'ИИ готовит…' : 'текущий шаг'

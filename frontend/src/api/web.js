@@ -377,6 +377,12 @@ export const aiApi = {
   board: (chatId, ops) => post(`/api/web/ai/chats/${chatId}/board`, { ops }),
   /** Одно решение на всю доску: { approve, rows: { id таблицы: [номера отмеченных строк] }, comment }. */
   boardDecide: (chatId, payload) => post(`/api/web/ai/chats/${chatId}/board/decide`, payload),
+  /** Ещё раз записать согласованные шаги в черновик Директа → чат целиком. */
+  boardWrite: (chatId) => post(`/api/web/ai/chats/${chatId}/board/write`, {}),
+  /** Черновик, собранный по шагам, — на модерацию → чат целиком. */
+  boardModerate: (chatId) => post(`/api/web/ai/chats/${chatId}/board/moderate`, {}),
+  /** Доска готовой кампании из Директа: { campaign, groups, negatives }. */
+  campaignBoard: (campaignRowId) => request(`/api/web/ai/campaigns/${campaignRowId}/board`),
   /** Картинки из объявлений кампаний проекта: { items: [{ hash, account_id, preview_url, campaigns, ads }], more }. */
   wsImages: (workspaceId, accountId = null) => request(`${WS(workspaceId)}/ad-images${query({ account_id: accountId })}`),
   /** Картинки по описанию → библиотека кабинета: { images: [{ hash, preview_url, account_id }], errors }. */

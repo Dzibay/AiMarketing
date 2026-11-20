@@ -17,7 +17,7 @@ from datetime import date, datetime, timedelta, timezone
 
 from psycopg.types.json import Jsonb
 
-from app import ai, ai_attachments, ai_blocks, ai_feedback, ai_memory, audiences, context_files, experiments, image_gen, plans
+from app import ai, ai_attachments, ai_blocks, ai_feedback, ai_memory, audiences, build_sync, context_files, experiments, image_gen, plans
 from app import help as help_docs
 from app.actions import BULK_ACTIONS, SETTINGS_LABELS, campaign_options
 from app.brief import brief_filled, normalize_brief
@@ -2161,6 +2161,55 @@ def _check_spec_money(ctx: Context, spec: dict) -> None:
         strategy["goal_id"] = ctx.ws["goal_id"]
     actions.build_bidding_strategy(strategy, str(spec.get("type") or "TEXT_CAMPAIGN").upper())
     actions.check_multi_goals(strategy, actions._priority_goals(spec.get("priority_goals")))
+
+
+def _brief_campaign(ctx: Context, raw, *, partial: bool = False) -> dict:
+    """campaign таблицы «Бриф» (или «Настроек»): с чем сервис создаст черновик в Директе после согласования.
+    partial — уточнение в «Настройках»: только названные поля, кабинет и тип уже не меняются."""
+    from app import actions
+    from app.adgroups import _check_region_ids
+
+    if not isinstance(raw, dict):
+        raise YandexError("args", "campaign — объект {account_id, name, type, region_ids, strategy, href}")
+    out: dict = {}
+    if not partial:
+        accounts = [int(a["id"]) for a in ctx.ws.get("accounts") or []]
+        account_id = raw.get("account_id") or (accounts[0] if len(accounts) == 1 else None)
+        if account_id in (None, ""):
+            raise YandexError("args", "campaign.account_id — кабинет, в котором создать черновик (list_accounts)")
+        try:
+            out["account_id"] = int(ctx.require_account(int(account_id))["id"])
+        except (TypeError, ValueError) as exc:
+            raise YandexError("args", "campaign.account_id — число") from exc
+        ctype = str(raw.get("type") or "TEXT_CAMPAIGN").strip().upper()
+        if ctype not in actions.CAMPAIGN_TYPES:
+            raise YandexError("args", f"campaign.type — одно из {sorted(actions.CAMPAIGN_TYPES)}")
+        out["type"] = ctype
+    name = _line(raw.get("name"), 255)
+    if name:
+        out["name"] = name
+    elif not partial:
+        raise YandexError("args", "campaign.name — название кампании")
+    if raw.get("region_ids") not in (None, "", []):
+        out["region_ids"] = _check_region_ids(ctx.user_id, raw["region_ids"])
+    elif not partial:
+        raise YandexError("args", "campaign.region_ids — регионы показа (id из справочника Директа, find_regions)")
+    if raw.get("strategy") is not None:
+        _check_spec_money(ctx, {"strategy": raw["strategy"], "type": out.get("type") or "TEXT_CAMPAIGN"})
+        out["strategy"] = dict(raw["strategy"])
+    if raw.get("daily_budget_rub") not in (None, ""):
+        try:
+            out["daily_budget_rub"] = max(0, round(float(raw["daily_budget_rub"]), 2))
+        except (TypeError, ValueError) as exc:
+            raise YandexError("args", "campaign.daily_budget_rub — число рублей") from exc
+    href = _line(raw.get("href"), 1024)
+    if href:
+        if not re.match(r"^https?://[^\s/]+\.[^\s]+", href):
+            raise YandexError("args", "campaign.href — адрес посадочной страницы, https://…")
+        out["href"] = href
+    elif not partial and not actions._ws_link_template(ctx.ws):
+        raise YandexError("args", "campaign.href — посадочная страница: у проекта нет шаблона ссылки")
+    return out
 
 
 def _spec_view(name: str, phrases: list[str], targeted: bool, ad, variants) -> dict:
@@ -5102,6 +5151,12 @@ def _q_items(ctx: Context, args: dict) -> dict:
         **({"account_id": image_account} if image_account else {}),
         # Требования ТЗ (пункт 6 плана): {} — в ТЗ нет ни цифр, ни запретов.
         **({"requirements": brief_requirements(args["requirements"])} if args.get("requirements") is not None else {}),
+        # Черновик в Директе (пункт 2 плана доски): бриф — целиком, «Настройки» — уточнения.
+        **(
+            {"campaign": _brief_campaign(ctx, args["campaign"], partial=stage == "settings")}
+            if args.get("campaign") not in (None, {}) and stage in ("goals", "settings")
+            else {}
+        ),
     }
 
 
@@ -5668,6 +5723,15 @@ TOOLS = [
                     "banned_words": {"type": "array", "items": {"type": "string"}},
                     "other": {"type": "array", "items": {"type": "string"}},
                 },
+            },
+            "campaign": {
+                "type": "object",
+                "description": "обязательно в stage=goals сборки по шагам: с чем сервис создаст черновик в Директе "
+                "сразу после согласования брифа — {account_id (если кабинетов несколько), name, type "
+                "(TEXT_CAMPAIGN|UNIFIED_CAMPAIGN), region_ids (find_regions), strategy {search, network, "
+                "weekly_budget_rub, goal_id, ...}, daily_budget_rub, href — посадочная страница}. В stage=settings "
+                "— только уточняемые поля (name, region_ids, strategy, daily_budget_rub, href); сервис сам запишет "
+                "их в черновик",
             },
         },
         ["stage", "rows"],
@@ -6539,7 +6603,10 @@ def _project_prompt(ctx: Context) -> str:
         "список не выполнен, — поэтому сразу давай нужное число строк и не используй запрещённые слова. 1) Цели кампании — сначала "
         "ask_questions, если чего-то не хватает в брифе, затем propose_items stage=goals строками «что — "
         "значение»: что рекламируем и оффер, гео, бюджет, цель (действие на сайте или цель Метрики), посадочная "
-        "ссылка, ограничения. 2) Анализ: сайт и посадочная (read_page — что продают, цены, оффер; не "
+        "ссылка, ограничения; в той же таблице — поле campaign {account_id, name, type, region_ids, strategy, "
+        "daily_budget_rub, href}: сразу после согласования брифа сервис сам создаст по нему черновик кампании в "
+        "Директе и дальше будет дописывать в него каждый согласованный шаг (группы и фразы, минус-фразы, аудитории, "
+        "объявления, картинки, расширения, настройки). 2) Анализ: сайт и посадочная (read_page — что продают, цены, оффер; не "
         "переспрашивай то, что там написано), похожие кампании проекта (list_campaigns, get_campaign — какие группы, фразы и тексты "
         "приносили конверсии), get_search_queries с with_conversions, get_wordstat по 1–5 главным фразам с "
         "регионами кампании. Короткий отчёт с цифрами таблицей, затем propose_items stage=analysis — направления, "
@@ -6578,10 +6645,12 @@ def _project_prompt(ctx: Context) -> str:
         "согласованные быстрые ссылки и уточнения — в ad.extras каждой группы. 8) Настройки — propose_items stage=settings: строки «Регион», «Тип кампании», "
         "«Стратегия», «Бюджет» (сумма и «в день» или «в неделю»), «Даты», «Цель»; регион — тот, что в брифе, "
         "а если его не называли — спроси, Россию сам не ставь; допустимые стратегии и цели — "
-        "get_campaign_options, id регионов — find_regions. 9) create_campaign — одним вызовом черновик со всеми "
-        "группами (spec.groups), только из согласованных строк: снятое галочкой не бери, новое не добавляй без "
-        "новой таблицы; регион, тип, стратегию и бюджет — как в согласованных настройках, сервис сверит. "
-        "10) На модерацию — только после отдельного согласия (moderate_campaign). Если Вордстат не подключён или "
+        "get_campaign_options, id регионов — find_regions; что меняется против брифа — полем campaign (только "
+        "меняемые name, region_ids, strategy, daily_budget_rub, href), сервис запишет в черновик. 9) create_campaign "
+        "в такой сборке не нужен: черновик уже в Директе и заполнен. Если в сводке сказано, что черновика по "
+        "шагам нет (старая сборка без campaign в брифе), — create_campaign одним вызовом со всеми группами из "
+        "согласованных строк. 10) На модерацию черновик отправляет маркетолог кнопкой на доске; сам — только "
+        "после его отдельного согласия (moderate_campaign). Если Вордстат не подключён или "
         "упёрся в квоту, скажи об этом, строй направления и фразы из брифа, сайта (read_page) и запросов других кампаний, а "
         "частоты не выдумывай — в таблице так и пиши «нет данных».",
         "- Сборку помнит сервис. Последним в запросе может стоять «[Сводка сервиса…]»: какие этапы согласованы, "
@@ -7730,14 +7799,15 @@ def _settings_check(build: dict) -> dict | None:
     if not agreed:
         return None
     check = {"key": "settings", "label": "Настройки"}
-    if "region" not in agreed:
+    # Сборка по шагам: регионы черновика — id из брифа (campaign.region_ids), строки «Регион» может не быть.
+    if "region" not in agreed and not (build.get("campaign") or {}).get("region_ids"):
         note = "не указан регион — напишите в чате, где показывать рекламу: без региона черновик не создаётся"
         return {**check, "state": "bad", "note": note}
     brief = _setting_rows(list(reversed(_checked(build.get("goals") or []))))
     clash: list[str] = []
     # Кабинета здесь нет — справочник только тот, что уже в памяти; нет его — основные регионы.
     regions = geo.cached_regions()
-    if brief.get("region") and not _geo_overlap(brief["region"]["value"], agreed["region"]["value"], regions):
+    if brief.get("region") and agreed.get("region") and not _geo_overlap(brief["region"]["value"], agreed["region"]["value"], regions):
         clash.append(f"в брифе «{brief['region']['value']}», в настройках «{agreed['region']['value']}»")
     mine = _budget_of(agreed["budget"]) if agreed.get("budget") else None
     theirs = _budget_of(brief["budget"]) if brief.get("budget") else None
@@ -7746,6 +7816,9 @@ def _settings_check(build: dict) -> dict | None:
     if clash:
         return {**check, "state": "warn", "note": "; ".join(clash)}
     wanted = ["type", "strategy", "budget", "dates"]
+    if build.get("campaign"):
+        # Тип, стратегия и бюджет черновика заданы полем campaign брифа и «Настроек».
+        wanted = [k for k in wanted if k == "dates"]
     # Цель нужна стратегии на конверсии; ручным ставкам и кликам — нет.
     if _strategy_kind((agreed.get("strategy") or {}).get("value", "")) in ("conv", "pay_conv", None):
         wanted.append("goal")
@@ -7922,6 +7995,9 @@ def campaign_build(actions: list[dict], *, link_template: bool = False) -> dict 
         episodes[-1].append(action)
         if action["tool"] == "create_campaign" and action["status"] == "done":
             episodes.append([])
+        # Черновик сборки по шагам отправлен на модерацию — сборка закончена.
+        if action["tool"] == build_sync.TOOL and (action.get("result") or {}).get("moderated"):
+            episodes.append([])
     episode = next(
         (
             ep
@@ -7944,8 +8020,18 @@ def campaign_build(actions: list[dict], *, link_template: bool = False) -> dict 
     # Требования ТЗ — из последней таблицы сборки, где они есть (заменённая на доске новой тоже считается).
     # Пустые {} в следующих таблицах их не стирают: «в ТЗ ничего нет» говорит только первая.
     requirements: dict | None = None
+    # С чем создаётся и уточняется черновик: campaign согласованных таблиц брифа и «Настроек» по порядку.
+    campaign: dict = {}
     for action in episode:
         args = action.get("args") or {}
+        if (
+            action["tool"] == "propose_items"
+            and action["status"] == "done"
+            and args.get("stage") in ("goals", "settings")
+            and isinstance(args.get("campaign"), dict)
+        ):
+            fixed = {k: campaign[k] for k in ("account_id", "type") if campaign.get(k)}
+            campaign = {**campaign, **args["campaign"], **fixed}
         if (
             action["tool"] == "propose_items"
             and isinstance(args.get("requirements"), dict)
@@ -8088,8 +8174,13 @@ def campaign_build(actions: list[dict], *, link_template: bool = False) -> dict 
         "sitelinks": list(board.links["sitelink"].values()),
         "callouts": list(board.links["callout"].values()),
         "draft": draft,
-        "account_id": _build_account(episode, groups),
+        "account_id": campaign.get("account_id") or _build_account(episode, groups),
         "requirements": requirements,
+        # Бриф кампании для черновика и черновик в Директе (build_sync): что записано, что не прошло.
+        "campaign": campaign or None,
+        "direct": build_sync.direct_info(episode),
+        # Что сервис уже записал в черновик (для build_sync; в ответ API не идёт).
+        "direct_state": build_sync.last_state(episode),
         # Таблицы, которые ждут одного согласования доски; board — последняя таблица сборки легла на доску
         # (следующая без by_stages ляжет так же); board_approved — доску уже согласовали одной кнопкой.
         "held": [a["id"] for a in held],
@@ -8130,7 +8221,7 @@ def _build_account(episode: list[dict], groups: list[dict]) -> int | None:
 # же таблицам и правкам, что и доска, — и на каждом шаге отдаёт модели короткой сводкой (в чат она не
 # пишется), а согласованное содержимое целиком — инструментом get_build.
 
-_BUILD_TOOLS = ("propose_items", "board_edit", "create_campaign")
+_BUILD_TOOLS = ("propose_items", "board_edit", "create_campaign", build_sync.TOOL)
 _STAGE_STATE = {
     "done": "согласовано",
     "pending": "ждёт решения маркетолога",
@@ -8167,6 +8258,12 @@ def _chat_build(ctx: Context) -> tuple[dict | None, list[dict]]:
             campaign = (action.get("result") or {}).get("campaign") if action["tool"] == "create_campaign" else None
             if action["status"] == "done" and isinstance(campaign, dict) and campaign.get("id"):
                 made.append(int(campaign["id"]))
+            # Черновик сборки по шагам — «создан» в этом чате, когда отправлен на модерацию.
+            result = action.get("result") or {}
+            if action["tool"] == build_sync.TOOL and result.get("moderated"):
+                row_id = (result.get("state") or {}).get("campaign_row_id")
+                if row_id:
+                    made.append(int(row_id))
         rows = []
         if made:
             rows = conn.execute(
@@ -8192,12 +8289,24 @@ def _chat_build(ctx: Context) -> tuple[dict | None, list[dict]]:
     return campaign_build(actions, link_template=bool(_ws_link_template(ctx.ws))), created
 
 
+def sync_build(ctx: Context) -> dict | None:
+    """Согласованные шаги сборки — в черновик Директа (build_sync). None — писать было нечего."""
+    if ctx.chat_id is None or ctx.ws_id is None:
+        return None
+    build, _created = _chat_build(ctx)
+    if not _build_open(build):
+        return None
+    return build_sync.sync(ctx.user_id, ctx.ws_id, ctx.chat_id, build, build["direct_state"])
+
+
 def _build_open(build: dict | None) -> bool:
     """Сборка идёт: на доске есть согласованное или ждущее, а черновик по ней ещё не создан."""
     if build is None:
         return False
     if build["draft"]:
         return build["draft"]["status"] != "done"
+    if (build.get("direct") or {}).get("moderated"):
+        return False
     # Одна отклонённая таблица целей — маркетолог сборку не начал.
     return any(s["status"] in ("done", "pending") for s in build["stages"])
 
@@ -8252,6 +8361,12 @@ def _build_next(build: dict) -> str:
         return f"следующий этап — «{BUILD_STAGES[key]}»{before}{ahead}"
     if held:
         return _BOARD_READY
+    if build.get("campaign"):
+        # Сборка по шагам: черновик в Директе уже заполнен сервисом, создавать нечего.
+        return (
+            "все шаги согласованы и записаны в черновик Директа — новые таблицы и create_campaign не нужны: закончи "
+            "ход коротким итогом и напомни, что на модерацию черновик отправляет маркетолог кнопкой на доске"
+        )
     if build.get("board_approved"):
         return (
             "доска согласована — создавай черновик create_campaign из согласованного (содержимое — get_build): он "
@@ -8283,6 +8398,30 @@ def _requirements_memory(build: dict) -> list[str]:
     return lines
 
 
+def _direct_memory(build: dict) -> list[str]:
+    """Черновик сборки по шагам в сводке: сервис пишет согласованное в Директ сам."""
+    direct = build.get("direct") or {}
+    if not build.get("campaign"):
+        return []
+    if not direct.get("campaign_row_id"):
+        return [
+            "Черновик в Директе сервис создаст сам сразу после согласования брифа (по его campaign) и будет "
+            "дописывать в него каждый согласованный шаг. create_campaign в этой сборке не вызывай."
+        ]
+    written = direct.get("written") or {}
+    lines = [
+        f"Черновик уже в Директе (campaign_row_id {direct['campaign_row_id']}): групп {written.get('groups', 0)}, "
+        f"фраз {written.get('keywords', 0)}, объявлений {written.get('ads', 0)}. Каждый согласованный шаг сервис "
+        "дописывает в него сам — create_campaign не вызывай, правки делай таблицами этапов (revise=true); на "
+        "модерацию черновик отправляет маркетолог кнопкой на доске."
+    ]
+    if direct.get("error"):
+        lines.append(f"Последняя запись в Директ не прошла: {direct['error']} — маркетолог может повторить её на доске.")
+    if direct.get("warnings"):
+        lines.append("Директ не принял при записи: " + "; ".join(direct["warnings"][:8]) + ".")
+    return lines
+
+
 def _build_memory(ctx: Context) -> str:
     """Сводка для модели: что уже создано в Директе и что согласовано в сборке. "" — сказать нечего."""
     build, created = _chat_build(ctx)
@@ -8310,6 +8449,7 @@ def _build_memory(ctx: Context) -> str:
             count = f", строк: {stage['count']}" if stage["count"] and stage["status"] in ("done", "pending") else ""
             lines.append(f"- {stage['label']}: {_stage_state(stage)}{count}")
         lines += _requirements_memory(build)
+        lines += _direct_memory(build)
         # Пока доска ждёт общего согласования, на ней — всё предложенное; после него — только согласованное.
         pick = _on_board_items if held else _approved_items
         groups = []
@@ -8561,6 +8701,20 @@ def _need_requirements(payload: dict) -> None:
         raise YandexError("args", _REQUIREMENTS_HINT)
 
 
+def _need_campaign(args: dict, payload: dict) -> None:
+    """Бриф сборки по шагам несёт campaign: после его согласования сервис создаёт черновик в Директе."""
+    if payload["stage"] != "goals" or "campaign" in payload or _bool(args, "revise", False):
+        return
+    if args.get("by_stages") not in (None, "") and not _bool(args, "by_stages", True):
+        return  # прежний режим одной доски: кампанию создаёт create_campaign
+    raise YandexError(
+        "args",
+        "В таблице брифа нужен campaign — {account_id, name, type, region_ids, strategy, daily_budget_rub, href}: "
+        "сразу после согласования брифа сервис создаст по нему черновик кампании в Директе. Чего не знаешь — "
+        "спроси маркетолога (ask_questions) или возьми из сайта и проекта",
+    )
+
+
 def _table_guard(ctx: Context, args: dict, payload: dict) -> dict | None:
     """Таблица этапа сборки против того, что сервис уже помнит.
 
@@ -8573,12 +8727,14 @@ def _table_guard(ctx: Context, args: dict, payload: dict) -> dict | None:
     if stage in _BUILD_STARTS and _bool(args, "new_campaign", False):
         # С этой таблицы доска начинает новую сборку (campaign_build).
         _need_requirements(payload)
+        _need_campaign(args, payload)
         payload["new_campaign"] = True
         return None
     build, created = _chat_build(ctx)
     if not _build_open(build):
         if stage in _BUILD_STARTS and not created:
             _need_requirements(payload)
+            _need_campaign(args, payload)
         if stage in _BUILD_STARTS and created:
             raise YandexError(
                 "args",
@@ -8636,6 +8792,8 @@ def _table_guard(ctx: Context, args: dict, payload: dict) -> dict | None:
     if _bool(args, "revise", False):
         return None
     status = {s["key"]: s["status"] for s in build["stages"]}
+    if stage == "goals" and status.get(stage) != "done" and not (build.get("campaign") or {}).get("name"):
+        _need_campaign(args, payload)
     if stage in ("goals", "analysis", "settings") and status.get(stage) == "done":
         restart = (
             " Бросить эту сборку и начать другую кампанию — new_campaign=true, только по его прямой просьбе."
@@ -8810,6 +8968,13 @@ def _create_guard(ctx: Context, args: dict) -> None:
             "args",
             f"Кампания на доске ещё ждёт согласования маркетолога ({', '.join(waiting)}) — create_campaign вызывай "
             "после его решения. Сейчас закончи ход коротким сообщением: что собрано и что стоит проверить на доске.",
+        )
+    if build and build.get("campaign") and _build_open(build):
+        raise YandexError(
+            "args",
+            "Эту кампанию собирают по шагам: черновик в Директе сервис создаёт и дополняет сам после каждого "
+            "согласованного шага — create_campaign не нужен. Правки — таблицей этапа с revise=true; на модерацию "
+            "черновик отправляет маркетолог кнопкой на доске.",
         )
     if not created:
         return
@@ -9828,6 +9993,7 @@ def get_chat(user_id: int, chat_id: int) -> dict:
         ]
         if build["account_id"] is None and len(accounts) == 1:
             build["account_id"] = int(accounts[0]["id"])
+        _board_from_direct(user_id, build)
     return {
         "chat": _chat_out(chat),
         "messages": [_message_out(m) for m in messages],
@@ -9837,6 +10003,66 @@ def get_chat(user_id: int, chat_id: int) -> dict:
         "ai": _ai_models(chat),
         "image_gen": {"configured": image_gen.is_configured()},
     }
+
+
+def _board_from_direct(user_id: int, build: dict) -> None:
+    """Доска сборки по шагам — глазами Директа: ✓ у того, что есть в черновике, и то, что добавили там руками."""
+    state = build.pop("direct_state", None) or {}
+    if not state.get("campaign_row_id"):
+        return
+    try:
+        build_sync.overlay(build, build_sync.direct_snapshot(user_id, int(state["campaign_row_id"])), state)
+    except Exception:  # доска без отметок Директа лучше, чем чат, который не открывается
+        log.warning("Черновик %s не прочитан для доски", state.get("campaign_row_id"), exc_info=True)
+
+
+def _chat_context(user_id: int, chat_id: int) -> Context:
+    with pool.connection() as conn:
+        chat = _require_chat(conn, user_id, chat_id)
+    if chat["workspace_id"] is None:
+        raise YandexError("args", "Сборка кампании идёт только в чате проекта")
+    ctx = Context(user_id, chat["workspace_id"])
+    ctx.chat_id = chat_id
+    return ctx
+
+
+def retry_build_write(user_id: int, chat_id: int) -> dict:
+    """«Повторить» на доске: ещё раз записать согласованные шаги в черновик Директа. Ответ — чат целиком."""
+    ctx = _chat_context(user_id, chat_id)
+    with acting_as("ai"):
+        sync_build(ctx)
+    return get_chat(user_id, chat_id)
+
+
+def moderate_build(user_id: int, chat_id: int) -> dict:
+    """«Отправить на модерацию» на доске: черновик сборки по шагам — в Директ на модерацию. Ответ — чат целиком."""
+    ctx = _chat_context(user_id, chat_id)
+    build, _created = _chat_build(ctx)
+    if build is None or not build.get("campaign"):
+        raise YandexError("args", "В этом чате нет черновика, собранного по шагам")
+    # Сначала дописать то, что согласовали, но ещё не записали.
+    with acting_as("ai"):
+        if sync_build(ctx) is not None:
+            build, _created = _chat_build(ctx)
+    build_sync.moderate(user_id, chat_id, build)
+    return get_chat(user_id, chat_id)
+
+
+def campaign_board(user_id: int, campaign_row_id: int) -> dict:
+    """Доска готовой кампании со страницы кампании: тот же вид, что у сборки, только из Директа и без шагов."""
+    snapshot = build_sync.direct_snapshot(user_id, campaign_row_id)
+    if snapshot is None:
+        raise YandexError("not-found", "Кампания не найдена")
+    board: dict = {"groups": [], "negatives": [], "sitelinks": [], "callouts": []}
+    build_sync.overlay(board, snapshot, {})
+    for group in board["groups"]:
+        group["direct_only"] = False
+        for key in ("keywords", "titles", "texts"):
+            for item in group[key]:
+                item["direct_only"] = False
+    for item in board["negatives"]:
+        item["direct_only"] = False
+    return {"campaign": snapshot["campaign"], "groups": board["groups"], "negatives": board["negatives"]}
 
 
 def rename_chat(user_id: int, chat_id: int, title: str) -> dict:
@@ -12648,6 +12874,9 @@ def run_chat(user_id: int, chat_id: int, progress=None) -> dict:
         for action in approved:
             step(0, "Выполняю одобренные действия…")
             _run_action(ctx, action)
+        if not ctx.general:
+            step(0, "Записываю согласованное в Директ…")
+            sync_build(ctx)
         with pool.connection() as conn:
             pending = conn.execute(
                 "SELECT COUNT(*) AS n FROM ai_actions WHERE chat_id = %s AND status = 'pending' AND detached_at IS NULL",

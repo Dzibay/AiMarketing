@@ -183,6 +183,8 @@
       @board="(payload) => respond(() => aiApi.boardDecide(chatId, payload))"
       @draft="(approve) => decide({ id: build.draft.action_id }, approve)"
       @ask="(text) => send(text)"
+      @write="respond(() => aiApi.boardWrite(chatId))"
+      @moderate="moderateDraft"
     />
   </div>
 </template>
@@ -353,6 +355,16 @@ const helloText = computed(() => {
 })
 
 /** Из плашки в чате — к разделу доски, где это решается (на узком экране — вкладка «Доска»). */
+/** «Отправить на модерацию» с доски: только после явного «да» — дальше Директ может запустить показы. */
+async function moderateDraft() {
+  const name = build.value?.campaign?.name
+  const ok = await askConfirm(
+    `Отправить черновик${name ? ` «${name}»` : ''} на модерацию? Когда Директ его примет, начнутся показы и расход бюджета.`,
+    { title: 'Отправить на модерацию', confirmText: 'Отправить' },
+  )
+  if (ok) respond(() => aiApi.boardModerate(chatId.value))
+}
+
 async function toBoard(actionId) {
   tab.value = 'board'
   await nextTick()

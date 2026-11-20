@@ -15,6 +15,8 @@
       </form>
       <template v-else>
         <strong>{{ group.name }}</strong>
+        <small v-if="group.direct_only" class="board-tag" v-tip="'Группу добавили в самом Директе'">только в Директе</small>
+        <small v-else-if="group.in_direct" class="board-tag board-tag--ok">✓ в Директе</small>
         <small v-if="onKeywords || !onAudiences">{{ onKeywords }} {{ plural(onKeywords, 'фраза', 'фразы', 'фраз') }}</small>
         <small v-else>по аудитории, без фраз</small>
         <span class="board-group__tools">
@@ -40,8 +42,16 @@
       <li
         v-for="k in shown"
         :key="k.text"
-        :class="{ 'is-pending': k.pending, 'is-off': !board.isOn(k), 'is-own': k.own, 'is-selected': selected.includes(k.text) }"
+        :class="{
+          'is-pending': k.pending,
+          'is-off': !board.isOn(k),
+          'is-own': k.own,
+          'is-selected': selected.includes(k.text),
+          'is-direct': k.in_direct,
+          'is-direct-only': k.direct_only,
+        }"
       >
+        <span v-if="k.in_direct && !k.pending" class="board-chips__direct" v-tip="k.direct_only ? 'Только в Директе — добавили там' : 'Есть в Директе'" aria-label="в Директе">✓</span>
         <UiCheckbox
           v-if="k.pending"
           :checked="board.isOn(k)"
@@ -57,7 +67,7 @@
           :disabled="board.disabled.value"
           @click="select(k)"
         >
-          {{ k.text }}<small v-if="k.value">{{ k.value }}</small>
+          {{ k.text }}<small v-if="k.value">{{ k.value }}</small><small v-if="k.direct_only">только в Директе</small>
         </button>
         <BoardRule :item="k" />
       </li>

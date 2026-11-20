@@ -4804,6 +4804,62 @@ button.board-chips__text:disabled {
   text-align: center;
 }
 
+.board-lines__ok.is-local {
+  color: var(--muted);
+}
+
+.board-lines__ok.is-direct-only,
+.board-chips li.is-direct-only .board-chips__direct {
+  color: var(--c-amber);
+}
+
+.board-chips__direct {
+  flex: none;
+  color: var(--ok);
+  font-size: 0.72rem;
+}
+
+.board-chips li.is-direct-only {
+  border-style: dotted;
+}
+
+.board-tag {
+  padding: 0.05rem 0.45rem;
+  border-radius: var(--pill);
+  background: var(--warn-soft);
+  color: var(--text);
+  font-size: 0.7rem;
+  white-space: nowrap;
+}
+
+.board-tag--ok {
+  background: var(--ok-soft);
+  color: var(--ok);
+}
+
+.board-direct {
+  display: grid;
+  gap: 0.35rem;
+  margin: 0 0 0.75rem;
+  padding: 0.6rem 0.8rem;
+  border-radius: 12px;
+  background: var(--surface-2);
+  font-size: 0.84rem;
+}
+
+.board-direct p {
+  margin: 0;
+}
+
+.board-direct.is-error {
+  background: var(--danger-soft);
+}
+
+.board-direct ul {
+  margin: 0;
+  padding-left: 1.1rem;
+}
+
 .board-lines__text {
   appearance: none;
   flex: 1;

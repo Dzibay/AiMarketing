@@ -2,6 +2,8 @@
 
 import json
 
+import pytest
+
 from app import actions, ai_agent
 from tests.dbutil import make_campaign
 from tests.test_db_ai import _call, _pending, _secret, _seed, _start, _text, _turn  # noqa: F401 — _secret: автофикстура
@@ -18,6 +20,13 @@ ADS = [
 ]
 SETTINGS = [{"kind": "setting", "cells": ["Бюджет", "500 ₽/день"]}]
 
+
+
+@pytest.fixture(autouse=True)
+def _old_brief(monkeypatch):
+    """Сборки здесь — без campaign в брифе (как до черновика с первого шага): черновик создаёт create_campaign.
+    Запись в Директ по шагам — tests/test_db_ai_build_sync.py."""
+    monkeypatch.setattr(ai_agent, "_need_campaign", lambda args, payload: None)
 
 def _table(stage, rows, **extra):
     # Первая таблица сборки несёт требования ТЗ; в этих тестах ТЗ без цифр и запретов.

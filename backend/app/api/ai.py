@@ -423,6 +423,24 @@ def chat_board_decide(chat_id: int, body: BoardDecideBody, user_id: int = Depend
     )
 
 
+@router.post("/ai/chats/{chat_id}/board/write")
+def chat_board_write(chat_id: int, user_id: int = Depends(require_web_user)) -> dict:
+    """«Повторить» запись согласованных шагов в черновик Директа; ответ — чат целиком."""
+    return _call(ai_agent.retry_build_write, user_id, chat_id)
+
+
+@router.post("/ai/chats/{chat_id}/board/moderate")
+def chat_board_moderate(chat_id: int, user_id: int = Depends(require_web_user)) -> dict:
+    """«Отправить на модерацию»: черновик, собранный по шагам, — в Директ на модерацию; ответ — чат целиком."""
+    return _call(ai_agent.moderate_build, user_id, chat_id)
+
+
+@router.get("/ai/campaigns/{campaign_row_id}/board")
+def campaign_board(campaign_row_id: int, user_id: int = Depends(require_web_user)) -> dict:
+    """Доска готовой кампании: группы, фразы и объявления из Директа."""
+    return _call(ai_agent.campaign_board, user_id, campaign_row_id)
+
+
 @router.post("/ai/chats/{chat_id}/decide-all")
 def chat_decide_all(chat_id: int, body: DecideAllBody, user_id: int = Depends(require_web_user)) -> dict:
     out = _call(ai_agent.decide_all, user_id, chat_id, approve=body.approve, exclude=body.exclude)

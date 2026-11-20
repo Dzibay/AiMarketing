@@ -18,7 +18,14 @@
           :aria-label="item.text"
           @change="board.toggle(item)"
         />
-        <span v-else class="board-lines__ok" v-tip="'Согласовано'" aria-hidden="true">✓</span>
+        <span
+          v-else
+          class="board-lines__ok"
+          :class="{ 'is-local': item.in_direct === false, 'is-direct-only': item.direct_only }"
+          v-tip="directTip(item)"
+          aria-hidden="true"
+          >{{ item.in_direct === false ? '·' : '✓' }}</span
+        >
         <form v-if="editing === item.text" class="board-lines__form" @submit.prevent="save(item)">
           <input
             ref="field"
@@ -131,5 +138,13 @@ async function add() {
   if (!canAdd.value) return
   const ok = await board.edit([{ op: 'add', kind: props.kind, group: props.group, text: fresh.value.trim() }])
   if (ok) fresh.value = ''
+}
+
+// ✓ у строки = она есть в черновике Директа (in_direct); без черновика — просто согласована.
+function directTip(item) {
+  if (item.direct_only) return 'Только в Директе — добавили там'
+  if (item.in_direct === true) return 'Есть в Директе'
+  if (item.in_direct === false) return 'Согласовано, в Директ ещё не записано'
+  return 'Согласовано'
 }
 </script>

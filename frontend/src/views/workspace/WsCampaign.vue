@@ -142,8 +142,14 @@
           />
         </div>
 
-        <h3 class="section-h">Что внутри <span class="cgroup__n">группы объявлений и их доля расхода</span></h3>
-        <div class="ccard">
+        <h3 class="section-h">
+          Что внутри <span class="cgroup__n">группы объявлений и их доля расхода</span>
+          <button class="ai-check__link home-link" type="button" @click="setTab(tab === 'board' ? 'structure' : 'board')">
+            {{ tab === 'board' ? 'Расход по группам' : 'Доска: фразы и объявления' }}
+          </button>
+        </h3>
+        <CampaignDirectBoard v-if="tab === 'board'" :key="`b${campaignId}`" :campaign-id="campaignId" />
+        <div v-else class="ccard">
           <UiSkeleton v-if="structLoading" variant="table" :count="3" label="Загружаем группы" />
           <p v-else-if="structError" class="ccard--note">{{ structError }}</p>
           <p v-else-if="!groups.length" class="ccard--note">В кампании нет групп объявлений.</p>
@@ -282,6 +288,7 @@
       <button type="button" :class="{ active: tab === 'structure' }" @click="setTab('structure')">
         Группы, объявления, фразы
       </button>
+      <button type="button" :class="{ active: tab === 'board' }" @click="setTab('board')">Доска</button>
       <button type="button" :class="{ active: tab === 'settings' }" @click="setTab('settings')">Настройки кампании</button>
     </nav>
 
@@ -292,6 +299,7 @@
       :campaign-id="campaignId"
       @loaded="campaign = $event"
     />
+    <CampaignDirectBoard v-else-if="tab === 'board'" :key="`b${campaignId}`" :campaign-id="campaignId" />
     <CampaignSettingsForm v-else :key="`c${campaignId}`" :workspace="ws" :campaign-id="campaignId" :campaign="campaign" @saved="onBudgetSaved(null)" />
 
     <DuplicateDialog
@@ -348,6 +356,7 @@ import ActionWho from '../../components/ActionWho.vue'
 import EffectLine from '../../components/EffectLine.vue'
 import BudgetDialog from '../../components/BudgetDialog.vue'
 import CampaignStructure from '../../components/CampaignStructure.vue'
+import CampaignDirectBoard from './CampaignDirectBoard.vue'
 import ExpertHint from '../../components/ExpertHint.vue'
 import RegionsDialog from '../../components/RegionsDialog.vue'
 import TermHint from '../../components/TermHint.vue'
@@ -408,7 +417,7 @@ const structure = ref(null)
 const structLoading = ref(false)
 const structError = ref('')
 const actions = ref([])
-const tab = computed(() => (route.query.tab === 'settings' ? 'settings' : 'structure'))
+const tab = computed(() => (['settings', 'board'].includes(route.query.tab) ? route.query.tab : 'structure'))
 
 const state = computed(() => row.value?.state || campaign.value?.state || '')
 const status = computed(() => row.value?.status || campaign.value?.status || '')

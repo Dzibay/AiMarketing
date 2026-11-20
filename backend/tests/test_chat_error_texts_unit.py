@@ -157,6 +157,7 @@ def turn(monkeypatch, feed):
     monkeypatch.setattr(ai_agent, "_history", lambda *a, **k: [{"role": "user", "content": "Привет"}])
     monkeypatch.setattr(ai_agent, "_touch", lambda chat_id: None)
     monkeypatch.setattr(ai_agent, "_build_memory", lambda ctx: "")
+    monkeypatch.setattr(ai_agent, "sync_build", lambda ctx: None)
     return feed
 
 

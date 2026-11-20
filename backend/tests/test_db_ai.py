@@ -608,7 +608,14 @@ def _turn(user, chat, monkeypatch, *replies):
     return fake, ai_agent.run_chat(user, chat)
 
 
+def _old_brief(monkeypatch):
+    """Сборка, начатая до черновика с первого шага (docs/board-plan.md, пункт 2): бриф без campaign, черновик
+    в конце создаёт create_campaign. Новый путь — tests/test_db_ai_build_sync.py."""
+    monkeypatch.setattr(ai_agent, "_need_campaign", lambda args, payload: None)
+
+
 def test_new_campaign_goes_by_stages(db, monkeypatch):
+    _old_brief(monkeypatch)
     s = _seed(db)
     user, chat = s["user"], s["chat"]
     created = []
@@ -748,6 +755,7 @@ def test_new_campaign_goes_by_stages(db, monkeypatch):
 
 
 def test_board_edits(db, monkeypatch):
+    _old_brief(monkeypatch)
     s = _seed(db)
     user, chat = s["user"], s["chat"]
     created = []
@@ -909,6 +917,7 @@ def _empty_workspace(db):
 
 
 def test_first_campaign_in_empty_workspace(db, monkeypatch):
+    _old_brief(monkeypatch)
     s = _empty_workspace(db)
     user, chat = s["user"], s["chat"]
     created = []

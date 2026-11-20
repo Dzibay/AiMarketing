@@ -16,6 +16,12 @@ USE = "ref=Telegram — как в ссылке"
 KEEP = "ref=Yandex — как в шаблоне проекта"
 
 
+@pytest.fixture(autouse=True)
+def _old_brief(monkeypatch):
+    """Сборки здесь — без campaign в брифе: черновик создаёт create_campaign (запись по шагам — test_db_ai_build_sync)."""
+    monkeypatch.setattr(ai_agent, "_need_campaign", lambda args, payload: None)
+
+
 def _links_seed(db):
     """Проект с шаблоном ссылки; в «Поиске» и «РСЯ» — по группе с объявлениями."""
     s = _seed(db)
