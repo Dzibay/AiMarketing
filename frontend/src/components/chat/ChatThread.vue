@@ -57,7 +57,7 @@
 
           <details v-if="item.reads.length" class="chat-steps">
             <summary>
-              Что я посмотрел · {{ item.reads.length }}
+              ИИ смотрел: {{ item.reads.length }} {{ plural(item.reads.length, 'источник', 'источника', 'источников') }}
               <span v-if="item.reads.some((r) => r.failed)" class="tone-bad">· есть ошибки</span>
             </summary>
             <ul>

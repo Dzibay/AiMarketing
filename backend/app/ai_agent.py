@@ -13514,6 +13514,58 @@ def _fallback_followups(chat_id: int) -> None:
         )
 
 
+def _empty_turn_text(ctx: Context, chat_id: int) -> tuple[str, list[str]]:
+    """Ход кончился без единого слова (docs/board-plan.md, пункт 7): вместо тишины после «посмотрел…» — итог.
+    В сборке — какой шаг согласован и какой следующий; иначе — что ИИ смотрел. → (текст, подсказки) или ('', [])."""
+    with pool.connection() as conn:
+        rows = _turn_rows(conn, chat_id)
+    if any(r["role"] == "assistant" and (r["content"] or "").strip() for r in rows):
+        return "", []
+    looked = sum(
+        1 for r in rows if r["role"] == "assistant"
+        for c in r.get("tool_calls") or [] if c.get("name") in READ_TOOLS
+    )
+    build = None
+    if not ctx.general:
+        try:
+            build, _actions = _chat_build(ctx)
+        except Exception:  # итог — подсказка: без доски напишем общий
+            log.warning("Доска чата %s для итога хода не собрана", chat_id, exc_info=True)
+    if _build_open(build):
+        stages = build["stages"]
+        done = [s for s in stages if s["status"] == "done"]
+        upcoming = next((s for s in stages if s["status"] == "todo"), None)
+        written = bool((build.get("direct") or {}).get("campaign_row_id"))
+        parts = []
+        if done:
+            parts.append(
+                f"Готово: шаг «{done[-1]['label']}» согласован" + (" и записан в черновик." if written else ".")
+            )
+        if upcoming is None:
+            parts.append("Все шаги пройдены — проверьте доску и отправьте черновик на модерацию.")
+            return " ".join(parts), []
+        parts.append(f"Следующий шаг — «{upcoming['label']}»: ИИ подготовит его по кнопке ниже.")
+        return " ".join(parts), [f"Подготовь шаг «{upcoming['label']}»"]
+    if looked:
+        return (
+            f"Посмотрел данные ({_count(looked, 'источник', 'источника', 'источников')}), "
+            "но ответ не написал. Спросите ещё раз или уточните вопрос.",
+            ["Ответь по тому, что посмотрел"],
+        )
+    return "Ответ получился пустым. Спросите ещё раз или уточните вопрос.", []
+
+
+def _fill_empty_turn(ctx: Context, chat_id: int, model: str) -> None:
+    text, followups = _empty_turn_text(ctx, chat_id)
+    if not text:
+        return
+    with pool.connection() as conn:
+        _insert_message(
+            conn, chat_id, "assistant", text, model=model,
+            meta={"auto": True, **({"followups": followups} if followups else {})},
+        )
+
+
 def _step_errors(chat_id: int, message_id: int) -> dict[str, str]:
     """Вызовы шага, которые не удались: tool_call_id → текст ошибки."""
     with pool.connection() as conn:
@@ -13662,6 +13714,7 @@ def run_chat(user_id: int, chat_id: int, progress=None) -> dict:
             if not calls and not (reply["content"] or "").strip():
                 # Одни подсказки без текста — к последнему ответу хода; пустое сообщение в ленту не пишем.
                 _attach_followups(chat_id, followups)
+                _fill_empty_turn(ctx, chat_id, cfg["class_name"])
                 break
             with pool.connection() as conn:
                 message = _insert_message(

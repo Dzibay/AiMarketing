@@ -118,15 +118,18 @@ def test_brief_needs_campaign_for_the_draft(db, monkeypatch):
         user, chat, "Сделай кампанию на окна", monkeypatch,
         _wizard("goals", GOALS),
         _wizard("goals", GOALS, campaign={**CAMPAIGN, "href": ""}),
-        _wizard("goals", GOALS, campaign=CAMPAIGN),
     )
     assert "campaign" in _reply(fake, 1)["error"]
-    # Ссылки нет, а у проекта нет шаблона — черновику некуда вести объявления.
-    assert "href" in _reply(fake, 2)["error"]
+    # Бриф без ссылки ИИ присылает как есть (пункт 6 — бриф формой): ссылку допишет маркетолог,
+    # а без неё и без шаблона ссылки у проекта «Дальше» не пройдёт — черновику некуда вести объявления.
     assert out["status"] == "waiting"
     table = _pending(user, chat, "propose_items")
     # Кабинет один — подставлен сам.
     assert table["args"]["campaign"]["account_id"] == s["acc"] and table["args"]["campaign"]["region_ids"] == [213]
+    assert ai_agent.get_chat(user, chat)["build"]["brief"]["missing"] == ["посадочная ссылка"]
+    with pytest.raises(YandexError) as err:
+        ai_agent.decide_items(user, table["id"], rows=[r["n"] for r in table["args"]["rows"]])
+    assert "посадочная ссылка" in err.value.message
 
 
 def test_each_step_is_written_to_the_draft(db, monkeypatch):

@@ -2,7 +2,7 @@
   <div
     ref="root"
     class="chat"
-    :class="[build ? ['chat--board', `is-tab-${tab}`] : 'chat--solo', { 'chat--hello': showIntro }]"
+    :class="[build ? ['chat--board', chatOpen ? 'is-chat-open' : 'is-chat-closed'] : 'chat--solo', { 'chat--hello': showIntro }]"
   >
     <!-- h1 — название чата, раздел «ИИ-помощник» — строкой над ним; у нового чата h1 остаётся названием раздела. -->
     <PageHeader :title="chat?.title || ''">
@@ -50,14 +50,23 @@
     <ChatList :open="chatsOpen" @close="chatsOpen = false" @new="newChat" />
 
     <section class="chat__main">
-      <div v-if="build" class="seg seg--sm chat__tabs" role="tablist" aria-label="Чат или доска кампании">
-        <button type="button" role="tab" :class="{ active: tab === 'chat' }" :aria-selected="tab === 'chat'" @click="tab = 'chat'">
-          Чат
-        </button>
-        <button type="button" role="tab" :class="{ active: tab === 'board' }" :aria-selected="tab === 'board'" @click="tab = 'board'">
-          Доска<span v-if="boardWaiting" class="ws-tabs__badge">{{ boardWaiting }}</span>
-        </button>
-      </div>
+      <!-- Со сборкой главное — доска, чат — панель сбоку (на узком экране — снизу), свёрнутая по умолчанию.
+           Свёрнутая показывает последнюю строку разговора: что ИИ делает или что сделал. -->
+      <button
+        v-if="build"
+        class="chat__dock"
+        :class="{ 'is-alert': dockAlert, 'is-running': status === 'running' }"
+        type="button"
+        :aria-expanded="chatOpen"
+        v-tip="chatOpen ? '' : dockLine"
+        @click="chatOpen = !chatOpen"
+      >
+        <MessageSquare class="chat__dock-icon" aria-hidden="true" />
+        <span class="chat__dock-name">Чат</span>
+        <span v-if="dockLine" class="chat__dock-line">{{ dockLine }}</span>
+        <span v-if="dockAlert" class="chat__dock-dot" aria-hidden="true" />
+        <component :is="chatOpen ? ChevronDown : ChevronUp" class="chat__dock-chev" aria-hidden="true" />
+      </button>
 
       <UiNotice v-if="!aiConfigured" tone="warn" class="chat__wide">
         ИИ временно недоступен: администратор ещё не подключил модель. Напишите в поддержку — подключим.
@@ -167,6 +176,8 @@
       </div>
     </section>
 
+    <div v-if="build && chatOpen" class="chat__scrim" aria-hidden="true" @click="chatOpen = false" />
+
     <CampaignBoard
       v-if="build"
       ref="board"
@@ -196,7 +207,20 @@
 
 <script setup>
 import { askConfirm, askText } from '../../composables/useConfirm'
-import { Archive, ArchiveRestore, History, Pencil, Pin, PinOff, ScanSearch, Sparkles, Trash2 } from '@lucide/vue'
+import {
+  Archive,
+  ArchiveRestore,
+  ChevronDown,
+  ChevronUp,
+  History,
+  MessageSquare,
+  Pencil,
+  Pin,
+  PinOff,
+  ScanSearch,
+  Sparkles,
+  Trash2,
+} from '@lucide/vue'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
 import { aiApi, errorText, wsApi } from '../../api/web'
@@ -262,7 +286,11 @@ const {
   laterCount,
   build,
   caps,
-  boardWaiting,
+  items,
+  pendingActions,
+  onBoard,
+  errorInFeed,
+  thinkingText,
   deciding,
   decide,
   decideAll,
@@ -291,9 +319,8 @@ const root = ref(null)
 const foot = ref(null)
 const composer = ref(null)
 const board = ref(null)
-// Список чатов выезжает слева по кнопке «Все чаты»; с доской на узком экране чат и доска — вкладками.
+// Список чатов выезжает слева по кнопке «Все чаты».
 const chatsOpen = ref(false)
-const tab = ref('chat')
 
 const access = computed(() => ws.value.ai_access || { full_access: false, categories: {}, max_change_pct: 30 })
 const accessText = computed(() => {
@@ -362,7 +389,6 @@ const helloText = computed(() => {
   return 'Вижу статистику, кампании, фразы, объявления и поисковые запросы проекта — отвечу и предложу, что поправить.'
 })
 
-/** Из плашки в чате — к разделу доски, где это решается (на узком экране — вкладка «Доска»). */
 /** «Отправить на модерацию» с доски: только после явного «да» — дальше Директ может запустить показы. */
 async function moderateDraft() {
   const name = build.value?.campaign?.name
@@ -403,8 +429,66 @@ watch(
   { immediate: true },
 )
 
+// --- Чат рядом с доской (docs/board-plan.md, пункт 7) ------------------------------------------
+
+// Развёрнут ли чат рядом с доской: выбор помним, по умолчанию свёрнут — главное на экране доска.
+const CHAT_OPEN_KEY = 'aimk.boardChat'
+const chatOpen = ref(readChatOpen())
+function readChatOpen() {
+  try {
+    return localStorage.getItem(CHAT_OPEN_KEY) === '1'
+  } catch {
+    return false
+  }
+}
+watch(chatOpen, (open) => {
+  try {
+    localStorage.setItem(CHAT_OPEN_KEY, open ? '1' : '0')
+  } catch {
+    // Приватный режим: выбор живёт до перезагрузки.
+  }
+})
+
+/** Последняя строка разговора — на свёрнутом чате: ИИ работает, итог шага или начало ответа. */
+const dockLine = computed(() => {
+  if (status.value === 'running') return thinkingText.value || 'ИИ работает…'
+  if (errorInFeed.value) return 'Ошибка — откройте чат'
+  const last = items.value[items.value.length - 1]
+  if (!last) return ''
+  if (last.role === 'assistant') {
+    const plaque = [...last.writes, ...last.asks].reverse().find((a) => a.plaque)?.plaque
+    if (plaque) return plaque
+    if (last.content) return firstLine(last.content)
+    return last.reads.length ? `ИИ смотрел: ${last.reads.length}` : ''
+  }
+  return firstLine(last.content || '')
+})
+
+function firstLine(text) {
+  const lines = text.replace(/[*_`#>]/g, '').split('\n')
+  return lines.find((l) => l.trim())?.trim() || ''
+}
+
+// Что решается только в чате (вопросы ИИ, выбор ссылки, карточки вне доски) — точка на свёрнутом чате.
+const chatWaiting = computed(() => pendingActions.value.filter((a) => !onBoard.value.has(a.id)).length)
+const dockAlert = computed(() => !chatOpen.value && (chatWaiting.value > 0 || !!errorInFeed.value))
+
+// Новый вопрос в чате или ошибка — разворачиваем чат сами: иначе сборка молча стоит.
+watch(chatWaiting, (n, old) => {
+  if (build.value && n > (old || 0)) chatOpen.value = true
+})
+watch(
+  () => !!errorInFeed.value,
+  (on) => {
+    if (build.value && on) chatOpen.value = true
+  },
+)
+
+const narrow = () => window.matchMedia('(max-width: 1099.98px)').matches
+
+/** Из строки в чате — к шагу на доске; на узком экране чат-шторка при этом сворачивается. */
 async function toBoard(actionId) {
-  tab.value = 'board'
+  if (narrow()) chatOpen.value = false
   await nextTick()
   board.value?.showAction(actionId)
 }
@@ -595,7 +679,6 @@ watch(
 
 watch(chatId, () => {
   chatsOpen.value = false
-  tab.value = 'chat'
 })
 
 // «Все чаты» в боковом меню ведут сюда с ?chats=1: открываем список и убираем метку из адреса.
@@ -617,6 +700,10 @@ onMounted(async () => {
   if (page && typeof ResizeObserver !== 'undefined') {
     topObserver = new ResizeObserver(measureTopLater)
     topObserver.observe(page)
+    // Шапка страницы дорастает после загрузки чата (строка «ИИ-помощник», название), а высота страницы
+    // при этом может не меняться — следим и за ней: доска с чатом рядом считают высоту от верха чата.
+    const head = page.querySelector(':scope > .dhead')
+    if (head) topObserver.observe(head)
   }
   if (foot.value && typeof ResizeObserver !== 'undefined') {
     footObserver = new ResizeObserver(measureFoot)

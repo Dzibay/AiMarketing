@@ -4,6 +4,7 @@ import { CHATS_EVENT, aiApi, errorText } from '../api/web'
 import { useAnswerWatch } from './useAnswerWatch'
 import { readNotificationsAt, refreshPending } from './usePending'
 import { pushToast } from './useToasts'
+import { plural } from '../utils/format'
 import { loadWorkspaces, useWorkspaces } from './useWorkspaces'
 
 const CHAT_KEY = Symbol('chat')
@@ -17,6 +18,26 @@ export const STATUS_LABELS = {
   error: 'ошибка',
 }
 const STATUS_TONES = { pending: 'tone-warn', done: 'tone-ok', error: 'tone-bad' }
+// Строки таблицы шага без своего kind — по шагу (как ai_agent._STAGE_KINDS); счёт для строки итога в чате.
+const STAGE_KINDS = {
+  analysis: 'direction',
+  keywords: 'keyword',
+  negatives: 'negative',
+  audiences: 'audience',
+  images: 'image',
+  extras: 'extra',
+}
+const GROUP_KINDS = new Set(['keyword', 'title', 'text', 'audience', 'image'])
+const KIND_WORDS = {
+  direction: ['направление', 'направления', 'направлений'],
+  keyword: ['фраза', 'фразы', 'фраз'],
+  negative: ['минус-фраза', 'минус-фразы', 'минус-фраз'],
+  audience: ['аудитория', 'аудитории', 'аудиторий'],
+  title: ['заголовок', 'заголовка', 'заголовков'],
+  text: ['текст', 'текста', 'текстов'],
+  image: ['картинка', 'картинки', 'картинок'],
+  extra: ['расширение', 'расширения', 'расширений'],
+}
 
 function parseToolResult(content) {
   try {
@@ -375,6 +396,20 @@ export function provideChat({ general, ws, basePath, reloadWs, panel = false, pa
     }
   }
 
+  /** Что в таблице шага одной строкой — для строки итога в чате: «5 групп, 120 фраз»; бриф и настройки — без счёта. */
+  function stepCounts(action) {
+    const stage = action.args?.stage
+    const rows = (action.args?.rows || []).map((r) => ({ ...r, kind: r.kind || STAGE_KINDS[stage] || '' }))
+    const out = []
+    const groups = new Set(rows.filter((r) => GROUP_KINDS.has(r.kind) && r.section).map((r) => r.section))
+    if (groups.size) out.push(`${groups.size} ${plural(groups.size, 'группа', 'группы', 'групп')}`)
+    for (const [kind, forms] of Object.entries(KIND_WORDS)) {
+      const n = rows.filter((r) => r.kind === kind).length
+      if (n) out.push(`${n} ${plural(n, ...forms)}`)
+    }
+    return out.join(', ')
+  }
+
   /** Плашка вместо таблицы этапа или карточки создания, которые решаются на доске; '' — карточка в чате. */
   function plaqueText(action) {
     if (!onBoard.value.has(action.id)) return ''
@@ -391,7 +426,10 @@ export function provideChat({ general, ws, basePath, reloadWs, panel = false, pa
     }
     const stage = action.args?.stage
     const label = build.value.stages.find((s) => s.key === stage)?.label || stage
-    if (action.status === 'pending') return `Шаг «${label}» готов — проверьте на доске и нажмите «Дальше»`
+    if (action.status === 'pending') {
+      const what = stepCounts(action)
+      return `Шаг «${label}» готов${what ? `: ${what}` : ''} — проверьте на доске и нажмите «Дальше»`
+    }
     if (action.status === 'done') {
       if (action.result?.skipped) return `Шаг «${label}» пропущен`
       const chosen = (action.result?.approved_rows || []).length
