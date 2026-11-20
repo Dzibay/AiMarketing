@@ -185,6 +185,16 @@
             </li>
           </ul>
           <p v-else class="hint">Минус-фразы ИИ предложит вместе с фразами или следом за ними.</p>
+          <button
+            v-if="regenerate && build.groups.length && !negativesRegen"
+            class="ai-check__link"
+            type="button"
+            :disabled="disabled"
+            @click="negativesRegen = true"
+          >
+            ↻ Ещё минус-фразы
+          </button>
+          <BoardRegen v-if="negativesRegen" kind="negative" :items="build.negatives" @close="negativesRegen = false" />
           <form v-if="build.groups.length" class="board-add" @submit.prevent="addNegative">
             <input
               v-model="negative"
@@ -417,6 +427,7 @@ import CampaignNextStep from '../../components/CampaignNextStep.vue'
 import BoardExtras from './BoardExtras.vue'
 import BoardFacts from './BoardFacts.vue'
 import BoardGroup from './BoardGroup.vue'
+import BoardRegen from './BoardRegen.vue'
 import BoardRule from './BoardRule.vue'
 import BoardSection from './BoardSection.vue'
 
@@ -431,6 +442,8 @@ const props = defineProps({
   running: { type: Boolean, default: false },
   // async (ops) => true, если правка прошла.
   edit: { type: Function, required: true },
+  // ↻: async ({ kind, group, text, comment }) => [варианты] или null при ошибке; нет — кнопок ↻ нет.
+  regenerate: { type: Function, default: null },
   // Генерация картинок подключена в настройках.
   imageGen: { type: Boolean, default: false },
 })
@@ -585,6 +598,7 @@ const PREVIEW_KEY = 'board-preview'
 const scroller = ref(null)
 const busy = ref(false)
 const negative = ref('')
+const negativesRegen = ref(false)
 const comment = ref('')
 const redoText = ref('')
 const preview = ref(localStorage.getItem(PREVIEW_KEY) || 'both')
@@ -882,6 +896,26 @@ async function remove(kind, group, items) {
   return ops.length ? edit(ops) : true
 }
 
+/**
+ * Итог ↻: убрать старые строки (ждущие — снять галочку) и добавить выбранные варианты одной правкой —
+ * сначала убираем, чтобы новые уложились в пределы Директа. Одна строка — правкой edit.
+ */
+async function replace(kind, group, olds, texts, line = null) {
+  if (line) return edit([{ op: 'edit', kind, group, text: line.text, to: texts[0] }])
+  const ops = []
+  for (const item of olds) {
+    if (item.pending && !item.added && !item.shared) setOn(item, false)
+    else ops.push({ op: 'remove', kind, group, text: item.text })
+  }
+  for (const text of texts) ops.push({ op: 'add', kind, group, text })
+  return ops.length ? edit(ops) : true
+}
+
+async function regenerate(body) {
+  if (!props.regenerate || disabled.value) return null
+  return props.regenerate(body)
+}
+
 async function addNegative() {
   const text = negative.value.trim()
   if (text && (await edit([{ op: 'add', kind: 'negative', text }]))) negative.value = ''
@@ -958,7 +992,10 @@ const images = {
   library,
 }
 
-provide('board', { isOn, toggle, remove, edit, disabled, offOf, setOff, decide, images })
+provide('board', {
+  isOn, toggle, remove, edit, disabled, offOf, setOff, decide, images, replace, regenerate,
+  canRegenerate: computed(() => !!props.regenerate),
+})
 
 /** Прокрутить доску к шагу и подсветить его. На узком экране доска не прокручивается сама — страницу. */
 function show(key, smooth = true) {

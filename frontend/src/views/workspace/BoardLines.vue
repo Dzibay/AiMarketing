@@ -3,70 +3,98 @@
     <div class="board-lines__head">
       <span>{{ label }}</span>
       <small :class="{ 'tone-bad': onCount > max }">{{ onCount }} из {{ max }}</small>
-    </div>
-    <ul class="board-lines__list">
-      <li
-        v-for="item in items"
-        :key="item.text"
-        class="board-lines__row"
-        :class="{ 'is-pending': item.pending, 'is-off': !board.isOn(item), 'is-own': item.own }"
+      <button
+        v-if="board.canRegenerate.value"
+        class="board-regen-btn"
+        type="button"
+        v-tip="kind === 'title' ? 'Новые варианты заголовков' : 'Новые варианты текстов'"
+        :aria-label="kind === 'title' ? 'Новые варианты заголовков' : 'Новые варианты текстов'"
+        :aria-expanded="regen === LIST"
+        :disabled="board.disabled.value"
+        @click="regen = regen === LIST ? null : LIST"
       >
-        <UiCheckbox
-          v-if="item.pending"
-          :checked="board.isOn(item)"
-          :disabled="board.disabled.value"
-          :aria-label="item.text"
-          @change="board.toggle(item)"
-        />
-        <span
-          v-else
-          class="board-lines__ok"
-          :class="{ 'is-local': item.in_direct === false, 'is-direct-only': item.direct_only }"
-          v-tip="directTip(item)"
-          aria-hidden="true"
-          >{{ item.in_direct === false ? '·' : '✓' }}</span
+        ↻
+      </button>
+    </div>
+    <BoardRegen v-if="regen === LIST" :kind="kind" :group="group" :items="items" :max="max" @close="regen = null" />
+    <ul class="board-lines__list">
+      <template v-for="item in items" :key="item.text">
+        <li
+          class="board-lines__row"
+          :class="{ 'is-pending': item.pending, 'is-off': !board.isOn(item), 'is-own': item.own }"
         >
-        <form v-if="editing === item.text" class="board-lines__form" @submit.prevent="save(item)">
-          <input
-            ref="field"
-            v-model="value"
-            class="ai-input"
-            :maxlength="limit + 20"
-            :aria-label="`${label}: новый текст`"
-            @keydown.esc.prevent="editing = null"
+          <UiCheckbox
+            v-if="item.pending"
+            :checked="board.isOn(item)"
+            :disabled="board.disabled.value"
+            :aria-label="item.text"
+            @change="board.toggle(item)"
           />
-          <small class="board-lines__len" :class="{ 'tone-bad': value.trim().length > limit }">
-            {{ value.trim().length }}/{{ limit }}
-          </small>
-          <button class="btn btn--accent btn--xs" type="submit" :disabled="!canSave(item)">Сохранить</button>
-          <button class="btn btn--ghost btn--xs" type="button" @click="editing = null">Отмена</button>
-        </form>
-        <template v-else>
-          <button
-            class="board-lines__text"
-            type="button"
-            v-tip="'Изменить'"
-            :disabled="board.disabled.value"
-            @click="start(item)"
+          <span
+            v-else
+            class="board-lines__ok"
+            :class="{ 'is-local': item.in_direct === false, 'is-direct-only': item.direct_only }"
+            v-tip="directTip(item)"
+            aria-hidden="true"
+            >{{ item.in_direct === false ? '·' : '✓' }}</span
           >
-            {{ item.text }}
-          </button>
-          <BoardRule :item="item" />
-          <small class="board-lines__len" :class="{ 'tone-bad': item.text.length > limit }">
-            {{ item.text.length }}/{{ limit }}
-          </small>
-          <button
-            class="board-x"
-            type="button"
-            v-tip="item.pending && !item.added ? 'Снять галочку' : 'Убрать'"
-            :aria-label="`Убрать: ${item.text}`"
-            :disabled="board.disabled.value"
-            @click="board.remove(kind, group, [item])"
-          >
-            ×
-          </button>
-        </template>
-      </li>
+          <form v-if="editing === item.text" class="board-lines__form" @submit.prevent="save(item)">
+            <input
+              ref="field"
+              v-model="value"
+              class="ai-input"
+              :maxlength="limit + 20"
+              :aria-label="`${label}: новый текст`"
+              @keydown.esc.prevent="editing = null"
+            />
+            <small class="board-lines__len" :class="{ 'tone-bad': value.trim().length > limit }">
+              {{ value.trim().length }}/{{ limit }}
+            </small>
+            <button class="btn btn--accent btn--xs" type="submit" :disabled="!canSave(item)">Сохранить</button>
+            <button class="btn btn--ghost btn--xs" type="button" @click="editing = null">Отмена</button>
+          </form>
+          <template v-else>
+            <button
+              class="board-lines__text"
+              type="button"
+              v-tip="'Изменить'"
+              :disabled="board.disabled.value"
+              @click="start(item)"
+            >
+              {{ item.text }}
+            </button>
+            <BoardRule :item="item" />
+            <small class="board-lines__len" :class="{ 'tone-bad': item.text.length > limit }">
+              {{ item.text.length }}/{{ limit }}
+            </small>
+            <button
+              v-if="board.canRegenerate.value"
+              class="board-regen-btn"
+              type="button"
+              v-tip="'Другие варианты этой строки'"
+              :aria-label="`Другие варианты: ${item.text}`"
+              :aria-expanded="regen === item.text"
+              :disabled="board.disabled.value"
+              @click="regen = regen === item.text ? null : item.text"
+            >
+              ↻
+            </button>
+            <button
+              class="board-x"
+              type="button"
+              v-tip="item.pending && !item.added ? 'Снять галочку' : 'Убрать'"
+              :aria-label="`Убрать: ${item.text}`"
+              :disabled="board.disabled.value"
+              @click="board.remove(kind, group, [item])"
+            >
+              ×
+            </button>
+          </template>
+        </li>
+        <li v-if="regen === item.text" class="board-lines__regen">
+          <BoardRegen :kind="kind" :group="group" :line="item" @close="regen = null" />
+        </li>
+      </template>
     </ul>
     <form v-if="onCount < max" class="board-lines__add" @submit.prevent="add">
       <input
@@ -89,6 +117,7 @@
 /** Заголовки или тексты группы на доске: правка по щелчку со счётчиком знаков, «×» и новая строка. */
 import { computed, inject, nextTick, ref } from 'vue'
 import UiCheckbox from '../../components/ui/UiCheckbox.vue'
+import BoardRegen from './BoardRegen.vue'
 import BoardRule from './BoardRule.vue'
 
 const props = defineProps({
@@ -106,6 +135,9 @@ const max = computed(() => MAX[props.kind])
 const label = computed(() => (props.kind === 'title' ? 'Заголовки' : 'Тексты'))
 const onCount = computed(() => props.items.filter(board.isOn).length)
 
+// Открытая ↻: LIST — весь список, текст строки — одна строка.
+const LIST = Symbol('list')
+const regen = ref(null)
 const editing = ref(null)
 const value = ref('')
 const fresh = ref('')

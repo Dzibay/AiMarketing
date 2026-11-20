@@ -452,6 +452,17 @@ export function provideChat({ general, ws, basePath, reloadWs, panel = false, pa
     }
   }
 
+  /** ↻ на доске: { kind, group, text, comment } → варианты ([] и тост при ошибке); доску не меняет. */
+  async function regenerateBoard(body) {
+    try {
+      const res = await aiApi.boardRegenerate(chatId.value, body)
+      return res.variants || []
+    } catch (err) {
+      pushToast(errorText(err), 'error')
+      return null
+    }
+  }
+
   // --- Загрузка и опрос -------------------------------------------------------------------------
 
   function stopPolling() {
@@ -962,6 +973,7 @@ export function provideChat({ general, ws, basePath, reloadWs, panel = false, pa
     respond,
     rateMessage,
     editBoard,
+    regenerateBoard,
     // Сообщение и модель ответа
     draft,
     mentions,

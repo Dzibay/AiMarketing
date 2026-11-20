@@ -4785,6 +4785,127 @@ button.board-chips__text:disabled {
   gap: 0.25rem;
 }
 
+/* ↻ — новые варианты строк доски (BoardRegen.vue). */
+.board-lines__head > span:first-child {
+  margin-right: auto;
+}
+
+.board-regen-btn {
+  appearance: none;
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  font-size: 0.9rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.board-regen-btn:hover:not(:disabled),
+.board-regen-btn[aria-expanded='true'] {
+  background: var(--accent-soft);
+  color: var(--ink);
+}
+
+.board-regen-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.board-regen {
+  display: grid;
+  gap: 0.45rem;
+  margin: 0.35rem 0;
+  padding: 0.6rem 0.7rem;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface-2);
+  font-size: 0.85rem;
+}
+
+.board-lines__regen {
+  list-style: none;
+}
+
+.board-extras__regen {
+  flex-basis: 100%;
+}
+
+.board-regen__ask {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.board-regen__ask .ai-input {
+  flex: 1;
+  min-width: 0;
+}
+
+.board-regen__note {
+  margin: 0;
+  font-size: 0.75rem;
+}
+
+.board-regen__cols {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 0.6rem;
+}
+
+.board-regen__head {
+  display: block;
+  margin-bottom: 0.25rem;
+  color: var(--muted);
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.board-regen__col ul {
+  display: grid;
+  gap: 0.2rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.board-regen__col li,
+.board-regen__radio {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.board-regen__col li > span,
+.board-regen__radio > span {
+  flex: 1;
+  min-width: 0;
+}
+
+.board-regen__col--new li {
+  padding: 0.15rem 0.35rem;
+  border-radius: 8px;
+  background: var(--accent-soft);
+}
+
+.board-regen__foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.board-regen__foot small {
+  font-variant-numeric: tabular-nums;
+}
+
 .board-lines__row {
   display: flex;
   align-items: center;

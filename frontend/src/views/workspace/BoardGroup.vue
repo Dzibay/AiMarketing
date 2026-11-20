@@ -20,6 +20,16 @@
         <small v-if="onKeywords || !onAudiences">{{ onKeywords }} {{ plural(onKeywords, 'фраза', 'фразы', 'фраз') }}</small>
         <small v-else>по аудитории, без фраз</small>
         <span class="board-group__tools">
+          <button
+            v-if="board.canRegenerate.value && group.keywords.length"
+            class="ai-check__link"
+            type="button"
+            :aria-expanded="regen"
+            :disabled="board.disabled.value"
+            @click="regen = !regen"
+          >
+            ↻ Ещё фразы
+          </button>
           <button class="ai-check__link" type="button" :disabled="board.disabled.value" @click="startRename">
             Переименовать
           </button>
@@ -77,6 +87,8 @@
         </button>
       </li>
     </ul>
+
+    <BoardRegen v-if="regen" kind="keyword" :group="group.name" :items="group.keywords" @close="regen = false" />
 
     <form v-if="editing" class="board-group__bar" @submit.prevent="saveKeyword">
       <input
@@ -184,6 +196,7 @@ import AdPreview from './AdPreview.vue'
 import BoardAudiences from './BoardAudiences.vue'
 import BoardImages from './BoardImages.vue'
 import BoardLines from './BoardLines.vue'
+import BoardRegen from './BoardRegen.vue'
 import BoardRule from './BoardRule.vue'
 
 const props = defineProps({
@@ -204,6 +217,7 @@ const board = inject('board')
 const KEYWORDS_SHOWN = 14
 
 const expanded = ref(false)
+const regen = ref(false)
 const selected = ref([])
 const moveTo = ref('')
 const editing = ref(false)

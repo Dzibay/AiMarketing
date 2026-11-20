@@ -385,6 +385,8 @@ export const aiApi = {
   boardCheck: (chatId) => post(`/api/web/ai/chats/${chatId}/board/check`, {}),
   /** «В Директе изменилось»: keep=false — подтянуть на доску, true — оставить правки доски → чат целиком. */
   boardPull: (chatId, keep = false) => post(`/api/web/ai/chats/${chatId}/board/pull`, { keep }),
+  /** ↻ на доске: { kind, group, text, comment } → { variants, dropped, usage }; доску не меняет. */
+  boardRegenerate: (chatId, body) => post(`/api/web/ai/chats/${chatId}/board/regenerate`, body),
   /** Черновик, собранный по шагам, — на модерацию → чат целиком. */
   boardModerate: (chatId) => post(`/api/web/ai/chats/${chatId}/board/moderate`, {}),
   /** Доска готовой кампании из Директа: { campaign, groups, negatives }. */

@@ -30,6 +30,18 @@
             </button>
             <BoardRule :item="l" />
             <button
+              v-if="board.canRegenerate.value"
+              class="board-regen-btn"
+              type="button"
+              v-tip="'Другие варианты текста ссылки'"
+              :aria-label="`Другие варианты: ${l.text}`"
+              :aria-expanded="regen === l.text"
+              :disabled="board.disabled.value"
+              @click="regen = regen === l.text ? null : l.text"
+            >
+              ↻
+            </button>
+            <button
               class="board-x board-extras__x"
               type="button"
               v-tip="removeTip(l)"
@@ -42,6 +54,7 @@
             <small v-if="l.description">{{ l.description }}</small>
             <small v-if="l.href" class="board-links__href">{{ l.href }}</small>
             <small v-else-if="board.isOn(l)" class="tone-bad">нет адреса страницы — нажмите на ссылку и впишите</small>
+            <BoardRegen v-if="regen === l.text" class="board-extras__regen" kind="sitelink" :line="l" @close="regen = null" />
           </template>
           <form v-else class="board-extras__form" @submit.prevent="saveLink(l)">
             <label v-for="f in LINK_FIELDS" :key="f.key" class="board-extras__field">
@@ -102,7 +115,20 @@
       <div class="board-lines__head">
         <span>Уточнения</span>
         <small :class="{ 'tone-bad': calloutsOn > MAX.callout }">{{ calloutsOn }} из {{ MAX.callout }}</small>
+        <button
+          v-if="board.canRegenerate.value"
+          class="board-regen-btn"
+          type="button"
+          v-tip="'Новые варианты уточнений'"
+          aria-label="Новые варианты уточнений"
+          :aria-expanded="regen === CALLOUTS"
+          :disabled="board.disabled.value"
+          @click="regen = regen === CALLOUTS ? null : CALLOUTS"
+        >
+          ↻
+        </button>
       </div>
+      <BoardRegen v-if="regen === CALLOUTS" kind="callout" :items="callouts" :max="MAX.callout" @close="regen = null" />
       <ul v-if="callouts.length" class="board-chips">
         <li
           v-for="c in callouts"
@@ -179,6 +205,7 @@
 import { computed, inject, nextTick, reactive, ref } from 'vue'
 import UiCheckbox from '../../components/ui/UiCheckbox.vue'
 import BoardRule from './BoardRule.vue'
+import BoardRegen from './BoardRegen.vue'
 
 const props = defineProps({
   // Быстрые ссылки и уточнения доски: из таблиц этапа, а нет их там — из карточки создания.
@@ -190,6 +217,9 @@ const board = inject('board')
 // Пределы Директа: заголовок ссылки, описание, уточнение; сколько всего.
 const LIMIT = { sitelink: 30, description: 60, callout: 25 }
 const MAX = { sitelink: 8, callout: 50 }
+// Открытая ↻: CALLOUTS — уточнения списком, текст быстрой ссылки — замена одной ссылки.
+const CALLOUTS = Symbol('callouts')
+const regen = ref(null)
 const ADD_LINK = '+'
 const LINK_FIELDS = [
   { key: 'text', label: 'Название', limit: LIMIT.sitelink, placeholder: 'Например, Доставка' },

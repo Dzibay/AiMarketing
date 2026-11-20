@@ -9760,6 +9760,153 @@ def edit_board(user_id: int, chat_id: int, ops, *, pulled: bool = False) -> dict
     return get_chat(user_id, chat_id)
 
 
+# --- Точечная перегенерация на доске -------------------------------------------------------------
+#
+# ↻ у заголовков, текстов, фраз, минус-фраз, уточнений (списком) и у одной строки (заголовок, текст, быстрая
+# ссылка). Не агентный ход: один короткий вызов модели без инструментов и истории — бриф строкой, фразы
+# группы, что есть сейчас, требования ТЗ и пределы знаков. Варианты сервер проверяет теми же правилами, что
+# правку доски, и лишнее отбрасывает; выбранные маркетолог кладёт на доску обычными правками (edit_board) —
+# в записанных шагах они ждут «Применить в Директ».
+
+REGEN_KINDS = ("title", "text", "keyword", "negative", "callout", "sitelink")
+REGEN_LINE_KINDS = ("title", "text", "sitelink", "callout")
+REGEN_LIST_KINDS = ("title", "text", "keyword", "negative", "callout")
+REGEN_COUNT = {"line": 4, "list": 5}
+REGEN_COMMENT_MAX = 300
+_REGEN_LIMITS = {"title": 56, "text": 81, "sitelink": SITELINK_TITLE_LEN, "callout": CALLOUT_LEN}
+_REGEN_WHAT = {
+    "title": "заголовки объявления (до 56 знаков, без точки в конце)",
+    "text": "тексты объявления (до 81 знака, законченная мысль с выгодой или призывом)",
+    "keyword": "ключевые фразы группы (2–4 слова, как ищут в Яндексе, до 7 слов, без минус-слов и операторов)",
+    "negative": "минус-фразы кампании (1–2 слова, нецелевые запросы, которые отсекают мусор)",
+    "callout": "уточнения объявления (до 25 знаков, короткий факт: доставка, гарантия, срок)",
+    "sitelink": "текст быстрой ссылки (до 30 знаков, название раздела сайта)",
+}
+
+
+def _regen_target(build: dict, kind: str, group: str, text: str) -> tuple[list[dict], dict | None, dict | None]:
+    """→ (строки того же вида, заменяемая строка или None, группа или None)."""
+    op = {"kind": kind, "group": "" if kind in _BOARD_LINKS or kind == "negative" else group, "text": text or "-"}
+    bucket, item = _board_find(build, op)
+    if text and item is None:
+        raise YandexError("args", f"«{text}» уже нет на доске — обновите страницу")
+    found = next((g for g in build["groups"] if g["name"] == group), None) if group else None
+    return bucket, (item if text else None), found
+
+
+def _regen_messages(ws: dict, build: dict, kind: str, bucket: list[dict], item: dict | None, group: dict | None,
+                    comment: str, count: int) -> list[dict]:
+    from app.brief import brief_prompt
+
+    brief = "; ".join(line for line in brief_prompt(ws).splitlines()[1:] if line.strip())
+    lines = [f"Бриф: {brief}"]
+    req = requirements_text(build.get("requirements"))
+    if req:
+        lines.append(f"Требования ТЗ: {req}")
+    if group is not None:
+        keywords = [k["text"] for k in _checked(group["keywords"])][:30]
+        lines.append(f"Группа «{group['name']}», фразы: " + ("; ".join(keywords) or "нет"))
+    current = [i["text"] for i in _checked(bucket)][:60]
+    lines.append("Сейчас: " + ("; ".join(current) or "пусто"))
+    if item is not None:
+        lines.append(f"Заменить одну строку: «{item['text']}»")
+    if comment:
+        lines.append(f"Что не так: {comment}")
+    what = _REGEN_WHAT[kind]
+    task = (
+        f"Предложи {count} вариантов на замену этой строки — {what}." if item is not None
+        else f"Предложи {count} новых вариантов — {what}. Не повторяй то, что уже есть."
+    )
+    system = (
+        "Ты помогаешь маркетологу с кампанией в Яндекс Директе. " + task + " Пиши по-русски, по брифу, без "
+        "выдуманных фактов и цен, без запрещённых в ТЗ слов. Ответ — только JSON {\"variants\": [\"…\", …]}."
+    )
+    return [{"role": "system", "content": system}, {"role": "user", "content": "\n".join(lines)}]
+
+
+def _regen_problem(build: dict, kind: str, group: str, item: dict | None, bucket: list[dict], text: str) -> str:
+    """Почему вариант не годится ('' — годится): те же проверки, что у правки доски, и запреты ТЗ."""
+    limit = _REGEN_LIMITS.get(kind)
+    if limit and len(text) > limit:
+        return "длинный"
+    words = (build.get("requirements") or {}).get("banned_words") or []
+    if kind != "keyword" and kind != "negative" and words and _banned_hits(words, [text]):
+        return "запрещённое слово"
+    target = "" if kind in _BOARD_LINKS or kind == "negative" else group
+    try:
+        if item is not None:
+            _board_validate(build, {"op": "edit", "kind": kind, "group": target, "text": item["text"], "to": text})
+        else:
+            problem = _board_text_problem(kind, text)
+            if problem:
+                return problem
+            key = _item_key(text, kind)
+            if any(_item_key(i["text"], kind) == key for i in bucket):
+                return "уже есть"
+            _board_keyword_elsewhere(build, {"kind": kind, "group": target}, text)
+    except YandexError as exc:
+        return exc.message or exc.code
+    return ""
+
+
+def regenerate_board(user_id: int, chat_id: int, kind: str, group: str = "", text: str = "", comment: str = "") -> dict:
+    """↻ на доске: {variants: [строки], dropped: сколько отброшено, usage}. text — заменить одну строку,
+    пусто — новые варианты к списку. Доску не меняет: выбранное маркетолог кладёт правками edit_board."""
+    kind = str(kind or "").strip()
+    group, text = _line(group, 120), _line(text, 4096)
+    comment = _line(comment, REGEN_COMMENT_MAX)
+    if kind not in REGEN_KINDS:
+        raise YandexError("args", f"kind — одно из {list(REGEN_KINDS)}")
+    if text and kind not in REGEN_LINE_KINDS:
+        raise YandexError("args", "Эту строку перегенерировать нельзя — только список целиком")
+    if not text and kind not in REGEN_LIST_KINDS:
+        raise YandexError("args", "Выберите строку, которую заменить")
+    if kind not in _BOARD_LINKS and kind != "negative" and not group:
+        raise YandexError("args", "Укажите группу")
+    with pool.connection() as conn:
+        chat = _require_chat(conn, user_id, chat_id)
+        if _chat_out(chat)["status"] == "running":
+            raise YandexError("busy", "ИИ ещё отвечает — дождитесь ответа")
+        actions = conn.execute("SELECT * FROM ai_actions WHERE chat_id = %s ORDER BY id", (chat_id,)).fetchall()
+    if chat["workspace_id"] is None:
+        raise YandexError("args", "Доска сборки есть только в чате проекта")
+    ws = require_workspace(user_id, chat["workspace_id"])
+    build = campaign_build([dict(a) for a in actions])
+    if build is None:
+        raise YandexError("args", "В этом чате не собирают новую кампанию")
+    bucket, item, found = _regen_target(build, kind, group, text)
+    if kind not in _BOARD_LINKS and kind != "negative" and found is None:
+        raise YandexError("args", f"Группы «{group}» уже нет на доске — обновите страницу")
+    count = REGEN_COUNT["line" if item is not None else "list"]
+    cfg = ai.load_config(user_id, "board_regen", chat["workspace_id"])
+    ai.check_budget(cfg)
+    with ai.meter() as spent:
+        data = ai.complete_json(cfg, _regen_messages(ws, build, kind, bucket, item, found, comment, count))
+    raw = data.get("variants")
+    raw = raw if isinstance(raw, list) else []
+    variants: list[str] = []
+    seen: set[str] = set()
+    dropped = 0
+    for value in raw[: count * 3]:
+        line = _line(value if isinstance(value, str) else "", 4096)
+        if kind == "title":
+            line = line.rstrip(".").strip()
+        if not line:
+            continue
+        key = _item_key(line, kind)
+        if key in seen:
+            dropped += 1
+            continue
+        if _regen_problem(build, kind, group, item, bucket, line):
+            dropped += 1
+            continue
+        seen.add(key)
+        variants.append(line)
+        if len(variants) >= count:
+            break
+    return {"variants": variants, "dropped": dropped, "usage": ai.usage_out(spent, user_id)}
+
+
 def _board_images(user_id: int, workspace_id: int, ops: list[dict]) -> None:
     """Картинки, добавленные на доске: кабинет — из проекта, картинка — в его библиотеке; превью — доске."""
     from app import ad_extras

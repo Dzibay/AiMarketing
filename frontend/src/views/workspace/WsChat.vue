@@ -179,6 +179,7 @@
       :disabled="deciding || status === 'running'"
       :running="status === 'running'"
       :edit="editBoard"
+      :regenerate="regenerateBoard"
       @decide="(id, payload) => respond(() => aiApi.items(id, payload))"
       @board="(payload) => respond(() => aiApi.boardDecide(chatId, payload))"
       @draft="(approve) => decide({ id: build.draft.action_id }, approve)"
@@ -265,6 +266,7 @@ const {
   decideAll,
   respond,
   editBoard,
+  regenerateBoard,
   draft,
   aiConfigured,
   reviewing,

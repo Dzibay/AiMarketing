@@ -146,6 +146,14 @@ class BoardPullBody(BaseModel):
     keep: bool = False
 
 
+class BoardRegenBody(BaseModel):
+    # title | text | keyword | negative | callout | sitelink; text — заменить одну строку, пусто — список.
+    kind: str
+    group: str = ""
+    text: str = ""
+    comment: str = ""
+
+
 class ReviewBody(BaseModel):
     # Пусто — общий разбор проекта; текст карточки сигнала — разбор по ней.
     prompt: str = ""
@@ -450,6 +458,14 @@ def chat_board_check(chat_id: int, user_id: int = Depends(require_web_user)) -> 
 def chat_board_pull(chat_id: int, body: BoardPullBody, user_id: int = Depends(require_web_user)) -> dict:
     """«Подтянуть» изменения из Директа на доску или «Оставить мои»; ответ — чат целиком."""
     return _call(ai_agent.pull_build, user_id, chat_id, keep=body.keep)
+
+
+@router.post("/ai/chats/{chat_id}/board/regenerate")
+def chat_board_regenerate(chat_id: int, body: BoardRegenBody, user_id: int = Depends(require_web_user)) -> dict:
+    """↻ на доске: один лёгкий вызов модели → {variants, dropped, usage}; доску не меняет."""
+    return _call(
+        ai_agent.regenerate_board, user_id, chat_id, body.kind, group=body.group, text=body.text, comment=body.comment
+    )
 
 
 @router.post("/ai/chats/{chat_id}/board/moderate")
