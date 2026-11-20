@@ -176,6 +176,9 @@
         <p v-if="missing.length" class="hint">
           Ещё не готово: {{ missing.join(', ') }}. Согласуйте готовое — ИИ доделает остальное и покажет здесь же.
         </p>
+        <p v-else-if="overLimit" class="hint tone-bad">
+          В объявлении больше 7 заголовков или 3 текстов — снимите лишние галочки, тогда кампанию можно согласовать.
+        </p>
         <p v-else-if="!build.ready" class="hint tone-bad">
           В проверке есть красные пункты — Директ может не принять кампанию. Поправьте на доске или напишите в
           комментарии, что изменить.
@@ -190,7 +193,12 @@
           aria-label="Комментарий к кампании"
         />
         <div class="board-decision__buttons">
-          <button class="btn btn--accent" type="button" :disabled="disabled || !heldChosen" @click="decideBoard(true)">
+          <button
+            class="btn btn--accent"
+            type="button"
+            :disabled="disabled || !heldChosen || overLimit"
+            @click="decideBoard(true)"
+          >
             {{ approveLabel }}
           </button>
           <button class="btn btn--ghost" type="button" :disabled="disabled" @click="decideBoard(false)">
@@ -386,6 +394,8 @@ const heldChosen = computed(() => heldTables.value.reduce((n, t) => n + chosenOf
 // Обязательные этапы, которых на доске ещё нет: согласование закроет готовое, черновик — после остальных.
 const missing = computed(() => props.build.missing || [])
 const boardComment = ref('')
+// Больше 7 заголовков или 3 текстов в группе: сервер такое согласование не примет.
+const overLimit = computed(() => (props.build.checks || []).some((c) => c.key === 'limits' && c.state === 'bad'))
 const approveLabel = computed(() => {
   if (missing.value.length) return 'Согласовать готовое'
   return boardComment.value.trim() ? 'Согласовать с правкой' : 'Согласовать и создать черновик'

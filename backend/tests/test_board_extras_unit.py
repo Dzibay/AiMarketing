@@ -73,9 +73,9 @@ def test_board_links_validate():
 
 def test_board_links_limits():
     build = _build(*[
-        {"op": "add", "kind": "sitelink", "group": "", "text": f"Ссылка {i}", "href": f"https://okna.ru/{i}"}
+        {"op": "add", "kind": "sitelink", "group": "", "text": f"Раздел {i}", "href": f"https://okna.ru/{i}"}
         for i in range(6)
-    ], *[{"op": "add", "kind": "callout", "group": "", "text": f"Уточнение {i}"} for i in range(48)])
+    ], *[{"op": "add", "kind": "callout", "group": "", "text": f"Скидка {i}%"} for i in range(48)])
     assert len(build["sitelinks"]) == 8 and len(build["callouts"]) == 50
     assert _error(build, op="add", kind="sitelink", text="Ещё", href="okna.ru/x") == (
         "Уже 8 быстрых ссылок — больше Директ не примет"
@@ -83,7 +83,7 @@ def test_board_links_limits():
     assert _error(build, op="add", kind="callout", text="Ещё") == "Уже 50 уточнений — больше Директ не примет"
     # Снятая галочка освобождает место.
     unchecked = _build(*[
-        {"op": "add", "kind": "sitelink", "group": "", "text": f"Ссылка {i}", "href": f"https://okna.ru/{i}"}
+        {"op": "add", "kind": "sitelink", "group": "", "text": f"Раздел {i}", "href": f"https://okna.ru/{i}"}
         for i in range(6)
     ])
     unchecked["sitelinks"][0]["checked"] = False
@@ -252,13 +252,13 @@ def _pending_extras(sitelinks, callouts=(), off=()):
 
 
 def test_board_extras_over_limit_and_no_href_are_red():
-    links = [(f"Ссылка {i}", f"https://okna.ru/{i}") for i in range(9)]
-    build = _pending_extras(links, [f"Уточнение {i}" for i in range(51)])
+    links = [(f"Раздел {i}", f"https://okna.ru/{i}") for i in range(9)]
+    build = _pending_extras(links, [f"Скидка {i}%" for i in range(51)])
     checks = {c["key"]: c for c in build["checks"]}
     assert checks["extras"]["state"] == "bad" and not build["ready"]
     assert checks["extras"]["note"] == "больше 8 быстрых ссылок и больше 50 уточнений — снимите лишние"
     # Снятые галочки — в пределах: проверка зелёная.
-    build = _pending_extras(links, [f"Уточнение {i}" for i in range(51)], off=(1, 10))
+    build = _pending_extras(links, [f"Скидка {i}%" for i in range(51)], off=(1, 10))
     assert {c["key"]: c["state"] for c in build["checks"]}["extras"] == "ok"
     # Быстрая ссылка без адреса — Директ не примет.
     build = _pending_extras([("Цены", "https://okna.ru/p"), ("Отзывы", "")])
@@ -300,7 +300,7 @@ def test_snapshot_rules_for_ai():
     # Снятое на доске ИИ не показываем; длинный список — с хвостом «и ещё N».
     build = _pending_extras([("Цены", "https://okna.ru/p"), ("Отзывы", "")], ["Лучшие цены!!"], off=(2, 3))
     assert ai_agent._snapshot_rules(build, ai_agent._on_board_items) == []
-    build = _pending_extras([(f"Ссылка {i}", "") for i in range(8)], [f"Лучшее {i}" for i in range(10)])
+    build = _pending_extras([(f"Раздел {i}", "") for i in range(8)], [f"Лучшее {i}" for i in range(10)])
     lines = ai_agent._snapshot_rules(build, ai_agent._on_board_items)
     assert len(lines) == ai_agent.MAX_SNAPSHOT_RULES + 1 and lines[-1] == "и ещё 3"
     assert all("Директ не примет" in line for line in lines[:8])

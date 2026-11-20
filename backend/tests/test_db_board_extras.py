@@ -67,7 +67,7 @@ def test_board_checks_follow_the_board(db, monkeypatch):
     s = _seed(db)
     user, chat = s["user"], s["chat"]
     _fake_direct(db, s, monkeypatch)
-    links = [{"section": "Быстрые ссылки", "cells": [f"Ссылка {i}", f"https://shop.ru/{i}", ""]} for i in range(1, 9)]
+    links = [{"section": "Быстрые ссылки", "cells": [f"Раздел {i}", f"https://shop.ru/{i}", ""]} for i in range(1, 9)]
     _start(user, chat, "Собери кампанию на окна", monkeypatch,
            *_stages(_table("extras", links + [{"cells": ["Уточнения", "Лучшие цены!!"]}])))
     extras = next(t for t in _held(user, chat) if t["args"]["stage"] == "extras")

@@ -4807,6 +4807,25 @@ _ITEM_COLUMNS = {
     "other": ["Что", "Комментарий"],
 }
 _ITEM_LIMITS = {"title": 56, "text": 81}
+# Подпись вместо текста: «Заголовок 1», «Текст 2», «Быстрая ссылка 3» — модель положила в первую ячейку
+# название колонки, а сам текст — дальше. На доске такая строка выглядит согласованным заголовком.
+_PLACEHOLDER_RE = re.compile(
+    r"(?:заголовок|текст|быстрая\s+ссылка|ссылка|уточнение|фраза|ключевая\s+фраза|минус-фраза|описание|"
+    r"объявление|title|text)\s*№?\s*\d{1,2}\s*[.:)]?",
+    re.IGNORECASE,
+)
+_PLACEHOLDER_STAGES = ("keywords", "negatives", "ads", "extras")
+# «Группа / Объявление 2» — у группы новой кампании одно объявление; так раньше называли второе.
+_AD_SUFFIX_RE = re.compile(r"\s*/\s*объявление\s*№?\s*\d+\s*$", re.IGNORECASE)
+
+
+def _placeholder(text) -> bool:
+    return bool(_PLACEHOLDER_RE.fullmatch(str(text or "").strip()))
+
+
+def _ad_group(section) -> str:
+    """Группа строки: «Группа / Объявление 2» → «Группа»."""
+    return _AD_SUFFIX_RE.sub("", str(section or "")).strip()
 
 
 def _audience_rows(ctx: Context, args: dict, rows: list[dict]) -> None:
@@ -4986,6 +5005,7 @@ def _q_items(ctx: Context, args: dict) -> dict:
     rows: list[dict] = []
     seen: set[tuple] = set()
     too_long: list[str] = []
+    placeholders: list[str] = []
     glued = False
     for item in raw if isinstance(raw, list) else []:
         if isinstance(item, str):
@@ -5010,6 +5030,12 @@ def _q_items(ctx: Context, args: dict) -> dict:
                 raise YandexError("args", f"«{cells[0]}»: в таблице ads у строки kind — title или text")
             kind = _STAGE_KINDS.get(stage, "other")
         section = _line(item.get("section") or item.get("group"), 120)
+        if stage in _PLACEHOLDER_STAGES and _placeholder(cells[0]):
+            placeholders.append(f"«{cells[0]}»")
+            continue
+        if stage == "keywords" and len(cells) > 1 and section and _item_key(cells[1]) == _item_key(section):
+            # Вторая колонка фраз — частотность; название группы там — повтор section.
+            cells[1] = ""
         image = None
         if kind == "image":
             if not section:
@@ -5044,6 +5070,13 @@ def _q_items(ctx: Context, args: dict) -> dict:
     if stage == "audiences" and rows:
         _audience_rows(ctx, args, rows)
     image_account = _image_rows(ctx, args, rows) if stage == "images" and rows else None
+    if placeholders:
+        raise YandexError(
+            "args",
+            f"В первой ячейке подпись вместо текста: {_preview(placeholders, 5)}. Первая ячейка строки — сам "
+            "заголовок, текст, фраза или ссылка, как он уйдёт в Директ; нумеровать строки не нужно. Пришли таблицу "
+            "заново с настоящими текстами.",
+        )
     if too_long:
         hint = (
             ". В ячейке склеено несколько текстов: одна строка — один заголовок или текст, остальные отдельными строками"
@@ -6537,7 +6570,8 @@ def _project_prompt(ctx: Context) -> str:
         "audience из согласованных строк. "
         "5) Заголовки и тексты — propose_items stage=ads: каждой группе до 7 заголовков (kind=title, до 56 "
         "знаков) и до 3 текстов (kind=text, до 81) под её фразы, section — группа. Одна строка — один заголовок или текст: не склеивай несколько через «;» "
-        "или «|». Несколько объявлений в группе — section «Группа / Объявление 2». 6) Картинки — если маркетолог "
+        "или «|», не пиши подписей вроде «Заголовок 1» — в первой ячейке сам текст. У группы новой кампании одно "
+        "объявление: section — точное название группы с доски, без «/ Объявление N». 6) Картинки — если маркетолог "
         f"ещё не сказал, откуда их брать, — ask_questions с key {IMAGE_SOURCE_KEY} (варианты подставит сервис, можно "
         "выбрать несколько; в сборке одной доской — вместе с остальными вопросами, до первой таблицы). «Взять из "
         "других кампаний» — list_ad_images без campaign_row_id, затем propose_items "
@@ -7042,7 +7076,14 @@ class _Board:
             return
         kind = row.get("kind") or ""
         section = str(row.get("section") or "").strip()
+        # Таблицы до проверок: «Группа / Объявление 2» — та же группа, «Заголовок 1» — подпись, а не текст.
+        if stage in ("ads", "images"):
+            section = _ad_group(section)
+        if stage in _PLACEHOLDER_STAGES and _placeholder(text):
+            return
         item = _row_item(row, action, pending)
+        if stage == "keywords" and section and _item_key(item["value"]) == _item_key(section):
+            item["value"] = ""
         if stage in ("keywords", "negatives"):
             if kind == "negative" or stage == "negatives":
                 key = _item_key(text, "negative")
@@ -7123,6 +7164,9 @@ class _Board:
             self.rename(op["group"], op["to"])
             return
         kind = op["kind"]
+        if kind in ("title", "text", "image"):
+            # Правки старых досок, где второе объявление было отдельной группой «… / Объявление 2».
+            op = {**op, "group": _ad_group(op.get("group"))}
         bucket = self._bucket(op)
         if bucket is None:
             return
@@ -7772,6 +7816,17 @@ def _build_checks(build: dict, *, link_template: bool) -> list[dict]:
                 "нужны заголовок и текст: " + _preview([f"«{n}»" for n in no_ad], 4))
         else:
             add("ads", "Объявление у каждой группы", "ok")
+        from app.ads import MAX_TEXTS, MAX_TITLES
+
+        over = [
+            f"«{name}» — {len(titles)} заголовков, {len(texts)} текстов"
+            for name, (titles, texts) in ads.items()
+            if len(titles) > MAX_TITLES or len(texts) > MAX_TEXTS
+        ]
+        if over:
+            # Пока не исправлено, доску не согласовать: Директ не примет объявление больше 7 + 3.
+            add("limits", f"До {MAX_TITLES} заголовков и {MAX_TEXTS} текстов в группе", "bad",
+                "снимите лишние галочки: " + _preview(over, 4))
         seen: dict[tuple, str] = {}
         twins: list[str] = []
         for name, (titles, texts) in ads.items():
@@ -8438,6 +8493,51 @@ def _approved_keys(items: list[dict] | None, kind: str = "") -> set[str]:
     return {_item_key(i["text"], kind) for i in _approved_items(items)}
 
 
+def _check_ad_sections(build: dict, rows: list[dict], stage: str) -> None:
+    """Объявления и картинки сборки — в группы, которые уже есть на доске; у группы одно объявление
+    (до 7 заголовков и 3 текстов вместе с согласованными). Ошибка — что поправить модели."""
+    from app.ads import MAX_TEXTS, MAX_TITLES
+
+    suffixed = sorted({r["section"] for r in rows if _AD_SUFFIX_RE.search(r["section"] or "")})
+    if suffixed:
+        raise YandexError(
+            "args",
+            f"Разделы {_preview([f'«{s}»' for s in suffixed], 4)}: у группы новой кампании одно объявление — до "
+            f"{MAX_TITLES} заголовков и {MAX_TEXTS} текстов, Директ сам собирает из них сочетания. section — точное "
+            "название группы, без «/ Объявление N».",
+        )
+    names = {g["name"] for g in build["groups"]}
+    if names:
+        unknown = sorted({r["section"] or NO_GROUP for r in rows} - names)
+        if unknown:
+            raise YandexError(
+                "args",
+                f"Групп {_preview([f'«{n}»' for n in unknown], 4)} на доске нет. section — точное название группы "
+                f"из доски: {_preview([f'«{n}»' for n in sorted(names)], 8)}. Новая группа появляется таблицей фраз "
+                "или аудиторий.",
+            )
+    if stage != "ads":
+        return
+    over: list[str] = []
+    for g in build["groups"]:
+        for kind, limit, word in (("title", MAX_TITLES, "заголовков"), ("text", MAX_TEXTS, "текстов")):
+            mine = [r for r in rows if (r["section"] or NO_GROUP) == g["name"] and r["kind"] == kind]
+            if not mine:
+                continue
+            keys = _approved_keys(g[f"{kind}s"])
+            keys -= {_item_key(r["cells"][0]) for r in mine if not r["checked"]}
+            keys |= {_item_key(r["cells"][0]) for r in mine if r["checked"]}
+            if len(keys) > limit:
+                over.append(f"«{g['name']}» — {len(keys)} {word} из {limit}")
+    if over:
+        raise YandexError(
+            "args",
+            f"Больше, чем вмещает объявление: {_preview(over, 4)}. Вместе с согласованными на доске — не больше "
+            f"{MAX_TITLES} заголовков и {MAX_TEXTS} текстов в группе. Лишние строки отметь checked: false (и "
+            "согласованные, которые заменяешь, — тоже с checked: false).",
+        )
+
+
 def _created_names(created: list[dict]) -> str:
     return _preview([f"«{c['name']}» (campaign_row_id {c['campaign_row_id']})" for c in created], 3)
 
@@ -8542,6 +8642,8 @@ def _table_guard(ctx: Context, args: dict, payload: dict) -> dict | None:
             "already_approved": True,
             "note": f"Всё из этой таблицы маркетолог уже согласовал — она не показана. {following}",
         }
+    if stage in ("ads", "images"):
+        _check_ad_sections(build, rows, stage)
     if _bool(args, "revise", False):
         return None
     status = {s["key"]: s["status"] for s in build["stages"]}
@@ -11419,6 +11521,10 @@ def decide_build(
             "SELECT * FROM ai_actions WHERE chat_id = %s AND tool = ANY(%s) ORDER BY id", (chat_id, list(_BUILD_TOOLS))
         ).fetchall()
         build = campaign_build(actions, link_template=link_template)
+        over = next((c for c in (build or {}).get("checks") or [] if c["key"] == "limits" and c["state"] == "bad"), None)
+        if approve and over:
+            # Исключение откатывает транзакцию: таблицы остаются ждать решения.
+            raise YandexError("args", f"{over['label']}: {over['note']}")
         following = f"Дальше: {_build_next(build)}." if build and _build_open(build) else ""
         if approve:
             whole = only is None
