@@ -4790,6 +4790,64 @@ button.board-chips__text:disabled {
   margin-right: auto;
 }
 
+/* Шаг «Бриф» доски — форма (пункт 6 плана доски). */
+.board-brief {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.board-brief__fill {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem 0.75rem;
+}
+
+.board-brief .field.is-missing label::after {
+  content: ' — нужно для черновика';
+  color: var(--danger);
+  font-weight: 400;
+}
+
+.board-brief .field select {
+  width: 100%;
+}
+
+.board-brief__limits > summary {
+  cursor: pointer;
+  font-weight: 600;
+  margin-bottom: 0.5rem;
+}
+
+.board-brief__extra {
+  display: grid;
+  gap: 0.25rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.board-brief__extra li {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.6rem;
+}
+
+.board-brief__extra span {
+  font-weight: 600;
+}
+
+.board-brief__save {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem 0.75rem;
+}
+
+.board-brief__save .hint {
+  margin: 0;
+}
+
 .board-regen-btn {
   appearance: none;
   display: inline-grid;

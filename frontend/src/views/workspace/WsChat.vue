@@ -180,6 +180,8 @@
       :running="status === 'running'"
       :edit="editBoard"
       :regenerate="regenerateBoard"
+      :save-brief="saveBrief"
+      :fill-brief="fillBrief"
       @decide="(id, payload) => respond(() => aiApi.items(id, payload))"
       @board="(payload) => respond(() => aiApi.boardDecide(chatId, payload))"
       @draft="(approve) => decide({ id: build.draft.action_id }, approve)"
@@ -267,6 +269,8 @@ const {
   respond,
   editBoard,
   regenerateBoard,
+  saveBrief,
+  fillBrief,
   draft,
   aiConfigured,
   reviewing,

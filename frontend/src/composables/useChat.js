@@ -463,6 +463,29 @@ export function provideChat({ general, ws, basePath, reloadWs, panel = false, pa
     }
   }
 
+  /** Форма брифа на доске → таблица брифа; сервер возвращает чат целиком. false — не сохранилось (тост). */
+  async function saveBrief(form) {
+    const id = chatId.value
+    try {
+      const res = await aiApi.boardBrief(id, form)
+      if (chatId.value === id) data.value = res
+      return true
+    } catch (err) {
+      pushToast(errorText(err), 'error')
+      return false
+    }
+  }
+
+  /** «ИИ заполнит по сайту»: { form, regions } или null (тост); форму на сервере не меняет. */
+  async function fillBrief(site) {
+    try {
+      return await aiApi.boardBriefFill(chatId.value, site || '')
+    } catch (err) {
+      pushToast(errorText(err), 'error')
+      return null
+    }
+  }
+
   // --- Загрузка и опрос -------------------------------------------------------------------------
 
   function stopPolling() {
@@ -974,6 +997,8 @@ export function provideChat({ general, ws, basePath, reloadWs, panel = false, pa
     rateMessage,
     editBoard,
     regenerateBoard,
+    saveBrief,
+    fillBrief,
     // Сообщение и модель ответа
     draft,
     mentions,

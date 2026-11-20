@@ -146,6 +146,14 @@ class BoardPullBody(BaseModel):
     keep: bool = False
 
 
+class BoardBriefBody(BaseModel):
+    form: dict
+
+
+class BoardBriefFillBody(BaseModel):
+    site: str = ""
+
+
 class BoardRegenBody(BaseModel):
     # title | text | keyword | negative | callout | sitelink; text — заменить одну строку, пусто — список.
     kind: str
@@ -466,6 +474,18 @@ def chat_board_regenerate(chat_id: int, body: BoardRegenBody, user_id: int = Dep
     return _call(
         ai_agent.regenerate_board, user_id, chat_id, body.kind, group=body.group, text=body.text, comment=body.comment
     )
+
+
+@router.put("/ai/chats/{chat_id}/board/brief")
+def chat_board_brief(chat_id: int, body: BoardBriefBody, user_id: int = Depends(require_web_user)) -> dict:
+    """Форма брифа на доске → ждущая таблица брифа; ответ — чат целиком."""
+    return _call(ai_agent.save_brief, user_id, chat_id, body.form)
+
+
+@router.post("/ai/chats/{chat_id}/board/brief/fill")
+def chat_board_brief_fill(chat_id: int, body: BoardBriefFillBody, user_id: int = Depends(require_web_user)) -> dict:
+    """«ИИ заполнит по сайту»: один лёгкий вызов модели → {form, regions, usage}; форму не сохраняет."""
+    return _call(ai_agent.fill_brief, user_id, chat_id, body.site)
 
 
 @router.post("/ai/chats/{chat_id}/board/moderate")

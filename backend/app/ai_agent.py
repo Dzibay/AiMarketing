@@ -40,6 +40,7 @@ from app.workspaces import (
     require_workspace,
     save_ai_facts,
     update_workspace,
+    workspace_goals,
     workspace_campaign_row_ids,
 )
 from app.yandex import YandexError
@@ -2163,9 +2164,11 @@ def _check_spec_money(ctx: Context, spec: dict) -> None:
     actions.check_multi_goals(strategy, actions._priority_goals(spec.get("priority_goals")))
 
 
-def _brief_campaign(ctx: Context, raw, *, partial: bool = False) -> dict:
+def _brief_campaign(ctx: Context, raw, *, partial: bool = False, loose: bool = False) -> dict:
     """campaign таблицы «Бриф» (или «Настроек»): с чем сервис создаст черновик в Директе после согласования.
-    partial — уточнение в «Настройках»: только названные поля, кабинет и тип уже не меняются."""
+    partial — уточнение в «Настройках»: только названные поля, кабинет и тип уже не меняются.
+    loose — бриф формой (пункт 6 плана доски): чего нет, маркетолог допишет на доске; без кабинета, названия,
+    регионов и ссылки бриф не согласовать (_brief_missing)."""
     from app import actions
     from app.adgroups import _check_region_ids
 
@@ -2175,10 +2178,11 @@ def _brief_campaign(ctx: Context, raw, *, partial: bool = False) -> dict:
     if not partial:
         accounts = [int(a["id"]) for a in ctx.ws.get("accounts") or []]
         account_id = raw.get("account_id") or (accounts[0] if len(accounts) == 1 else None)
-        if account_id in (None, ""):
+        if account_id in (None, "") and not loose:
             raise YandexError("args", "campaign.account_id — кабинет, в котором создать черновик (list_accounts)")
         try:
-            out["account_id"] = int(ctx.require_account(int(account_id))["id"])
+            if account_id not in (None, ""):
+                out["account_id"] = int(ctx.require_account(int(account_id))["id"])
         except (TypeError, ValueError) as exc:
             raise YandexError("args", "campaign.account_id — число") from exc
         ctype = str(raw.get("type") or "TEXT_CAMPAIGN").strip().upper()
@@ -2188,11 +2192,11 @@ def _brief_campaign(ctx: Context, raw, *, partial: bool = False) -> dict:
     name = _line(raw.get("name"), 255)
     if name:
         out["name"] = name
-    elif not partial:
+    elif not partial and not loose:
         raise YandexError("args", "campaign.name — название кампании")
     if raw.get("region_ids") not in (None, "", []):
         out["region_ids"] = _check_region_ids(ctx.user_id, raw["region_ids"])
-    elif not partial:
+    elif not partial and not loose:
         raise YandexError("args", "campaign.region_ids — регионы показа (id из справочника Директа, find_regions)")
     if raw.get("strategy") is not None:
         _check_spec_money(ctx, {"strategy": raw["strategy"], "type": out.get("type") or "TEXT_CAMPAIGN"})
@@ -2207,7 +2211,7 @@ def _brief_campaign(ctx: Context, raw, *, partial: bool = False) -> dict:
         if not re.match(r"^https?://[^\s/]+\.[^\s]+", href):
             raise YandexError("args", "campaign.href — адрес посадочной страницы, https://…")
         out["href"] = href
-    elif not partial and not actions._ws_link_template(ctx.ws):
+    elif not partial and not loose and not actions._ws_link_template(ctx.ws):
         raise YandexError("args", "campaign.href — посадочная страница: у проекта нет шаблона ссылки")
     return out
 
@@ -5152,9 +5156,15 @@ def _q_items(ctx: Context, args: dict) -> dict:
         # Требования ТЗ (пункт 6 плана): {} — в ТЗ нет ни цифр, ни запретов.
         **({"requirements": brief_requirements(args["requirements"])} if args.get("requirements") is not None else {}),
         # Черновик в Директе (пункт 2 плана доски): бриф — целиком, «Настройки» — уточнения.
+        # Бриф шага 1 — форма на доске: campaign может прийти неполным (даже {}), маркетолог допишет.
         **(
-            {"campaign": _brief_campaign(ctx, args["campaign"], partial=stage == "settings")}
-            if args.get("campaign") not in (None, {}) and stage in ("goals", "settings")
+            {"campaign": _brief_campaign(ctx, args["campaign"], loose=True)}
+            if isinstance(args.get("campaign"), dict) and stage == "goals"
+            else {}
+        ),
+        **(
+            {"campaign": _brief_campaign(ctx, args["campaign"], partial=True)}
+            if args.get("campaign") not in (None, {}) and stage == "settings"
             else {}
         ),
     }
@@ -6600,11 +6610,13 @@ def _project_prompt(ctx: Context) -> str:
         "edited_by_user — дальше бери их в таком виде. Цифры и запреты ТЗ (7 заголовков, 3 текста, 8 быстрых "
         "ссылок, 20 уточнений, «не писать слово…») зафиксируй полем requirements первой таблицы сборки: сервис сам "
         "считает строки и ищет запрещённые слова, показывает это маркетологу на доске и не создаст черновик, пока "
-        "список не выполнен, — поэтому сразу давай нужное число строк и не используй запрещённые слова. 1) Цели кампании — сначала "
-        "ask_questions, если чего-то не хватает в брифе, затем propose_items stage=goals строками «что — "
-        "значение»: что рекламируем и оффер, гео, бюджет, цель (действие на сайте или цель Метрики), посадочная "
-        "ссылка, ограничения; в той же таблице — поле campaign {account_id, name, type, region_ids, strategy, "
-        "daily_budget_rub, href}: сразу после согласования брифа сервис сам создаст по нему черновик кампании в "
+        "список не выполнен, — поэтому сразу давай нужное число строк и не используй запрещённые слова. 1) Бриф — сразу propose_items "
+        "stage=goals, без ask_questions и без чтения сайта: на доске бриф — форма (сайт, что рекламируем, регион, "
+        "бюджет в неделю, цель, ограничения), маркетолог допишет её сам или кнопкой «ИИ заполнит по сайту». "
+        "Строки «что — значение» — то, что уже известно из брифа проекта и сообщения (что рекламируем и оффер, гео, "
+        "бюджет, цель, посадочная, ограничения), неизвестное не выдумывай и не спрашивай; поле campaign {account_id, "
+        "name, type, region_ids, strategy, daily_budget_rub, href} — тоже с тем, что известно (можно {}). "
+        "Сразу после согласования брифа сервис сам создаст по нему черновик кампании в "
         "Директе и дальше будет дописывать в него каждый согласованный шаг (группы и фразы, минус-фразы, аудитории, "
         "объявления, картинки, расширения, настройки). 2) Анализ: сайт и посадочная (read_page — что продают, цены, оффер; не "
         "переспрашивай то, что там написано), похожие кампании проекта (list_campaigns, get_campaign — какие группы, фразы и тексты "
@@ -8760,8 +8772,8 @@ def _need_campaign(args: dict, payload: dict) -> None:
     raise YandexError(
         "args",
         "В таблице брифа нужен campaign — {account_id, name, type, region_ids, strategy, daily_budget_rub, href}: "
-        "сразу после согласования брифа сервис создаст по нему черновик кампании в Директе. Чего не знаешь — "
-        "спроси маркетолога (ask_questions) или возьми из сайта и проекта",
+        "сразу после согласования брифа сервис создаст по нему черновик кампании в Директе. Передай то, что "
+        "известно (можно {}): остальное маркетолог допишет в форме брифа на доске",
     )
 
 
@@ -9907,6 +9919,406 @@ def regenerate_board(user_id: int, chat_id: int, kind: str, group: str = "", tex
     return {"variants": variants, "dropped": dropped, "usage": ai.usage_out(spent, user_id)}
 
 
+# --- Бриф формой (пункт 6 плана доски) -------------------------------------------------------------
+#
+# Шаг 1 мастера — форма: сайт, что рекламируем, регион, бюджет в неделю, цель, ограничения. Форма — та же ждущая
+# таблица брифа (propose_items stage=goals с campaign): ИИ присылает её сразу с тем, что знает, маркетолог дописывает
+# поля, сервис кладёт их в campaign, requirements и строки этой таблицы. «Дальше» — обычное согласование таблицы,
+# но без кабинета, названия, регионов и ссылки сервис его не примет. «ИИ заполнит по сайту» — один короткий вызов
+# модели по странице сайта (как ↻): возвращает значения полей, форма заполняет ими пустые и ничего не сохраняет.
+
+BRIEF_ORDER = ("name", "product", "region", "budget", "goal", "href", "limits")
+BRIEF_LABELS = {
+    "name": "Кампания",
+    "product": "Что рекламируем",
+    "region": "Регион",
+    "budget": "Бюджет в неделю",
+    "goal": "Цель",
+    "href": "Посадочная ссылка",
+    "limits": "Ограничения",
+}
+# Строки брифа от ИИ, которые заменяет поле формы, — по названию строки; порядок важен.
+_BRIEF_ROW_RE = (
+    ("name", re.compile(r"^назван|^кампани[яи]$")),
+    ("href", re.compile(r"ссылк|посадочн|сайт|\burl\b")),
+    ("region", re.compile(_SETTING_KINDS["region"][1])),
+    ("budget", re.compile(_SETTING_KINDS["budget"][1])),
+    ("goal", re.compile(_SETTING_KINDS["goal"][1] + r"|конверси")),
+    ("limits", re.compile(r"огранич|запре[тщ]|требован|нельзя|стоп-слов")),
+    ("product", re.compile(r"реклам|продукт|товар|услуг|что прода")),
+)
+_WEEKLY_KINDS = ("WB_MAXIMUM_CLICKS", "WB_MAXIMUM_CONVERSION_RATE")
+BRIEF_PRODUCT_MAX = 300
+BRIEF_OTHER_MAX = 600
+BRIEF_FILL_REGIONS = 5
+BRIEF_FILL_PAGE = 4000
+
+
+def _brief_row_kind(row: dict) -> str:
+    """Какое поле формы — эта строка брифа; "" — своя строка ИИ (оффер, УТП…), форма её не трогает."""
+    if row.get("form") in BRIEF_LABELS:
+        return row["form"]
+    name = str((row.get("cells") or [""])[0] or "").lower().replace("ё", "е").strip()
+    return next((kind for kind, pattern in _BRIEF_ROW_RE if pattern.search(name)), "")
+
+
+def _brief_row_value(row: dict | None) -> str:
+    cells = (row or {}).get("cells") or []
+    return str(cells[1] if len(cells) > 1 else "").strip()
+
+
+def _brief_table(actions: list[dict]) -> dict | None:
+    """Ждущая таблица брифа сборки по шагам — форма шага 1; None — формы нет (бриф согласован или старый чат)."""
+    build = campaign_build([dict(a) for a in actions])
+    if not _build_open(build):
+        return None
+    for action in reversed(actions):
+        args = action.get("args") or {}
+        if (
+            action["tool"] == "propose_items" and action["status"] == "pending" and args.get("stage") == "goals"
+            and isinstance(args.get("campaign"), dict) and not args.get("held")
+        ):
+            return dict(action)
+    return None
+
+
+def _brief_missing(form: dict, *, link_template: bool) -> list[str]:
+    """Без чего черновик в Директе не создать — «Дальше» на брифе недоступна."""
+    missing: list[str] = []
+    if not form.get("account_id"):
+        missing.append("кабинет")
+    if not form.get("name"):
+        missing.append("название кампании")
+    if not any(int(rid) > 0 for rid in form.get("region_ids") or []):
+        missing.append("регион")
+    if not form.get("href") and not link_template:
+        missing.append("посадочная ссылка")
+    return missing
+
+
+def brief_form(user_id: int, ws: dict, action: dict, *, link_template: bool) -> dict:
+    """Форма брифа из ждущей таблицы: поля, чего не хватает для «Дальше», что выбрать (кабинеты, цели).
+    ws — проект с accounts и goals (get_workspace)."""
+    from app import geo
+
+    args = action.get("args") or {}
+    camp = args.get("campaign") if isinstance(args.get("campaign"), dict) else {}
+    req = args.get("requirements") if isinstance(args.get("requirements"), dict) else {}
+    rows: dict[str, dict] = {}
+    for row in args.get("rows") or []:
+        kind = _brief_row_kind(row)
+        if kind and kind not in rows:
+            rows[kind] = row
+    strategy = camp.get("strategy") if isinstance(camp.get("strategy"), dict) else {}
+    weekly = strategy.get("weekly_budget_rub")
+    if weekly in (None, "") and rows.get("budget"):
+        cells = rows["budget"]["cells"]
+        parsed = _budget_of({"name": cells[0], "value": _brief_row_value(rows["budget"])})
+        if parsed:
+            weekly = round(parsed[0] * 7, 2) if parsed[1] == "day" else parsed[0]
+    accounts = [
+        {"id": int(a["id"]), "name": a.get("name") or a.get("client_login") or str(a["id"])}
+        for a in ws.get("accounts") or []
+    ]
+    href = camp.get("href") or ""
+    if not href:
+        found = _LINK_RE.search(_brief_row_value(rows.get("href")))
+        href = found.group(0) if found and found.group(0).startswith("http") else ""
+    region_ids = [int(r) for r in camp.get("region_ids") or []]
+    form = {
+        "account_id": camp.get("account_id") or (accounts[0]["id"] if len(accounts) == 1 else None),
+        "name": camp.get("name") or "",
+        "href": href,
+        "product": _brief_row_value(rows.get("product")),
+        "region_ids": region_ids,
+        "weekly_budget_rub": float(weekly) if weekly not in (None, "") else None,
+        "goal_id": strategy.get("goal_id") or ws.get("goal_id") or None,
+        "banned_words": list(req.get("banned_words") or []),
+        "other": "\n".join(req.get("other") or []),
+        **{key: req.get(key) for key in REQ_COUNTS},
+    }
+    try:
+        regions = geo.regions_named(user_id, region_ids) if region_ids else []
+    except Exception:  # форма без названий регионов лучше, чем доска, которая не открывается
+        log.warning("Регионы брифа не прочитаны", exc_info=True)
+        regions = [{"id": abs(r), "name": str(abs(r)), "path": "", "minus": r < 0} for r in region_ids]
+    return {
+        "action_id": action["id"],
+        "form": form,
+        "missing": _brief_missing(form, link_template=link_template),
+        # Регион словами от ИИ — подсказка, пока регионы из справочника не выбраны.
+        "region_text": "" if region_ids else _brief_row_value(rows.get("region")),
+        "regions": regions,
+        "accounts": accounts,
+        "goals": [
+            {"goal_id": int(g["goal_id"]), "name": str(g.get("name") or g["goal_id"])}
+            for g in ws.get("goals") or [] if str(g.get("goal_id") or "").isdigit()
+        ],
+        "link_template": link_template,
+        "extra": [
+            {"text": str(r["cells"][0]), "value": _brief_row_value(r)}
+            for r in args.get("rows") or [] if not _brief_row_kind(r) and r.get("cells")
+        ],
+    }
+
+
+def _brief_number(raw, what: str, *, integer: bool = False):
+    if raw in (None, ""):
+        return None
+    try:
+        number = int(raw) if integer else round(float(raw), 2)
+    except (TypeError, ValueError):
+        raise YandexError("args", f"{what} — число") from None
+    if number < 0:
+        raise YandexError("args", f"{what} — не меньше нуля")
+    return number or None
+
+
+def _brief_strategy(old: dict, weekly: float | None, goal_id: int | None) -> dict | None:
+    """Стратегия по форме: недельный бюджет и цель. Свою стратегию ИИ (CPA, ручные ставки…) не меняем — только её
+    бюджет и цель; без стратегии — «Максимум конверсий» с целью или «Максимум кликов». None — стратегии нет
+    (её зададут «Настройки»)."""
+    from app import actions
+
+    old = dict(old or {})
+    kind = str(old.get("search") or "")
+    if kind in ("", *_WEEKLY_KINDS):
+        if not weekly:
+            return None
+        # Новая стратегия брифа — на поиске, без сетей: сети включат «Настройки», если нужно.
+        out = {"network": "SERVING_OFF", **old, "search": "WB_MAXIMUM_CONVERSION_RATE" if goal_id else "WB_MAXIMUM_CLICKS"}
+        out["weekly_budget_rub"] = weekly
+        out.pop("goal_id", None)
+        if goal_id:
+            out["goal_id"] = goal_id
+        return out
+    spec = actions.AUTO_STRATEGIES.get(kind)
+    fields = spec[2] if isinstance(spec, tuple) and len(spec) > 2 else {}
+    if "weekly_budget_rub" in fields:
+        if weekly:
+            old["weekly_budget_rub"] = weekly
+    if "goal_id" in fields and goal_id:
+        old["goal_id"] = goal_id
+    return old
+
+
+def _brief_rows(old_rows: list[dict], width: int, values: dict[str, str]) -> list[dict]:
+    """Строки брифа: поля формы своими строками (номера прежних строк тех же полей сохраняются), строки ИИ
+    про другое — как были."""
+    keep = [r for r in old_rows if not _brief_row_kind(r)]
+    numbers: dict[str, int] = {}
+    for row in old_rows:
+        kind = _brief_row_kind(row)
+        if kind and kind not in numbers and row.get("n") is not None:
+            numbers[kind] = int(row["n"])
+    top = max([0, *numbers.values(), *(int(r["n"]) for r in keep if r.get("n") is not None)])
+    out: list[dict] = []
+    for kind in BRIEF_ORDER:
+        text = values.get(kind) or ""
+        if not text:
+            continue
+        n = numbers.get(kind)
+        if n is None:
+            top += 1
+            n = top
+        cells = [BRIEF_LABELS[kind], _line(text, 300)]
+        out.append({
+            "n": n, "section": "", "kind": "goal", "cells": (cells + [""] * width)[: max(width, 2)],
+            "checked": True, "form": kind,
+        })
+    return sorted(out + keep, key=lambda r: int(r.get("n") or 0))
+
+
+def _clean_brief_form(raw) -> dict:
+    if not isinstance(raw, dict):
+        raise YandexError("args", "Форма брифа — объект")
+    other = raw.get("other")
+    other = "\n".join(str(v) for v in other) if isinstance(other, list) else str(other or "")
+    banned = raw.get("banned_words")
+    return {
+        "account_id": _brief_number(raw.get("account_id"), "Кабинет", integer=True),
+        "name": _line(raw.get("name"), 255),
+        "href": _line(raw.get("href"), 1024),
+        "product": _line(raw.get("product"), BRIEF_PRODUCT_MAX),
+        "region_ids": raw.get("region_ids") if isinstance(raw.get("region_ids"), list) else [],
+        "weekly_budget_rub": _brief_number(raw.get("weekly_budget_rub"), "Бюджет в неделю"),
+        "goal_id": _brief_number(raw.get("goal_id"), "Цель", integer=True),
+        "banned_words": banned if isinstance(banned, (list, str)) else [],
+        "other": [line.strip() for line in other[:BRIEF_OTHER_MAX].splitlines() if line.strip()],
+        **{key: raw.get(key) for key in REQ_COUNTS},
+    }
+
+
+def _brief_actions(user_id: int, chat_id: int) -> list[dict]:
+    with pool.connection() as conn:
+        chat = _require_chat(conn, user_id, chat_id)
+        if _chat_out(chat)["status"] == "running":
+            raise YandexError("busy", "ИИ ещё отвечает — дождитесь ответа")
+        return conn.execute("SELECT * FROM ai_actions WHERE chat_id = %s ORDER BY id", (chat_id,)).fetchall()
+
+
+def save_brief(user_id: int, chat_id: int, raw) -> dict:
+    """Форма брифа → ждущая таблица брифа (campaign, requirements, строки). Ответ — чат, как get_chat."""
+    from app import geo
+
+    form = _clean_brief_form(raw)
+    ctx = _chat_context(user_id, chat_id)
+    table = _brief_table(_brief_actions(user_id, chat_id))
+    if table is None:
+        raise YandexError("decided", "Бриф уже согласован — обновите страницу")
+    original = table["args"]
+    args = copy.deepcopy(original)
+    old = args.get("campaign") or {}
+    strategy = _brief_strategy(old.get("strategy") or {}, form["weekly_budget_rub"], form["goal_id"])
+    campaign = _brief_campaign(
+        ctx,
+        {
+            **{k: old[k] for k in ("type", "daily_budget_rub") if old.get(k) not in (None, "")},
+            "account_id": form["account_id"],
+            "name": form["name"],
+            "region_ids": form["region_ids"],
+            "href": form["href"],
+            **({"strategy": strategy} if strategy else {}),
+        },
+        loose=True,
+    )
+    requirements = brief_requirements({
+        **{key: form[key] for key in REQ_COUNTS if form[key] not in (None, "")},
+        "banned_words": form["banned_words"],
+        "other": form["other"],
+    })
+    goal_id = form["goal_id"]
+    ids = campaign.get("region_ids") or []
+    values = {
+        "name": campaign.get("name") or "",
+        "product": form["product"],
+        "region": geo.region_label(ids, geo.cached_regions()) if ids else "",
+        "budget": f"{_money(form['weekly_budget_rub'])} в неделю" if form["weekly_budget_rub"] else "",
+        "goal": (_goal_names(ctx).get(int(goal_id)) or f"цель {goal_id}") if goal_id else "",
+        "href": campaign.get("href") or "",
+        "limits": requirements_text(requirements),
+    }
+    args["campaign"] = campaign
+    args["requirements"] = requirements
+    args["rows"] = _brief_rows(args.get("rows") or [], len(args.get("columns") or []), values)
+    with pool.connection() as conn:
+        chat = _require_chat(conn, user_id, chat_id, lock=True)
+        if _chat_out(chat)["status"] == "running":
+            raise YandexError("busy", "ИИ ещё отвечает — дождитесь ответа")
+        done = conn.execute(
+            "UPDATE ai_actions SET args = %s WHERE id = %s AND status = 'pending' AND args = %s RETURNING id",
+            (Jsonb(args), table["id"], Jsonb(original)),
+        ).fetchone()
+        if done is None:
+            raise YandexError("decided", "Пока вы правили, бриф уже решён — обновите страницу")
+    return get_chat(user_id, chat_id)
+
+
+def _brief_gate(user_id: int, row: dict) -> None:
+    """«Дальше» на брифе формой: без кабинета, названия, регионов и ссылки черновик не создать."""
+    from app.actions import _ws_link_template
+
+    payload = row.get("args") or {}
+    if payload.get("stage") != "goals" or not isinstance(payload.get("campaign"), dict):
+        return
+    ctx = _chat_context(user_id, row["chat_id"])
+    build, _created = _chat_build(ctx)
+    if build is not None and (build.get("campaign") or {}).get("name"):
+        return  # бриф согласован раньше — это правка (revise), черновик уже есть
+    form = brief_form(user_id, ctx.ws, row, link_template=bool(_ws_link_template(ctx.ws)))
+    if form["missing"]:
+        raise YandexError("args", "Заполните в брифе: " + ", ".join(form["missing"]))
+
+
+_BRIEF_FILL_SYSTEM = (
+    "Ты заполняешь бриф рекламной кампании в Яндекс Директе по странице сайта и брифу проекта. Ответ — только "
+    'JSON-объект: {"name": "название кампании до 60 знаков: Поиск — что рекламируем — город", '
+    '"product": "что рекламируем и оффер, 1–2 предложения", "regions": ["города или регионы показа, если '
+    'география видна на сайте или в брифе"], "weekly_budget_rub": число, только если бюджет назван в брифе '
+    'проекта, иначе null, "banned_words": ["слова, которые нельзя писать в объявлениях, только если это прямо '
+    'следует из брифа или сайта"], "other": ["другие ограничения для рекламы, коротко"]}. Не выдумывай: '
+    "чего нет на странице и в брифе — пустая строка, null или пустой список. Пиши по-русски."
+)
+
+
+def _brief_fill_regions(user_id: int, raw) -> list[dict]:
+    from app import geo
+
+    names = [raw] if isinstance(raw, str) else raw if isinstance(raw, list) else []
+    out: list[dict] = []
+    for place in names[:BRIEF_FILL_REGIONS]:
+        word = _line(place if isinstance(place, str) else "", 80)
+        if not word:
+            continue
+        try:
+            found = (geo.search_regions(user_id, word, limit=1).get("regions") or [])[:1]
+        except YandexError:
+            continue
+        if found and all(r["id"] != found[0]["id"] for r in out):
+            out.append({"id": int(found[0]["id"]), "name": found[0]["name"], "path": found[0].get("path") or ""})
+    return out
+
+
+def fill_brief(user_id: int, chat_id: int, site: str = "") -> dict:
+    """«ИИ заполнит по сайту»: {form: поля, которые удалось найти, regions: выбранные регионы, usage}.
+    Форму не сохраняет — маркетолог правит и сохраняет сам."""
+    from app import brief as brief_mod
+
+    ctx = _chat_context(user_id, chat_id)
+    table = _brief_table(_brief_actions(user_id, chat_id))
+    if table is None:
+        raise YandexError("decided", "Бриф уже согласован — обновите страницу")
+    camp = (table.get("args") or {}).get("campaign") or {}
+    url = _line(site, 1024) or camp.get("href") or ctx.ws.get("site") or ctx.ws.get("counter_site") or ""
+    if not url:
+        raise YandexError("site", "Укажите адрес сайта в поле «Сайт»")
+    cfg = ai.load_config(user_id, "board_brief", ctx.ws_id)
+    ai.check_budget(cfg)
+    page = brief_mod.read_page(url, BRIEF_FILL_PAGE)
+    content = "\n".join(
+        part for part in (
+            brief_mod.brief_prompt(ctx.ws),
+            f"Страница: {page['url']}",
+            f"Заголовок: {page['title']}" if page.get("title") else "",
+            f"Описание: {page['description']}" if page.get("description") else "",
+            "Подзаголовки: " + " | ".join(page["headings"]) if page.get("headings") else "",
+            "Цены: " + ", ".join(page["prices"]) if page.get("prices") else "",
+            f"Текст: {page.get('text') or ''}",
+        ) if part
+    )
+    with ai.meter() as spent:
+        data = ai.complete_json(
+            cfg, [{"role": "system", "content": _BRIEF_FILL_SYSTEM}, {"role": "user", "content": content}]
+        )
+    data = data if isinstance(data, dict) else {}
+    out: dict = {"href": page["url"]}
+    if _line(data.get("name"), 255):
+        out["name"] = _line(data.get("name"), 255)
+    if _line(data.get("product"), BRIEF_PRODUCT_MAX):
+        out["product"] = _line(data.get("product"), BRIEF_PRODUCT_MAX)
+    regions = _brief_fill_regions(user_id, data.get("regions"))
+    if regions:
+        out["region_ids"] = [r["id"] for r in regions]
+    try:
+        weekly = _brief_number(data.get("weekly_budget_rub"), "Бюджет")
+    except YandexError:
+        weekly = None
+    if weekly:
+        out["weekly_budget_rub"] = weekly
+    try:
+        req = brief_requirements({
+            "banned_words": data.get("banned_words") if isinstance(data.get("banned_words"), list) else [],
+            "other": data.get("other") if isinstance(data.get("other"), list) else [],
+        })
+    except YandexError:
+        req = {}
+    if req.get("banned_words"):
+        out["banned_words"] = req["banned_words"]
+    if req.get("other"):
+        out["other"] = "\n".join(req["other"])
+    return {"form": out, "regions": regions, "usage": ai.usage_out(spent, user_id)}
+
+
 def _board_images(user_id: int, workspace_id: int, ops: list[dict]) -> None:
     """Картинки, добавленные на доске: кабинет — из проекта, картинка — в его библиотеке; превью — доске."""
     from app import ad_extras
@@ -10214,6 +10626,14 @@ def get_chat(user_id: int, chat_id: int) -> dict:
         if build["account_id"] is None and len(accounts) == 1:
             build["account_id"] = int(accounts[0]["id"])
         _board_from_direct(user_id, build)
+        brief_table = _brief_table(actions)
+        if brief_table is not None:
+            build["brief"] = brief_form(
+                user_id,
+                {**ws, "accounts": accounts, "goals": workspace_goals(user_id, chat["workspace_id"])},
+                brief_table,
+                link_template=bool(_ws_link_template(ws)),
+            )
     return {
         "chat": _chat_out(chat),
         "messages": [_message_out(m) for m in messages],
@@ -11909,6 +12329,8 @@ def decide_items(
             comment=comment, only=[action_id],
         )
         return {"action": out["actions"][0], "pending": out["pending"], "job": out["job"]}
+    if approve and not skip:
+        _brief_gate(user_id, row)
     table = payload.get("rows") or []
     stage = ITEM_STAGES.get(payload.get("stage") or "other", "")
     comment = _para(comment, 2000)

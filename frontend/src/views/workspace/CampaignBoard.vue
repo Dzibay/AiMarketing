@@ -104,9 +104,19 @@
           </button>
         </div>
 
-        <BoardSection v-if="s.key === 'brief'" name="goals" title="Бриф" bare :tables="tablesOf(s, 'goals')">
+        <BoardBrief
+          v-if="s.key === 'brief' && build.brief && saveBrief"
+          :ref="(el) => (briefForm = el)"
+          :brief="build.brief"
+          :intro="briefIntro"
+          :site="site"
+          :disabled="disabled"
+          :save-form="saveBrief"
+          :fill="fillBrief"
+        />
+        <BoardSection v-else-if="s.key === 'brief'" name="goals" title="Бриф" bare :tables="tablesOf(s, 'goals')">
           <BoardFacts v-if="build.goals.length" :items="build.goals" />
-          <p v-else class="hint">ИИ спросит про продукт, гео, бюджет и цель — бриф появится здесь.</p>
+          <p v-else class="hint">ИИ пришлёт форму брифа — заполните её сами или кнопкой «ИИ заполнит по сайту».</p>
         </BoardSection>
 
         <BoardSection v-if="s.key === 'demand'" name="demand" title="Спрос" bare :tables="tablesOf(s, 'demand')">
@@ -349,7 +359,7 @@
             <button
               class="btn btn--accent"
               type="button"
-              :disabled="disabled || !stepChosen(s) || stepBlocked(s)"
+              :disabled="disabled || stepBlocked(s) || (!stepChosen(s) && !briefDirty(s))"
               v-tip="`Согласовать отмеченное (${stepChosen(s)}) — ИИ подготовит следующий шаг`"
               @click="next(s)"
             >
@@ -427,6 +437,7 @@ import CampaignNextStep from '../../components/CampaignNextStep.vue'
 import BoardExtras from './BoardExtras.vue'
 import BoardFacts from './BoardFacts.vue'
 import BoardGroup from './BoardGroup.vue'
+import BoardBrief from './BoardBrief.vue'
 import BoardRegen from './BoardRegen.vue'
 import BoardRule from './BoardRule.vue'
 import BoardSection from './BoardSection.vue'
@@ -444,6 +455,9 @@ const props = defineProps({
   edit: { type: Function, required: true },
   // ↻: async ({ kind, group, text, comment }) => [варианты] или null при ошибке; нет — кнопок ↻ нет.
   regenerate: { type: Function, default: null },
+  // Бриф формой: async (form) => true, если сохранилось; async (site) => { form, regions } или null.
+  saveBrief: { type: Function, default: null },
+  fillBrief: { type: Function, default: null },
   // Генерация картинок подключена в настройках.
   imageGen: { type: Boolean, default: false },
 })
@@ -693,7 +707,20 @@ function stepChecks(step) {
 }
 
 function stepBlocked(step) {
+  if (step.key === 'brief' && briefForm.value?.missing?.length) return true
   return stepChecks(step).some((c) => BLOCKING.has(c.key))
+}
+
+// --- Бриф формой ------------------------------------------------------------------------------------
+
+const briefForm = ref(null)
+const briefIntro = computed(() => {
+  const id = props.build.brief?.action_id
+  return props.actions.find((a) => a.id === id)?.args?.intro || ''
+})
+
+function briefDirty(step) {
+  return step.key === 'brief' && !!briefForm.value?.dirty
 }
 
 function stepSkippable(step) {
@@ -938,6 +965,11 @@ function chosenOf(table) {
  * how: 'next' — согласовать отмеченное, 'redo' — переделать, 'skip' — пропустить необязательный этап.
  */
 async function decideStep(step, how) {
+  if (step.key === 'brief' && how === 'next' && briefForm.value?.dirty) {
+    // «Дальше» на брифе формой — сначала сохранить форму в таблицу брифа, потом согласовать её.
+    if (!(await briefForm.value.save())) return
+    await nextTick()
+  }
   const list = stepTables(step)
   if (!list.length) return
   await settleChecks()
