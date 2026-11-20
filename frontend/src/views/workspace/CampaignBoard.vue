@@ -36,6 +36,51 @@
       </div>
     </div>
 
+    <!-- Сверка: кампанию правили в самом Директе. Конфликт с правкой доски — обе версии. -->
+    <div v-if="drift.length && !direct?.moderated" class="board-sync is-drift" data-sync="drift">
+      <p><strong>В Директе изменилось:</strong> {{ drift.length }} {{ plural(drift.length, 'правка', 'правки', 'правок') }}</p>
+      <ul class="board-sync__list">
+        <li v-for="(c, i) in drift" :key="`d${i}`" :class="{ 'is-conflict': c.conflict }">
+          <span class="board-sync__op">{{ OPS[c.op] }}</span>
+          <span>{{ changeText(c) }}</span>
+          <template v-if="c.conflict">
+            <small class="tone-warn">конфликт</small>
+            <span class="board-sync__both">
+              <span><b>в Директе:</b> {{ directVersion(c) }}</span>
+              <span><b>на доске:</b> {{ boardVersion(c) }}</span>
+            </span>
+          </template>
+        </li>
+      </ul>
+      <div class="board-decision__buttons">
+        <button class="btn btn--xs btn--accent" type="button" :disabled="disabled" @click="emit('pull', false)">Подтянуть</button>
+        <button v-if="drift.some((c) => c.conflict) || queue.length" class="btn btn--xs" type="button" :disabled="disabled" @click="emit('pull', true)">
+          Оставить мои
+        </button>
+      </div>
+      <p class="hint">«Подтянуть» — доска станет как в Директе; «Оставить мои» — по «Применить» Директ вернётся к доске.</p>
+    </div>
+
+    <!-- Очередь правок к записанным шагам: пишутся только по «Применить в Директ». -->
+    <div v-if="queue.length && !direct?.moderated" class="board-sync" data-sync="queue">
+      <p>
+        <strong>Правки, которых нет в Директе:</strong> {{ queue.length }}
+        <button class="ai-check__link" type="button" @click="queueOpen = !queueOpen">{{ queueOpen ? 'свернуть' : 'что изменится' }}</button>
+      </p>
+      <ul v-if="queueOpen" class="board-sync__list">
+        <li v-for="(c, i) in queue" :key="`q${i}`">
+          <span class="board-sync__op">{{ OPS[c.op] }}</span>
+          <span>{{ changeText(c) }}</span>
+        </li>
+      </ul>
+      <div class="board-decision__buttons">
+        <button class="btn btn--xs btn--accent" type="button" :disabled="disabled" @click="emit('write')">
+          Применить в Директ ({{ queue.length }} {{ plural(queue.length, 'изменение', 'изменения', 'изменений') }})
+        </button>
+        <button class="btn btn--xs btn--ghost" type="button" :disabled="disabled" @click="resetQueue">Сбросить</button>
+      </div>
+    </div>
+
     <!-- Мастер: открыт один шаг (текущий или прошлый, который открыли поправить), прошлые свёрнуты с ✓, будущие серые. -->
     <section
       v-for="(s, i) in steps"
@@ -366,6 +411,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, provide, reactive, ref,
 import UiCheckbox from '../../components/ui/UiCheckbox.vue'
 import { RouterLink } from 'vue-router'
 import { aiApi } from '../../api/web'
+import { askConfirm } from '../../composables/useConfirm'
 import { plural } from '../../utils/format'
 import CampaignNextStep from '../../components/CampaignNextStep.vue'
 import BoardExtras from './BoardExtras.vue'
@@ -390,8 +436,10 @@ const props = defineProps({
 })
 // decide — решение по одной таблице (id, { approve, rows, comment, skip? }); board — решение по таблицам старой
 // доски ({ approve, rows, comment, only }); draft — карточка создания черновика (approve); ask — вопрос ИИ в чат (text).
-// write — ещё раз записать согласованное в черновик Директа; moderate — отправить черновик на модерацию.
-const emit = defineEmits(['decide', 'board', 'draft', 'ask', 'write', 'moderate'])
+// write — «Применить в Директ» (очередь правок и незаписанное); reset — сбросить очередь правок;
+// pull — плашка «В Директе изменилось» (keep: false — «Подтянуть», true — «Оставить мои»);
+// moderate — отправить черновик на модерацию.
+const emit = defineEmits(['decide', 'board', 'draft', 'ask', 'write', 'reset', 'pull', 'moderate'])
 
 // --- Черновик в Директе (сборка по шагам) -------------------------------------------------------
 
@@ -405,6 +453,56 @@ const writtenText = computed(() => {
     count(w.ads, 'объявление', 'объявления', 'объявлений'),
   ].join(' · ')
 })
+
+// --- Очередь правок и сверка с Директом (пункт 4) -------------------------------------------------
+
+const queue = computed(() => props.build.queue || [])
+const drift = computed(() => props.build.drift || [])
+const queueOpen = ref(false)
+const OPS = { add: '+', remove: '−', edit: '~' }
+const KINDS = {
+  campaign: 'кампания',
+  group: 'группа',
+  keyword: 'фраза',
+  negative: 'минус-фраза',
+  audience: 'аудитория',
+  ad: 'объявление',
+  title: 'заголовок',
+  text: 'текст',
+}
+
+function changeText(c) {
+  const kind = KINDS[c.kind]
+  if (c.kind === 'group' && c.op === 'edit' && c.group && c.group !== c.text) return `группа «${c.group}» → «${c.text}»`
+  const where = c.group && c.kind !== 'group' ? ` · ${c.group}` : ''
+  return kind ? `${kind} «${c.text}»${where}` : `${c.text}${where}`
+}
+
+function directVersion(c) {
+  if (c.direct) return [...(c.direct.titles || []), ...(c.direct.texts || [])].join(' · ') || '—'
+  return c.op === 'remove' ? 'удалено' : c.text
+}
+
+// Своя правка к тому же объекту в очереди «Применить».
+function boardVersion(c) {
+  const norm = (t) => String(t || '').trim().toLowerCase()
+  const same = queue.value.filter((q) => {
+    if ((q.group || '') !== (c.group || '')) return false
+    if (c.kind === 'keyword' || c.kind === 'negative') return q.kind === c.kind && norm(q.text) === norm(c.text)
+    return c.kind === 'group' || ['ad', 'title', 'text'].includes(q.kind)
+  })
+  const edits = same.map((q) => `${OPS[q.op]} ${changeText(q)}`)
+  if (c.kind === 'group' && c.op === 'edit') edits.unshift(`«${c.group}»`)
+  return edits.length ? edits.join('; ') : 'своя правка'
+}
+
+async function resetQueue() {
+  const ok = await askConfirm(`Сбросить ${queue.value.length} ${plural(queue.value.length, 'правку', 'правки', 'правок')}? Доска вернётся к тому, что в Директе.`, {
+    title: 'Сбросить правки',
+    confirmText: 'Сбросить',
+  })
+  if (ok) emit('reset')
+}
 
 // --- Что не попало в черновик -------------------------------------------------------------------
 

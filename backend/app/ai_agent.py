@@ -8040,6 +8040,9 @@ def campaign_build(actions: list[dict], *, link_template: bool = False) -> dict 
         ):
             requirements = args["requirements"]
         if action["tool"] == "board_edit":
+            # «Сбросить» на доске: правки, не применённые в Директ, отменены.
+            if action.get("status") == "rejected":
+                continue
             for op in args.get("ops") or []:
                 board.op(op)
             continue
@@ -8242,8 +8245,9 @@ BUILD_MEMORY_NOTE = (
 )
 
 
-def _chat_build(ctx: Context) -> tuple[dict | None, list[dict]]:
-    """(сборка кампании в этом чате — как на доске; кампании, созданные в нём и не удалённые из Директа)."""
+def _chat_build(ctx: Context, *, without_queue: bool = False) -> tuple[dict | None, list[dict]]:
+    """(сборка кампании в этом чате — как на доске; кампании, созданные в нём и не удалённые из Директа).
+    without_queue — без правок доски, которые ждут «Применить в Директ» (так пишет ход ИИ)."""
     if ctx.chat_id is None or ctx.ws_id is None:
         return None, []
     from app.actions import _ws_link_template
@@ -8286,16 +8290,34 @@ def _chat_build(ctx: Context) -> tuple[dict | None, list[dict]]:
         for i in dict.fromkeys(made)
         if i in by_id
     ]
+    if without_queue:
+        upto = build_sync.edits_upto(actions)
+        actions = [a for a in actions if not build_sync.queued(a, upto)]
     return campaign_build(actions, link_template=bool(_ws_link_template(ctx.ws))), created
 
 
-def sync_build(ctx: Context) -> dict | None:
-    """Согласованные шаги сборки — в черновик Директа (build_sync). None — писать было нечего."""
+def _last_board_edit(ctx: Context) -> int:
+    with pool.connection() as conn:
+        row = conn.execute(
+            "SELECT MAX(id) AS id FROM ai_actions WHERE chat_id = %s AND tool = 'board_edit'", (ctx.chat_id,)
+        ).fetchone()
+    return int(row["id"] or 0)
+
+
+def sync_build(ctx: Context, *, apply: bool = False) -> dict | None:
+    """Согласованные шаги сборки — в черновик Директа (build_sync). None — писать было нечего.
+    Ход ИИ пишет новые шаги, а правки доски в уже записанном ждут «Применить в Директ» (apply=True)."""
     if ctx.chat_id is None or ctx.ws_id is None:
         return None
-    build, _created = _chat_build(ctx)
-    if not _build_open(build):
+    full, _created = _chat_build(ctx)
+    if not _build_open(full):
         return None
+    if apply or not (full.get("direct_state") or {}).get("campaign_row_id"):
+        # Черновика ещё нет — в него идёт всё, что на доске; дальше копится только новое.
+        return build_sync.sync(
+            ctx.user_id, ctx.ws_id, ctx.chat_id, full, full["direct_state"], upto=_last_board_edit(ctx)
+        )
+    build, _created = _chat_build(ctx, without_queue=True)
     return build_sync.sync(ctx.user_id, ctx.ws_id, ctx.chat_id, build, build["direct_state"])
 
 
@@ -8419,7 +8441,34 @@ def _direct_memory(build: dict) -> list[str]:
         lines.append(f"Последняя запись в Директ не прошла: {direct['error']} — маркетолог может повторить её на доске.")
     if direct.get("warnings"):
         lines.append("Директ не принял при записи: " + "; ".join(direct["warnings"][:8]) + ".")
+    queue, drift = build.get("queue") or [], build.get("drift") or []
+    if queue:
+        more = f"; и ещё {len(queue) - BUILD_MEMORY_EDITS}" if len(queue) > BUILD_MEMORY_EDITS else ""
+        lines.append(
+            f"На доске правки, которых ещё нет в Директе ({len(queue)}; маркетолог применит их кнопкой «Применить "
+            "в Директ»), доска — это Директ плюс они: " + "; ".join(_change_text(c) for c in queue[:BUILD_MEMORY_EDITS])
+            + more + "."
+        )
+    if drift:
+        lines.append(
+            "В самом Директе черновик поменяли после записи (на доске плашка «Подтянуть» / «Оставить мои»): "
+            + "; ".join(_change_text(c) for c in drift[:BUILD_MEMORY_EDITS]) + "."
+        )
     return lines
+
+
+_CHANGE_KINDS = {
+    "campaign": "кампания", "group": "группа", "keyword": "фраза", "negative": "минус-фраза", "audience": "аудитория",
+    "ad": "объявление", "title": "заголовок", "text": "текст", "images": "", "extras": "",
+}
+_CHANGE_OPS = {"add": "+", "remove": "−", "edit": "~"}
+
+
+def _change_text(change: dict) -> str:
+    """Строка очереди или сверки для сводки модели: «+ фраза «окна» (Окна ПВХ)»."""
+    kind = _CHANGE_KINDS.get(change["kind"], change["kind"])
+    where = f" ({change['group']})" if change.get("group") and change["kind"] != "group" else ""
+    return f"{_CHANGE_OPS.get(change['op'], '')} {kind} «{change['text']}»{where}".replace("  ", " ").strip()
 
 
 def _build_memory(ctx: Context) -> str:
@@ -8449,6 +8498,7 @@ def _build_memory(ctx: Context) -> str:
             count = f", строк: {stage['count']}" if stage["count"] and stage["status"] in ("done", "pending") else ""
             lines.append(f"- {stage['label']}: {_stage_state(stage)}{count}")
         lines += _requirements_memory(build)
+        build["queue"], build["drift"], _snapshot = _direct_view(ctx.user_id, build)
         lines += _direct_memory(build)
         # Пока доска ждёт общего согласования, на ней — всё предложенное; после него — только согласованное.
         pick = _on_board_items if held else _approved_items
@@ -9566,8 +9616,10 @@ def _spec_patch(spec: dict, op: dict) -> None:
         phrases(find(op["to_group"])).append(values.pop(index))
 
 
-def edit_board(user_id: int, chat_id: int, ops) -> dict:
-    """Правки маркетолога на доске сборки: всё или ничего. → чат, как get_chat."""
+def edit_board(user_id: int, chat_id: int, ops, *, pulled: bool = False) -> dict:
+    """Правки маркетолога на доске сборки: всё или ничего. → чат, как get_chat.
+    pulled — «Подтянуть из Директа»: правка, которую доска не принимает (строки уже нет и т. п.), пропускается,
+    а записанные ложатся отдельной строкой с pulled — в очередь «Применить в Директ» они не идут."""
     if not isinstance(ops, list) or not ops:
         raise YandexError("args", "Нет правок")
     checks = [raw for raw in ops if isinstance(raw, dict) and raw.get("op") == BOARD_CHECKS]
@@ -9575,7 +9627,16 @@ def edit_board(user_id: int, chat_id: int, ops) -> dict:
     if len(ops) > MAX_BOARD_OPS or len(checks) > 1:
         raise YandexError("args", f"Не больше {MAX_BOARD_OPS} правок за раз")
     off = _board_off(checks[0]) if checks else {}
-    ops = [_board_op(raw) for raw in ops]
+    if pulled:
+        parsed = []
+        for raw in ops:
+            try:
+                parsed.append(_board_op(raw))
+            except YandexError:
+                continue
+        ops = parsed
+    else:
+        ops = [_board_op(raw) for raw in ops]
     with pool.connection() as conn:
         chat = _require_chat(conn, user_id, chat_id)
         if _chat_out(chat)["status"] == "running":
@@ -9607,7 +9668,13 @@ def edit_board(user_id: int, chat_id: int, ops) -> dict:
         draft = build["draft"]
         if draft and draft["status"] in ("approved", "done"):
             raise YandexError("decided", "Черновик уже создаётся или создан — правьте кампанию в разделе кампаний")
-        item = _board_validate(build, op)
+        if pulled:
+            try:
+                item = _board_validate(build, op)
+            except YandexError:
+                continue
+        else:
+            item = _board_validate(build, op)
         op["note"] = _board_note(op)
         by_id = {a["id"]: a for a in work}
         record = True
@@ -9668,7 +9735,10 @@ def edit_board(user_id: int, chat_id: int, ops) -> dict:
             last = conn.execute(
                 "SELECT * FROM ai_actions WHERE chat_id = %s ORDER BY id DESC LIMIT 1", (chat_id,)
             ).fetchone()
-            if last and last["tool"] == "board_edit" and last["message_id"] == anchor:
+            if (
+                not pulled and last and last["tool"] == "board_edit" and last["message_id"] == anchor
+                and not (last["args"] or {}).get("pulled") and last["status"] != "rejected"
+            ):
                 all_ops = list((last["args"] or {}).get("ops") or []) + recorded
                 conn.execute(
                     "UPDATE ai_actions SET args = %s, summary = %s, decided_at = NOW() WHERE id = %s",
@@ -9681,7 +9751,10 @@ def edit_board(user_id: int, chat_id: int, ops) -> dict:
                         (chat_id, message_id, user_id, tool_call_id, tool, args, summary, category, status, auto, decided_at)
                     VALUES (%s, %s, %s, '', 'board_edit', %s, %s, '', 'done', FALSE, NOW())
                     """,
-                    (chat_id, anchor, user_id, Jsonb({"ops": recorded}), _board_summary(recorded)),
+                    (
+                        chat_id, anchor, user_id, Jsonb({"ops": recorded, **({"pulled": True} if pulled else {})}),
+                        ("Подтянуто из Директа: " if pulled else "") + _board_summary(recorded),
+                    ),
                 )
         conn.execute("UPDATE ai_chats SET updated_at = NOW() WHERE id = %s", (chat_id,))
     return get_chat(user_id, chat_id)
@@ -10005,15 +10078,29 @@ def get_chat(user_id: int, chat_id: int) -> dict:
     }
 
 
-def _board_from_direct(user_id: int, build: dict) -> None:
-    """Доска сборки по шагам — глазами Директа: ✓ у того, что есть в черновике, и то, что добавили там руками."""
-    state = build.pop("direct_state", None) or {}
+def _direct_view(user_id: int, build: dict) -> tuple[list[dict], list[dict], dict | None]:
+    """(очередь «Применить в Директ», что поменяли в самом Директе, кампания из локальной копии Директа)."""
+    state = build.get("direct_state") or {}
     if not state.get("campaign_row_id"):
-        return
+        return [], [], None
+    queue = build_sync.changes(build, state)
     try:
-        build_sync.overlay(build, build_sync.direct_snapshot(user_id, int(state["campaign_row_id"])), state)
+        snapshot = build_sync.direct_snapshot(user_id, int(state["campaign_row_id"]))
     except Exception:  # доска без отметок Директа лучше, чем чат, который не открывается
         log.warning("Черновик %s не прочитан для доски", state.get("campaign_row_id"), exc_info=True)
+        return queue, [], None
+    moderated = (build.get("direct") or {}).get("moderated")
+    return queue, ([] if moderated else build_sync.drift(snapshot, state, queue)), snapshot
+
+
+def _board_from_direct(user_id: int, build: dict) -> None:
+    """Доска сборки по шагам — глазами Директа: ✓ у того, что есть в черновике, и то, что добавили там руками;
+    очередь правок для «Применить в Директ» и что поменяли в самом Директе."""
+    queue, drift, snapshot = _direct_view(user_id, build)
+    state = build.pop("direct_state", None) or {}
+    build["queue"], build["drift"] = queue, drift
+    if snapshot is not None:
+        build_sync.overlay(build, snapshot, state)
 
 
 def _chat_context(user_id: int, chat_id: int) -> Context:
@@ -10026,11 +10113,86 @@ def _chat_context(user_id: int, chat_id: int) -> Context:
     return ctx
 
 
+def _require_idle(user_id: int, chat_id: int) -> None:
+    with pool.connection() as conn:
+        chat = _require_chat(conn, user_id, chat_id)
+    if _chat_out(chat)["status"] == "running":
+        raise YandexError("busy", "ИИ ещё отвечает — дождитесь ответа")
+
+
 def retry_build_write(user_id: int, chat_id: int) -> dict:
-    """«Повторить» на доске: ещё раз записать согласованные шаги в черновик Директа. Ответ — чат целиком."""
+    """«Применить в Директ» (и «Повторить запись»): всё согласованное и поправленное на доске — в черновик.
+    Ответ — чат целиком."""
     ctx = _chat_context(user_id, chat_id)
+    _require_idle(user_id, chat_id)
     with acting_as("ai"):
-        sync_build(ctx)
+        sync_build(ctx, apply=True)
+    return get_chat(user_id, chat_id)
+
+
+def reset_build_edits(user_id: int, chat_id: int) -> dict:
+    """«Сбросить»: правки доски, которые ещё не применены в Директ, отменяются. Ответ — чат целиком."""
+    ctx = _chat_context(user_id, chat_id)
+    _require_idle(user_id, chat_id)
+    with pool.connection() as conn:
+        actions = conn.execute(
+            "SELECT id, tool, status, args, result FROM ai_actions WHERE chat_id = %s AND tool = ANY(%s) ORDER BY id",
+            (chat_id, ["board_edit", build_sync.TOOL]),
+        ).fetchall()
+        upto = build_sync.edits_upto(actions)
+        if upto is None:
+            raise YandexError("args", "Черновика в Директе ещё нет — сбрасывать нечего")
+        ids = [a["id"] for a in actions if build_sync.queued(a, upto)]
+        if ids:
+            conn.execute(
+                "UPDATE ai_actions SET status = 'rejected', error = %s, decided_at = NOW() WHERE id = ANY(%s)",
+                ("Сброшено: правка не применена в Директ", ids),
+            )
+            conn.execute("UPDATE ai_chats SET updated_at = NOW() WHERE id = %s", (ctx.chat_id,))
+    # Доска без очереди всё ещё не как записано (например, после «Подтянуть» сбросили правку, которая с Директом
+    # совпадала, — без неё фраза вернулась) — обратные правки, без записи в Директ.
+    build, _created = _chat_build(ctx)
+    state = (build or {}).get("direct_state") or {}
+    if state.get("campaign_row_id"):
+        ops = build_sync.revert_ops(build_sync.changes(build, state))
+        if ops:
+            edit_board(user_id, chat_id, ops, pulled=True)
+    return get_chat(user_id, chat_id)
+
+
+def check_build_direct(user_id: int, chat_id: int) -> dict:
+    """Лёгкая сверка черновика с Директом (доска открыта): {"changed": bool, "chat": чат, если перечитали}."""
+    ctx = _chat_context(user_id, chat_id)
+    build, _created = _chat_build(ctx)
+    state = (build or {}).get("direct_state") or {}
+    if not state.get("campaign_row_id") or (build.get("direct") or {}).get("moderated"):
+        return {"changed": False}
+    if not build_sync.check(user_id, chat_id, state):
+        return {"changed": False}
+    return {"changed": True, "chat": get_chat(user_id, chat_id)}
+
+
+def pull_build(user_id: int, chat_id: int, *, keep: bool = False) -> dict:
+    """Плашка «В Директе изменилось»: «Подтянуть» — доска как в Директе; keep — «Оставить мои»: правки доски
+    остаются и по «Применить» перепишут Директ. Ответ — чат целиком."""
+    ctx = _chat_context(user_id, chat_id)
+    _require_idle(user_id, chat_id)
+    build, _created = _chat_build(ctx)
+    state = (build or {}).get("direct_state") or {}
+    if not state.get("campaign_row_id"):
+        raise YandexError("args", "Черновика в Директе ещё нет")
+    snapshot = build_sync.direct_snapshot(user_id, int(state["campaign_row_id"]))
+    if snapshot is None:
+        raise YandexError("not-found", "Черновик не найден в Директе")
+    if not build_sync.drift(snapshot, state):
+        return get_chat(user_id, chat_id)
+    if not keep:
+        ops = build_sync.pull_ops(build, snapshot, state)
+        if ops:
+            edit_board(user_id, chat_id, ops, pulled=True)
+    new_state = build_sync.pulled_state(state, snapshot)
+    summary = "В Директе изменилось — оставлены правки доски" if keep else "Подтянуто из Директа"
+    build_sync._record(user_id, chat_id, {"state": new_state, "stages": [], "warnings": []}, summary=summary)
     return get_chat(user_id, chat_id)
 
 
@@ -10040,10 +10202,15 @@ def moderate_build(user_id: int, chat_id: int) -> dict:
     build, _created = _chat_build(ctx)
     if build is None or not build.get("campaign"):
         raise YandexError("args", "В этом чате нет черновика, собранного по шагам")
-    # Сначала дописать то, что согласовали, но ещё не записали.
+    # Сначала дописать то, что согласовали, но ещё не записали (правки доски — только через «Применить»).
     with acting_as("ai"):
         if sync_build(ctx) is not None:
             build, _created = _chat_build(ctx)
+    queue = build_sync.changes(build, build.get("direct_state") or {})
+    if queue:
+        raise YandexError(
+            "args", f"На доске есть правки, которых нет в Директе ({len(queue)}) — примените или сбросьте их"
+        )
     build_sync.moderate(user_id, chat_id, build)
     return get_chat(user_id, chat_id)
 

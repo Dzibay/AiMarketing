@@ -141,6 +141,11 @@ class BoardDecideBody(BaseModel):
     only: list[int] | None = None
 
 
+class BoardPullBody(BaseModel):
+    # «Оставить мои»: правки доски остаются, по «Применить» они перепишут Директ.
+    keep: bool = False
+
+
 class ReviewBody(BaseModel):
     # Пусто — общий разбор проекта; текст карточки сигнала — разбор по ней.
     prompt: str = ""
@@ -425,8 +430,26 @@ def chat_board_decide(chat_id: int, body: BoardDecideBody, user_id: int = Depend
 
 @router.post("/ai/chats/{chat_id}/board/write")
 def chat_board_write(chat_id: int, user_id: int = Depends(require_web_user)) -> dict:
-    """«Повторить» запись согласованных шагов в черновик Директа; ответ — чат целиком."""
+    """«Применить в Директ» (и «Повторить запись»): доска целиком — в черновик Директа; ответ — чат целиком."""
     return _call(ai_agent.retry_build_write, user_id, chat_id)
+
+
+@router.post("/ai/chats/{chat_id}/board/reset")
+def chat_board_reset(chat_id: int, user_id: int = Depends(require_web_user)) -> dict:
+    """«Сбросить»: правки доски, не применённые в Директ, отменяются; ответ — чат целиком."""
+    return _call(ai_agent.reset_build_edits, user_id, chat_id)
+
+
+@router.post("/ai/chats/{chat_id}/board/check")
+def chat_board_check(chat_id: int, user_id: int = Depends(require_web_user)) -> dict:
+    """Лёгкая сверка черновика с Директом: {changed, chat — если черновик перечитан}."""
+    return _call(ai_agent.check_build_direct, user_id, chat_id)
+
+
+@router.post("/ai/chats/{chat_id}/board/pull")
+def chat_board_pull(chat_id: int, body: BoardPullBody, user_id: int = Depends(require_web_user)) -> dict:
+    """«Подтянуть» изменения из Директа на доску или «Оставить мои»; ответ — чат целиком."""
+    return _call(ai_agent.pull_build, user_id, chat_id, keep=body.keep)
 
 
 @router.post("/ai/chats/{chat_id}/board/moderate")

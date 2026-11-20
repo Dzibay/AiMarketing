@@ -203,11 +203,23 @@ def test_removed_phrase_and_group_leave_the_draft(db, monkeypatch):
         {"op": "remove", "kind": "keyword", "group": "Окна ПВХ", "text": drop["text"]},
         {"op": "remove", "kind": "keyword", "group": "Двери", "text": doors["keywords"][0]["text"]},
     ])
+    # Правки в записанном шаге копятся: ход ИИ их не пишет, на доске — «Применить в Директ (N)».
+    before = len(direct.calls)
     _turn(user, chat, monkeypatch, _text("Учёл."))
+    assert len(direct.calls) == before
+    queue = ai_agent.get_chat(user, chat)["build"]["queue"]
+    assert {(c["kind"], c["op"], c["group"]) for c in queue} >= {("keyword", "remove", "Окна ПВХ")}
+
+    out = ai_agent.retry_build_write(user, chat)
+    assert out["build"]["queue"] == []
     assert "delete_adgroups" in direct.tools() and "keywords_delete" in direct.tools()
     with db.connection() as conn:
         left = [r["keyword"] for r in conn.execute("SELECT keyword FROM direct_keywords ORDER BY id").fetchall()]
     assert left == ["купить окна пвх"]
+    # Применённое следующий ход не трогает.
+    before = len(direct.calls)
+    _turn(user, chat, monkeypatch, _text("Дальше."))
+    assert len(direct.calls) == before
 
 
 def test_write_error_is_on_the_board_and_retry_works(db, monkeypatch):

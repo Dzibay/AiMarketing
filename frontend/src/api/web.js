@@ -377,8 +377,14 @@ export const aiApi = {
   board: (chatId, ops) => post(`/api/web/ai/chats/${chatId}/board`, { ops }),
   /** Одно решение на всю доску: { approve, rows: { id таблицы: [номера отмеченных строк] }, comment }. */
   boardDecide: (chatId, payload) => post(`/api/web/ai/chats/${chatId}/board/decide`, payload),
-  /** Ещё раз записать согласованные шаги в черновик Директа → чат целиком. */
+  /** «Применить в Директ»: записать очередь правок и незаписанные шаги в черновик → чат целиком. */
   boardWrite: (chatId) => post(`/api/web/ai/chats/${chatId}/board/write`, {}),
+  /** Сбросить правки доски, которых нет в Директе → чат целиком. */
+  boardReset: (chatId) => post(`/api/web/ai/chats/${chatId}/board/reset`, {}),
+  /** Лёгкая сверка черновика с Директом: { changed, chat? }. */
+  boardCheck: (chatId) => post(`/api/web/ai/chats/${chatId}/board/check`, {}),
+  /** «В Директе изменилось»: keep=false — подтянуть на доску, true — оставить правки доски → чат целиком. */
+  boardPull: (chatId, keep = false) => post(`/api/web/ai/chats/${chatId}/board/pull`, { keep }),
   /** Черновик, собранный по шагам, — на модерацию → чат целиком. */
   boardModerate: (chatId) => post(`/api/web/ai/chats/${chatId}/board/moderate`, {}),
   /** Доска готовой кампании из Директа: { campaign, groups, negatives }. */

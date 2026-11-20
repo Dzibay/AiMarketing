@@ -47,6 +47,34 @@ def empty_state() -> dict:
     return {"campaign_row_id": None, "account_id": None, "applied": {}, "groups": {}, "negatives": None}
 
 
+# --- Очередь правок (пункт 4) ------------------------------------------------------------------------
+#
+# Ход ИИ после «Дальше» пишет в черновик новые шаги, а правки маркетолога на доске в уже записанных шагах
+# копятся до «Применить в Директ». Граница — state.edits_upto: правки доски (board_edit) с id больше неё ещё
+# не применены. Правки «Подтянуть из Директа» (args.pulled) доску с Директом выравнивают — в очередь не идут.
+
+
+def edits_upto(actions: list[dict]) -> int | None:
+    """До какой правки доски включительно всё применено; None — черновика ещё нет (в него пойдёт всё)."""
+    writes = [a for a in actions if a.get("tool") == TOOL]
+    if not writes:
+        return None
+    state = (writes[-1].get("result") or {}).get("state") or {}
+    # Записи до пункта 4 писали все правки сразу: применено всё, что было до последней записи.
+    return int(state["edits_upto"]) if state.get("edits_upto") is not None else int(writes[-1]["id"])
+
+
+def queued(action: dict, upto: int | None) -> bool:
+    """Правка доски ждёт «Применить в Директ»."""
+    return (
+        upto is not None
+        and action.get("tool") == "board_edit"
+        and action.get("status") != "rejected"
+        and int(action["id"]) > upto
+        and not (action.get("args") or {}).get("pulled")
+    )
+
+
 def last_state(actions: list[dict]) -> dict:
     """Состояние после последней записи (её result.state); записей нет — пустое."""
     for action in reversed(actions):
@@ -329,7 +357,7 @@ class _Writer:
                 continue
             try:
                 if entry.get("ad"):
-                    ads.update_text_ad(self.user_id, int(entry["ad"]), titles=titles, texts=texts, href=href)
+                    made = ads.update_text_ad(self.user_id, int(entry["ad"]), titles=titles, texts=texts, href=href)
                 else:
                     made = ads.create_text_ad(
                         self.user_id, adgroup_row_id=int(entry["id"]), href=href, titles=titles, texts=texts
@@ -337,6 +365,11 @@ class _Writer:
                     entry["ad"] = int(made["id"])
                     entry["extras_sig"] = None
                 entry["ad_sig"] = sig
+                # Как текст лёг в Директ (он чистит кавычки и пробелы) — с этим сверка и сравнивает.
+                made = made if isinstance(made, dict) else {}
+                entry["ad_direct"] = {
+                    "titles": list(made.get("titles") or titles), "texts": list(made.get("texts") or texts),
+                }
                 self.mark("ads")
             except YandexError as exc:
                 self.warn(f"«{group['name']}»: объявление не записано: {exc.message or exc.code}")
@@ -387,12 +420,18 @@ class _Writer:
             self.extras()
 
 
-def sync(user_id: int, workspace_id: int, chat_id: int, build: dict | None, state: dict) -> dict | None:
+def sync(
+    user_id: int, workspace_id: int, chat_id: int, build: dict | None, state: dict, upto: int | None = None
+) -> dict | None:
     """Дописать согласованное в черновик. None — писать нечего (сборка не по шагам или ничего не изменилось).
-    state — что уже записано в этой сборке (last_state её действий)."""
+    state — что уже записано в этой сборке (last_state её действий); upto — до какой правки доски теперь
+    всё применено (state.edits_upto после записи)."""
     if not build or not build.get("campaign") or build.get("draft"):
         return None
     state = {**empty_state(), **(state or {})}
+    moved = upto is not None and upto != state.get("edits_upto")
+    if upto is not None:
+        state["edits_upto"] = upto
     writer = _Writer(user_id, workspace_id, build, {**state, "groups": {k: dict(v) for k, v in state["groups"].items()}})
     error = ""
     try:
@@ -403,7 +442,12 @@ def sync(user_id: int, workspace_id: int, chat_id: int, build: dict | None, stat
         log.exception("Запись сборки в Директ, чат %s", chat_id)
         error = "Сбой при записи в Директ"
     if not writer.stages and not writer.warnings and not error:
-        return None
+        if not moved or not writer.state.get("campaign_row_id"):
+            return None
+        # Записывать было нечего (правки свелись к тому, что уже в Директе), но очередь применена.
+        result = {"state": writer.state, "stages": [], "warnings": []}
+        _record(user_id, chat_id, result, summary="Правки доски совпадают с Директом")
+        return {**result, "error": ""}
     result = {"state": writer.state, "stages": writer.stages, "warnings": writer.warnings[:MAX_WARNINGS]}
     _record(user_id, chat_id, result, error)
     return {**result, "error": error}
@@ -577,3 +621,325 @@ def overlay(build: dict, snapshot: dict | None, state: dict) -> None:
         _item(n) for n in snapshot["negatives"] if _norm(n) not in on_board and _norm(n) not in {_norm(w) for w in written}
     ]
     build["direct_campaign"] = snapshot["campaign"]
+
+
+# --- Очередь «Применить в Директ» ------------------------------------------------------------------
+
+
+def _change(kind: str, op: str, text: str, group: str = "", **extra) -> dict:
+    return {"kind": kind, "op": op, "group": group, "text": text, **extra}
+
+
+def _done(build: dict) -> set[str]:
+    return {s["key"] for s in build.get("stages") or [] if s["status"] == "done"}
+
+
+def changes(build: dict | None, state: dict) -> list[dict]:
+    """Что изменится в черновике по «Применить в Директ»: доска против записанного (state). Тот же расчёт, что
+    у записи (_Writer), только без вызовов Директа. Пусто — доска и черновик совпадают."""
+    if not build or not build.get("campaign") or build.get("draft") or not (state or {}).get("campaign_row_id"):
+        return []
+    done = _done(build)
+    out: list[dict] = []
+    camp = build.get("campaign") or {}
+    applied = state.get("applied") or {}
+    if camp.get("name") and camp["name"] != applied.get("name"):
+        out.append(_change("campaign", "edit", f"Название: «{camp['name']}»"))
+    if camp.get("strategy") and camp["strategy"] != applied.get("strategy"):
+        out.append(_change("campaign", "edit", "Стратегия"))
+    daily = camp.get("daily_budget_rub") or None
+    if daily != (applied.get("daily_budget_rub") or None):
+        out.append(_change("campaign", "edit", f"Бюджет в день: {daily} ₽" if daily else "Бюджет в день: снять"))
+    regions = list(camp.get("region_ids") or [])
+    if regions and regions != list(applied.get("region_ids") or []):
+        out.append(_change("campaign", "edit", "Регионы"))
+
+    mine = state.get("groups") or {}
+    planned: set[str] = set(mine)
+    if "keywords" in done:
+        wanted = {}
+        for group in build["groups"]:
+            phrases = _texts(group.get("keywords"))
+            if phrases or _approved(group.get("audiences")):
+                wanted[group["name"]] = phrases
+        for name in mine:
+            if name not in wanted:
+                out.append(_change("group", "remove", name, name))
+        planned = set(wanted)
+        for name, phrases in wanted.items():
+            entry = mine.get(name) or {}
+            if name not in mine:
+                out.append(_change("group", "add", name, name))
+            have = {_norm(p) for p in entry.get("keywords") or []}
+            want = {_norm(p): p for p in phrases}
+            out += [_change("keyword", "add", p, name) for k, p in want.items() if k not in have]
+            out += [_change("keyword", "remove", p, name) for p in entry.get("keywords") or [] if _norm(p) not in want]
+    if done & {"keywords", "negatives"}:
+        want = _texts(build.get("negatives"))
+        have = state.get("negatives")
+        if have is not None or want:
+            had = {_norm(p) for p in have or []}
+            keys = {_norm(p) for p in want}
+            out += [_change("negative", "add", p) for p in want if _norm(p) not in had]
+            out += [_change("negative", "remove", p) for p in have or [] if _norm(p) not in keys]
+    if "audiences" in done:
+        for group in build["groups"]:
+            if group["name"] not in planned:
+                continue
+            had = set((mine.get(group["name"]) or {}).get("audiences") or [])
+            out += [
+                _change("audience", "add", a.get("text") or "", group["name"])
+                for a in _approved(group.get("audiences"))
+                if isinstance(a.get("audience"), dict) and _norm(a.get("text")) not in had
+            ]
+    images: list[str] = []
+    extras: list[str] = []
+    sitelinks = [s.get("text") or "" for s in _approved(build.get("sitelinks"))]
+    callouts = _texts(build.get("callouts"))
+    for group in build["groups"]:
+        name = group["name"]
+        if name not in planned:
+            continue
+        entry = mine.get(name) or {}
+        titles, texts = _texts(group.get("titles")), _texts(group.get("texts"))
+        will_have_ad = "ads" in done and bool(titles and texts)
+        if will_have_ad:
+            sig = entry.get("ad_sig") or {}
+            if not entry.get("ad"):
+                out.append(_change("ad", "add", f"заголовков {len(titles)}, текстов {len(texts)}", name))
+            else:
+                for kind, now, before in (("title", titles, sig.get("titles")), ("text", texts, sig.get("texts"))):
+                    had = {_norm(t) for t in before or []}
+                    keys = {_norm(t) for t in now}
+                    out += [_change(kind, "add", t, name) for t in now if _norm(t) not in had]
+                    out += [_change(kind, "remove", t, name) for t in before or [] if _norm(t) not in keys]
+        if not entry.get("ad") and not will_have_ad:
+            continue
+        sig = entry.get("extras_sig") or {}
+        if "images" in done:
+            hashes = [i["hash"] for i in _approved(group.get("images")) if i.get("hash")]
+            if sorted(hashes) != sorted(sig.get("image_hashes") or []):
+                images.append(name)
+        if "extras" in done and (
+            [s.get("title") for s in sig.get("sitelinks") or []] != sitelinks
+            or list(sig.get("callouts") or []) != callouts
+        ):
+            extras.append(name)
+    if images:
+        out.append(_change("images", "edit", "Картинки: " + ", ".join(f"«{n}»" for n in images[:5])))
+    if extras:
+        out.append(_change("extras", "edit", f"Быстрые ссылки и уточнения — групп: {len(extras)}"))
+    return out
+
+
+# --- Сверка с Директом -------------------------------------------------------------------------------
+
+
+def _direct_ad(group: dict, ad_row_id) -> dict | None:
+    return next((a for a in group.get("ads") or [] if int(a["id"]) == int(ad_row_id)), None)
+
+
+def drift(snapshot: dict | None, state: dict, queue: list[dict] | None = None) -> list[dict]:
+    """Что в черновике поменяли в самом Директе с последней записи: Директ (локальная копия) против state.
+    conflict — тот же объект правят и на доске (он в очереди «Применить») иначе, чем в Директе: одну фразу
+    удалили и там, и там — не конфликт."""
+    if snapshot is None or not (state or {}).get("campaign_row_id"):
+        return []
+    queue = queue or []
+    ops: dict[tuple, set[str]] = {}
+    for c in queue:
+        ops.setdefault((c["kind"], c["group"], _norm(c["text"])), set()).add(c["op"])
+
+    def differs(kind: str, group: str, text: str, op: str) -> bool:
+        return bool(ops.get((kind, group, _norm(text)), set()) - {op})
+
+    groups_touched = {c["group"] for c in queue if c["group"]}
+    ads_touched = {c["group"] for c in queue if c["kind"] in ("title", "text", "ad")}
+    by_id = {int(g["id"]): g for g in snapshot["groups"]}
+    out: list[dict] = []
+    for name, entry in (state.get("groups") or {}).items():
+        direct = by_id.get(int(entry["id"])) if entry.get("id") else None
+        if direct is None:
+            out.append(_change("group", "remove", name, name, conflict=name in groups_touched))
+            continue
+        if direct["name"] != name:
+            out.append(_change("group", "edit", direct["name"], name, conflict=name in groups_touched))
+        have = {_norm(k): k for k in direct["keywords"]}
+        ours = {_norm(p) for p in entry.get("keywords") or []}
+        out += [
+            _change("keyword", "add", k, name, conflict=differs("keyword", name, k, "add"))
+            for key, k in have.items() if key not in ours
+        ]
+        out += [
+            _change("keyword", "remove", p, name, conflict=differs("keyword", name, p, "remove"))
+            for p in entry.get("keywords") or [] if _norm(p) not in have
+        ]
+        if entry.get("ad"):
+            ad = _direct_ad(direct, entry["ad"])
+            if ad is None:
+                out.append(_change("ad", "remove", "объявление удалено", name, conflict=name in ads_touched))
+                continue
+            wrote = entry.get("ad_direct") or entry.get("ad_sig") or {}
+            now = {"titles": list(ad.get("titles") or []), "texts": list(ad.get("texts") or [])}
+            if any(
+                sorted(_norm(t) for t in now[key]) != sorted(_norm(t) for t in wrote.get(key) or [])
+                for key in ("titles", "texts")
+            ):
+                out.append(_change(
+                    "ad", "edit", " · ".join(now["titles"][:3]), name, conflict=name in ads_touched, direct=now,
+                ))
+    if state.get("negatives") is not None:
+        have = {_norm(n): n for n in snapshot["negatives"]}
+        ours = {_norm(n) for n in state["negatives"]}
+        out += [
+            _change("negative", "add", n, conflict=differs("negative", "", n, "add"))
+            for key, n in have.items() if key not in ours
+        ]
+        out += [
+            _change("negative", "remove", n, conflict=differs("negative", "", n, "remove"))
+            for n in state["negatives"] if _norm(n) not in have
+        ]
+    return out
+
+
+def refresh_local(user_id: int, campaign_row_id: int) -> None:
+    """Перечитать черновик из Директа в локальную копию: группы, фразы, объявления, название и минус-фразы.
+    Удалённое в Директе из копии тоже уходит (обычная синхронизация только дописывает)."""
+    from app import actions, adgroups, ads, keywords
+
+    camp = actions._campaign_full(user_id, campaign_row_id)
+    token = get_connection_access_token(camp["connection_id"], user_id)
+    login, account_id = camp["client_login"], int(camp["account_id"])
+    items = adgroups.fetch_adgroups(token, login, int(camp["campaign_id"]))
+    adgroups.upsert_adgroups(user_id, account_id, campaign_row_id, items)
+    with pool.connection() as conn:
+        conn.execute(
+            "DELETE FROM direct_adgroups WHERE user_id = %s AND campaign_row_id = %s AND NOT (adgroup_id = ANY(%s))",
+            (user_id, campaign_row_id, [int(i["adgroup_id"]) for i in items]),
+        )
+        rows = conn.execute(
+            "SELECT id, adgroup_id FROM direct_adgroups WHERE user_id = %s AND campaign_row_id = %s",
+            (user_id, campaign_row_id),
+        ).fetchall()
+    map_ids = {int(r["adgroup_id"]): int(r["id"]) for r in rows}
+    if map_ids:
+        found = keywords.fetch_keywords(token, login, list(map_ids))
+        keywords.upsert_keywords(user_id, account_id, map_ids, found)
+        made = ads.fetch_ads(token, login, list(map_ids))
+        ads.upsert_ads(user_id, account_id, map_ids, made)
+        with pool.connection() as conn:
+            conn.execute(
+                "DELETE FROM direct_keywords WHERE user_id = %s AND adgroup_row_id = ANY(%s) "
+                "AND NOT (keyword_id = ANY(%s))",
+                (user_id, list(map_ids.values()), [int(k["keyword_id"]) for k in found]),
+            )
+            conn.execute(
+                "DELETE FROM direct_ads WHERE user_id = %s AND adgroup_row_id = ANY(%s) AND NOT (ad_id = ANY(%s))",
+                (user_id, list(map_ids.values()), [int(a["ad_id"]) for a in made]),
+            )
+    settings = actions.get_campaign_settings(user_id, campaign_row_id)
+    actions._update_local(
+        campaign_row_id, {"name": settings["name"], "negative_keywords": list(settings.get("negative_keywords") or [])}
+    )
+
+
+def check(user_id: int, chat_id: int, state: dict) -> bool:
+    """Лёгкая сверка черновика с Директом: changes.checkCampaigns с прошлой метки; кампанию меняли — перечитать
+    её в локальную копию. → True, если перечитали. Метка хранится в последней записи сборки."""
+    from app import actions, direct_api
+    from app.account_load import parse_changed_campaigns
+
+    row_id = (state or {}).get("campaign_row_id")
+    if not row_id:
+        return False
+    camp = actions._campaign_full(user_id, int(row_id))
+    token = get_connection_access_token(camp["connection_id"], user_id)
+    since = state.get("direct_ts")
+    if since:
+        res = direct_api.call(token, camp["client_login"], "changes", "checkCampaigns", {"Timestamp": since})
+        changed = int(camp["campaign_id"]) in parse_changed_campaigns(res)
+    else:
+        # Метки ещё нет — перечитать один раз и запомнить, с какого момента смотреть дальше.
+        res = direct_api.call(token, camp["client_login"], "changes", "checkDictionaries", {})
+        changed = True
+    if changed:
+        refresh_local(user_id, int(row_id))
+    stamp = str((res or {}).get("Timestamp") or "")
+    if stamp:
+        with pool.connection() as conn:
+            conn.execute(
+                """
+                UPDATE ai_actions SET result = jsonb_set(result, '{state,direct_ts}', to_jsonb(%s::text))
+                WHERE id = (SELECT MAX(id) FROM ai_actions WHERE chat_id = %s AND tool = %s)
+                  AND result ? 'state'
+                """,
+                (stamp, chat_id, TOOL),
+            )
+    return changed
+
+
+def pulled_state(state: dict, snapshot: dict) -> dict:
+    """Записанное = как сейчас в Директе (после «Подтянуть» или «Оставить мои» сверка начинается с нуля)."""
+    out = {**empty_state(), **state, "groups": {}}
+    by_id = {int(g["id"]): g for g in snapshot["groups"]}
+    for name, entry in (state.get("groups") or {}).items():
+        direct = by_id.get(int(entry["id"])) if entry.get("id") else None
+        if direct is None:
+            continue
+        entry = {**entry, "keywords": list(direct["keywords"])}
+        if entry.get("ad"):
+            ad = _direct_ad(direct, entry["ad"])
+            if ad is None:
+                entry.update(ad=None, ad_sig=None, ad_direct=None, extras_sig=None)
+            else:
+                now = {"titles": list(ad.get("titles") or []), "texts": list(ad.get("texts") or [])}
+                entry["ad_direct"] = now
+                entry["ad_sig"] = {**(entry.get("ad_sig") or {}), **now}
+        out["groups"][direct["name"]] = entry
+    if state.get("negatives") is not None or snapshot["negatives"]:
+        out["negatives"] = list(snapshot["negatives"])
+    return out
+
+
+def revert_ops(queue: list[dict]) -> list[dict]:
+    """Правки доски, отменяющие очередь «Применить» (фразы, минус-фразы, заголовки, тексты): доска = записанное."""
+    flip = {"add": "remove", "remove": "add"}
+    return [
+        {"op": flip[c["op"]], "kind": c["kind"], "group": c["group"], "text": c["text"]}
+        for c in queue
+        if c["kind"] in ("keyword", "negative", "title", "text") and c["op"] in flip
+    ]
+
+
+def pull_ops(build: dict, snapshot: dict, state: dict) -> list[dict]:
+    """Правки доски, после которых на ней то же, что в Директе (по объектам из drift)."""
+    board = {g["name"]: g for g in build["groups"]}
+    ops: list[dict] = []
+
+    def approved(items) -> list[str]:
+        return [i["text"] for i in items or [] if not i.get("pending") and i.get("checked", True)]
+
+    for item in drift(snapshot, state):
+        group = board.get(item["group"]) if item["group"] else None
+        kind, op = item["kind"], item["op"]
+        if kind == "group" and op == "remove" and group:
+            for key, k in (("keywords", "keyword"), ("titles", "title"), ("texts", "text")):
+                ops += [{"op": "remove", "kind": k, "group": item["group"], "text": t} for t in approved(group[key])]
+        elif kind == "group" and op == "edit" and group:
+            ops.append({"op": "rename_group", "group": item["group"], "to": item["text"]})
+        elif kind == "keyword":
+            ops.append({"op": op, "kind": "keyword", "group": item["group"], "text": item["text"]})
+        elif kind == "ad" and group:
+            now = item.get("direct") or {"titles": [], "texts": []}
+            for key, k in (("titles", "title"), ("texts", "text")):
+                keep = {_norm(t) for t in now[key]}
+                have = {_norm(t) for t in approved(group[key])}
+                ops += [
+                    {"op": "remove", "kind": k, "group": item["group"], "text": t}
+                    for t in approved(group[key]) if _norm(t) not in keep
+                ]
+                ops += [{"op": "add", "kind": k, "group": item["group"], "text": t} for t in now[key] if _norm(t) not in have]
+        elif kind == "negative":
+            ops.append({"op": op, "kind": "negative", "group": "", "text": item["text"]})
+    # Переименование — последним: правки выше адресуют группу по старому имени.
+    return [o for o in ops if o["op"] != "rename_group"] + [o for o in ops if o["op"] == "rename_group"]

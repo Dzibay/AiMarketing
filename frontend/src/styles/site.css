@@ -4860,6 +4860,53 @@ button.board-chips__text:disabled {
   padding-left: 1.1rem;
 }
 
+/* Очередь правок «Применить в Директ» и плашка «В Директе изменилось». */
+.board-sync {
+  display: grid;
+  gap: 0.4rem;
+  margin: 0 0 0.75rem;
+  padding: 0.6rem 0.8rem;
+  border-radius: 12px;
+  background: var(--accent-soft);
+  font-size: 0.84rem;
+}
+
+.board-sync p {
+  margin: 0;
+}
+
+.board-sync.is-drift {
+  background: var(--warn-soft);
+}
+
+.board-sync__list {
+  display: grid;
+  gap: 0.2rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.board-sync__list li {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  align-items: baseline;
+}
+
+.board-sync__op {
+  min-width: 0.8rem;
+  font-weight: 700;
+}
+
+.board-sync__both {
+  display: grid;
+  flex-basis: 100%;
+  gap: 0.1rem;
+  padding-left: 1.15rem;
+  color: var(--muted);
+}
+
 .board-lines__text {
   appearance: none;
   flex: 1;

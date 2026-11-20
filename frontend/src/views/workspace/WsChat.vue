@@ -184,6 +184,8 @@
       @draft="(approve) => decide({ id: build.draft.action_id }, approve)"
       @ask="(text) => send(text)"
       @write="respond(() => aiApi.boardWrite(chatId))"
+      @reset="respond(() => aiApi.boardReset(chatId))"
+      @pull="(keep) => respond(() => aiApi.boardPull(chatId, keep))"
       @moderate="moderateDraft"
     />
   </div>
@@ -364,6 +366,36 @@ async function moderateDraft() {
   )
   if (ok) respond(() => aiApi.boardModerate(chatId.value))
 }
+
+// Сверка черновика с Директом (docs/board-plan.md, пункт 4): при открытии доски и раз в 3 минуты, пока она открыта.
+const CHECK_EVERY = 3 * 60 * 1000
+let checkTimer = 0
+const checkable = computed(
+  () => !!build.value?.direct?.campaign_row_id && !build.value.direct.moderated && status.value !== 'running',
+)
+
+async function checkDirect() {
+  const id = chatId.value
+  if (!id || !checkable.value || deciding.value || document.hidden) return
+  try {
+    const res = await aiApi.boardCheck(id)
+    if (res.changed && chatId.value === id && !deciding.value) loadChat(id, true)
+  } catch {
+    // Сверка фоновая: ошибка Директа не мешает работать с доской.
+  }
+}
+
+watch(
+  [chatId, checkable],
+  ([id, ok], [oldId, wasOk] = []) => {
+    clearInterval(checkTimer)
+    checkTimer = 0
+    if (!id || !ok) return
+    if (id !== oldId || !wasOk) checkDirect()
+    checkTimer = setInterval(checkDirect, CHECK_EVERY)
+  },
+  { immediate: true },
+)
 
 async function toBoard(actionId) {
   tab.value = 'board'
@@ -602,6 +634,7 @@ onMounted(async () => {
 })
 
 onBeforeUnmount(() => {
+  clearInterval(checkTimer)
   clearTimeout(typingTimer)
   topObserver?.disconnect()
   footObserver?.disconnect()
