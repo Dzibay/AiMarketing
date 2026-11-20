@@ -177,6 +177,7 @@
       :ws-id="ws.id"
       :image-gen="caps.image_gen"
       :disabled="deciding || status === 'running'"
+      :running="status === 'running'"
       :edit="editBoard"
       @decide="(id, payload) => respond(() => aiApi.items(id, payload))"
       @board="(payload) => respond(() => aiApi.boardDecide(chatId, payload))"

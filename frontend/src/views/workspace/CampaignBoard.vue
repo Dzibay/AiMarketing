@@ -4,289 +4,320 @@
       <div class="board__title">
         <h3>{{ build.draft?.name || 'Новая кампания' }}</h3>
         <p class="hint">
-          Доска сборки · готово {{ doneCount }} из {{ steps.length }}
+          Шаг {{ currentIndex + 1 }} из {{ steps.length }} · {{ current.label }}
           <template v-if="locked"> · черновик {{ build.draft.status === 'done' ? 'создан' : 'создаётся' }}, правки закрыты</template>
         </p>
       </div>
-      <nav class="board__steps" aria-label="Этапы">
-        <button
-          v-for="(s, i) in steps"
-          :key="s.key"
-          type="button"
-          class="board__step"
-          :class="`is-${s.status}`"
-          :data-section="s.section"
-          v-tip="s.held ? HELD_TIP : STATUS[s.status] || s.status"
-          @click="show(s.section)"
-        >
-          <span class="board__dot">{{ s.status === 'done' ? '✓' : i + 1 }}</span>
-          {{ s.label }}
-        </button>
-      </nav>
+      <div class="board__progress" aria-hidden="true">
+        <span v-for="s in steps" :key="s.key" :class="`is-${s.status}`" />
+      </div>
     </header>
-    <p v-if="!locked && heldTables.length" class="hint board__legend">
-      <span class="board__swatch" aria-hidden="true" />
-      <span>
-        предложено ИИ. Снимите галочки с лишнего, заголовок, текст или фразу поправьте щелчком — и согласуйте
-        кампанию целиком, одной кнопкой внизу доски.
-        <button class="ai-check__link" type="button" @click="show('ready')">К согласованию</button>
-      </span>
-    </p>
-    <p v-else-if="!locked" class="hint board__legend">
-      <span class="board__swatch" aria-hidden="true" /> предложено ИИ и ждёт решения. Заголовок, текст или фразу
-      можно поправить щелчком — ИИ увидит правки.
-    </p>
 
-    <BoardSection name="goals" title="Цели" :stages="stagesOf('goals')" :tables="tables.goals">
-      <BoardFacts v-if="build.goals.length" :items="build.goals" />
-      <p v-else class="hint">ИИ спросит про продукт, гео, бюджет и цель — согласованное появится здесь.</p>
-    </BoardSection>
-
-    <BoardSection name="demand" title="Спрос" :stages="stagesOf('demand')" :tables="tables.demand">
-      <BoardFacts v-if="build.directions.length" :items="build.directions" bars />
-      <p v-else class="hint">Направления с частотностью из Вордстата появятся после анализа спроса.</p>
-    </BoardSection>
-
-    <BoardSection name="groups" title="Структура и объявления" :stages="stagesOf('groups')" :tables="tables.groups">
-      <template #tools>
-        <small v-if="build.groups.length" class="board-section__meta">
-          {{ build.groups.length }} {{ plural(build.groups.length, 'группа', 'группы', 'групп') }} · {{ keywordCount }}
-          {{ plural(keywordCount, 'фраза', 'фразы', 'фраз') }}<template v-if="audienceCount">
-            · {{ audienceCount }} {{ plural(audienceCount, 'аудитория', 'аудитории', 'аудиторий') }}</template><template v-if="imageCount">
-            · {{ imageCount }} {{ plural(imageCount, 'картинка', 'картинки', 'картинок') }}</template>
-        </small>
-        <div class="seg board__preview-mode" role="group" aria-label="Предпросмотр">
-          <button
-            v-for="m in PREVIEW_MODES"
-            :key="m.key"
-            type="button"
-            :class="{ active: preview === m.key }"
-            :aria-pressed="preview === m.key"
-            @click="preview = m.key"
-          >
-            {{ m.label }}
+    <!-- Мастер: открыт один шаг (текущий или прошлый, который открыли поправить), прошлые свёрнуты с ✓, будущие серые. -->
+    <section
+      v-for="(s, i) in steps"
+      :key="s.key"
+      class="wiz"
+      :class="[`is-${s.status}`, { 'is-open': s.key === openKey, 'is-future': i > currentIndex }]"
+      :data-step="s.key"
+    >
+      <button v-if="s.key !== openKey" type="button" class="wiz__row" :disabled="i > currentIndex" @click="open(s.key)">
+        <span class="board__dot">{{ dotOf(s, i) }}</span>
+        <strong>{{ s.label }}</strong>
+        <small>{{ rowNote(s, i) }}</small>
+      </button>
+      <template v-else>
+        <div class="wiz__title">
+          <span class="board__dot">{{ dotOf(s, i) }}</span>
+          <h4>{{ s.label }}</h4>
+          <small v-if="s.optional" class="hint">можно пропустить</small>
+          <button v-if="s.key !== current.key" class="ai-check__link" type="button" @click="open(current.key)">
+            К текущему шагу
           </button>
         </div>
-      </template>
-      <p v-if="!build.groups.length" class="hint">
-        Группы с фразами появятся на этапе «Группы и фразы», аудитории (ретаргетинг, LAL, интересы и привычки) — на
-        этапе «Аудитории», объявления — на этапе «Объявления», картинки — на этапе «Картинки».
-      </p>
-      <BoardGroup
-        v-for="g in build.groups"
-        :key="g.name"
-        :group="g"
-        :names="groupNames"
-        :site="site"
-        :preview="preview"
-        :sitelinks="build.sitelinks"
-        :callouts="build.callouts"
-        :ads-started="adsStarted"
-      />
-    </BoardSection>
 
-    <BoardSection name="negatives" title="Минус-фразы" :stages="stagesOf('negatives')" :tables="tables.negatives">
-      <ul v-if="build.negatives.length" class="board-chips">
-        <li
-          v-for="n in build.negatives"
-          :key="n.text"
-          :class="{ 'is-pending': n.pending, 'is-off': !isOn(n), 'is-own': n.own }"
+        <BoardSection v-if="s.key === 'brief'" name="goals" title="Бриф" bare :tables="tablesOf(s, 'goals')">
+          <BoardFacts v-if="build.goals.length" :items="build.goals" />
+          <p v-else class="hint">ИИ спросит про продукт, гео, бюджет и цель — бриф появится здесь.</p>
+        </BoardSection>
+
+        <BoardSection v-if="s.key === 'demand'" name="demand" title="Спрос" bare :tables="tablesOf(s, 'demand')">
+          <BoardFacts v-if="build.directions.length" :items="build.directions" bars />
+          <p v-else class="hint">Направления с частотностью из Вордстата — они станут группами.</p>
+        </BoardSection>
+
+        <BoardSection
+          v-if="GROUP_STEPS.includes(s.key)"
+          name="groups"
+          title="Группы и фразы"
+          bare
+          :tables="tablesOf(s, 'groups')"
         >
-          <UiCheckbox
-            v-if="n.pending"
-            :checked="isOn(n)"
-            :disabled="disabled"
-            :aria-label="n.text"
-            @change="toggle(n)"
-          />
-          <span class="board-chips__text">−{{ n.text }}</span>
-          <BoardRule :item="n" />
-          <button
-            class="board-x"
-            type="button"
-            v-tip="n.pending && !n.added ? 'Снять галочку' : 'Убрать'"
-            :aria-label="`Убрать: ${n.text}`"
-            :disabled="disabled"
-            @click="remove('negative', '', [n])"
-          >
-            ×
-          </button>
-        </li>
-      </ul>
-      <p v-else class="hint">Минус-фразы ИИ предложит вместе с фразами или отдельным этапом.</p>
-      <form v-if="build.groups.length" class="board-add" @submit.prevent="addNegative">
-        <input
-          v-model="negative"
-          class="ai-input"
-          maxlength="4096"
-          placeholder="+ минус-фраза"
-          aria-label="Новая минус-фраза"
-          :disabled="disabled"
-        />
-        <button v-if="negative.trim()" class="btn btn--xs" type="submit" :disabled="disabled">Добавить</button>
-      </form>
-    </BoardSection>
-
-    <BoardSection name="extras" title="Расширения" :stages="stagesOf('extras')" :tables="tables.extras">
-      <BoardFacts v-if="build.extras.length" :items="build.extras" />
-      <p v-if="!build.extras.length && !boardSitelinks.length && !boardCallouts.length" class="hint">
-        Быстрые ссылки и уточнения — после объявлений. С ними объявление крупнее и заметнее в выдаче. Можно вписать
-        свои — ИИ возьмёт их в кампанию.
-      </p>
-      <BoardExtras
-        v-if="build.groups.length || boardSitelinks.length || boardCallouts.length"
-        :sitelinks="boardSitelinks"
-        :callouts="boardCallouts"
-      />
-    </BoardSection>
-
-    <BoardSection name="settings" title="Настройки" :stages="stagesOf('settings')" :tables="tables.settings">
-      <BoardFacts v-if="build.settings.length" :items="build.settings" />
-      <p v-else class="hint">Стратегия, бюджет, гео и расписание — последним этапом перед черновиком.</p>
-    </BoardSection>
-
-    <BoardSection name="ready" title="Готовность" :stages="draftStage">
-      <ul class="board-checks">
-        <li v-for="c in build.checks" :key="c.key + c.label" :class="`is-${c.state}`">
-          <span class="board-checks__icon" aria-hidden="true">{{ CHECK_ICONS[c.state] }}</span>
-          <span>{{ c.label }}</span>
-          <small v-if="c.note">{{ c.note }}</small>
-          <!-- Группы спорят за запросы: ИИ подберёт минус-слова между ними и покажет правки на доске. -->
-          <button
-            v-if="c.ask && !locked"
-            class="btn btn--xs board-checks__ask"
-            type="button"
-            v-tip="'ИИ подберёт минус-слова между группами и покажет правки здесь — на согласование'"
-            :disabled="disabled"
-            @click="emit('ask', c.ask)"
-          >
-            Развести группы
-          </button>
-        </li>
-      </ul>
-
-      <!-- Кампания собрана одной доской: одно решение на все таблицы, которые на ней лежат. -->
-      <div v-if="heldTables.length" class="board-draft board-approve is-pending">
-        <strong>{{ missing.length ? 'Кампания собрана не полностью' : 'Кампания собрана — проверьте и согласуйте' }}</strong>
-        <p class="hint">
-          Отмечено {{ heldChosen }} из {{ heldRows }} {{ plural(heldRows, 'строки', 'строк', 'строк') }} в
-          {{ heldTables.length }} {{ plural(heldTables.length, 'таблице', 'таблицах', 'таблицах') }}. Снятое галочкой ИИ
-          в кампанию не возьмёт.
-        </p>
-        <p v-if="missing.length" class="hint">
-          Ещё не готово: {{ missing.join(', ') }}. Согласуйте готовое — ИИ доделает остальное и покажет здесь же.
-        </p>
-        <p v-else-if="overLimit" class="hint tone-bad">
-          В объявлении больше 7 заголовков или 3 текстов — снимите лишние галочки, тогда кампанию можно согласовать.
-        </p>
-        <p v-else-if="!build.ready" class="hint tone-bad">
-          В проверке есть красные пункты — Директ может не принять кампанию. Поправьте на доске или напишите в
-          комментарии, что изменить.
-        </p>
-        <textarea
-          v-model="boardComment"
-          class="ai-input ai-input--area"
-          rows="1"
-          maxlength="2000"
-          :disabled="disabled"
-          placeholder="Что поправить — необязательно"
-          aria-label="Комментарий к кампании"
-        />
-        <div class="board-decision__buttons">
-          <button
-            class="btn btn--accent"
-            type="button"
-            :disabled="disabled || !heldChosen || overLimit"
-            @click="decideBoard(true)"
-          >
-            {{ approveLabel }}
-          </button>
-          <button class="btn btn--ghost" type="button" :disabled="disabled" @click="decideBoard(false)">
-            Отменить сборку
-          </button>
-        </div>
-        <p v-if="boardComment.trim()" class="hint">
-          С правкой ИИ сначала покажет изменённый раздел здесь же — черновик будет после того, как вы согласуете и его.
-        </p>
-        <p v-else class="hint">Черновик сам не запустится: на модерацию его отправляете вы.</p>
-      </div>
-
-      <div v-if="build.draft" class="board-draft" :class="`is-${build.draft.status}`" :data-action="build.draft.action_id">
-        <template v-if="build.draft.status === 'pending'">
-          <strong>Черновик готов к созданию</strong>
-          <p v-if="build.draft.summary" class="hint">{{ build.draft.summary }}</p>
-          <p v-if="!build.ready" class="hint tone-bad">
-            В проверке есть красные пункты — Директ может не принять кампанию. Поправьте на доске или напишите ИИ.
-          </p>
-          <div class="board-decision__buttons">
-            <button class="btn btn--accent" type="button" :disabled="disabled" @click="emit('draft', true)">
-              Создать черновик в Директе
-            </button>
-            <button class="btn btn--ghost" type="button" :disabled="disabled" @click="emit('draft', false)">Отклонить</button>
-          </div>
-          <p class="hint">Черновик сам не запустится: на модерацию его отправляете вы.</p>
-        </template>
-        <template v-else-if="build.draft.status === 'done'">
-          <strong>Черновик создан в Директе</strong>
-          <template v-if="draftMissed.length">
-            <p class="tone-warn">Что не попало в Директ:</p>
-            <ul class="board-draft__missed">
-              <li v-for="w in draftMissed" :key="w">{{ w }}</li>
-            </ul>
-            <p class="hint">ИИ подготовит недостающее и пришлёт карточку на согласование — сам ничего не меняет.</p>
+          <template #tools>
+            <small v-if="build.groups.length" class="board-section__meta">
+              {{ build.groups.length }} {{ plural(build.groups.length, 'группа', 'группы', 'групп') }} · {{ keywordCount }}
+              {{ plural(keywordCount, 'фраза', 'фразы', 'фраз') }}<template v-if="audienceCount">
+                · {{ audienceCount }} {{ plural(audienceCount, 'аудитория', 'аудитории', 'аудиторий') }}</template><template v-if="imageCount">
+                · {{ imageCount }} {{ plural(imageCount, 'картинка', 'картинки', 'картинок') }}</template>
+            </small>
+            <div v-if="s.key !== 'groups'" class="seg board__preview-mode" role="group" aria-label="Предпросмотр">
+              <button
+                v-for="m in PREVIEW_MODES"
+                :key="m.key"
+                type="button"
+                :class="{ active: preview === m.key }"
+                :aria-pressed="preview === m.key"
+                @click="preview = m.key"
+              >
+                {{ m.label }}
+              </button>
+            </div>
           </template>
-          <p v-else-if="madeText" class="hint">Всё создано: {{ madeText }}.</p>
-          <div class="board-decision__buttons">
-            <button v-if="draftMissed.length" class="btn btn--accent" type="button" :disabled="disabled" @click="finishDraft">
-              Доделать с ИИ
-            </button>
-            <CampaignNextStep
-              v-if="build.draft.campaign_row_id"
-              :ws-id="Number(wsId)"
-              :campaign="{ campaign_row_id: build.draft.campaign_row_id, name: build.draft.name }"
-              :next="{ kind: 'moderate', label: 'Отправить на проверку' }"
-              :quiet="draftMissed.length > 0"
+          <p v-if="!build.groups.length" class="hint">Группы с фразами появятся, когда ИИ подготовит этот шаг.</p>
+          <BoardGroup
+            v-for="g in build.groups"
+            :key="g.name"
+            :group="g"
+            :names="groupNames"
+            :site="site"
+            :preview="preview"
+            :sitelinks="build.sitelinks"
+            :callouts="build.callouts"
+            :ads-started="s.key !== 'groups' && adsStarted"
+          />
+        </BoardSection>
+
+        <BoardSection v-if="s.key === 'groups'" name="negatives" title="Минус-фразы" :tables="tablesOf(s, 'negatives')">
+          <ul v-if="build.negatives.length" class="board-chips">
+            <li
+              v-for="n in build.negatives"
+              :key="n.text"
+              :class="{ 'is-pending': n.pending, 'is-off': !isOn(n), 'is-own': n.own }"
+            >
+              <UiCheckbox
+                v-if="n.pending"
+                :checked="isOn(n)"
+                :disabled="disabled"
+                :aria-label="n.text"
+                @change="toggle(n)"
+              />
+              <span class="board-chips__text">−{{ n.text }}</span>
+              <BoardRule :item="n" />
+              <button
+                class="board-x"
+                type="button"
+                v-tip="n.pending && !n.added ? 'Снять галочку' : 'Убрать'"
+                :aria-label="`Убрать: ${n.text}`"
+                :disabled="disabled"
+                @click="remove('negative', '', [n])"
+              >
+                ×
+              </button>
+            </li>
+          </ul>
+          <p v-else class="hint">Минус-фразы ИИ предложит вместе с фразами или следом за ними.</p>
+          <form v-if="build.groups.length" class="board-add" @submit.prevent="addNegative">
+            <input
+              v-model="negative"
+              class="ai-input"
+              maxlength="4096"
+              placeholder="+ минус-фраза"
+              aria-label="Новая минус-фраза"
+              :disabled="disabled"
             />
-            <RouterLink v-if="build.draft.campaign_row_id" class="btn btn--ghost" :to="`/w/${wsId}/campaigns/${build.draft.campaign_row_id}`">
-              Открыть кампанию
-            </RouterLink>
-          </div>
-          <p class="hint">
-            Показы начнутся, когда вы отправите черновик на проверку и Директ его примет — обычно в течение дня.
+            <button v-if="negative.trim()" class="btn btn--xs" type="submit" :disabled="disabled">Добавить</button>
+          </form>
+        </BoardSection>
+
+        <BoardSection v-if="s.key === 'extras'" name="extras" title="Расширения" bare :tables="tablesOf(s, 'extras')">
+          <BoardFacts v-if="build.extras.length" :items="build.extras" />
+          <p v-if="!build.extras.length && !boardSitelinks.length && !boardCallouts.length" class="hint">
+            Быстрые ссылки и уточнения: с ними объявление крупнее и заметнее в выдаче. Можно вписать свои — ИИ возьмёт
+            их в кампанию.
           </p>
-        </template>
-        <template v-else-if="build.draft.status === 'error'">
-          <strong class="tone-bad">Черновик не создан</strong>
-          <p v-if="build.draft.error" class="hint">{{ build.draft.error }}</p>
-        </template>
-        <strong v-else><span class="spinner" /> Черновик создаётся…</strong>
-      </div>
-      <p v-else-if="build.board_approved && !heldTables.length && missing.length" class="hint">
-        Готовое согласовано. Осталось: {{ missing.join(', ') }} — ИИ соберёт это и покажет здесь же.
-      </p>
-      <p v-else-if="build.board_approved && !heldTables.length" class="hint">
-        Кампания согласована: ИИ создаст черновик в Директе без второго подтверждения — он появится здесь.
-      </p>
-      <p v-else-if="!heldTables.length" class="hint">
-        Когда этапы будут согласованы, ИИ подготовит черновик — создать его в Директе можно будет здесь.
-      </p>
-    </BoardSection>
+          <BoardExtras
+            v-if="build.groups.length || boardSitelinks.length || boardCallouts.length"
+            :sitelinks="boardSitelinks"
+            :callouts="boardCallouts"
+          />
+        </BoardSection>
+
+        <BoardSection v-if="s.key === 'settings'" name="settings" title="Настройки" bare :tables="tablesOf(s, 'settings')">
+          <BoardFacts v-if="build.settings.length" :items="build.settings" />
+          <p v-else class="hint">Стратегия, бюджет, гео и расписание.</p>
+        </BoardSection>
+
+        <BoardSection v-if="s.key === 'ready'" name="ready" title="Проверка" bare>
+          <ul class="board-checks">
+            <li v-for="c in build.checks" :key="c.key + c.label" :class="`is-${c.state}`">
+              <span class="board-checks__icon" aria-hidden="true">{{ CHECK_ICONS[c.state] }}</span>
+              <span>{{ c.label }}</span>
+              <small v-if="c.note">{{ c.note }}</small>
+              <!-- Группы спорят за запросы: ИИ подберёт минус-слова между ними и покажет правки на доске. -->
+              <button
+                v-if="c.ask && !locked"
+                class="btn btn--xs board-checks__ask"
+                type="button"
+                v-tip="'ИИ подберёт минус-слова между группами и покажет правки здесь — на согласование'"
+                :disabled="disabled"
+                @click="emit('ask', c.ask)"
+              >
+                Развести группы
+              </button>
+            </li>
+          </ul>
+
+          <div v-if="build.draft" class="board-draft" :class="`is-${build.draft.status}`" :data-action="build.draft.action_id">
+            <template v-if="build.draft.status === 'pending'">
+              <strong>Черновик готов к созданию</strong>
+              <p v-if="build.draft.summary" class="hint">{{ build.draft.summary }}</p>
+              <p v-if="!build.ready" class="hint tone-bad">
+                В проверке есть красные пункты — Директ может не принять кампанию. Поправьте на доске или напишите ИИ.
+              </p>
+              <div class="board-decision__buttons">
+                <button class="btn btn--accent" type="button" :disabled="disabled" @click="emit('draft', true)">
+                  Создать черновик в Директе
+                </button>
+                <button class="btn btn--ghost" type="button" :disabled="disabled" @click="emit('draft', false)">Отклонить</button>
+              </div>
+              <p class="hint">Черновик сам не запустится: на модерацию его отправляете вы.</p>
+            </template>
+            <template v-else-if="build.draft.status === 'done'">
+              <strong>Черновик создан в Директе</strong>
+              <template v-if="draftMissed.length">
+                <p class="tone-warn">Что не попало в Директ:</p>
+                <ul class="board-draft__missed">
+                  <li v-for="w in draftMissed" :key="w">{{ w }}</li>
+                </ul>
+                <p class="hint">ИИ подготовит недостающее и пришлёт карточку на согласование — сам ничего не меняет.</p>
+              </template>
+              <p v-else-if="madeText" class="hint">Всё создано: {{ madeText }}.</p>
+              <div class="board-decision__buttons">
+                <button v-if="draftMissed.length" class="btn btn--accent" type="button" :disabled="disabled" @click="finishDraft">
+                  Доделать с ИИ
+                </button>
+                <CampaignNextStep
+                  v-if="build.draft.campaign_row_id"
+                  :ws-id="Number(wsId)"
+                  :campaign="{ campaign_row_id: build.draft.campaign_row_id, name: build.draft.name }"
+                  :next="{ kind: 'moderate', label: 'Отправить на проверку' }"
+                  :quiet="draftMissed.length > 0"
+                />
+                <RouterLink v-if="build.draft.campaign_row_id" class="btn btn--ghost" :to="`/w/${wsId}/campaigns/${build.draft.campaign_row_id}`">
+                  Открыть кампанию
+                </RouterLink>
+              </div>
+              <p class="hint">
+                Показы начнутся, когда вы отправите черновик на проверку и Директ его примет — обычно в течение дня.
+              </p>
+            </template>
+            <template v-else-if="build.draft.status === 'error'">
+              <strong class="tone-bad">Черновик не создан</strong>
+              <p v-if="build.draft.error" class="hint">{{ build.draft.error }}</p>
+            </template>
+            <strong v-else><span class="spinner" /> Черновик создаётся…</strong>
+          </div>
+          <p v-else-if="running" class="hint"><span class="spinner" /> ИИ готовит черновик…</p>
+          <template v-else-if="s.key === current.key && !locked">
+            <p class="hint">Все шаги пройдены. ИИ соберёт черновик — создать его в Директе можно будет здесь.</p>
+            <div class="board-decision__buttons">
+              <button class="btn btn--accent" type="button" :disabled="disabled" @click="emit('ask', DRAFT_ASK)">
+                Собрать черновик
+              </button>
+            </div>
+          </template>
+        </BoardSection>
+
+        <!-- Решение по шагу: «Дальше» согласует отмеченное, ИИ готовит следующий шаг. -->
+        <div v-if="!locked && stepTables(s).length" class="board-decision board-step__foot">
+          <p v-for="c in stepChecks(s)" :key="c.key" class="hint" :class="BLOCKING.has(c.key) ? 'tone-bad' : 'tone-warn'">
+            {{ c.label }}<template v-if="c.note">: {{ c.note }}</template>
+          </p>
+          <textarea
+            v-model="comment"
+            class="ai-input ai-input--area"
+            rows="1"
+            maxlength="2000"
+            :disabled="disabled"
+            placeholder="Что поправить — необязательно"
+            aria-label="Комментарий к шагу"
+          />
+          <div class="board-decision__buttons">
+            <button
+              class="btn btn--accent"
+              type="button"
+              :disabled="disabled || !stepChosen(s) || stepBlocked(s)"
+              v-tip="`Согласовать отмеченное (${stepChosen(s)}) — ИИ подготовит следующий шаг`"
+              @click="next(s)"
+            >
+              {{ comment.trim() ? 'Дальше с правкой' : 'Дальше' }} →
+            </button>
+            <button
+              class="btn btn--ghost"
+              type="button"
+              :disabled="disabled"
+              v-tip="'ИИ покажет этот шаг заново с учётом комментария'"
+              @click="redo(s)"
+            >
+              Переделать
+            </button>
+            <button v-if="stepSkippable(s)" class="btn btn--ghost" type="button" :disabled="disabled" @click="skip(s)">
+              Пропустить
+            </button>
+          </div>
+        </div>
+        <div v-else-if="!locked && s.key !== 'ready' && s.key === current.key" class="board-step__wait">
+          <p v-if="running" class="hint"><span class="spinner" /> ИИ готовит этот шаг…</p>
+          <template v-else>
+            <p class="hint">ИИ ещё не подготовил этот шаг.</p>
+            <div class="board-decision__buttons">
+              <button class="btn btn--accent" type="button" :disabled="disabled" @click="emit('ask', `Подготовь шаг «${s.label}».`)">
+                Попросить ИИ
+              </button>
+              <button
+                v-if="s.optional"
+                class="btn btn--ghost"
+                type="button"
+                :disabled="disabled"
+                @click="emit('ask', `Шаг «${s.label}» пропускаем — переходи к следующему.`)"
+              >
+                Пропустить
+              </button>
+            </div>
+          </template>
+        </div>
+        <form
+          v-else-if="!locked && s.key !== 'ready' && s.key !== current.key"
+          class="board-add board-step__redo"
+          @submit.prevent="askRedo(s)"
+        >
+          <input
+            v-model="redoText"
+            class="ai-input"
+            maxlength="1000"
+            placeholder="Что переделать на этом шаге — ИИ покажет изменения на согласование"
+            aria-label="Что переделать на шаге"
+            :disabled="disabled"
+          />
+          <button v-if="redoText.trim()" class="btn btn--xs" type="submit" :disabled="disabled">Попросить ИИ</button>
+        </form>
+      </template>
+    </section>
   </div>
 </template>
 
 <script setup>
 /**
- * Доска сборки новой кампании рядом с чатом: разделы по этапам сверху вниз, галочки и решения по
- * ждущим таблицам, правки маркетолога (фразы, группы, заголовки, тексты, картинки, быстрые ссылки и уточнения),
- * предпросмотр и проверка готовности (с правилами Директа). Данные — build из get_chat; правки уходят через
- * edit(ops) и возвращают чат целиком.
- * Кампания, собранная одной доской (build.held), согласуется одним решением в разделе «Готовность».
+ * Доска сборки новой кампании — мастер по шагам (docs/board-plan.md, пункт 3): Бриф → Спрос → Группы и фразы →
+ * Объявления → Картинки → Расширения → Настройки → Проверка. Открыт один шаг: текущий (на нём таблица ИИ с
+ * галочками и кнопка «Дальше») или прошлый, который открыли поправить; прошлые свёрнуты с ✓ и итогом, будущие
+ * серые. Правки маркетолога (фразы, группы, заголовки, тексты, картинки, ссылки) уходят через edit(ops) и
+ * возвращают чат целиком. Данные — build из get_chat.
  */
 import { computed, nextTick, onBeforeUnmount, onMounted, provide, reactive, ref, watch } from 'vue'
 import UiCheckbox from '../../components/ui/UiCheckbox.vue'
 import { RouterLink } from 'vue-router'
 import { aiApi } from '../../api/web'
-import { askConfirm } from '../../composables/useConfirm'
 import { plural } from '../../utils/format'
 import CampaignNextStep from '../../components/CampaignNextStep.vue'
 import BoardExtras from './BoardExtras.vue'
@@ -302,13 +333,15 @@ const props = defineProps({
   site: { type: String, default: '' },
   wsId: { type: [Number, String], required: true },
   disabled: { type: Boolean, default: false },
+  // ИИ сейчас отвечает — шаг готовится.
+  running: { type: Boolean, default: false },
   // async (ops) => true, если правка прошла.
   edit: { type: Function, required: true },
   // Генерация картинок подключена в настройках.
   imageGen: { type: Boolean, default: false },
 })
-// decide — решение по одной таблице (id, payload); board — одно решение на всю доску ({ approve, rows, comment });
-// draft — карточка создания черновика (approve); ask — готовый вопрос ИИ в чат (text).
+// decide — решение по одной таблице (id, { approve, rows, comment, skip? }); board — решение по таблицам старой
+// доски ({ approve, rows, comment, only }); draft — карточка создания черновика (approve); ask — вопрос ИИ в чат (text).
 const emit = defineEmits(['decide', 'board', 'draft', 'ask'])
 
 // --- Что не попало в черновик -------------------------------------------------------------------
@@ -336,28 +369,51 @@ function finishDraft() {
   )
 }
 
+// --- Шаги мастера -------------------------------------------------------------------------------
+
+// Этапы сборки (build.stages) → шаги мастера. Аудитории и минус-фразы — необязательные части «Групп».
+const WIZARD = [
+  { key: 'brief', label: 'Бриф', stages: ['goals'] },
+  { key: 'demand', label: 'Спрос', stages: ['analysis'] },
+  { key: 'groups', label: 'Группы и фразы', stages: ['keywords', 'negatives', 'audiences'], required: ['keywords'] },
+  { key: 'ads', label: 'Объявления', stages: ['ads'] },
+  { key: 'images', label: 'Картинки', stages: ['images'], optional: true },
+  { key: 'extras', label: 'Расширения', stages: ['extras'], optional: true },
+  { key: 'settings', label: 'Настройки', stages: ['settings'] },
+  { key: 'ready', label: 'Проверка и черновик', stages: [] },
+]
+const OPTIONAL_STAGES = new Set(['negatives', 'audiences', 'images', 'extras'])
+const GROUP_STEPS = ['groups', 'ads', 'images']
+// Где на шаге лежит таблица этапа: у «Групп» минус-фразы — своим разделом.
 const SECTION_OF = {
   goals: 'goals',
   analysis: 'demand',
   keywords: 'groups',
-  ads: 'groups',
   negatives: 'negatives',
   audiences: 'groups',
+  ads: 'groups',
   images: 'groups',
   extras: 'extras',
   settings: 'settings',
 }
-const SHORT = { keywords: 'фразы', audiences: 'аудитории', ads: 'объявления', images: 'картинки' }
+// Проверки «Готовности», которые относятся к шагу; BLOCKING — красные из них не дают нажать «Дальше»
+// (их снимают галочками: больше 7 заголовков, лишние картинки, ссылки и уточнения).
+const STEP_CHECKS = {
+  groups: ['keywords'],
+  ads: ['ads', 'limits', 'unique'],
+  images: ['images'],
+  extras: ['extras', 'link'],
+}
+const BLOCKING = new Set(['limits', 'images', 'extras'])
 const STATUS = {
   done: 'согласовано',
-  pending: 'ждёт решения',
+  pending: 'ждёт «Дальше»',
   todo: 'впереди',
   skipped: 'пропущено',
-  rejected: 'на доработке',
+  rejected: 'ИИ переделывает',
 }
-const HELD_TEXT = 'на доске'
-const HELD_TIP = 'на доске — ждёт общего согласования'
-const DRAFT_TEXT = { todo: 'впереди', pending: 'ждёт решения', approved: 'создаётся', done: 'создан', error: 'ошибка' }
+const DRAFT_TEXT = { pending: 'черновик ждёт решения', approved: 'черновик создаётся', done: 'черновик создан', error: 'ошибка' }
+const DRAFT_ASK = 'Все шаги согласованы — собери черновик кампании из согласованного на доске.'
 const CHECK_ICONS = { ok: '✓', warn: '!', bad: '×' }
 const PREVIEW_MODES = [
   { key: 'desktop', label: 'Компьютер' },
@@ -369,6 +425,8 @@ const PREVIEW_KEY = 'board-preview'
 const scroller = ref(null)
 const busy = ref(false)
 const negative = ref('')
+const comment = ref('')
+const redoText = ref('')
 const preview = ref(localStorage.getItem(PREVIEW_KEY) || 'both')
 // { id ждущей таблицы: [номера строк без галочки] } — решение уходит с этими галочками.
 const off = reactive({})
@@ -385,63 +443,151 @@ const pendingTables = computed(() => {
 })
 
 const stageLabels = computed(() => Object.fromEntries(props.build.stages.map((s) => [s.key, s.label])))
-
-// Таблицы, собранные одной доской: своих кнопок у них нет, решение одно — в разделе «Готовность».
+// Таблицы старой доски (одно согласование на всё): решаются через decide_build по одной.
 const heldIds = computed(() => new Set(props.build.held || []))
-const heldTables = computed(() => pendingTables.value.filter((a) => heldIds.value.has(a.id)))
-const heldRows = computed(() => heldTables.value.reduce((n, t) => n + (t.args?.rows || []).length, 0))
-const heldChosen = computed(() => heldTables.value.reduce((n, t) => n + chosenOf(t).length, 0))
-// Обязательные этапы, которых на доске ещё нет: согласование закроет готовое, черновик — после остальных.
-const missing = computed(() => props.build.missing || [])
-const boardComment = ref('')
-// Больше 7 заголовков или 3 текстов в группе: сервер такое согласование не примет.
-const overLimit = computed(() => (props.build.checks || []).some((c) => c.key === 'limits' && c.state === 'bad'))
-const approveLabel = computed(() => {
-  if (missing.value.length) return 'Согласовать готовое'
-  return boardComment.value.trim() ? 'Согласовать с правкой' : 'Согласовать и создать черновик'
-})
 
-const tables = computed(() => {
-  const out = { goals: [], demand: [], groups: [], negatives: [], extras: [], settings: [] }
-  for (const a of pendingTables.value) {
-    const stage = a.args?.stage
-    out[SECTION_OF[stage] || 'goals'].push({
-      ...a,
-      stageLabel: stageLabels.value[stage] || stage,
-      held: heldIds.value.has(a.id),
-    })
+function stepStatus(step, stages) {
+  if (step.key === 'ready') {
+    const draft = props.build.draft
+    if (!draft) return 'todo'
+    return draft.status === 'done' ? 'done' : draft.status === 'error' ? 'rejected' : 'pending'
   }
-  return out
-})
+  const mine = step.stages.map((k) => stages[k] || 'todo')
+  if (mine.includes('pending')) return 'pending'
+  if (mine.includes('rejected')) return 'rejected'
+  const required = step.optional ? [] : step.required || step.stages
+  const states = required.map((k) => stages[k] || 'todo')
+  if (step.optional) {
+    if (mine.every((st) => st === 'skipped')) return 'skipped'
+    return mine.some((st) => st === 'done') ? 'done' : 'todo'
+  }
+  return states.every((st) => st === 'done' || st === 'skipped') ? 'done' : 'todo'
+}
 
 const steps = computed(() => {
-  const out = props.build.stages.map((s) => ({
-    key: s.key,
-    label: s.label,
-    status: s.status,
-    held: !!s.held,
-    section: SECTION_OF[s.key],
-  }))
-  const draft = props.build.draft
-  const status = !draft ? 'todo' : draft.status === 'done' ? 'done' : draft.status === 'error' ? 'rejected' : 'pending'
-  out.push({ key: 'draft', label: 'Черновик', status, section: 'ready' })
-  return out
+  const stages = Object.fromEntries(props.build.stages.map((s) => [s.key, s.status]))
+  return WIZARD.map((w) => ({ ...w, status: stepStatus(w, stages) }))
 })
-const doneCount = computed(() => steps.value.filter((s) => s.status === 'done').length)
 
-const draftStage = computed(() => {
-  const draft = props.build.draft
-  // Кампания на доске ждёт одного согласования: раздел уже не «впереди», решение за маркетологом.
-  if (!draft && heldTables.value.length) return [{ key: 'draft', short: '', status: 'pending', text: 'ждёт согласования' }]
-  const status = draft ? draft.status : 'todo'
-  return [{ key: 'draft', short: '', status, text: DRAFT_TEXT[status] }]
+// Текущий шаг: где ждёт таблица, иначе первый непройденный; черновик есть — «Проверка».
+const currentIndex = computed(() => {
+  const list = steps.value
+  const waiting = list.findIndex((s) => s.status === 'pending' && s.key !== 'ready')
+  if (waiting >= 0) return waiting
+  if (props.build.draft) return list.length - 1
+  const next = list.findIndex((s) => s.status === 'todo' || s.status === 'rejected')
+  return next >= 0 ? next : list.length - 1
 })
+const current = computed(() => steps.value[currentIndex.value])
+
+// Открытый шаг: прошлый, который открыл маркетолог, — иначе текущий.
+const opened = ref(null)
+const openKey = computed(() => opened.value || current.value.key)
+
+function open(key) {
+  opened.value = key === current.value.key ? null : key
+  nextTick(() => show(key))
+}
+
+watch(
+  () => current.value.key,
+  (key) => {
+    opened.value = null
+    comment.value = ''
+    nextTick(() => show(key))
+  },
+)
+
+function stepTables(step) {
+  return pendingTables.value
+    .filter((a) => step.stages.includes(a.args?.stage))
+    .map((a) => ({ ...a, stageLabel: stageLabels.value[a.args?.stage] || a.args?.stage }))
+}
+
+function tablesOf(step, section) {
+  return stepTables(step).filter((a) => SECTION_OF[a.args?.stage] === section)
+}
+
+function stepChosen(step) {
+  return stepTables(step).reduce((n, t) => n + chosenOf(t).length, 0)
+}
+
+function stepChecks(step) {
+  const keys = STEP_CHECKS[step.key] || []
+  return (props.build.checks || []).filter((c) => keys.includes(c.key) && c.state === 'bad')
+}
+
+function stepBlocked(step) {
+  return stepChecks(step).some((c) => BLOCKING.has(c.key))
+}
+
+function stepSkippable(step) {
+  const list = stepTables(step)
+  return list.length > 0 && list.every((t) => OPTIONAL_STAGES.has(t.args?.stage))
+}
+
+function dotOf(step, i) {
+  if (step.status === 'done') return '✓'
+  if (step.status === 'skipped') return '–'
+  return i + 1
+}
 
 const groupNames = computed(() => props.build.groups.map((g) => g.name))
 const keywordCount = computed(() => props.build.groups.reduce((n, g) => n + g.keywords.filter(isOn).length, 0))
 const audienceCount = computed(() => props.build.groups.reduce((n, g) => n + (g.audiences || []).filter(isOn).length, 0))
 const imageCount = computed(() => props.build.groups.reduce((n, g) => n + (g.images || []).filter(isOn).length, 0))
 const adsStarted = computed(() => props.build.stages.some((s) => s.key === 'ads' && s.status !== 'todo'))
+
+function count(n, one, few, many) {
+  return `${n} ${plural(n, one, few, many)}`
+}
+
+function factsLine(items) {
+  return items
+    .filter(isOn)
+    .slice(0, 2)
+    .map((f) => f.value || f.text)
+    .join(' · ')
+}
+
+/** Итог шага одной строкой — у свёрнутого прошлого шага. */
+function summary(key) {
+  const b = props.build
+  const on = (list) => (list || []).filter(isOn).length
+  const sum = (field) => b.groups.reduce((n, g) => n + on(g[field]), 0)
+  switch (key) {
+    case 'brief':
+      return factsLine(b.goals)
+    case 'demand':
+      return count(on(b.directions), 'направление', 'направления', 'направлений')
+    case 'groups':
+      return [
+        count(b.groups.length, 'группа', 'группы', 'групп'),
+        count(keywordCount.value, 'фраза', 'фразы', 'фраз'),
+        on(b.negatives) ? count(on(b.negatives), 'минус-фраза', 'минус-фразы', 'минус-фраз') : '',
+      ].filter(Boolean).join(' · ')
+    case 'ads':
+      return `${count(sum('titles'), 'заголовок', 'заголовка', 'заголовков')} · ${count(sum('texts'), 'текст', 'текста', 'текстов')}`
+    case 'images':
+      return count(imageCount.value, 'картинка', 'картинки', 'картинок')
+    case 'extras':
+      return [
+        count(on(boardSitelinks.value), 'быстрая ссылка', 'быстрые ссылки', 'быстрых ссылок'),
+        count(on(boardCallouts.value), 'уточнение', 'уточнения', 'уточнений'),
+      ].join(' · ')
+    case 'settings':
+      return factsLine(b.settings)
+    default:
+      return ''
+  }
+}
+
+function rowNote(step, i) {
+  if (step.key === 'ready') return props.build.draft ? DRAFT_TEXT[props.build.draft.status] || '' : 'впереди'
+  if (step.status === 'done') return summary(step.key) || STATUS.done
+  if (i === currentIndex.value && step.status === 'todo') return props.running ? 'ИИ готовит…' : 'текущий шаг'
+  return STATUS[step.status] || ''
+}
 
 // Быстрые ссылки и уточнения доски: из таблиц этапа, а нет их там — из карточки создания (без повторов по группам).
 function boardLinks(key) {
@@ -461,13 +607,6 @@ function boardLinks(key) {
 const boardSitelinks = computed(() => boardLinks('sitelinks'))
 const boardCallouts = computed(() => boardLinks('callouts'))
 
-// Раздел, о котором сейчас речь: последняя ждущая таблица или карточка создания.
-const active = computed(() => {
-  if (props.build.draft?.status === 'pending') return 'ready'
-  const last = pendingTables.value[pendingTables.value.length - 1]
-  return last ? SECTION_OF[last.args?.stage] || null : null
-})
-
 watch(
   pendingTables,
   (list) => {
@@ -478,19 +617,12 @@ watch(
   { immediate: true },
 )
 
-watch(active, (key) => key && nextTick(() => show(key)))
 onMounted(() => {
-  if (!active.value) return
-  show(active.value, false)
-  // Шрифты догружаются и меняют высоту разделов — встать к разделу ещё раз.
-  document.fonts?.ready.then(() => active.value && show(active.value, false))
+  if (currentIndex.value === 0) return
+  show(current.value.key, false)
+  // Шрифты догружаются и меняют высоту шагов — встать к шагу ещё раз.
+  document.fonts?.ready.then(() => show(openKey.value, false))
 })
-
-function stagesOf(section) {
-  return props.build.stages
-    .filter((s) => SECTION_OF[s.key] === section)
-    .map((s) => ({ key: s.key, short: SHORT[s.key] || s.label, status: s.status, text: s.held ? HELD_TEXT : '' }))
-}
 
 function isOn(item) {
   if (!item.pending) return item.checked !== false
@@ -605,29 +737,38 @@ function chosenOf(table) {
   return (table.args?.rows || []).map((r) => r.n).filter((n) => !list.includes(n))
 }
 
-/** Одно решение на всю доску: согласовать отмеченное во всех её таблицах или отменить сборку. */
-async function decideBoard(approve) {
-  const comment = boardComment.value.trim()
-  if (!approve) {
-    const sure = await askConfirm(
-      'Отменить сборку? Таблицы на доске будут отклонены, в Директе ничего не создано. Чтобы поправить часть ' +
-        'кампании, напишите комментарий и нажмите «Согласовать».',
-      { danger: true },
-    )
-    if (!sure) return
-  }
+/**
+ * Решение по шагу. Таблица мастера — одна на шаг (ИИ ждёт ответа); таблицы старой доски шага решаются вместе.
+ * how: 'next' — согласовать отмеченное, 'redo' — переделать, 'skip' — пропустить необязательный этап.
+ */
+async function decideStep(step, how) {
+  const list = stepTables(step)
+  if (!list.length) return
   await settleChecks()
-  const rows = approve ? Object.fromEntries(heldTables.value.map((t) => [t.id, chosenOf(t)])) : {}
-  emit('board', { approve, rows, comment })
+  const text = comment.value.trim()
+  const held = list.filter((t) => heldIds.value.has(t.id))
+  if (held.length) {
+    const rows = Object.fromEntries(held.map((t) => [t.id, how === 'skip' ? [] : chosenOf(t)]))
+    emit('board', { approve: how !== 'redo', rows, comment: text, only: held.map((t) => t.id) })
+    return
+  }
+  const table = list[0]
+  if (how === 'skip') emit('decide', table.id, { approve: true, skip: true, rows: [], comment: text })
+  else if (how === 'redo') emit('decide', table.id, { approve: false, rows: [], comment: text })
+  else emit('decide', table.id, { approve: true, rows: chosenOf(table), comment: text })
 }
 
-// Комментарий живёт, пока доска ждёт решения: не принятое сервером решение его не теряет.
-watch(
-  () => heldTables.value.length,
-  (n) => {
-    if (!n) boardComment.value = ''
-  },
-)
+const next = (step) => decideStep(step, 'next')
+const redo = (step) => decideStep(step, 'redo')
+const skip = (step) => decideStep(step, 'skip')
+
+/** Прошлый шаг: попросить ИИ переделать — он покажет изменения таблицей этого этапа. */
+function askRedo(step) {
+  const text = redoText.value.trim()
+  if (!text) return
+  emit('ask', `Переделай шаг «${step.label}»: ${text}`)
+  redoText.value = ''
+}
 
 // Картинки: кабинет кампании (или выбранный, пока ИИ его не назвал), библиотека кампаний — один раз на доску.
 const chosenAccount = ref(null)
@@ -657,20 +798,14 @@ const images = {
 
 provide('board', { isOn, toggle, remove, edit, disabled, offOf, setOff, decide, images })
 
-/** Прокрутить доску к разделу и подсветить его. На узком экране доска не прокручивается сама — страницу. */
-function show(section, smooth = true) {
+/** Прокрутить доску к шагу и подсветить его. На узком экране доска не прокручивается сама — страницу. */
+function show(key, smooth = true) {
   const box = scroller.value
-  const el = section && box?.querySelector(`[data-section="${section}"]`)
+  const el = key && box?.querySelector(`[data-step="${key}"]`)
   if (!el || !el.offsetParent) return
   const behavior = smooth ? 'smooth' : 'auto'
-  // На телефоне этапы — лента вбок: подвинуть её к этапу раздела (только по горизонтали).
-  const strip = box.querySelector('.board__steps')
-  const chip = strip?.querySelector(`[data-section="${section}"]`)
-  if (chip && strip.scrollWidth > strip.clientWidth + 1) {
-    strip.scrollTo({ left: chip.offsetLeft - strip.offsetLeft - parseFloat(getComputedStyle(strip).paddingLeft), behavior })
-  }
   if (box.scrollHeight > box.clientHeight + 1) {
-    // Шапка доски с этапами закреплена сверху — раздел должен встать под неё.
+    // Шапка доски закреплена сверху — шаг должен встать под неё.
     const head = box.querySelector('.board__head')?.offsetHeight || 0
     const top = el.getBoundingClientRect().top - box.getBoundingClientRect().top + box.scrollTop - head - 8
     box.scrollTo({ top: Math.max(0, top), behavior })
@@ -684,11 +819,12 @@ function show(section, smooth = true) {
   setTimeout(() => el.classList.remove('is-flash'), 1600)
 }
 
-/** Раздел доски, где решается действие чата (таблица этапа или карточка создания). */
+/** Шаг доски, где решается действие чата (таблица этапа или карточка создания). */
 function showAction(actionId) {
-  if (props.build.draft?.action_id === actionId) return show('ready')
+  if (props.build.draft?.action_id === actionId) return open('ready')
   const action = props.actions.find((a) => a.id === actionId)
-  show(SECTION_OF[action?.args?.stage] || 'goals')
+  const step = WIZARD.find((w) => w.stages.includes(action?.args?.stage))
+  open(step ? step.key : current.value.key)
 }
 
 defineExpose({ show, showAction })

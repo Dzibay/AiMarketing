@@ -381,7 +381,7 @@ export function provideChat({ general, ws, basePath, reloadWs, panel = false, pa
     if (action.tool === 'create_campaign') {
       const name = action.args?.spec?.name ? ` «${action.args.spec.name}»` : ''
       const texts = {
-        pending: `Черновик${name} на доске ждёт решения`,
+        pending: `Черновик${name} готов — создать его можно на доске`,
         approved: `Черновик${name} создаётся…`,
         done: `Черновик${name} создан в Директе`,
         error: `Черновик${name} не создан: ${action.error || 'ошибка'}`,
@@ -391,18 +391,16 @@ export function provideChat({ general, ws, basePath, reloadWs, panel = false, pa
     }
     const stage = action.args?.stage
     const label = build.value.stages.find((s) => s.key === stage)?.label || stage
-    if (action.status === 'pending') {
-      // Собрано одной доской: своего решения у таблицы нет, кампания согласуется целиком.
-      return action.args?.held ? `Этап «${label}» на доске — согласуется вместе с кампанией` : `Этап «${label}» на доске ждёт решения`
-    }
+    if (action.status === 'pending') return `Шаг «${label}» готов — проверьте на доске и нажмите «Дальше»`
     if (action.status === 'done') {
+      if (action.result?.skipped) return `Шаг «${label}» пропущен`
       const chosen = (action.result?.approved_rows || []).length
-      return `Этап «${label}» согласован на доске: ${chosen} из ${(action.args?.rows || []).length}`
+      return `Шаг «${label}» согласован: ${chosen} из ${(action.args?.rows || []).length}`
     }
     // Сервис сам закрыл таблицу: ИИ показал этот раздел заново или маркетолог отменил сборку целиком.
-    if ((action.error || '').startsWith('Заменена')) return `Этап «${label}»: таблица заменена новой`
-    if ((action.error || '').includes('отменил сборку')) return `Этап «${label}»: сборка отменена`
-    return `Этап «${label}» отклонён`
+    if ((action.error || '').startsWith('Заменена')) return `Шаг «${label}»: таблица заменена новой`
+    if ((action.error || '').includes('отменил сборку')) return `Шаг «${label}»: сборка отменена`
+    return `Шаг «${label}» — ИИ переделывает`
   }
 
   function offRows(action) {

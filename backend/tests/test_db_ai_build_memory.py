@@ -23,6 +23,8 @@ def _table(stage, rows, **extra):
     # Первая таблица сборки несёт требования ТЗ; в этих тестах ТЗ без цифр и запретов.
     if stage in ("goals", "analysis"):
         extra.setdefault("requirements", {})
+    # Сборка одной доской — прежний режим, его теперь включают явно; мастер по шагам — by_stages=True.
+    extra.setdefault("by_stages", False)
     return _call("propose_items", {"stage": stage, "rows": rows, **extra}, f"t-{stage}")
 
 

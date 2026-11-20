@@ -292,7 +292,7 @@ def test_stage_by_stage_and_ready_campaign_tables_wait(db, monkeypatch):
     assert out["status"] == "waiting" and _held(user, chat) == []
     table = _pending(user, chat, "propose_items")
     ai_agent.decide_items(user, table["id"], rows=[1, 2])
-    _fake, out = _turn(user, chat, monkeypatch, _table("analysis", ANALYSIS))
+    _fake, out = _turn(user, chat, monkeypatch, _table("analysis", ANALYSIS, by_stages=True))
     assert out["status"] == "waiting" and _held(user, chat) == []
     with pytest.raises(YandexError):  # общего согласования у пошаговой сборки нет
         ai_agent.decide_build(user, chat)
@@ -331,3 +331,45 @@ def test_board_decision_over_api(db, monkeypatch):
     assert done["result"]["approved_rows"] == [1, 3] and done["result"]["removed_rows"] == [2]
     again = client.post(f"/api/web/ai/chats/{chat}/board/decide", headers=auth, json={})
     assert again.status_code >= 400 and len(_held(user, chat)) == 0  # ход уже идёт, решать больше нечего
+
+
+def test_wizard_is_default_and_optional_step_skips(db, monkeypatch):
+    s = _seed(db)
+    user, chat = s["user"], s["chat"]
+
+    # Мастер по шагам (пункт 3 docs/board-plan.md) — режим по умолчанию: таблица без by_stages ждёт «Дальше».
+    goals = _call("propose_items", {"stage": "goals", "rows": GOALS, "requirements": {}}, "t-goals")
+    _fake, out = _start(user, chat, BRIEF, monkeypatch, goals)
+    assert out["status"] == "waiting" and _held(user, chat) == []
+    ai_agent.decide_items(user, _pending(user, chat, "propose_items")["id"], rows=[1, 2])
+    for stage, rows in (("analysis", ANALYSIS), ("keywords", KEYWORDS), ("ads", ADS)):
+        _fake, out = _turn(user, chat, monkeypatch, _table(stage, rows, by_stages=True))
+        assert out["status"] == "waiting" and _held(user, chat) == []
+        table = _pending(user, chat, "propose_items")
+        if stage == "ads":  # обязательный этап не пропустить
+            with pytest.raises(YandexError) as err:
+                ai_agent.decide_items(user, table["id"], skip=True)
+            assert "обязательный" in err.value.message
+        ai_agent.decide_items(user, table["id"], rows=[r["n"] for r in table["args"]["rows"]])
+
+    extras = [{"kind": "callout", "cells": ["Гарантия 5 лет"]}]
+    _turn(user, chat, monkeypatch, _table("extras", extras, by_stages=True))
+    table = _pending(user, chat, "propose_items")
+    ai_agent.decide_items(user, table["id"], skip=True)
+    fake, _out = _turn(user, chat, monkeypatch, _text("Дальше — настройки."))
+    assert "пропустил этот необязательный этап" in fake.calls[0][-1]["content"]
+    build = ai_agent.campaign_build(_cards(user, chat))
+    assert {st["key"]: st["status"] for st in build["stages"]}["extras"] == "skipped"
+    assert build["callouts"] == [] or all(not c.get("checked", True) for c in build["callouts"])
+
+
+def test_held_optional_table_skips_alone(db, monkeypatch):
+    s = _seed(db)
+    user, chat = s["user"], s["chat"]
+    extras = [{"kind": "callout", "cells": ["Гарантия 5 лет"]}]
+    _start(user, chat, BRIEF, monkeypatch, *_stages(_table("extras", extras)))
+    tables = {t["args"]["stage"]: t for t in _held(user, chat)}
+    # «Пропустить» шага старой доски: одна необязательная таблица без строк — пропуск, а не ошибка.
+    out = ai_agent.decide_build(user, chat, rows={str(tables["extras"]["id"]): []}, only=[tables["extras"]["id"]])
+    assert [a["status"] for a in out["actions"]] == ["done"]
+    assert len(_held(user, chat)) == 5

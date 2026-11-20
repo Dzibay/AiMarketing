@@ -4171,121 +4171,153 @@ body.has-modal {
   font-size: 0.8rem;
 }
 
-.board__steps {
+.board__progress {
   display: flex;
-  flex-wrap: wrap;
-  gap: 0.3rem;
+  gap: 3px;
+}
+
+.board__progress span {
+  flex: 1;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--line);
+}
+
+.board__progress .is-done,
+.board__progress .is-skipped {
+  background: var(--accent);
+}
+
+.board__progress .is-pending,
+.board__progress .is-rejected {
+  background: var(--c-amber);
 }
 
 @media (max-width: 640px) {
-  /* Этапы доски — лента с прокруткой вбок и остановкой на этапе. */
-  .board__steps {
-    flex-wrap: nowrap;
-    overflow-x: auto;
-    scroll-snap-type: x mandatory;
-    scrollbar-width: none;
-    margin-inline: -1.2rem;
-    padding-inline: 1.2rem;
-    scroll-padding-inline: 1.2rem;
-  }
-
-  .board__steps::-webkit-scrollbar {
-    display: none;
-  }
-
-  .board__step {
-    flex: none;
-    scroll-snap-align: start;
-  }
-
   .board-decision__buttons .btn {
     flex: 1 1 auto;
   }
-}
-
-.board__step {
-  appearance: none;
-  display: inline-flex;
-  align-items: center;
-  gap: 0.35rem;
-  padding: 0.18rem 0.6rem 0.18rem 0.22rem;
-  border: 1px solid var(--line);
-  border-radius: var(--pill);
-  background: var(--surface);
-  color: var(--ink);
-  font: inherit;
-  font-size: 0.78rem;
-  white-space: nowrap;
-  cursor: pointer;
-}
-
-.board__step:hover {
-  border-color: var(--accent);
 }
 
 .board__dot {
   display: inline-grid;
   place-items: center;
   flex: none;
-  width: 18px;
-  height: 18px;
+  width: 20px;
+  height: 20px;
   border: 1.5px solid var(--line-2);
   border-radius: 50%;
   color: var(--muted);
-  font-size: 0.64rem;
+  font-size: 0.66rem;
   font-weight: 650;
 }
 
-.board__step.is-done .board__dot {
+/* Мастер: шаг — свёрнутая строка или открытый блок */
+.wiz {
+  border-bottom: 1px solid var(--line);
+  scroll-margin-top: 1rem;
+}
+
+.wiz__row {
+  appearance: none;
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  width: 100%;
+  padding: 0.75rem 0;
+  border: 0;
+  background: none;
+  color: var(--ink);
+  font: inherit;
+  font-size: 0.9rem;
+  text-align: left;
+  cursor: pointer;
+}
+
+.wiz__row small {
+  margin-left: auto;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 0.78rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wiz__row:hover:not(:disabled) strong {
+  text-decoration: underline;
+}
+
+.wiz__row:disabled {
+  cursor: default;
+}
+
+.wiz.is-future .wiz__row {
+  color: var(--muted);
+}
+
+.wiz.is-future .wiz__row strong {
+  font-weight: 500;
+}
+
+.wiz.is-done .board__dot {
   border-color: var(--accent);
   background: var(--accent);
   color: var(--on-accent);
 }
 
-.board__step.is-pending,
-.board__step.is-rejected {
-  border-color: color-mix(in srgb, var(--c-amber) 70%, transparent);
-  background: var(--warn-soft);
-  font-weight: 600;
+.wiz.is-skipped .board__dot {
+  border-style: dashed;
 }
 
-.board__step.is-pending .board__dot,
-.board__step.is-rejected .board__dot {
+.wiz.is-pending .board__dot,
+.wiz.is-rejected .board__dot {
   border-color: var(--c-amber);
   color: var(--warn);
 }
 
-.board__step.is-todo,
-.board__step.is-skipped {
-  color: var(--muted);
+.wiz.is-open {
+  padding-bottom: 1rem;
 }
 
-.board__step.is-skipped .board__dot {
-  border-style: dashed;
-}
-
-.board__legend {
+.wiz__title {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 0.45rem;
-  margin: 0.75rem 0 0;
-  font-size: 0.78rem;
+  gap: 0.6rem;
+  padding: 1rem 0 0.25rem;
 }
 
-.board__swatch {
-  flex: none;
-  width: 18px;
-  height: 12px;
-  border: 1.5px dashed var(--c-amber);
-  border-radius: 4px;
-  background: var(--warn-soft);
+.wiz__title h4 {
+  margin: 0;
+  font-size: 1rem;
 }
 
-.board__subhead {
-  margin: 0.35rem 0 0;
-  color: var(--muted);
-  font-size: 0.8rem;
-  font-weight: 620;
+.wiz__title .ai-check__link {
+  margin-left: auto;
+}
+
+.wiz.is-open .board-section {
+  border-bottom: 0;
+}
+
+.board-step__foot,
+.board-step__wait {
+  display: grid;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+}
+
+.board-step__foot .hint,
+.board-step__wait .hint {
+  margin: 0;
+}
+
+.board-step__redo {
+  margin-top: 0.5rem;
+}
+
+.wiz.is-flash {
+  animation: card-flash 1.6s ease;
 }
 
 .board-section {
@@ -4381,8 +4413,8 @@ body.has-modal {
   position: static;
 }
 
-/* Таблица одной доски: без своих кнопок — тонкая строка под разделом, решение одно на всю кампанию. */
-.board-decision.is-held {
+/* Ждущая таблица в разделе — тонкая строка: решение по ней — кнопкой «Дальше» шага. */
+.board-decision.is-line {
   position: static;
   padding: 0.45rem 0.7rem;
   border-style: dashed;

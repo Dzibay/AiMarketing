@@ -123,6 +123,8 @@ class ItemsBody(BaseModel):
     # Номера отмеченных строк таблицы.
     rows: list[int] = []
     comment: str = ""
+    # «Пропустить» необязательный этап сборки на доске.
+    skip: bool = False
 
 
 class BoardBody(BaseModel):
@@ -135,6 +137,8 @@ class BoardDecideBody(BaseModel):
     # {id таблицы на доске: номера отмеченных строк}; таблицы без записи согласуются как показаны.
     rows: dict[str, list[int]] = {}
     comment: str = ""
+    # Решить только эти таблицы (шаг мастера на старой доске); без него — всю доску.
+    only: list[int] | None = None
 
 
 class ReviewBody(BaseModel):
@@ -413,7 +417,10 @@ def chat_board(chat_id: int, body: BoardBody, user_id: int = Depends(require_web
 @router.post("/ai/chats/{chat_id}/board/decide")
 def chat_board_decide(chat_id: int, body: BoardDecideBody, user_id: int = Depends(require_web_user)) -> dict:
     """Одно решение по всей кампании на доске: согласовать (ИИ создаст черновик) или отменить сборку."""
-    return _call(ai_agent.decide_build, user_id, chat_id, approve=body.approve, rows=body.rows, comment=body.comment)
+    return _call(
+        ai_agent.decide_build, user_id, chat_id, approve=body.approve, rows=body.rows, comment=body.comment,
+        only=body.only,
+    )
 
 
 @router.post("/ai/chats/{chat_id}/decide-all")
@@ -491,4 +498,4 @@ def action_plan(action_id: int, body: PlanBody, user_id: int = Depends(require_w
 def action_items(action_id: int, body: ItemsBody, user_id: int = Depends(require_web_user)) -> dict:
     """Решение по таблице ИИ: какие строки согласованы."""
     return _call(ai_agent.decide_items, user_id, action_id, rows=body.rows, comment=body.comment,
-                 approve=body.approve)
+                 approve=body.approve, skip=body.skip)

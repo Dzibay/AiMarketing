@@ -1,8 +1,8 @@
 <template>
   <section class="board-section" :data-section="name" :class="{ 'is-waiting': tables.length }">
-    <header class="board-section__head">
-      <h4>{{ title }}</h4>
-      <span v-for="s in stages" :key="s.key" class="chip" :class="CHIPS[s.status]">
+    <header v-if="!bare || $slots.tools" class="board-section__head">
+      <h4 v-if="!bare">{{ title }}</h4>
+      <span v-for="s in bare ? [] : stages" :key="s.key" class="chip" :class="CHIPS[s.status]">
         {{ stages.length > 1 ? `${s.short}: ` : '' }}{{ s.text || STATUS[s.status] || s.status }}
       </span>
       <slot name="tools" />
@@ -14,8 +14,7 @@
     <div
       v-for="t in tables"
       :key="t.id"
-      class="board-decision"
-      :class="{ 'is-table': shown[t.id], 'is-held': t.held }"
+      class="board-decision is-line"
       :data-action="t.id"
     >
       <div class="board-decision__head">
@@ -33,40 +32,14 @@
         :disabled="board.disabled.value"
         @update:off="board.setOff(t.id, $event)"
       />
-      <!-- Таблица одной доски решается вместе с остальными — кнопкой в разделе «Готовность». -->
-      <template v-if="!t.held">
-        <textarea
-          v-model="comments[t.id]"
-          class="ai-input ai-input--area"
-          rows="1"
-          maxlength="2000"
-          :disabled="board.disabled.value"
-          placeholder="Что поправить или добавить — необязательно"
-          aria-label="Комментарий к этапу"
-        />
-        <div class="board-decision__buttons">
-          <button
-            class="btn btn--accent"
-            type="button"
-            :disabled="board.disabled.value || !chosen(t).length"
-            @click="decide(t, true)"
-          >
-            Согласовать выбранные ({{ chosen(t).length }})
-          </button>
-          <button class="btn btn--ghost" type="button" :disabled="board.disabled.value" @click="decide(t, false)">
-            Отклонить этап
-          </button>
-        </div>
-      </template>
     </div>
   </section>
 </template>
 
 <script setup>
 /**
- * Раздел доски: заголовок со статусом этапов, пояснение ИИ, содержимое и решение по ждущей таблице —
- * отмеченное галочками на доске, комментарий, «Согласовать» и «Отклонить». Таблица целиком — по кнопке.
- * У таблицы одной доски (held) своих кнопок нет: кампания согласуется целиком в разделе «Готовность».
+ * Раздел доски: заголовок со статусом этапов, пояснение ИИ, содержимое и строка ждущей таблицы — сколько
+ * отмечено и таблица целиком по кнопке. Решение по таблице — кнопкой «Дальше» шага мастера (CampaignBoard).
  */
 import { computed, inject, reactive } from 'vue'
 import AiCheckTable from './AiCheckTable.vue'
@@ -76,8 +49,10 @@ const props = defineProps({
   title: { type: String, required: true },
   // [{ key, short, status, text? }] — этапы раздела.
   stages: { type: Array, default: () => [] },
-  // Ждущие таблицы этапов раздела (действия propose_items) с stageLabel и held.
+  // Ждущие таблицы этапов раздела (действия propose_items) с stageLabel.
   tables: { type: Array, default: () => [] },
+  // Раздел — единственный на шаге мастера: заголовок уже у шага, свой не нужен.
+  bare: { type: Boolean, default: false },
 })
 const board = inject('board')
 
@@ -92,7 +67,6 @@ const STATUS = {
 }
 const CHIPS = { done: 'chip--ok', pending: 'chip--warning', rejected: 'chip--bad', error: 'chip--bad' }
 
-const comments = reactive({})
 const shown = reactive({})
 
 const intros = computed(() => props.tables.filter((t) => t.args?.intro))
@@ -104,9 +78,5 @@ function rowsOf(table) {
 function chosen(table) {
   const off = board.offOf(table)
   return rowsOf(table).map((r) => r.id).filter((n) => !off.includes(n))
-}
-
-function decide(table, approve) {
-  board.decide(table.id, { approve, rows: approve ? chosen(table) : [], comment: (comments[table.id] || '').trim() })
 }
 </script>

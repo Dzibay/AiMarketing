@@ -292,10 +292,7 @@ const placeholder = computed(() => {
   if (!aiConfigured.value) return 'ИИ временно недоступен'
   if (status.value === 'running') return 'ИИ отвечает…'
   if (pendingActions.value.length && pendingActions.value.every((a) => onBoard.value.has(a.id))) {
-    // Одна доска: решение одно на всю кампанию; по этапам — на каждую таблицу своё.
-    return pendingActions.value.some((a) => a.args?.held)
-      ? 'Согласуйте кампанию на доске или напишите, что поправить'
-      : 'Решите этап на доске или напишите своими словами'
+    return 'Нажмите «Дальше» на доске или напишите, что поправить'
   }
   if (pendingAsks.value.length) return 'Ответьте в карточке или напишите своими словами'
   if (waitingWrites.value.length) return 'Решите предложения в карточках или напишите что-то ещё'
